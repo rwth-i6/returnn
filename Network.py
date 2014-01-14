@@ -128,7 +128,7 @@ class SoftmaxLayer(Layer):
     pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
     #return -T.sum(T.log(self.p_y_given_x)[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]])
     #return -T.sum(T.log(pcx))
-    return -T.sum(T.log(pcx)) - 0.01 * T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+    return -T.sum(T.log(pcx)) #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   
   def entropy(self, y, lreg):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
@@ -343,7 +343,7 @@ class LayerNetwork(object):
     dropout = config.list('dropout', [0.0])
     sharpgates = config.value('sharpgates', 'none')
     loss = config.value('loss', 'loglik')
-    entropy = config.value('entropy', 0)
+    entropy = config.float('entropy', 0.0)
     if len(actfct) < len(hidden_size):
       for i in xrange(len(hidden_size) - len(actfct)):
         actfct.append("logistic")
