@@ -125,7 +125,15 @@ class SoftmaxLayer(Layer):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
     #y_f = y.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
     #y_f = y.flatten()
-    return -T.sum(T.log(self.p_y_given_x)[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]])
+    pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
+    #return -T.sum(T.log(self.p_y_given_x)[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]])
+    #return -T.sum(T.log(pcx))
+    return -T.sum(T.log(pcx)) - 0.01 * T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+  
+  def entropy(self, y, lreg):
+    y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
+    pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
+    return -T.sum(T.log(pcx)) - lreg * T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
 
   def errors(self, y):
     y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32') #y_f = y.flatten(ndim=1)
@@ -335,6 +343,7 @@ class LayerNetwork(object):
     dropout = config.list('dropout', [0.0])
     sharpgates = config.value('sharpgates', 'none')
     loss = config.value('loss', 'loglik')
+    entropy = config.value('entropy', 0)
     if len(actfct) < len(hidden_size):
       for i in xrange(len(hidden_size) - len(actfct)):
         actfct.append("logistic")
@@ -370,13 +379,13 @@ class LayerNetwork(object):
       network.add_hidden(config.int('pretrain_layer_size', hidden_size[-1]),
                          config.value('pretrain_layer_type', hidden_type[-1]),
                          config.value('pretrain_layer_activation', actfct[-1]))
-    network.initialize(loss, L1_reg, L2_reg, dropout, bidirectional, truncation, sharpgates)
+    network.initialize(loss, L1_reg, L2_reg, dropout, bidirectional, truncation, sharpgates, entropy)
     return network
     
   def add_hidden(self, size, layer_type = 'forward', activation = T.tanh):
     self.hidden_info.append((layer_type, size, activation))
   
-  def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none'):
+  def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
     self.L1_reg = L1_reg
     self.L2_reg = L2_reg
     self.hidden = []
@@ -433,7 +442,7 @@ class LayerNetwork(object):
     self.gparams = self.params[:]
     # create output layer
     self.loss = loss
-    if loss == 'loglik':
+    if loss == 'loglik' or loss == 'entropy':
       if self.bidirectional:
         self.output = BidirectionalSoftmaxLayer(forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, dropout = dropout[-1], mask = self.mask)
         #self.output = BidirectionalContextSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, n_ctx = self.n_out)
@@ -456,7 +465,10 @@ class LayerNetwork(object):
       L2 += (self.output.W_reverse ** 2).sum()
     self.params += self.output.params
     self.gparams += self.output.params
-    self.cost = self.output.cost(self.y)
+    if loss == 'entropy':
+      self.cost = self.output.entropy(self.y, entropy)
+    else:
+      self.cost = self.output.cost(self.y)
     self.objective = self.cost + self.L1_reg * L1 + self.L2_reg * L2
     self.errors = self.output.errors(self.y)
     #self.jacobian = T.jacobian(self.output.z, self.x)
