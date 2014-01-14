@@ -130,10 +130,8 @@ class SoftmaxLayer(Layer):
     #return -T.sum(T.log(pcx))
     return -T.sum(T.log(pcx)) #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   
-  def entropy(self, y, lreg):
-    y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
-    pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
-    return -T.sum(T.log(pcx)) - lreg * T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+  def entropy(self):
+    return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
 
   def errors(self, y):
     y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32') #y_f = y.flatten(ndim=1)
@@ -362,7 +360,7 @@ class LayerNetwork(object):
                     'softsquare': lambda z : 1 / (1.0 + z * z),
                     'maxout': lambda z : T.max(z, axis = 0),
                     'sin' : T.sin,
-                    'cos' : T.cos } #0.5 * (1 + T.tanh(z))} #0.25 * T.nnet.sigmoid(z) }
+                    'cos' : T.cos }
     for i in xrange(len(hidden_size)):
       if ':' in actfct[i]:
         acts = []
@@ -386,8 +384,6 @@ class LayerNetwork(object):
     self.hidden_info.append((layer_type, size, activation))
   
   def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
-    self.L1_reg = L1_reg
-    self.L2_reg = L2_reg
     self.hidden = []
     self.reverse_hidden = []
     self.params = []
@@ -442,7 +438,7 @@ class LayerNetwork(object):
     self.gparams = self.params[:]
     # create output layer
     self.loss = loss
-    if loss == 'loglik' or loss == 'entropy':
+    if loss == 'loglik':
       if self.bidirectional:
         self.output = BidirectionalSoftmaxLayer(forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, dropout = dropout[-1], mask = self.mask)
         #self.output = BidirectionalContextSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, n_ctx = self.n_out)
@@ -465,11 +461,8 @@ class LayerNetwork(object):
       L2 += (self.output.W_reverse ** 2).sum()
     self.params += self.output.params
     self.gparams += self.output.params
-    if loss == 'entropy':
-      self.cost = self.output.entropy(self.y, entropy)
-    else:
-      self.cost = self.output.cost(self.y)
-    self.objective = self.cost + self.L1_reg * L1 + self.L2_reg * L2
+    self.cost = self.output.cost(self.y)
+    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 + entropy * self.output.entropy()
     self.errors = self.output.errors(self.y)
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
