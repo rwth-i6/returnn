@@ -25,6 +25,7 @@ if __name__ == '__main__':
   if len(sys.argv) != 2:
     print "usage:", sys.argv[0], "config"
     sys.exit(1)
+  
   # initialize config file
   assert os.path.isfile(sys.argv[1]), "config file not found"  
   config = Config()
