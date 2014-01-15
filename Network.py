@@ -202,7 +202,7 @@ class RecurrentLayer(HiddenLayer):
     return self.create_random_weights(n, m, nin), self.create_random_weights(m, m, nin)
    
 class LstmLayer(RecurrentLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'false' , dropout = 0, mask = "unity", name = "lstm"):
+  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", name = "lstm"):
     super(LstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, name = name)
     if not isinstance(activation, (list, tuple)):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
@@ -401,7 +401,7 @@ class LayerNetwork(object):
         if info[0] == 'recurrent':
           self.hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
         elif info[0] == 'lstm':
-          self.hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
+          self.hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
         elif info[0] == 'peep_lstm':
           self.hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
         else: assert False, "invalid layer type: " + info[0]
@@ -424,7 +424,7 @@ class LayerNetwork(object):
           if info[0] == 'recurrent':
             self.reverse_hidden.append(RecurrentLayer(rng = self.rng, source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
           elif info[0] == 'lstm':
-            self.reverse_hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
+            self.reverse_hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
           elif info[0] == 'peep_lstm':
             self.reverse_hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
           else: assert False, "invalid layer type: " + info[0]
