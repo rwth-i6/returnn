@@ -83,6 +83,7 @@ class Engine:
       device.data = numpy.zeros(batch.shape + [data.num_inputs * data.window], dtype=theano.config.floatX)
       device.targets = numpy.zeros(batch.shape, dtype = theano.config.floatX)
       device.index = numpy.zeros(batch.shape, dtype = 'int8')
+      data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
       idi = data.alloc_interval_index(batch.start[0])
       if self.network.recurrent:
         for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
