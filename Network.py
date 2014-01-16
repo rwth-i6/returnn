@@ -5,6 +5,8 @@ import theano
 import theano.tensor as T
 from Util import netcdf_dimension
 from math import sqrt
+from CTC import CTCOp
+from BestPathDecoder import BestPathDecodeOp
 
 """
         META LAYER
@@ -126,10 +128,10 @@ class SoftmaxLayer(Layer):
     #y_f = y.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
     #y_f = y.flatten()
     pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
+    known_grads = None
     #return -T.sum(T.log(self.p_y_given_x)[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]])
     #return -T.sum(T.log(pcx))
-    return -T.sum(T.log(pcx)) #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
-  
+    return -T.sum(T.log(pcx)), known_grads #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   def entropy(self):
     return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
 
@@ -138,6 +140,42 @@ class SoftmaxLayer(Layer):
     if y_f.dtype.startswith('int'):
       return T.sum(T.neq(self.y_pred[(self.i > 0).nonzero()], y_f[(self.i > 0).nonzero()]))
     else: raise NotImplementedError()
+    
+class CTCLayer(Container):
+  def __init__(self, softmax, index, name = 'ctc'):
+    super(CTCLayer, self).__init__(name)
+    self.softmax = softmax
+    self.params = softmax.params
+    self.W_in = softmax.W_in
+    self.p_y_given_x = softmax.p_y_given_x
+    self.i = index;
+    try:
+      self.W_reverse = softmax.W_reverse
+    except AttributeError:
+      pass
+    
+    self.y_given_x_reshaped = T.reshape(self.softmax.p_y_given_x, self.softmax.z.shape);
+    self.index_collapsed = T.sum(index, axis=0);
+    
+  def cost(self, c):
+    ctc = CTCOp()    
+    err, grad = ctc(self.y_given_x_reshaped, c, self.index_collapsed)
+    score = err.sum()
+    known_grads = {self.softmax.z: grad}
+    return score, known_grads
+
+  def entropy(self):
+    return self.softmax.entropy()
+  
+  def errors(self, c):
+    #sum of char edit distance per sequence
+    return T.sum(BestPathDecodeOp()(self.y_given_x_reshaped, c, self.index_collapsed))
+  
+  def get_params(self):
+    return self.softmax.get_params()
+    
+  def set_params(self, params):
+    self.softmax.set_params(params)
     
 class BidirectionalSoftmaxLayer(SoftmaxLayer):  
   def __init__(self, forward, backward, index, n_in, n_out, dropout = 0, mask = "unity", name = "bisoftmax"):
@@ -310,17 +348,22 @@ class LayerNetwork(object):
   def __init__(self, n_in, n_out, mask = "unity"):
     self.x = T.tensor3('x')
     self.y = T.imatrix('y')
+    self.c = T.imatrix('c')
     self.i = T.bmatrix('i')
     Layer.initialize()
     self.hidden_info = []
     self.n_in = n_in
     self.n_out = n_out
     self.mask = mask
+    self.is_ctc = False
   
   @classmethod
   def from_config(cls, config, mask = "unity"):
     num_inputs = netcdf_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+    loss = config.value('loss', 'loglik')
     num_outputs = netcdf_dimension(config.list('train')[0], 'numLabels')
+    if loss == 'ctc':
+      num_outputs += 1 #add blank
     hidden_size = config.int_list('hidden_size')
     assert len(hidden_size) > 0, "no hidden layers specified"
     hidden_type = config.list('hidden_type')
@@ -340,7 +383,6 @@ class LayerNetwork(object):
     actfct = config.list('activation')
     dropout = config.list('dropout', [0.0])
     sharpgates = config.value('sharpgates', 'none')
-    loss = config.value('loss', 'loglik')
     entropy = config.float('entropy', 0.0)
     if len(actfct) < len(hidden_size):
       for i in xrange(len(hidden_size) - len(actfct)):
@@ -438,7 +480,7 @@ class LayerNetwork(object):
     self.gparams = self.params[:]
     # create output layer
     self.loss = loss
-    if loss == 'loglik':
+    if loss == 'loglik' or loss == 'ctc':
       if self.bidirectional:
         self.output = BidirectionalSoftmaxLayer(forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, dropout = dropout[-1], mask = self.mask)
         #self.output = BidirectionalContextSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, n_ctx = self.n_out)
@@ -454,6 +496,9 @@ class LayerNetwork(object):
         self.output = SoftmaxLayer(source = x_in, index = self.i, n_in = n_in, n_out = self.n_out, dropout = dropout[-1], mask = self.mask)
       self.gparams = self.hidden[-1].params + (self.reverse_hidden[-1].params if self.bidirectional else [])
     else: assert False, "invalid loss: " + loss
+    if loss == 'ctc':
+      self.is_ctc = True
+      self.output = CTCLayer(self.output, index = self.i)
     L1 += abs(self.output.W_in.sum())
     L2 += (self.output.W_in ** 2).sum()
     if self.bidirectional:
@@ -461,9 +506,15 @@ class LayerNetwork(object):
       L2 += (self.output.W_reverse ** 2).sum()
     self.params += self.output.params
     self.gparams += self.output.params
-    self.cost = self.output.cost(self.y)
-    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 + entropy * self.output.entropy()
-    self.errors = self.output.errors(self.y)
+    if loss == 'ctc':
+      self.cost, self.known_grads = self.output.cost(self.c)
+    else:
+      self.cost, self.known_grads = self.output.cost(self.y)
+    self.objective = self.cost + self.L1_reg * L1 + self.L2_reg * L2 + entropy * self.output.entropy()
+    if loss == 'ctc':
+      self.errors = self.output.errors(self.c)
+    else:
+      self.errors = self.output.errors(self.y)
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
   def num_params(self):
