@@ -324,8 +324,6 @@ class Dataset:
     for i in xrange(self.num_seqs):
       ids = self.seq_index[i]
       self.seq_start.append(self.seq_start[-1] + self.seq_lengths[ids])
-      if self.vocabulary:
-        self.transcription_start.append(self.transcription_start[-1] + self.transcription_lengths[ids])
       nbytes = self.seq_lengths[ids] * self.nbytes
       if num_cached == self.num_seqs:
         if self.cache_size > 0 and self.cached_bytes + nbytes > self.cache_size:
