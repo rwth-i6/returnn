@@ -510,7 +510,7 @@ class LayerNetwork(object):
       self.cost, self.known_grads = self.output.cost(self.c)
     else:
       self.cost, self.known_grads = self.output.cost(self.y)
-    self.objective = self.cost + self.L1_reg * L1 + self.L2_reg * L2 + entropy * self.output.entropy()
+    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 + entropy * self.output.entropy()
     if loss == 'ctc':
       self.errors = self.output.errors(self.c)
     else:
