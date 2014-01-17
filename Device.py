@@ -195,14 +195,14 @@ class Device():
       self.x.set_value(self.data)
       self.t.set_value(self.targets)
       self.i.set_value(self.index)
-	  if network.is_ctc:
-	    self.cp.set_value(self.ctc_targets)
+      if network.is_ctc:
+        self.cp.set_value(self.ctc_targets)
     else:
       self.input_queue.put("update")
       self.input_queue.put(self.data)
       self.input_queue.put(self.targets)
       self.input_queue.put(self.index)
-	  self.input_queue.put(self.ctc_targets)
+      self.input_queue.put(self.ctc_targets)
   
   def run(self, task, network):
     self.task = task
