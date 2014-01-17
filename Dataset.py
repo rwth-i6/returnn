@@ -99,9 +99,9 @@ class Dataset:
     
     if nc.variables.has_key('ctcIndexTranscription'):
       if self.ctc_targets is None:
-        self.ctc_targets = nc.variables['ctcIndexTranscription'].getValue()
+        self.ctc_targets = nc.variables['ctcIndexTranscription'].data
       else:
-        tmp = nc.variables['ctcIndexTranscription'].getValue()
+        tmp = nc.variables['ctcIndexTranscription'].data
         pad_width = self.max_ctc_length - tmp.shape[1]
         tmp = numpy.pad(tmp, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
         pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
