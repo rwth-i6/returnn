@@ -19,7 +19,8 @@ def get_device_attributes():
                  #"GeForce GTX 680" : (1536, 324, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
-                 "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024) }
+                 "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024), 
+                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024)}
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
   cpu = 0
   #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
@@ -76,25 +77,39 @@ class Device():
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = T.cast(self.t, 'int32')
+    self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+    self.c = T.cast(self.cp, 'int32')
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     gparams = []
     for param in self.trainnet.gparams:
-      gparam = T.grad(self.trainnet.objective, param)
+      gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
       gparams.append(gparam)
     # initialize functions
     if self.network_task == 'train':
+      if self.trainnet.is_ctc:
+        train_givens = self.make_ctc_givens(self.trainnet)
+        test_givens = self.make_ctc_givens(self.testnet)
+      else:
+        train_givens = self.make_givens(self.trainnet)
+        test_givens = self.make_givens(self.testnet)
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
-                                     givens = self.make_givens(self.trainnet))
+                                     givens = train_givens)
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
-                                    givens = self.make_givens(self.testnet))
+                                    givens = test_givens)
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
       for extract in extractions:
         if extract == "log-posteriors":
           source.append(T.log(self.testnet.output.p_y_given_x))
+        elif extract == "ctc-sil":
+          feat = self.testnet.output.p_y_given_x
+          feat = feat[:,:-1] #remove blank
+          feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
+          feat = T.log(feat)
+          source.append(feat)
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
@@ -156,6 +171,9 @@ class Device():
         x = input_queue.get()
         t = input_queue.get()
         i = input_queue.get()
+        if network.is_ctc:
+          c = input_queue.get()
+          self.cp.set_value(c)
         self.x.set_value(x)
         self.t.set_value(t)
         self.i.set_value(i)
@@ -171,17 +189,20 @@ class Device():
           return
         for output in result:
           output_queue.put(output)
-        
+
   def update_data(self):
     if self.blocking:
       self.x.set_value(self.data)
       self.t.set_value(self.targets)
       self.i.set_value(self.index)
+      if network.is_ctc:
+        self.cp.set_value(self.ctc_targets)
     else:
       self.input_queue.put("update")
       self.input_queue.put(self.data)
       self.input_queue.put(self.targets)
       self.input_queue.put(self.index)
+      self.input_queue.put(self.ctc_targets)
   
   def run(self, task, network):
     self.task = task
@@ -199,6 +220,7 @@ class Device():
     #self.targets = numpy.zeros((1, 1), dtype = theano.config.floatX)
     #self.index = numpy.zeros((1, 1), dtype = theano.config.floatX)
     self.update_data()
+
   
   def result(self):
     if not self.blocking:
@@ -242,3 +264,5 @@ class Device():
     return [(network.x, self.x), (network.y, self.y), (network.i, self.i)]
   def make_input_givens(self, network):
     return [(network.x, self.x), (network.i, self.i)]
+  def make_ctc_givens(self, network):
+    return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]

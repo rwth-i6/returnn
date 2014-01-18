@@ -84,6 +84,7 @@ class Engine:
     for batch, device in zip(batches[start_batch:], self.devices):
       device.data = numpy.zeros(batch.shape + [data.num_inputs * data.window], dtype=theano.config.floatX)
       device.targets = numpy.zeros(batch.shape, dtype = theano.config.floatX)
+      device.ctc_targets = numpy.zeros((batch.shape[1], data.max_ctc_length), dtype = theano.config.floatX)
       device.index = numpy.zeros(batch.shape, dtype = 'int8')
       if self.network.recurrent:
         data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
@@ -95,6 +96,7 @@ class Engine:
           q = batch.start[0] - s
           device.data[:l, q] = data.alloc_intervals[idi][2][o:o + l]
           device.targets[:l, q] = data.targets[data.seq_start[s] + batch.start[1]:data.seq_start[s] + batch.start[1] + l]
+          device.ctc_targets[q] = data.ctc_targets[ids]
           device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
       else:
         data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)

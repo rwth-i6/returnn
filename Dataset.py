@@ -6,6 +6,8 @@ from numpy.lib.stride_tricks import as_strided as ast
 from scipy.io.netcdf import NetCDFFile
 from Log import log
 from Util import cmd
+import SprintCache
+from math import sqrt
 import theano
 import theano.tensor as T
 import gc
@@ -34,7 +36,7 @@ class Dataset:
     self.labels = []
     self.tags = []
     self.num_seqs = 0
-    self.num_timesteps = 0    
+    self.num_timesteps = 0
     self.chunk_size = int(chunking.split(':')[0])
     if ':' in chunking:
       self.chunk_step = int(chunking.split(':')[1])
@@ -42,6 +44,10 @@ class Dataset:
     else:
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
+
+    self.num_running_chars = 0
+    self.max_ctc_length = 0
+    self.ctc_targets = None
     
   def read_tags(self, filename):
     # super frustrating resignation solution because there is no way to read ncChars in python
@@ -82,12 +88,26 @@ class Dataset:
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
     self.num_timesteps = sum(self.seq_lengths) #nc.dimensions['numTimesteps']
+    if nc.dimensions.has_key('maxCTCIndexTranscriptionLength'):
+      self.max_ctc_length = max(self.max_ctc_length, nc.dimensions['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
       self.num_inputs = nc.dimensions['inputPattSize']
     assert self.num_inputs == nc.dimensions['inputPattSize']
     if self.num_outputs == 0:
       self.num_outputs = nc.dimensions['numLabels']
-    assert self.num_outputs == nc.dimensions['numLabels'] 
+    assert self.num_outputs == nc.dimensions['numLabels']
+    
+    if nc.variables.has_key('ctcIndexTranscription'):
+      if self.ctc_targets is None:
+        self.ctc_targets = nc.variables['ctcIndexTranscription'].data
+      else:
+        tmp = nc.variables['ctcIndexTranscription'].data
+        pad_width = self.max_ctc_length - tmp.shape[1]
+        tmp = numpy.pad(tmp, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
+        pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
+        self.ctc_targets = numpy.pad(self.ctc_targets, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
+        self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))      
+      self.num_running_chars = numpy.sum(self.ctc_targets != -1)  
     nc.close()
     
   def sliding_window(self, xr):
@@ -268,20 +288,22 @@ class Dataset:
       print >> log.v4, "loading file", self.files[i]
       nc = NetCDFFile(self.files[i], 'r')
       inputs = nc.variables['inputs'].data
-      targs = nc.variables['targetClasses'].data
+      if nc.variables.has_key('targetClasses'):
+        targs = nc.variables['targetClasses'].data
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
         idi = self.alloc_interval_index(idc)
         o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
         l = self.seq_lengths[ids]
-        y = targs[p : p + l]
+        if nc.variables.has_key('targetClasses'):
+          y = targs[p : p + l]
+          self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
         x = inputs[p : p + l]
         x = self.preprocess(x)
         if self.window > 1:
           x = self.sliding_window(x) 
         self.alloc_intervals[idi][2][o:o + l] = x
-        self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
       nc.close()
     gc.collect()
     
@@ -296,6 +318,7 @@ class Dataset:
       random.shuffle(self.seq_index)
     else: assert self.batching == 'default', "invalid batching specified: " + self.batching
     self.seq_start = [0]
+    self.transcription_start = [0]
     self.cached_bytes = 0
     num_cached = self.num_seqs
     for i in xrange(self.num_seqs):
@@ -305,7 +328,8 @@ class Dataset:
       if num_cached == self.num_seqs:
         if self.cache_size > 0 and self.cached_bytes + nbytes > self.cache_size:
           num_cached = i
-        else: self.cached_bytes += nbytes
+        else:
+          self.cached_bytes += nbytes
     self.temp_cache_size += self.cached_bytes
     self.alloc_intervals = [[0,0,numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)],
                             [self.num_seqs,self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)]]
@@ -329,6 +353,8 @@ class Dataset:
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = T.cast(self.t, 'int32')
+    self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+    self.c = T.cast(self.cp, 'int32')
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     self.theano_init = True
     return extra
