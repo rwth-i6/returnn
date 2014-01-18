@@ -171,7 +171,7 @@ class Device():
         x = input_queue.get()
         t = input_queue.get()
         i = input_queue.get()
-        if network.is_ctc:
+        if self.trainnet.is_ctc:
           c = input_queue.get()
           self.cp.set_value(c)
         self.x.set_value(x)
@@ -195,7 +195,7 @@ class Device():
       self.x.set_value(self.data)
       self.t.set_value(self.targets)
       self.i.set_value(self.index)
-      if network.is_ctc:
+      if self.trainnet.is_ctc:
         self.cp.set_value(self.ctc_targets)
     else:
       self.input_queue.put("update")
