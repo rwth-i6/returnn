@@ -317,6 +317,7 @@ class Dataset:
   def initialize(self):
     self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
     if self.window > 1:
+      if int(self.window) % 2 == 0: self.window += 1
       self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype = theano.config.floatX)
     self.targets = numpy.zeros((self.num_timesteps, ), dtype = theano.config.floatX)
     self.temp_cache_size += self.cache_size
