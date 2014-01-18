@@ -15,6 +15,7 @@ class Batch:
   def __init__(self, start = [0, 0]):
     self.shape = [0, 0]
     self.start = start
+    self.nseqs = 1
   def try_sequence(self, length): return [max(self.shape[0], length), self.shape[1] + 1]
   def add_sequence(self, length): self.shape = self.try_sequence(length)
   def add_frames(self, length): self.shape = [self.shape[0] + length, max(self.shape[1], 1)]
@@ -73,6 +74,7 @@ class Engine:
             nframes = min(length, batch_size)
           batch.add_frames(nframes)
           length -= min(nframes, batch_step)
+        if s != data.num_seqs - 1: batch.nseqs += 1
       s += 1
     batches.append(batch)
     return batches
@@ -83,9 +85,9 @@ class Engine:
       device.data = numpy.zeros(batch.shape + [data.num_inputs * data.window], dtype=theano.config.floatX)
       device.targets = numpy.zeros(batch.shape, dtype = theano.config.floatX)
       device.index = numpy.zeros(batch.shape, dtype = 'int8')
-      data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
-      idi = data.alloc_interval_index(batch.start[0])
       if self.network.recurrent:
+        data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
+        idi = data.alloc_interval_index(batch.start[0])
         for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
           ids = data.seq_index[s]
           l = data.seq_lengths[ids]
@@ -95,6 +97,8 @@ class Engine:
           device.targets[:l, q] = data.targets[data.seq_start[s] + batch.start[1]:data.seq_start[s] + batch.start[1] + l]
           device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
       else:
+        data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)
+        idi = data.alloc_interval_index(batch.start[0])
         o = data.seq_start[batch.start[0]] + batch.start[1] - data.seq_start[data.alloc_intervals[idi][0]]
         l = batch.shape[0]
         device.data[:l, 0] = data.alloc_intervals[idi][2][o:o + l]
@@ -177,7 +181,7 @@ class Engine:
       if log.verbose[1]:
         print >> log.v1, "epoch", epoch, "elapsed:", str(time.time() - epoch_start_time), "score:", score,
         for name in self.data.keys():
-          data, num_batches = self.data[name] 
+          data, num_batches = self.data[name]
           score, error = self.process('eval', updater, data, num_batches)
           print >> log.v1, name + ":", "score", score, "error", error,
         print >> log.v1, ''
