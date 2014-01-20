@@ -360,7 +360,6 @@ class LayerNetwork(object):
     self.n_in = n_in
     self.n_out = n_out
     self.mask = mask
-    self.is_ctc = False
   
   @classmethod
   def from_config(cls, config, mask = "unity"):
@@ -502,7 +501,6 @@ class LayerNetwork(object):
       self.gparams = self.hidden[-1].params + (self.reverse_hidden[-1].params if self.bidirectional else [])
     else: assert False, "invalid loss: " + loss
     if loss == 'ctc':
-      self.is_ctc = True
       self.output = CTCLayer(self.output, index = self.i)
     L1 += abs(self.output.W_in.sum())
     L2 += (self.output.W_in ** 2).sum()

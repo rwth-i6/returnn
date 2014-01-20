@@ -86,7 +86,7 @@ class Device():
       gparams.append(gparam)
     # initialize functions
     if self.network_task == 'train':
-      if self.trainnet.is_ctc:
+      if self.trainnet.loss == 'ctc':
         train_givens = self.make_ctc_givens(self.trainnet)
         test_givens = self.make_ctc_givens(self.testnet)
       else:
@@ -171,7 +171,7 @@ class Device():
         x = input_queue.get()
         t = input_queue.get()
         i = input_queue.get()
-        if self.trainnet.is_ctc:
+        if self.trainnet.loss == 'ctc':
           c = input_queue.get()
           self.cp.set_value(c)
         self.x.set_value(x)
@@ -195,7 +195,7 @@ class Device():
       self.x.set_value(self.data)
       self.t.set_value(self.targets)
       self.i.set_value(self.index)
-      if self.trainnet.is_ctc:
+      if self.trainnet.loss == 'ctc':
         self.cp.set_value(self.ctc_targets)
     else:
       self.input_queue.put("update")
