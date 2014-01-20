@@ -438,6 +438,9 @@ class LayerNetwork(object):
     L1 = T.constant(0)
     L2 = T.constant(0)
     self.recurrent = False
+    
+    if hasattr(LstmLayer, 'sharpgates'):
+      del LstmLayer.sharpgates
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
       if info[0] == 'forward':
@@ -531,7 +534,7 @@ class LayerNetwork(object):
   
   def set_params(self, params):
     self.output.set_params(params[0])
-    for p,h in zip(params[1:], self.hidden + self.reverse_hidden):
+    for p, h in zip(params[1:], self.hidden + self.reverse_hidden):
       h.set_params(p)
   
   def save(self, name, epoch):
