@@ -202,7 +202,8 @@ class Device():
       self.input_queue.put(self.data)
       self.input_queue.put(self.targets)
       self.input_queue.put(self.index)
-      self.input_queue.put(self.ctc_targets)
+      if self.config.value('loss','') == 'ctc':
+        self.input_queue.put(self.ctc_targets)
   
   def run(self, task, network):
     self.task = task
