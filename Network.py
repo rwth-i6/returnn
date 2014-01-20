@@ -259,9 +259,14 @@ class LstmLayer(RecurrentLayer):
     self.n_out /= 4
     
     if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    elif sharpgates == 'shared':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(3)
+        self.add_param(LstmLayer.sharpgates)
+      self.sharpness = LstmLayer.sharpgates
     else: self.sharpness = self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none': self.add_param(self.sharpness)
+    if sharpgates != 'none' and sharpgates != "shared": self.add_param(self.sharpness)
     
     def step(x_t, i_t, s_p, h_p, mask):
       i = T.outer(i_t, self.o)

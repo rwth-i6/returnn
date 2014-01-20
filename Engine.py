@@ -96,7 +96,7 @@ class Engine:
           q = batch.start[0] - s
           device.data[:l, q] = data.alloc_intervals[idi][2][o:o + l]
           device.targets[:l, q] = data.targets[data.seq_start[s] + batch.start[1]:data.seq_start[s] + batch.start[1] + l]
-          device.ctc_targets[q] = data.ctc_targets[ids]
+          if data.ctc_targets: device.ctc_targets[q] = data.ctc_targets[ids]
           device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
       else:
         data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)
@@ -110,7 +110,7 @@ class Engine:
     return devices
     
   def process(self, task, updater, data, batches, start_batch = 0):
-    score, error, nseqs, pseqs = 0, 0, 0, 0
+    score, error = 0, 0
     num_batches = start_batch
     num_data_batches = len(batches)
     while num_batches < num_data_batches:
