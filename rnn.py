@@ -169,6 +169,6 @@ if __name__ == '__main__':
     engine.classify(devices[0], eval, cache_file)
   elif task == "classify":
     assert eval != None, 'no eval data provided'
-  print("elapsed: %f" % (time.time() - st))
+  print >> log.v3, ("elapsed: %f" % (time.time() - st))
   for device in devices:
     device.terminate()
