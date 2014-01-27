@@ -126,7 +126,7 @@ class Device():
                                        givens = self.make_input_givens(self.testnet))
     elif self.network_task == 'classify':
       self.extractor = theano.function(inputs = [],
-                                       outputs = T.argmax(self.testnet.output.p_y_give_x),
+                                       outputs = T.argmax(self.testnet.output.p_y_given_x),
                                        givens = self.make_input_givens(self.testnet))
     elif self.network_task == 'analyze':
       self.analyzer = theano.function(inputs = [],
