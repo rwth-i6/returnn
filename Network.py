@@ -225,6 +225,7 @@ class RecurrentLayer(HiddenLayer):
     def step(x_t, i_t, h_p):
       i = T.outer(i_t, self.o)
       z = T.dot(x_t, self.mass * self.mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
+      #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
       return h_t * i
     
@@ -232,7 +233,7 @@ class RecurrentLayer(HiddenLayer):
                                  go_backwards = self.reverse,
                                  truncate_gradient = self.truncation,
                                  sequences = [self.source, self.index],
-                                 outputs_info = [self.act])
+                                 outputs_info = [T.alloc(self.act, self.source.shape[1], self.n_out)])
     self.output = self.output[::-(2 * self.reverse - 1)]
     
   def create_recurrent_weights(self, n, m):
@@ -264,10 +265,14 @@ class LstmLayer(RecurrentLayer):
         LstmLayer.sharpgates = self.create_bias(3)
         self.add_param(LstmLayer.sharpgates)
       self.sharpness = LstmLayer.sharpgates
+    elif sharpgates == 'single':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(1)
+        self.add_param(LstmLayer.sharpgates)
+      self.sharpness = LstmLayer.sharpgates
     else: self.sharpness = self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none' and sharpgates != "shared": self.add_param(self.sharpness)
-    
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness) 
     def step(x_t, i_t, s_p, h_p, mask):
       i = T.outer(i_t, self.o)
       z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
@@ -279,9 +284,11 @@ class LstmLayer(RecurrentLayer):
       partition = z.shape[1] / 4
       input = CI(z[:,:partition])
       ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
-      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
+      #forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
+      forgetgate = GF(self.sharpness[0] * z[:,2 * partition:3 * partition])
       s_t = input * ingate + s_p * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
+      #outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
+      outgate = GO(self.sharpness[0] * z[:,3 * partition:4 * partition])
       h_t = CO(s_t) * outgate
       return s_t * i, h_t * i
     
@@ -438,7 +445,6 @@ class LayerNetwork(object):
     L1 = T.constant(0)
     L2 = T.constant(0)
     self.recurrent = False
-    
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     # create forward layers
@@ -471,7 +477,7 @@ class LayerNetwork(object):
           self.reverse_hidden.append(ForwardLayer(source = x_in, n_in = n_in, n_out = info[1], activation = info[2], dropout = drop, mask = self.mask))
         else:
           if info[0] == 'recurrent':
-            self.reverse_hidden.append(RecurrentLayer(rng = self.rng, source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
+            self.reverse_hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
           elif info[0] == 'lstm':
             self.reverse_hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
           elif info[0] == 'peep_lstm':
@@ -516,7 +522,9 @@ class LayerNetwork(object):
       self.cost, self.known_grads = self.output.cost(self.c)
     else:
       self.cost, self.known_grads = self.output.cost(self.y)
-    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 + entropy * self.output.entropy()
+    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 #+ entropy * self.output.entropy()
+    if hasattr(LstmLayer, 'sharpgates'):
+      self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     if loss == 'ctc':
       self.errors = self.output.errors(self.c)
     else:

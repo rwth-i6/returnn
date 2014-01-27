@@ -10,10 +10,10 @@ from Device import Device, get_num_devices
 from Config import Config
 from optparse import OptionParser
 
-def load_data(config, cache_size, key, chunking = "chunking"):
+def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
   window = config.int('window', 1)
-  batching = config.value("batching", 'default')
   if chunking == "chunking": chunking = config.value("chunking", "0")
+  if batching == "batching": batching = config.value("batching", 'default')
   if config.has(key):
     data = Dataset(window, cache_size, chunking, batching)
     for f in config.list(key):
@@ -118,8 +118,8 @@ if __name__ == '__main__':
       cache_size *= 1024
     cache_size = int(cache_size) + 1 if int(cache_size) > 0 else 0    
     cache_sizes.append(cache_size)
-  dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = "0")
-  eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = "0")
+  dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = "0", batching = "sorted")
+  eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = "0", batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
   # initialize network
