@@ -125,7 +125,7 @@ class Device():
                                        outputs = source,
                                        givens = self.make_input_givens(self.testnet))
     elif self.network_task == 'classify':
-      self.extractor = theano.function(inputs = [],
+      self.classifier = theano.function(inputs = [],
                                        outputs = T.argmax(self.testnet.output.p_y_given_x),
                                        givens = self.make_input_givens(self.testnet))
     elif self.network_task == 'analyze':
@@ -142,6 +142,8 @@ class Device():
       proc = self.tester
     elif cmd == "extract":
       proc = self.extractor
+    elif cmd == 'classify':
+      proc = self.classifier
     elif cmd == "analyze":
       proc = self.analyzer
     else: assert False, "invalid command: " + cmd
