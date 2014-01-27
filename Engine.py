@@ -210,6 +210,21 @@ class Engine:
         cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
       num_batches += len(alloc_devices)
     cache.finalize()
+  
+  def classify(self, device, data):
+    batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
+    num_data_batches = len(batches)
+    num_batches = 0
+    while num_batches < num_data_batches:
+      alloc_devices = self.allocate_devices(data, batches, num_batches)
+      print >> log.v3, "alloc"
+      for batch, device in enumerate(alloc_devices):
+        device.run('classify', self.network)
+        labels = numpy.concatenate(device.result(), axis = 1) #reduce(operator.add, device.result())
+        print >> log.v3, batch
+        print >> log.v3, data.tags[num_batches + batch]
+        for label in labels: print >> log.v3, label
+      num_batches += len(alloc_devices)
 
   def analyze(self, device, data, statistics):
     num_labels = len(data.labels)

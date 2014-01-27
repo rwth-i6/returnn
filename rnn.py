@@ -166,6 +166,9 @@ if __name__ == '__main__':
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.analyze(devices[0], eval, statistics)
-  print("elapsed: %f" % (time.time() - st))
+    engine.classify(devices[0], eval, cache_file)
+  elif task == "classify":
+    assert eval != None, 'no eval data provided'
+  print >> log.v3, ("elapsed: %f" % (time.time() - st))
   for device in devices:
     device.terminate()
