@@ -217,12 +217,13 @@ class Engine:
     num_batches = 0
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
+      print >> log.v3, "alloc"
       for batch, device in enumerate(alloc_devices):
         device.run('classify', self.network)
         labels = numpy.concatenate(device.result(), axis = 1) #reduce(operator.add, device.result())
-        print >> log.v3, data.tags[num_batches + batch],
-        for label in labels: print >> log.v3, label,
-        print >> log.v3, ''
+        print >> log.v3, batch
+        print >> log.v3, data.tags[num_batches + batch]
+        for label in labels: print >> log.v3, label
       num_batches += len(alloc_devices)
 
   def analyze(self, device, data, statistics):
