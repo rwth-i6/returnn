@@ -36,7 +36,7 @@ class Container(object):
   def load(self, layer):
     layer = layer.strip().split()
     assert layer[0] == self.name, "invalid layer name (expected " + self.name + " got " + layer[0] + ")"
-    assert len(layer) - 1 == len(self.params), "invalid layer parameter count (expected " + str(len(self.params)) + " got " + str(len(layer) - 1) + ")"
+    assert len(layer) - 1 == len(self.params), "invalid parameter count for layer " + self.name + " (expected " + str(len(self.params)) + " got " + str(len(layer) - 1) + ")"
     for l in xrange(len(layer) - 1):
       rows = layer[l + 1].split(';')
       if len(rows) == 1:
