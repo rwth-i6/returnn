@@ -186,7 +186,7 @@ class CTCLayer(Container):
     
 class BidirectionalOutputLayer(OutputLayer):  
   def __init__(self, forward, backward, index, n_in, n_out, loss = "ce", dropout = 0, mask = "unity", name = "bisoftmax"):
-    super(BidirectionalOutputLayer, self).__init__(forward, index, n_in, n_out, dropout, loss, mask, name = name)
+    super(BidirectionalOutputLayer, self).__init__(forward, index, n_in, n_out, loss, dropout, mask, name = name)
     self.W_reverse = self.add_param(self.create_forward_weights(n_in, n_out))
     self.z += T.dot(backward, self.mass * self.mask * self.W_reverse)
     self.initialize()
