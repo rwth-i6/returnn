@@ -8,8 +8,7 @@ import sys
 import theano.tensor as T
 from Log import log
 from collections import OrderedDict
-import operator
-import gc
+import threading
 
 class Batch:
   def __init__(self, start = [0, 0]):
@@ -220,7 +219,7 @@ class Engine:
             for j, label in enumerate(merge.keys()):
               for k in merge[label]:
                 merged[i, j] += features[i, k]
-            features = numpy.log(numpy.exp(merged) / numpy.sum(numpy.exp(merged[i])))    
+              merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))    
         print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", data.tags[num_batches + batch]
         times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
         #times = zip(range(0, len(features)), range(1, len(features) + 1))
