@@ -204,26 +204,28 @@ class Engine:
         if not merged in merge.keys():
           merge[merged] = []
         merge[merged].append(index)
+      label_file = open(cache_file + ".labels", 'w')
+      for key in merge.keys():
+        print >> label_file, key
+      label_file.close()
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
         print >> log.v4, "processing batch", num_batches + batch, "of", num_data_batches
         device.run('extract', self.network)
         features = numpy.concatenate(device.result(), axis = 1) #reduce(operator.add, device.result())
-        print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", data.tags[num_batches + batch]
-        times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
-        #times = zip(range(0, len(features)), range(1, len(features) + 1))
-        toffset += len(features)
         if combine_labels != '':
           merged = numpy.zeros((len(features), len(merge.keys())), dtype = theano.config.floatX)
           for i in xrange(len(features)): 
             for j, label in enumerate(merge.keys()):
               for k in merge[label]:
                 merged[i, j] += features[i, k]
-            merged = numpy.log(numpy.exp(merged) / numpy.sum(numpy.exp(merged[i])))
-          cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(merged), numpy.asarray(times))
-        else:  
-          cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
+            features = numpy.log(numpy.exp(merged) / numpy.sum(numpy.exp(merged[i])))    
+        print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", data.tags[num_batches + batch]
+        times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
+        #times = zip(range(0, len(features)), range(1, len(features) + 1))
+        toffset += len(features)
+        cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
       num_batches += len(alloc_devices)
     cache.finalize()
   
