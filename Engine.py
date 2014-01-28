@@ -218,7 +218,8 @@ class Engine:
           merged = numpy.zeros((len(features), len(merge.keys())), dtype = theano.config.floatX)
           for i in xrange(len(features)): 
             for j, label in enumerate(merge.keys()):
-              merged[i, j] += features[i][merge[label]]
+              for k in merge[label]:
+                merged[i, j] += features[i, k]
             merged = numpy.log(numpy.exp(merged) / numpy.sum(numpy.exp(merged[i])))
           cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(merged), numpy.asarray(times))
         else:  
