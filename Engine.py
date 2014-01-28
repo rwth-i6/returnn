@@ -199,7 +199,7 @@ class Engine:
     toffset = 0
     merge = {}
     if combine_labels != '':
-      for index, label in enumerate(data.labels()):
+      for index, label in enumerate(data.labels):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
         if not merged in merge.keys():
           merge[merged] = []
