@@ -219,7 +219,7 @@ class Engine:
           for i in xrange(len(features)): 
             for j, label in enumerate(merge.keys()):
               merged[i, j] += features[i][merge[label]]
-            merged = numpy.exp(merged) / numpy.sum(numpy.exp(merged[i]))
+            merged = numpy.log(numpy.exp(merged) / numpy.sum(numpy.exp(merged[i])))
           cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(merged), numpy.asarray(times))
         else:  
           cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
