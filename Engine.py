@@ -191,12 +191,19 @@ class Engine:
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
       
-  def forward(self, device, data, cache_file):
+  def forward(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     num_data_batches = len(batches)
     num_batches = 0
     toffset = 0
+    merge = {}
+    if combine_labels != '':
+      for index, label in enumerate(data.labels()):
+        merged = combine_labels.join(label.split(combine_labels)[:-1])
+        if not merged in merge.keys():
+          merge[merged] = []
+        merge[merged].append(index)
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
@@ -207,7 +214,15 @@ class Engine:
         times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
         #times = zip(range(0, len(features)), range(1, len(features) + 1))
         toffset += len(features)
-        cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
+        if combine_labels != '':
+          merged = numpy.zeros((len(features), len(merge.keys())), dtype = theano.config.floatX)
+          for i in xrange(len(features)): 
+            for j, label in enumerate(merge.keys()):
+              merged[i, j] += features[i][merge[label]]
+            merged = numpy.exp(merged) / numpy.sum(numpy.exp(merged[i]))
+          cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(merged), numpy.asarray(times))
+        else:  
+          cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
       num_batches += len(alloc_devices)
     cache.finalize()
   
