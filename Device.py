@@ -228,7 +228,6 @@ class Device():
     #self.index = numpy.zeros((1, 1), dtype = theano.config.floatX)
     self.update_data()
 
-  
   def result(self):
     if not self.blocking:
       self.output = []

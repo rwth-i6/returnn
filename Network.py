@@ -41,18 +41,8 @@ class Container(object):
       rows = layer[l + 1].split(';')
       if len(rows) == 1:
         value = numpy.array([float(x) for x in rows[0].split(',')], dtype=theano.config.floatX)
-      else: # nr of rwos as n_in, nr of cols as n_out
+      else: # nr of rows as n_in, nr of cols as n_out
         value = numpy.array([[float(x) for x in row.split(',')] for row in rows], dtype=theano.config.floatX)
-      #######################################################################################################
-      #if self.name == 'bisoftmax':
-      #  mapping = [ int(line.strip()) for line in open('/home/creon/map.clean') ]
-      #  if len(rows) == 1: valuex = numpy.array([value[i] for i in mapping], dtype = theano.config.floatX)
-      #  else:
-      #    valuex = numpy.zeros((value.shape[0], len(mapping)), dtype = theano.config.floatX)
-      #    for i,j in enumerate(mapping):
-      #      valuex[:, i] = value[:, j]
-      #  value = valuex
-      #######################################################################################################
       assert self.params[l].get_value().shape == value.shape, "invalid layer parameter shape (expected  " + str(self.params[l].get_value().shape) + " got " + str(value.shape) + ")"
       self.params[l].set_value(value)
         
