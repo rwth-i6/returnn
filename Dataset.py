@@ -92,10 +92,10 @@ class Dataset:
       self.max_ctc_length = max(self.max_ctc_length, nc.dimensions['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
       self.num_inputs = nc.dimensions['inputPattSize']
-    assert self.num_inputs == nc.dimensions['inputPattSize']
+    assert self.num_inputs == nc.dimensions['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(nc.dimensions['inputPattSize']) + ")"
     if self.num_outputs == 0:
       self.num_outputs = nc.dimensions['numLabels']
-    assert self.num_outputs == nc.dimensions['numLabels']
+    assert self.num_outputs == nc.dimensions['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(nc.dimensions['numLabels']) + ")"
     
     if nc.variables.has_key('ctcIndexTranscription'):
       if self.ctc_targets is None:
