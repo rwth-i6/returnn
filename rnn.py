@@ -161,8 +161,9 @@ if __name__ == '__main__':
   elif task == 'forward':
     assert eval != None, 'no eval data provided'
     assert config.has('cache_file'), 'no output file provided'
+    combine_labels = config.value('combine_labels', '')
     cache_file = config.value('cache_file', '')
-    engine.forward(devices[0], eval, cache_file)
+    engine.forward(devices[0], eval, cache_file, combine_labels)
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.analyze(devices[0], eval, statistics)
