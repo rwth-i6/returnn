@@ -21,6 +21,15 @@ class Batch:
   def size(self): return self.shape[0] * self.shape[1]
 
 class Engine:
+  class Process(threading.Thread):
+    def __init__(self, data, batches, devices):
+      self.data = data
+      self.batches = batches
+      self.devices = devices
+      
+    def run(self):
+      score, error = 0, 0
+      
   def __init__(self, devices, network):
     self.network = network
     self.devices = devices
@@ -114,7 +123,6 @@ class Engine:
     num_batches = start_batch
     num_data_batches = len(batches)
     while num_batches < num_data_batches:
-      #alloc_batches = self.allocate_batches(data, batches, num_batches)
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
         if self.network.recurrent:
@@ -200,6 +208,7 @@ class Engine:
     if combine_labels != '':
       for index, label in enumerate(data.labels):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
+        if merged == '': merged = label
         if not merged in merge.keys():
           merge[merged] = []
         merge[merged].append(index)
@@ -300,4 +309,3 @@ class Engine:
         
     if "error" in statistics:
       print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps) 
-    
