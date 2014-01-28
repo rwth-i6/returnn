@@ -137,7 +137,7 @@ class OutputLayer(Layer):
       pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
-      y_oh = T.eq(T.shape_padleft(T.arange(2), y_f.ndim), T.shape_padright(y_f, 1))
+      y_oh = T.eq(T.shape_padleft(T.arange(self.n_out), y_f.ndim), T.shape_padright(y_f, 1))
       return ((self.p_y_given_x[(self.i > 0).nonzero()] - y_oh[(self.i > 0).nonzero()]) ** 2).sum(), known_grads
     #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   def entropy(self):
