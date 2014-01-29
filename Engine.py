@@ -136,9 +136,9 @@ class SprintCacheForwardProcess(Process):
         for i in xrange(len(features)): 
           for j, label in enumerate(self.merge.keys()):
             for k in self.merge[label]:
-              merged[i, j] += features[i, k]
-          z = max(numpy.sum(numpy.exp(merged[i])), 0.000001)
-          merged[i] = numpy.log(numpy.exp(merged[i]) / z)
+              merged[i, j] += numpy.exp(features[i, k])
+          z = max(numpy.sum(merged[i]), 0.000001)
+          merged[i] = numpy.log(merged[i] / z)
         features = merged
       print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
@@ -239,6 +239,9 @@ class Engine:
           if len(self.devices) == 1: tester.join(9044006400)
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
+    if tester:
+      if len(self.devices) > 1: tester.join(9044006400)
+      print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       
   def forward(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
