@@ -212,9 +212,10 @@ class Engine:
         if not merged in merge.keys():
           merge[merged] = []
         merge[merged].append(index)
-      label_file = open(cache_file + ".labels", 'w')
+      import codecs
+      label_file = codecs.open(cache_file + ".labels", encoding = 'utf-8', mode = 'w')
       for key in merge.keys():
-        print >> label_file, key
+        label_file.write(key.decode('utf-8') + "\n")
       label_file.close()
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
@@ -234,7 +235,7 @@ class Engine:
         times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
         #times = zip(range(0, len(features)), range(1, len(features) + 1))
         toffset += len(features)
-        cache.addFeatureCache(data.tags[num_batches + batch], numpy.asarray(features), numpy.asarray(times))
+        cache.addFeatureCache(data.tags[data.seq_index[num_batches + batch]], numpy.asarray(features), numpy.asarray(times))
       num_batches += len(alloc_devices)
     cache.finalize()
   
