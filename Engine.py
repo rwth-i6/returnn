@@ -137,7 +137,7 @@ class SprintCacheForwardProcess(Process):
           for j, label in enumerate(self.merge.keys()):
             for k in self.merge[label]:
               merged[i, j] += features[i, k]
-            merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))
+          merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))
         features = merged
       print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
@@ -219,7 +219,7 @@ class Engine:
       epoch_start_time = time.time()
       trainer = TrainProcess(self.network, self.devices[0:-1], train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
-        if tester.is_alive(): tester.join(9044006400)
+        if len(self.devices) > 1: tester.join(9044006400)
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
@@ -233,8 +233,7 @@ class Engine:
         for name in self.data.keys():
           data, num_batches = self.data[name]
           tester = EvalProcess(self.network, [self.devices[-1]], data, num_batches)
-          if len(self.devices) == 1:
-            tester.join(9044006400)
+          if len(self.devices) == 1: tester.join(9044006400)
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
       
@@ -252,7 +251,7 @@ class Engine:
       import codecs
       label_file = codecs.open(cache_file + ".labels", encoding = 'utf-8', mode = 'w')
       for key in merge.keys():
-        label_file.write(key.decode('utf-8') + "\n")
+        label_file.write(key + "\n")
       label_file.close()
     forwarder = SprintCacheForwardProcess(self.network, self.devices, data, batches, cache, merge)
     forwarder.join(9044006400)
