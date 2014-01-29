@@ -137,7 +137,8 @@ class SprintCacheForwardProcess(Process):
           for j, label in enumerate(self.merge.keys()):
             for k in self.merge[label]:
               merged[i, j] += features[i, k]
-          merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))
+          z = max(numpy.sum(numpy.exp(merged[i])), 0.000001)
+          merged[i] = numpy.log(numpy.exp(merged[i]) / z)
         features = merged
       print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
