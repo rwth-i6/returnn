@@ -9,7 +9,6 @@ import theano.tensor as T
 from Log import log
 from collections import OrderedDict
 import threading
-import Queue
 
 class Batch:
   def __init__(self, start = [0, 0]):
@@ -64,7 +63,7 @@ class Process(threading.Thread):
         devices.append(device)
       return devices
       
-    def evaluate(self, result):
+    def evaluate(self, batch, result):
       self.result = result
     def initialize(self): pass
     def finalize(self): pass
@@ -87,7 +86,7 @@ class Process(threading.Thread):
             print >> log.v2, "device", device.name, "crashed on batch", batch + num_batches
             self.last_batch = batch + num_batches
             return -1
-          self.evaluate(result)
+          self.evaluate(num_batches + batch, result)
         num_batches += len(alloc_devices)
       self.finalize()
         
@@ -99,7 +98,7 @@ class TrainProcess(Process):
     self.gparams = gparams
   def initialize(self):
     self.score = 0
-  def evaluate(self, result):
+  def evaluate(self, batch, result):
     self.score += result[0]
     assert len(result) == len(self.network.gparams) + 1
     for p,q in zip(self.network.gparams, result[1:]):
@@ -116,13 +115,36 @@ class EvalProcess(Process):
     def initialize(self):
       self.score = 0
       self.error = 0
-    def evaluate(self, result):
+    def evaluate(self, batch, result):
       self.score += result[0]
       self.error += result[1]
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)
-
+      
+class SprintCacheForwardProcess(Process):
+    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
+      super(SprintCacheForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
+      self.cache = cache
+      self.merge = merge
+    def initialize(self, result):
+      self.toffset = 0
+    def evaluate(self, batch, result):
+      features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
+      if self.merge.keys():
+        merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
+        for i in xrange(len(features)): 
+          for j, label in enumerate(self.merge.keys()):
+            for k in self.merge[label]:
+              merged[i, j] += features[i, k]
+            merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))
+        features = merged
+      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
+      times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
+      #times = zip(range(0, len(features)), range(1, len(features) + 1))
+      self.toffset += len(features)
+      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
+      
 class Engine:      
   def __init__(self, devices, network):
     self.network = network
@@ -213,16 +235,12 @@ class Engine:
           tester = EvalProcess(self.network, [self.devices[-1]], data, num_batches)
           if len(self.devices) == 1:
             tester.join(9044006400)
-        #print >> log.v1, ''
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
       
   def forward(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
-    num_data_batches = len(batches)
-    num_batches = 0
-    toffset = 0
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
@@ -236,26 +254,8 @@ class Engine:
       for key in merge.keys():
         label_file.write(key.decode('utf-8') + "\n")
       label_file.close()
-    while num_batches < num_data_batches:
-      alloc_devices = self.allocate_devices(data, batches, num_batches)
-      for batch, device in enumerate(alloc_devices):
-        print >> log.v4, "processing batch", num_batches + batch, "of", num_data_batches
-        device.run('extract', self.network)
-        features = numpy.concatenate(device.result(), axis = 1) #reduce(operator.add, device.result())
-        if combine_labels != '':
-          merged = numpy.zeros((len(features), len(merge.keys())), dtype = theano.config.floatX)
-          for i in xrange(len(features)): 
-            for j, label in enumerate(merge.keys()):
-              for k in merge[label]:
-                merged[i, j] += features[i, k]
-              merged[i] = numpy.log(numpy.exp(merged[i]) / numpy.sum(numpy.exp(merged[i])))
-          features = merged
-        print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", data.tags[num_batches + batch]
-        times = zip(range(0, len(features)), range(1, len(features) + 1)) if not data.timestamps else data.timestamps[toffset : toffset + len(features)]
-        #times = zip(range(0, len(features)), range(1, len(features) + 1))
-        toffset += len(features)
-        cache.addFeatureCache(data.tags[data.seq_index[num_batches + batch]], numpy.asarray(features), numpy.asarray(times))
-      num_batches += len(alloc_devices)
+    forwarder = SprintCacheForwardProcess(self.network, self.devices, data, batches, cache, merge)
+    forwarder.join(9044006400)
     cache.finalize()
   
   def classify(self, device, data, label_file):
