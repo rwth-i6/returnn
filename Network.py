@@ -198,10 +198,6 @@ class HiddenLayer(Layer):
 class ForwardLayer(HiddenLayer):
   def __init__(self, source, n_in, n_out, activation=T.tanh, dropout = 0, mask = "unity", name = "hidden"):
     super(ForwardLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, name = name)
-    #values = numpy.asarray(self.rng.uniform(low = -numpy.sqrt(6. / (n_in + n_out)),
-    #                                        high = numpy.sqrt(6. / (n_in + n_out)),
-    #                                        size = (n_in, n_out)), dtype=theano.config.floatX)
-    #if self.activation == theano.tensor.nnet.sigmoid: values *= 4
     self.W_in.set_value(self.create_uniform_weights(n_in, n_out).get_value())
     z = T.dot(source, self.mass * self.mask * self.W_in) + self.b
     self.output = (z if self.activation is None else self.activation(z))
@@ -225,8 +221,7 @@ class RecurrentLayer(HiddenLayer):
       z = T.dot(x_t, self.mass * self.mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
       #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
-      return h_t * i
-    
+      return h_t * i    
     self.output, _ = theano.scan(step,
                                  go_backwards = self.reverse,
                                  truncate_gradient = self.truncation,

@@ -215,9 +215,11 @@ class Engine:
     updater = theano.function(inputs = [self.rate], updates = updates)
     train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
     tester = None
+    training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
+    testing_device = self.devices[-1]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
       epoch_start_time = time.time()
-      trainer = TrainProcess(self.network, self.devices[0:-1], train, train_batches, learning_rate, self.gparams, updater, start_batch)
+      trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if len(self.devices) > 1: tester.join(9044006400)
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
@@ -232,7 +234,7 @@ class Engine:
         print >> log.v1, "epoch", epoch, "elapsed:", str(time.time() - epoch_start_time), "score:", trainer.score,
         for name in self.data.keys():
           data, num_batches = self.data[name]
-          tester = EvalProcess(self.network, [self.devices[-1]], data, num_batches)
+          tester = EvalProcess(self.network, [testing_device], data, num_batches)
           if len(self.devices) == 1: tester.join(9044006400)
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
