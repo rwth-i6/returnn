@@ -98,11 +98,13 @@ class Layer(Container):
 """
 
 class OutputLayer(Layer):
-  def __init__(self, source, index, n_in, n_out, loss = 'ce', dropout = 0, mask = "unity", name = "softmax"):
-    super(OutputLayer, self).__init__(n_in, n_out, name, mask, dropout)
-    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out))
-    self.z = T.dot(source, self.mass * self.mask * self.W_in) + self.b
-    self.i = index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
+  def __init__(self, sources, index, n_out, loss = 'ce', dropout = 0, mask = "unity", name = "softmax"):
+    super(OutputLayer, self).__init__(sum([s.n_out for s in sources]), n_out, name, mask, dropout)
+    self.z = self.b
+    self.W_in = [ self.add_param(self.create_forward_weights(source.n_out, n_out)) for source in sources ]
+    for source, W in zip(sources, self.W_in): self.z += T.dot(source.output, self.mass * self.mask * W)
+    self.index = index
+    self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
     self.loss = loss
     self.initialize()
     
@@ -113,7 +115,8 @@ class OutputLayer(Layer):
     #self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
-    else: assert False, "invalid loss " + self.loss
+    elif self.loss == 'ctc': self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.p_y_given_x, axis = -1)
 
   def cost(self, y):
@@ -121,67 +124,28 @@ class OutputLayer(Layer):
     #y_f = y.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
     #y_f = y.flatten()
     known_grads = None
-    #return -T.sum(T.log(self.p_y_given_x)[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]])
-    #return -T.sum(T.log(pcx))
     if self.loss == 'ce':
       pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
       y_oh = T.eq(T.shape_padleft(T.arange(self.n_out), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[(self.i > 0).nonzero()] - y_oh[(self.i > 0).nonzero()])), known_grads
+    elif self.loss == 'ctc':
+      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0))
+      known_grads = {self.z: grad}
+      return err.sum(), known_grads
+    else: assert False
     #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   def entropy(self):
     return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
 
   def errors(self, y):
+    if self.loss == 'ctc': return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0)))
     y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32') #y_f = y.flatten(ndim=1)
     if y_f.dtype.startswith('int'):
       return T.sum(T.neq(self.y_pred[(self.i > 0).nonzero()], y_f[(self.i > 0).nonzero()]))
     else: raise NotImplementedError()
-    
-class CTCLayer(Container):
-  def __init__(self, softmax, index, name = 'ctc'):
-    super(CTCLayer, self).__init__(name)
-    self.softmax = softmax
-    self.params = softmax.params
-    self.W_in = softmax.W_in
-    self.p_y_given_x = softmax.p_y_given_x
-    self.i = index;
-    try:
-      self.W_reverse = softmax.W_reverse
-    except AttributeError:
-      pass
-    
-    self.y_given_x_reshaped = T.reshape(self.softmax.p_y_given_x, self.softmax.z.shape);
-    self.index_collapsed = T.sum(index, axis=0);
-    
-  def cost(self, c):
-    ctc = CTCOp()    
-    err, grad = ctc(self.y_given_x_reshaped, c, self.index_collapsed)
-    score = err.sum()
-    known_grads = {self.softmax.z: grad}
-    return score, known_grads
-
-  def entropy(self):
-    return self.softmax.entropy()
-  
-  def errors(self, c):
-    #sum of char edit distance per sequence
-    return T.sum(BestPathDecodeOp()(self.y_given_x_reshaped, c, self.index_collapsed))
-  
-  def get_params(self):
-    return self.softmax.get_params()
-    
-  def set_params(self, params):
-    self.softmax.set_params(params)
-    
-class BidirectionalOutputLayer(OutputLayer):  
-  def __init__(self, forward, backward, index, n_in, n_out, loss = "ce", dropout = 0, mask = "unity", name = "bisoftmax"):
-    super(BidirectionalOutputLayer, self).__init__(forward, index, n_in, n_out, loss, dropout, mask, name = name)
-    self.W_reverse = self.add_param(self.create_forward_weights(n_in, n_out))
-    self.z += T.dot(backward, self.mass * self.mask * self.W_reverse)
-    self.initialize()
-    
+       
 """
         HIDDEN LAYERS
 """
@@ -484,42 +448,24 @@ class LayerNetwork(object):
     self.gparams = self.params[:]
     # create output layer
     self.loss = loss
+    sources = [self.hidden[-1]] + ([self.reverse_hidden[-1]] if self.bidirectional else [])
     if loss == 'ce' or loss == 'ctc' or loss == 'sse':
-      if self.bidirectional:
-        self.output = BidirectionalOutputLayer(forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
-        #self.output = BidirectionalContextSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, n_ctx = self.n_out)
-        #self.output = BidirectionalStaticContextSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, n_ctx = self.n_out)
-        #self.output = RecurrentBidirectionalSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out)
-        #self.output = BidirectionalLstmSoftmaxLayer(rng = self.rng, forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out)
-      else:
-        self.output = OutputLayer(source = x_in, index = self.i, n_in = n_in, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
+      self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
     elif loss == 'layer':
-      if self.bidirectional:
-        self.output = BidirectionalOutputLayer(forward = self.hidden[-1].output, backward = self.reverse_hidden[-1].output, index = self.i, n_in = n_in, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
-      else:
-        self.output = OutputLayer(source = x_in, index = self.i, n_in = n_in, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
+      self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
       self.gparams = self.hidden[-1].params + (self.reverse_hidden[-1].params if self.bidirectional else [])
     else: assert False, "invalid loss: " + loss
-    if loss == 'ctc':
-      self.output = CTCLayer(self.output, index = self.i)
-    L1 += abs(self.output.W_in.sum())
-    L2 += (self.output.W_in ** 2).sum()
-    if self.bidirectional:
-      L1 += abs(self.output.W_reverse.sum())
-      L2 += (self.output.W_reverse ** 2).sum()
+    for W in self.output.W_in:
+      L1 += abs(W.sum())
+      L2 += (W ** 2).sum()
     self.params += self.output.params
     self.gparams += self.output.params
-    if loss == 'ctc':
-      self.cost, self.known_grads = self.output.cost(self.c)
-    else:
-      self.cost, self.known_grads = self.output.cost(self.y)
+    targets = self.c if self.loss == 'ctc' else self.y
+    self.errors = self.output.errors(targets)
+    self.cost, self.known_grads = self.output.cost(targets)
     self.objective = self.cost + L1_reg * L1 + L2_reg * L2 #+ entropy * self.output.entropy()
     if hasattr(LstmLayer, 'sharpgates'):
       self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
-    if loss == 'ctc':
-      self.errors = self.output.errors(self.c)
-    else:
-      self.errors = self.output.errors(self.y)
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
   def num_params(self):

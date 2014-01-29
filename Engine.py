@@ -222,7 +222,10 @@ class Engine:
       epoch_start_time = time.time()
       trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
-        if len(self.devices) > 1: tester.join(9044006400)
+        if len(self.devices) > 1:
+          if not tester.join(0):
+            print >> log.v5, "warning: waiting for test score of previous epoch"
+            tester.join(9044006400)
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
