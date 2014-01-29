@@ -127,7 +127,7 @@ class SprintCacheForwardProcess(Process):
       super(SprintCacheForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
       self.cache = cache
       self.merge = merge
-    def initialize(self, result):
+    def initialize(self):
       self.toffset = 0
     def evaluate(self, batch, result):
       features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
