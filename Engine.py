@@ -197,7 +197,7 @@ class Engine:
       epoch_start_time = time.time()
       trainer = TrainProcess(self.network, self.devices[0:-1], train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
-        tester.join(9044006400)
+        if tester.is_alive(): tester.join(9044006400)
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
