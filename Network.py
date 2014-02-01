@@ -106,6 +106,7 @@ class OutputLayer(Layer):
     self.index = index
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
     self.loss = loss
+    if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
     self.initialize()
     
   def initialize(self):
@@ -116,6 +117,7 @@ class OutputLayer(Layer):
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'ctc': self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.p_y_given_x, axis = -1)
 
@@ -124,7 +126,7 @@ class OutputLayer(Layer):
     #y_f = y.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
     #y_f = y.flatten()
     known_grads = None
-    if self.loss == 'ce':
+    if self.loss == 'ce' or self.loss == 'priori':
       pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
@@ -215,7 +217,6 @@ class LstmLayer(RecurrentLayer):
       self.W_re.set_value(W_re.get_value())
     self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))    
     self.n_out /= 4
-    
     if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
@@ -449,12 +450,9 @@ class LayerNetwork(object):
     # create output layer
     self.loss = loss
     sources = [self.hidden[-1]] + ([self.reverse_hidden[-1]] if self.bidirectional else [])
-    if loss == 'ce' or loss == 'ctc' or loss == 'sse':
-      self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
-    elif loss == 'layer':
-      self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
+    self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
+    if loss == 'layer':
       self.gparams = self.hidden[-1].params + (self.reverse_hidden[-1].params if self.bidirectional else [])
-    else: assert False, "invalid loss: " + loss
     for W in self.output.W_in:
       L1 += abs(W.sum())
       L2 += (W ** 2).sum()

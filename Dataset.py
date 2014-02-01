@@ -44,7 +44,6 @@ class Dataset:
     else:
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
-
     self.num_running_chars = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
@@ -96,7 +95,6 @@ class Dataset:
     if self.num_outputs == 0:
       self.num_outputs = nc.dimensions['numLabels']
     assert self.num_outputs == nc.dimensions['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(nc.dimensions['numLabels']) + ")"
-    
     if nc.variables.has_key('ctcIndexTranscription'):
       if self.ctc_targets is None:
         self.ctc_targets = nc.variables['ctcIndexTranscription'].data
@@ -358,3 +356,11 @@ class Dataset:
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     self.theano_init = True
     return extra
+  
+  def calculate_priori(self):
+    priori = numpy.zeros((self.num_outputs), dtype = theano.config.floatX)
+    for i in xrange(self.num_seqs):
+      self.load_seqs(i, i + 1)
+      for t in self.targets[self.seq_start[i] : self.seq_start[i] + self.seq_lengths[self.seq_index[i]]]:
+        priori[t] += 1
+    return numpy.array(priori / self.num_timesteps, dtype = theano.config.floatX)

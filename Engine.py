@@ -208,6 +208,8 @@ class Engine:
     deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
     self.learning_rate = learning_rate
     updates = []
+    if self.network.loss == 'priori':
+      self.network.output.priori.set_value(train.calculate_priori())
     for param in self.network.gparams:
         #upd = momentum * deltas[param] - learning_rate * self.gparams[param]
         upd = momentum * deltas[param] - self.rate * self.gparams[param]
@@ -296,7 +298,7 @@ class Engine:
     num_data_batches = len(batches)
     num_batches = 0
     while num_batches < num_data_batches:
-      alloc_batches = self.allocate_batches(data, batches, num_batches)
+      alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
         device.run('analyze', batch, self.network)
         result = device.result()
@@ -311,7 +313,7 @@ class Engine:
             confusion_matrix[mle_map[int(real_c[i])], mle_map[int(max_c[i])]] += 1
           else:
             confusion_matrix[real_c[i], max_c[i]] += 1
-      num_batches += alloc_batches
+      num_batches += len(alloc_devices)
     if "confusion_matrix" in statistics:
       print >> log.v1, "confusion matrix:"
       for i in xrange(confusion_matrix.shape[0]):
