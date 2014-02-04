@@ -269,6 +269,9 @@ class Device():
   def make_givens(self, network):
     return [(network.x, self.x), (network.y, self.y), (network.i, self.i)]
   def make_input_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)]
+    if network.recurrent:
+      return [(network.x, self.x), (network.i, self.i)]
+    else:
+      return [(network.x, self.x)]
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
