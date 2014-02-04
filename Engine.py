@@ -180,7 +180,7 @@ class Engine:
       else:
         while length > 0:
           nframes = min(length, batch_size - batch.shape[0])
-          if nframes == 0:
+          if nframes == 0 or batch.nseqs > max_seqs:
             batches.append(batch)
             batch = Batch([s, data.seq_lengths[data.seq_index[s]] - length])
             nframes = min(length, batch_size)
