@@ -68,6 +68,7 @@ class Process(threading.Thread):
     def initialize(self): pass
     def finalize(self): pass
     def run(self):
+      start_time = time.time()
       num_data_batches = len(self.batches)
       num_batches = self.start_batch
       self.initialize()
@@ -85,10 +86,12 @@ class Process(threading.Thread):
           if result == None:
             print >> log.v2, "device", device.name, "crashed on batch", batch + num_batches
             self.last_batch = batch + num_batches
+            self.score = -1
             return -1
           self.evaluate(num_batches + batch, result)
         num_batches += len(alloc_devices)
       self.finalize()
+      self.elapsed = (time.time() - start_time)
         
 class TrainProcess(Process):
   def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
@@ -221,7 +224,6 @@ class Engine:
     training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
     testing_device = self.devices[-1]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
-      epoch_start_time = time.time()
       trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if len(self.devices) > 1:
@@ -237,11 +239,13 @@ class Engine:
       if model and (epoch % interval == 0):
         self.network.save(model + ".%03d" % epoch, epoch)
       if log.verbose[1]:
-        print >> log.v1, "epoch", epoch, "elapsed:", str(time.time() - epoch_start_time), "score:", trainer.score,
         for name in self.data.keys():
           data, num_batches = self.data[name]
           tester = EvalProcess(self.network, [testing_device], data, num_batches)
-          if len(self.devices) == 1: tester.join(9044006400)
+          if len(self.devices) == 1:
+            tester.join(9044006400)
+            trainer.elapsed += tester.elapsed
+        print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score,
     if model:
       self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
     if tester:
