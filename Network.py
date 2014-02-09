@@ -310,17 +310,16 @@ class GateLstmLayer(RecurrentLayer):
       h_t = CO(s_t) * outgate
       return s_t * i, h_t * i, ingate * i, forgetgate * i, outgate * i
     
-    [state, self.output, self.input_gate, self.forget_gate, self.output_gate], _ = 
-                                          theano.scan(step,
-                                          truncate_gradient = self.truncation,
-                                          go_backwards = self.reverse,
-                                          sequences = [self.source, self.index],
-                                          non_sequences = [self.mask],
-                                          outputs_info = [ T.alloc(self.state, self.source.shape[1], n_out),
-                                                           T.alloc(self.act, self.source.shape[1], n_out),
-                                                           T.alloc(self.ingate, self.source.shape[1], n_out),
-                                                           T.alloc(self.forgetgate, self.source.shape[1], n_out),
-                                                           T.alloc(self.outgate, self.source.shape[1], n_out) ])
+    [state, self.output, self.input_gate, self.forget_gate, self.output_gate], _ = theano.scan(step,
+                                                                                   truncate_gradient = self.truncation,
+                                                                                   go_backwards = self.reverse,
+                                                                                   sequences = [self.source, self.index],
+                                                                                   non_sequences = [self.mask],
+                                                                                   outputs_info = [ T.alloc(self.state, self.source.shape[1], n_out),
+                                                                                                    T.alloc(self.act, self.source.shape[1], n_out),
+                                                                                                    T.alloc(self.ingate, self.source.shape[1], n_out),
+                                                                                                    T.alloc(self.forgetgate, self.source.shape[1], n_out),
+                                                                                                    T.alloc(self.outgate, self.source.shape[1], n_out) ])
     self.output = self.output[::-(2 * self.reverse - 1)]
     self.input_gate = self.input_gate[::-(2 * self.reverse - 1)]
     self.forget_gate = self.forget_gate[::-(2 * self.reverse - 1)]
