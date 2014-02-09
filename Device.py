@@ -111,17 +111,15 @@ class Device():
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
-        elif "gates" in extract:
-          for i in xrange(len(self.testnet.hidden)):
-            if isinstance(self.testnet.hidden[i], GateLstmLayer):
-              source.append(self.testnet.hidden[i].input_gate)
-              source.append(self.testnet.hidden[i].forget_gate)
-              source.append(self.testnet.hidden[i].output_gate)
-              if self.testnet.reverse_hidden:
-                source.append(self.testnet.reverse_hidden[i].input_gate)
-                source.append(self.testnet.reverse_hidden[i].forget_gate)
-                source.append(self.testnet.reverse_hidden[i].output_gate)
-          assert source, "no gating lstm layers found"
+        elif "gates_" in extract:
+          idx = int(extract.split('_')[1])
+          if idx > 0:
+            hidden = self.testnet.hidden[idx - 1]
+          else:
+            hidden = self.testnet.reverse_hidden[-idx - 1]
+          source.append(T.reshape(hidden.input_gate, (hidden.input_gate.shape[0] * hidden.input_gate.shape[1], hidden.input_gate.shape[2])))
+          source.append(T.reshape(hidden.input_gate, (hidden.forget_gate.shape[0] * hidden.forget_gate.shape[1], hidden.forget_gate.shape[2])))
+          source.append(T.reshape(hidden.input_gate, (hidden.output_gate.shape[0] * hidden.output_gate.shape[1], hidden.output_gate.shape[2])))
         elif "hidden_" in extract:
           idx = int(extract.split('_')[1])
           if idx > 0:
