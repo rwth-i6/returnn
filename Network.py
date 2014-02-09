@@ -298,7 +298,7 @@ class GateLstmLayer(RecurrentLayer):
     self.forgetgate = self.create_bias(n_out)
     self.outgate = self.create_bias(n_out)
     
-    def step(x_t, i_t, s_p, h_p, mask):
+    def step(x_t, i_t, s_p, h_p, ig_p, fg_p, og_p, mask):
       i = T.outer(i_t, self.o)
       z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
       partition = z.shape[1] / 4
