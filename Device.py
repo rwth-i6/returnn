@@ -2,9 +2,7 @@ from multiprocessing import Process, Queue
 from Queue import Empty
 from Util import cmd
 from Log import log
-from Network import LayerNetwork
-import signal
-import os
+from Network import LayerNetwork, GateLstmLayer
 import numpy
 
 def get_num_devices():
@@ -113,6 +111,18 @@ class Device():
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
+        elif "gates" in extract:
+          idx = int(extract.split('_')[1])
+          for i in xrange(len(self.testnet.hidden)):
+            if isinstance(self.testnet.hidden[i], GateLstmLayer):
+              source.append(self.testnet.hidden[i].input_gate)
+              source.append(self.testnet.hidden[i].forget_gate)
+              source.append(self.testnet.hidden[i].output_gate)
+              if self.testnet.reverse_hidden:
+                source.append(self.testnet.reverse_hidden[i].input_gate)
+                source.append(self.testnet.reverse_hidden[i].forget_gate)
+                source.append(self.testnet.reverse_hidden[i].output_gate)
+          assert source, "no gating lstm layers found"
         elif "hidden_" in extract:
           idx = int(extract.split('_')[1])
           if idx > 0:

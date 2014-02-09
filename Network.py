@@ -230,15 +230,11 @@ class LstmLayer(RecurrentLayer):
       self.sharpness = LstmLayer.sharpgates
     else: self.sharpness = self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness) 
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness)
+    
     def step(x_t, i_t, s_p, h_p, mask):
       i = T.outer(i_t, self.o)
       z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
-      #z = T.dot(x_t, self.mass * mask * self.W_in) + T.max(abs(T.dot(h_p, self.W_re)), axis = 0) * T.sgn(T.dot(h_p, self.W_re)) + self.b
-      #z = T.dot(x_t, self.mass * mask * self.W_in) + T.sum(T.dot(h_p, self.W_re), axis = 0) + self.b
-      #z_in = T.max(0, T.dot(x_t, self.mass * mask * self.W_in) + self.b)
-      #z_re = T.dot(h_p, self.W_re)
-      #z = T.tanh(z_in) + T.tanh(z_re)
       partition = z.shape[1] / 4
       input = CI(z[:,:partition])
       ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
@@ -256,6 +252,79 @@ class LstmLayer(RecurrentLayer):
                                           outputs_info = [ T.alloc(self.state, self.source.shape[1], n_out),
                                                            T.alloc(self.act, self.source.shape[1], n_out), ])
     self.output = self.output[::-(2 * self.reverse - 1)]
+  
+  def create_lstm_weights(self, n, m):
+    n_in = n + 4 * m + m + 4 * m
+    #scale = numpy.sqrt(12. / (n_in))
+    #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
+    #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
+    return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
+  
+  
+class GateLstmLayer(RecurrentLayer):
+  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", name = "lstm"):
+    super(GateLstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, name = name)
+    if not isinstance(activation, (list, tuple)):
+      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    self.act = self.create_bias(n_out)
+    self.state = self.create_bias(n_out)
+    W_in, W_re = self.create_lstm_weights(n_in, n_out)
+    if CI == T.nnet.sigmoid or CO == T.nnet.sigmoid:
+      self.W_in.set_value(W_in.get_value()) # * 0.5) # * 0.000001)
+      self.W_re.set_value(W_re.get_value()) # * 0.5) # * 0.000001)
+    else:  
+      self.W_in.set_value(W_in.get_value())
+      self.W_re.set_value(W_re.get_value())
+    self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))    
+    self.n_out /= 4
+    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    elif sharpgates == 'shared':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(3)
+        self.add_param(LstmLayer.sharpgates)
+      self.sharpness = LstmLayer.sharpgates
+    elif sharpgates == 'single':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(1)
+        self.add_param(LstmLayer.sharpgates)
+      self.sharpness = LstmLayer.sharpgates
+    else: self.sharpness = self.create_bias(3)
+    self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness)
+    
+    self.ingate = self.create_bias(n_out)
+    self.forgetgate = self.create_bias(n_out)
+    self.outgate = self.create_bias(n_out)
+    
+    def step(x_t, i_t, s_p, h_p, mask):
+      i = T.outer(i_t, self.o)
+      z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
+      partition = z.shape[1] / 4
+      input = CI(z[:,:partition])
+      ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
+      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
+      s_t = input * ingate + s_p * forgetgate
+      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
+      h_t = CO(s_t) * outgate
+      return s_t * i, h_t * i, ingate * i, forgetgate * i, outgate * i
+    
+    [state, self.output, self.input_gate, self.forget_gate, self.output_gate], _ = 
+                                          theano.scan(step,
+                                          truncate_gradient = self.truncation,
+                                          go_backwards = self.reverse,
+                                          sequences = [self.source, self.index],
+                                          non_sequences = [self.mask],
+                                          outputs_info = [ T.alloc(self.state, self.source.shape[1], n_out),
+                                                           T.alloc(self.act, self.source.shape[1], n_out),
+                                                           T.alloc(self.ingate, self.source.shape[1], n_out),
+                                                           T.alloc(self.forgetgate, self.source.shape[1], n_out),
+                                                           T.alloc(self.outgate, self.source.shape[1], n_out) ])
+    self.output = self.output[::-(2 * self.reverse - 1)]
+    self.input_gate = self.input_gate[::-(2 * self.reverse - 1)]
+    self.forget_gate = self.forget_gate[::-(2 * self.reverse - 1)]
+    self.output_gate = self.output_gate[::-(2 * self.reverse - 1)]
   
   def create_lstm_weights(self, n, m):
     n_in = n + 4 * m + m + 4 * m
@@ -413,6 +482,8 @@ class LayerNetwork(object):
           self.hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
         elif info[0] == 'lstm':
           self.hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+        elif info[0] == 'gatelstm':
+          self.hidden.append(GateLstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
         elif info[0] == 'peep_lstm':
           self.hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
         else: assert False, "invalid layer type: " + info[0]
@@ -436,6 +507,8 @@ class LayerNetwork(object):
             self.reverse_hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
           elif info[0] == 'lstm':
             self.reverse_hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+          elif info[0] == 'gatelstm':
+            self.reverse_hidden.append(GateLstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
           elif info[0] == 'peep_lstm':
             self.reverse_hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
           else: assert False, "invalid layer type: " + info[0]

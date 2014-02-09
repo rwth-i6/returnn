@@ -212,7 +212,9 @@ class Engine:
     self.learning_rate = learning_rate
     updates = []
     if self.network.loss == 'priori':
-      self.network.output.priori.set_value(train.calculate_priori())
+      prior = train.calculate_priori()
+      self.network.output.priori.set_value(prior)
+      self.network.output.initialize()
     for param in self.network.gparams:
         #upd = momentum * deltas[param] - learning_rate * self.gparams[param]
         upd = momentum * deltas[param] - self.rate * self.gparams[param]
