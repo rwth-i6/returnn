@@ -112,7 +112,6 @@ class Device():
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
         elif "gates" in extract:
-          idx = int(extract.split('_')[1])
           for i in xrange(len(self.testnet.hidden)):
             if isinstance(self.testnet.hidden[i], GateLstmLayer):
               source.append(self.testnet.hidden[i].input_gate)
