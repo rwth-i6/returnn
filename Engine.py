@@ -102,13 +102,16 @@ class TrainProcess(Process):
   def initialize(self):
     self.score = 0
   def evaluate(self, batch, result):
-    self.score += result[0]
-    assert len(result) == len(self.network.gparams) + 1
-    for p,q in zip(self.network.gparams, result[1:]):
-      self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
-    self.updater(self.learning_rate)
-    for p in self.network.gparams:
-      self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
+    if result == None:
+      self.score = None
+    else:
+      self.score += result[0]
+      assert len(result) == len(self.network.gparams) + 1
+      for p,q in zip(self.network.gparams, result[1:]):
+        self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
+      self.updater(self.learning_rate)
+      for p in self.network.gparams:
+        self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
   def finalize(self):
     self.score /= float(self.data.num_timesteps)
 
@@ -235,7 +238,7 @@ class Engine:
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
-      if trainer.score == -1:
+      if trainer.score == None:
         self.network.save(model + ".crash_" + str(trainer.error), epoch - 1)
         sys.exit(1)
       if model and (epoch % interval == 0):
