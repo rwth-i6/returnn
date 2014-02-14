@@ -142,15 +142,15 @@ if __name__ == '__main__':
   print >> log.v2, "weights:", network.num_params()
   print >> log.v2, "train:"
   print >> log.v2, "sequences:", train.num_seqs
-  print >> log.v2, "timesteps:", train.num_timesteps
+  print >> log.v2, "frames:", train.num_timesteps
   if dev:
     print >> log.v2, "dev:"
     print >> log.v2, "sequences:", dev.num_seqs
-    print >> log.v2, "timesteps:", dev.num_timesteps
+    print >> log.v2, "frames:", dev.num_timesteps
   if eval:
     print >> log.v2, "eval:"
     print >> log.v2, "sequences:", eval.num_seqs
-    print >> log.v2, "timesteps:", eval.num_timesteps
+    print >> log.v2, "frames:", eval.num_timesteps
   print >> log.v3, "Devices:"
   for device in devices:
     print >> log.v3, device.name + ":", device.device_name, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)"
