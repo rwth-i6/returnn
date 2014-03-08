@@ -7,7 +7,6 @@ from scipy.io.netcdf import NetCDFFile
 from Log import log
 from Util import cmd
 import SprintCache
-from math import sqrt
 import theano
 import theano.tensor as T
 import gc

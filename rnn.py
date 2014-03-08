@@ -64,12 +64,16 @@ if __name__ == '__main__':
   log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
   # initialize devices
   device_info = config.list('device', ['cpu0'])
-  device_tags = set([])
+  device_tags = {}
   ncpus, ngpus = get_num_devices()
   if "all" in device_info:
-    device_tags = set([ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)])
+    device_tags = { tag: 1 for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
   else:
     for info in device_info:
+      num_batches = 1
+      if ':' in info:
+        num_batches = int(info.split(':')[1])
+        info = info.split(':')[0]
       if len(info) == 3: info += "X"
       assert len(info) > 3, "invalid device: " + str(info[:-1])
       utype = info[0:3]
@@ -84,16 +88,16 @@ if __name__ == '__main__':
         match = False
         for p in xrange(np):
           if re.match(uid, str(p)):
-            device_tags.add(utype + str(p))
+            device_tags[utype + str(p)] = num_batches
             match = True
         assert match, "invalid device specified: " + info
   assert config.has('train'), "no train files specified"
-  device_info = list(device_tags) 
+  tags = sorted(device_tags.keys())
   if config.bool('multiprocessing', True):
-    devices = [Device(info, config) for info in device_info]
+    devices = [Device(tag, config, num_batches = device_tags[tag]) for tag in tags]
   else:
     import theano.tensor as T
-    devices = [ Device(device_info[0], config, blocking = True) ]
+    devices = [ Device(device_tags[tags[0]], config, blocking = True) ]
   # load data
   import theano.tensor as T
   from Dataset import Dataset
@@ -153,7 +157,9 @@ if __name__ == '__main__':
     print >> log.v2, "frames:", eval.num_timesteps
   print >> log.v3, "Devices:"
   for device in devices:
-    print >> log.v3, device.name + ":", device.device_name, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)"
+    print >> log.v3, device.name + ":", device.device_name,
+    print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)"
+    print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
   engine = Engine(devices, network)
   st = time.time()
   if task == 'train':    
