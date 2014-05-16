@@ -97,7 +97,7 @@ if __name__ == '__main__':
     devices = [Device(tag, config, num_batches = device_tags[tag]) for tag in tags]
   else:
     import theano.tensor as T
-    devices = [ Device(device_tags[tags[0]], config, blocking = True) ]
+    devices = [ Device(tags[0], config, blocking = True) ]
   # load data
   import theano.tensor as T
   from Dataset import Dataset
@@ -158,7 +158,7 @@ if __name__ == '__main__':
   print >> log.v3, "Devices:"
   for device in devices:
     print >> log.v3, device.name + ":", device.device_name,
-    print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)"
+    print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
   engine = Engine(devices, network)
   st = time.time()

@@ -96,6 +96,7 @@ class Process(threading.Thread):
           device.run(self.task, self.network)
           batch += device.num_batches
         batch = num_batches
+        device_results = []
         for device in alloc_devices:
           try: result = device.result()
           except RuntimeError: result = None
@@ -104,8 +105,8 @@ class Process(threading.Thread):
             self.last_batch = batch
             self.score = -1
             return -1
-          self.evaluate(batch, result)
-          batch += device.num_batches
+          device_results.append(result)
+        self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
       self.finalize()
       self.elapsed = (time.time() - start_time)
@@ -122,10 +123,10 @@ class TrainProcess(Process):
     if result == None:
       self.score = None
     else:
-      self.score += result[0]
-      assert len(result) == len(self.network.gparams) + 1
-      for p,q in zip(self.network.gparams, result[1:]):
-        self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
+      for res in result:
+        self.score += res[0]
+        for p,q in zip(self.network.gparams, res[1:]):
+          self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
       self.updater(self.learning_rate)
       for p in self.network.gparams:
         self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
@@ -139,8 +140,8 @@ class EvalProcess(Process):
       self.score = 0
       self.error = 0
     def evaluate(self, batch, result):
-      self.score += result[0]
-      self.error += result[1]
+      self.score += sum([res[0] for res in result]) 
+      self.error += sum([res[1] for res in result])
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)
