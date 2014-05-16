@@ -178,6 +178,8 @@ if __name__ == '__main__':
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.classify(devices[0], eval, label_file)
+  elif task == "daemon":                                            
+    engine.run_daemon(train, dev, eval)
   for device in devices:
     device.terminate()
   print >> log.v3, ("elapsed: %f" % (time.time() - st))

@@ -276,6 +276,12 @@ class Engine:
     if tester:
       if len(self.devices) > 1: tester.join(9044006400)
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
+
+  def run_daemon(self, train, dev, eval):
+    with open('/u/voigtlaender/Desktop/trainset_b01-057-10_1') as f:
+      n_timeframes = int(f.readline())
+      errsig = numpy.fromfile(f, sep=' ')
+      errsig = errsig.reshape((n_timeframes, errsig.size / n_timeframes))
       
   def forward(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
