@@ -108,6 +108,7 @@ class Device():
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
+      givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "log-posteriors":
           source.append(T.log(self.testnet.output.p_y_given_x))
@@ -117,6 +118,10 @@ class Device():
           feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
           feat = T.log(feat)
           source.append(feat)
+	elif extract == "ce-errsig":
+	  feat = T.grad(self.testnet.cost, self.testnet.output.z) #TODO
+	  source.append(feat)
+	  givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
@@ -139,7 +144,7 @@ class Device():
         else: assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
                                        outputs = source,
-                                       givens = self.make_input_givens(self.testnet))
+                                       givens = givens)
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
                                         outputs = [T.argmax(self.testnet.output.p_y_given_x, axis = 1)],
