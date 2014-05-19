@@ -21,10 +21,15 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
     return data, data.initialize()
   return None, 0
   
-if __name__ == '__main__':  
+if __name__ == '__main__':    
+  import numpy
+  print numpy.__version__
+  print numpy.__file__
   if len(sys.argv) != 2:
     print "usage:", sys.argv[0], "config"
-    sys.exit(1)
+    sys.argv = [sys.argv[0], '/work/cv2/voigtlaender/theano_training/lastconfig']
+    os.chdir('/work/cv2/voigtlaender/theano_training')
+    #sys.exit(1)
   
   # initialize config file
   assert os.path.isfile(sys.argv[1]), "config file not found"  
