@@ -18,7 +18,8 @@ def get_device_attributes():
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024), 
-                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024)}
+                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024)}
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
   cpu = 0
   #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
@@ -28,9 +29,10 @@ def get_device_attributes():
   return attributes
 
 class Device():
-  def __init__(self, device, config, blocking = False):
+  def __init__(self, device, config, blocking = False, num_batches = 1):
     self.input_queue = Queue()
     self.output_queue = Queue()
+    self.num_batches = num_batches
     self.blocking = blocking
     if blocking:
       self.initialize(config)
@@ -81,6 +83,13 @@ class Device():
     gparams = []
     for param in self.trainnet.gparams:
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
+      if False and param.name == 'lambda':
+        f = theano.function(inputs = [],
+                            outputs = [gparam],
+                            givens = self.make_givens(self.trainnet))
+        print >> log.v3, theano.printing.pp(gparam)
+        print >> log.v3, "-------------------------------------------"
+        print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
       gparams.append(gparam)
     # initialize functions
     if self.network_task == 'train':
@@ -99,6 +108,7 @@ class Device():
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
+      givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "log-posteriors":
           source.append(T.log(self.testnet.output.p_y_given_x))
@@ -108,6 +118,10 @@ class Device():
           feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
           feat = T.log(feat)
           source.append(feat)
+	elif extract == "ce-errsig":
+	  feat = T.grad(self.testnet.cost, self.testnet.output.z) #TODO
+	  source.append(feat)
+	  givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
@@ -130,7 +144,7 @@ class Device():
         else: assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
                                        outputs = source,
-                                       givens = self.make_input_givens(self.testnet))
+                                       givens = givens)
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
                                         outputs = [T.argmax(self.testnet.output.p_y_given_x, axis = 1)],
@@ -200,6 +214,9 @@ class Device():
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.put("error")
           return
+        except MemoryError:
+          output_queue.put("error")
+          raise
         for output in result:
           output_queue.put(output)
 

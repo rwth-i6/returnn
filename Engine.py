@@ -34,34 +34,45 @@ class Process(threading.Thread):
       
     def allocate_devices(self, start_batch):
       devices = []
-      for batch, device in zip(self.batches[start_batch:], self.devices):
-        device.data = numpy.zeros(batch.shape + [self.data.num_inputs * self.data.window], dtype=theano.config.floatX)
-        device.targets = numpy.zeros(batch.shape, dtype = theano.config.floatX)
-        device.ctc_targets = numpy.zeros((batch.shape[1], self.data.max_ctc_length), dtype = theano.config.floatX)
-        device.index = numpy.zeros(batch.shape, dtype = 'int8')
-        if self.network.recurrent:
-          self.data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
-          idi = self.data.alloc_interval_index(batch.start[0])
-          for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
-            ids = self.data.seq_index[s]
-            l = self.data.seq_lengths[ids]
-            o = self.data.seq_start[s] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
-            q = batch.start[0] - s
-            device.data[:l, q] = self.data.alloc_intervals[idi][2][o:o + l]
-            device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
-            if self.data.ctc_targets is not None:
-              device.ctc_targets[q] = self.data.ctc_targets[ids]
-            device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
-        else:
-          self.data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)
-          idi = self.data.alloc_interval_index(batch.start[0])
-          o = self.data.seq_start[batch.start[0]] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
-          l = batch.shape[0]
-          device.data[:l, 0] = self.data.alloc_intervals[idi][2][o:o + l]
-          device.targets[:l, 0] = self.data.targets[self.data.seq_start[batch.start[0]] + batch.start[1]:self.data.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
-          device.index[:l, 0] = numpy.ones((l,), dtype = 'int8')
+      num_batches = start_batch
+      for device in self.devices:
+        shape = [0, 0]
+        device_batches = min(num_batches + device.num_batches, len(self.batches))
+        for batch in self.batches[num_batches : device_batches]:
+          shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
+        if shape[1] == 0: break
+        device.data = numpy.zeros(shape + [self.data.num_inputs * self.data.window], dtype=theano.config.floatX)
+        device.targets = numpy.zeros(shape, dtype = theano.config.floatX)
+        device.ctc_targets = numpy.zeros((shape[1], self.data.max_ctc_length), dtype = theano.config.floatX)
+        device.index = numpy.zeros(shape, dtype = 'int8')
+        offset = 0
+        for batch in self.batches[num_batches : device_batches]:
+          if self.network.recurrent:
+            self.data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
+            idi = self.data.alloc_interval_index(batch.start[0])
+            for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
+              ids = self.data.seq_index[s]
+              l = self.data.seq_lengths[ids]
+              o = self.data.seq_start[s] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
+              q = s - batch.start[0] + offset
+              device.data[:l, q] = self.data.alloc_intervals[idi][2][o:o + l]
+              device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
+              if self.data.ctc_targets is not None:
+                device.ctc_targets[q] = self.data.ctc_targets[ids]
+              device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
+            offset += batch.shape[1]
+          else:
+            self.data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)
+            idi = self.data.alloc_interval_index(batch.start[0])
+            o = self.data.seq_start[batch.start[0]] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
+            l = batch.shape[0]
+            device.data[offset:offset + l, 0] = self.data.alloc_intervals[idi][2][o:o + l]
+            device.targets[offset:offset + l, 0] = self.data.targets[self.data.seq_start[batch.start[0]] + batch.start[1]:self.data.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
+            device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
+            offset += l
+        num_batches = device_batches
         devices.append(device)
-      return devices
+      return devices, num_batches - start_batch
       
     def evaluate(self, batch, result):
       self.result = result
@@ -74,22 +85,29 @@ class Process(threading.Thread):
       self.initialize()
       print >> log.v5, "starting process", self.task
       while num_batches < num_data_batches:
-        alloc_devices = self.allocate_devices(num_batches)
-        for batch, device in enumerate(alloc_devices):
+        alloc_devices, num_alloc_batches = self.allocate_devices(num_batches)
+        batch = num_batches
+        for device in alloc_devices:
           if self.network.recurrent: print >> log.v5, "running", device.data.shape[1], "sequences (" + str(device.data.shape[0] * device.data.shape[1]) + " nts)", 
           else: print >> log.v5, "running", device.data.shape[0], "frames",
-          print >> log.v5, "of batch", batch + num_batches, "/", num_data_batches, "on device", device.name
+          if device.num_batches == 1: print >> log.v5, "of batch", batch,
+          else: print >> log.v5, "of batches", str(batch) + "-" + str(batch + device.num_batches - 1),
+          print >> log.v5, "/", num_data_batches, "on device", device.name
           device.run(self.task, self.network)
-        for batch, device in enumerate(alloc_devices):
+          batch += device.num_batches
+        batch = num_batches
+        device_results = []
+        for device in alloc_devices:
           try: result = device.result()
           except RuntimeError: result = None
           if result == None:
-            print >> log.v2, "device", device.name, "crashed on batch", batch + num_batches
-            self.last_batch = batch + num_batches
+            print >> log.v2, "device", device.name, "crashed on batch", batch
+            self.last_batch = batch
             self.score = -1
             return -1
-          self.evaluate(num_batches + batch, result)
-        num_batches += len(alloc_devices)
+          device_results.append(result)
+        self.evaluate(num_batches, device_results)
+        num_batches += num_alloc_batches
       self.finalize()
       self.elapsed = (time.time() - start_time)
         
@@ -102,13 +120,16 @@ class TrainProcess(Process):
   def initialize(self):
     self.score = 0
   def evaluate(self, batch, result):
-    self.score += result[0]
-    assert len(result) == len(self.network.gparams) + 1
-    for p,q in zip(self.network.gparams, result[1:]):
-      self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
-    self.updater(self.learning_rate)
-    for p in self.network.gparams:
-      self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
+    if result == None:
+      self.score = None
+    else:
+      for res in result:
+        self.score += res[0]
+        for p,q in zip(self.network.gparams, res[1:]):
+          self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
+      self.updater(self.learning_rate)
+      for p in self.network.gparams:
+        self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
   def finalize(self):
     self.score /= float(self.data.num_timesteps)
 
@@ -119,8 +140,8 @@ class EvalProcess(Process):
       self.score = 0
       self.error = 0
     def evaluate(self, batch, result):
-      self.score += result[0]
-      self.error += result[1]
+      self.score += sum([res[0] for res in result]) 
+      self.error += sum([res[1] for res in result])
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)
@@ -223,19 +244,21 @@ class Engine:
     updater = theano.function(inputs = [self.rate], updates = updates)
     train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
     tester = None
-    training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
-    testing_device = self.devices[-1]
+    #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
+    #testing_device = self.devices[-1]
+    training_devices = self.devices
+    testing_device = self.devices[0]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
       trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
-        if len(self.devices) > 1:
+        if False and len(self.devices) > 1:
           if tester.isAlive(): 
             #print >> log.v3, "warning: waiting for test score of previous epoch"
             tester.join(9044006400)
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
-      if trainer.score == -1:
+      if trainer.score == None:
         self.network.save(model + ".crash_" + str(trainer.error), epoch - 1)
         sys.exit(1)
       if model and (epoch % interval == 0):
@@ -244,7 +267,7 @@ class Engine:
         for name in self.data.keys():
           data, num_batches = self.data[name]
           tester = EvalProcess(self.network, [testing_device], data, num_batches)
-          if len(self.devices) == 1:
+          if True or len(self.devices) == 1:
             tester.join(9044006400)
             trainer.elapsed += tester.elapsed
         print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score,
@@ -253,6 +276,12 @@ class Engine:
     if tester:
       if len(self.devices) > 1: tester.join(9044006400)
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
+
+  def run_daemon(self, train, dev, eval):
+    with open('/u/voigtlaender/Desktop/trainset_b01-057-10_1') as f:
+      n_timeframes = int(f.readline())
+      errsig = numpy.fromfile(f, sep=' ')
+      errsig = errsig.reshape((n_timeframes, errsig.size / n_timeframes))
       
   def forward(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)

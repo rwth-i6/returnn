@@ -228,7 +228,7 @@ class LstmLayer(RecurrentLayer):
         LstmLayer.sharpgates = self.create_bias(1)
         self.add_param(LstmLayer.sharpgates)
       self.sharpness = LstmLayer.sharpgates
-    else: self.sharpness = self.create_bias(3)
+    else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda') #self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness)
     
