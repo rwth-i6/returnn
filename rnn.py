@@ -1,5 +1,14 @@
 #! /usr/bin/python2.7
 
+__author__ = "Patrick Doetsch"
+__copyright__ = "Copyright 2014"
+__credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
+__license__ = "GPL"
+__version__ = "0.9"
+__maintainer__ = "Patrick Doetsch"
+__email__ = "doetsch@i6.informatik.rwth-aachen.de"
+
+
 import re
 import os
 import sys
