@@ -3,7 +3,7 @@
 import numpy
 import theano
 import theano.tensor as T
-from Util import netcdf_dimension
+from Util import hdf5_dimension
 from math import sqrt
 from CTC import CTCOp
 from BestPathDecoder import BestPathDecodeOp
@@ -394,9 +394,9 @@ class LayerNetwork(object):
   
   @classmethod
   def from_config(cls, config, mask = "unity"):
-    num_inputs = netcdf_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+    num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
     loss = config.value('loss', 'ce')
-    num_outputs = netcdf_dimension(config.list('train')[0], 'numLabels')
+    num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
     if loss == 'ctc':
       num_outputs += 1 #add blank
     hidden_size = config.int_list('hidden_size')

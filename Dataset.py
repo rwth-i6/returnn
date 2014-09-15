@@ -3,7 +3,7 @@
 import numpy
 import random
 from numpy.lib.stride_tricks import as_strided as ast
-from scipy.io.netcdf import NetCDFFile
+import h5py
 from Log import log
 from Util import cmd
 import SprintCache
@@ -52,22 +52,18 @@ class Dataset:
     call = "ncdump -v seqTags " + filename + " | grep \"^  \\\"\" | cut -d \\\" -f 2"
     return cmd(call)
 
-  def read_labels(self, filename):
-    call = "ncdump -v labels " + filename + " | grep \"^  \\\"\" | cut -d \\\" -f 2"
-    return cmd(call)
-  
   def add_file(self, filename):
-    labels = self.read_labels(filename)
+    fin = h5py.File(filename, "r")
+    labels = fin["labels"][...].tolist()
     if not self.labels:
       self.labels = labels
     assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
-    tags = self.read_tags(filename)
+    tags = fin["seqTags"][...].tolist()
     self.files.append(filename)
-    nc = NetCDFFile(filename, 'r')
     seq_start = [0]
-    if nc.variables.has_key('times'):
-      self.timestamps.extend(nc.variables['times'].data.tolist())
-    for l,t in zip(nc.variables['seqLengths'].data.tolist(), tags):
+    if 'times' in fin:
+      self.timestamps.extend(fin['times'][...].tolist())
+    for l,t in zip(fin['seqLengths'][...].tolist(), tags):
       if self.chunk_size == 0:
         self.seq_lengths.append(l)
         seq_start.append(seq_start[-1] + l)
@@ -86,26 +82,26 @@ class Dataset:
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
     self.num_timesteps = sum(self.seq_lengths) #nc.dimensions['numTimesteps']
-    if nc.dimensions.has_key('maxCTCIndexTranscriptionLength'):
-      self.max_ctc_length = max(self.max_ctc_length, nc.dimensions['maxCTCIndexTranscriptionLength'])
+    if 'maxCTCIndexTranscriptionLength' in fin.attrs:
+      self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
-      self.num_inputs = nc.dimensions['inputPattSize']
-    assert self.num_inputs == nc.dimensions['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(nc.dimensions['inputPattSize']) + ")"
+      self.num_inputs = fin.attrs['inputPattSize']
+    assert self.num_inputs == fin.attrs['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs['inputPattSize']) + ")"
     if self.num_outputs == 0:
-      self.num_outputs = nc.dimensions['numLabels']
-    assert self.num_outputs == nc.dimensions['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(nc.dimensions['numLabels']) + ")"
-    if nc.variables.has_key('ctcIndexTranscription'):
+      self.num_outputs = fin.attrs['numLabels']
+    assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+    if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
-        self.ctc_targets = nc.variables['ctcIndexTranscription'].data
+        self.ctc_targets = fin['ctcIndexTranscription'][...]
       else:
-        tmp = nc.variables['ctcIndexTranscription'].data
+        tmp = fin['ctcIndexTranscription'][...]
         pad_width = self.max_ctc_length - tmp.shape[1]
         tmp = numpy.pad(tmp, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
         pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
         self.ctc_targets = numpy.pad(self.ctc_targets, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))      
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)  
-    nc.close()
+    fin.close()
     
   def sliding_window(self, xr):
     x = numpy.concatenate([self.zpad, xr, self.zpad])
@@ -283,17 +279,17 @@ class Dataset:
       if len(file_info[i]) == 0:
         continue
       print >> log.v4, "loading file", self.files[i]
-      nc = NetCDFFile(self.files[i], 'r')
-      inputs = nc.variables['inputs'].data
-      if nc.variables.has_key('targetClasses'):
-        targs = nc.variables['targetClasses'].data
+      fin = h5py.File(self.files[i], 'r')
+      inputs = fin['inputs'][...]
+      if 'targetClasses' in fin:
+        targs = fin['targetClasses'][...]
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
         idi = self.alloc_interval_index(idc)
         o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
         l = self.seq_lengths[ids]
-        if nc.variables.has_key('targetClasses'):
+        if 'targetClasses' in fin:
           y = targs[p : p + l]
           self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
         x = inputs[p : p + l]
@@ -301,7 +297,7 @@ class Dataset:
         if self.window > 1:
           x = self.sliding_window(x) 
         self.alloc_intervals[idi][2][o:o + l] = x
-      nc.close()
+      fin.close()
     gc.collect()
     
   def set_batching(self, batching):

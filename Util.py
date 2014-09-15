@@ -1,4 +1,5 @@
 import subprocess
+import h5py
 from scipy.io.netcdf import NetCDFFile
 
 def cmd(cmd):
@@ -7,8 +8,8 @@ def cmd(cmd):
   p.stdout.close()
   return result
 
-def netcdf_dimension(filename, dimension):
-  nc = NetCDFFile(filename, 'r')
-  res = nc.dimensions[dimension]
-  nc.close()
+def hdf5_dimension(filename, dimension):
+  fin = h5py.File(filename, "r")
+  res = fin.attrs[dimension]
+  fin.close()
   return res

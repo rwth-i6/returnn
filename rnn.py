@@ -84,7 +84,7 @@ if __name__ == '__main__':
       utype = info[0:3]
       uid = info[3:]
       if uid == '*': uid = "[0-9]*"
-      if uid == 'X': device_tags.add(info)
+      if uid == 'X': device_tags[info] = num_batches
       else:
         if utype == 'cpu':
           np = ncpus
