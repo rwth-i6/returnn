@@ -16,7 +16,7 @@ class Config:
       if len(line.strip()) == 0 or line.strip()[0] == '#':
         continue
       line = line.strip().split()
-      assert len(line) == 2
+      assert len(line) == 2, "unable to parse config line: " + line
       key = line[0]
       value = line[1]
       if value.find(',') > 0:
@@ -27,8 +27,11 @@ class Config:
       
   def has(self, key):
     return self.dict.has_key(key)
+
+  def set(self, key, value):
+    self.dict[key] = value
   
-  def value(self, key, default, index=0):
+  def value(self, key, default, index = 0):
     if not self.dict.has_key(key):
       return default
     return self.dict[key][index]
@@ -41,19 +44,23 @@ class Config:
     if v == "false" or v == "0":
       return False
     return default
-  def float(self, key, default, index=0):
+  def float(self, key, default, index = 0):
     return float(self.value(key, default, index))
   
-  def list(self, key, default = []):
+  def list(self, key, default = None):
+    if default == None: default = []
     if not self.dict.has_key(key):
       return default
     return self.dict[key]
   
-  def int_list(self, key, default = []):
+  def int_list(self, key, default = None):
+    if default == None: default = []
     return [int(x) for x in self.list(key, default)]
-  def float_list(self, key, default = []):
+  def float_list(self, key, default = None):
+    if default == None: default = []
     return [float(x) for x in self.list(key, default)]
-  def int_pair(self, key, default = (0,0)):
+  def int_pair(self, key, default = None):
+    if default == None: default = (0,0)
     if not self.has(key): return default
     value = self.value(key, '')
     if ':' in value:

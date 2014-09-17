@@ -1,9 +1,10 @@
 #! /usr/bin/python2.7
 
 import numpy
+import h5py
 import theano
 import theano.tensor as T
-from Util import netcdf_dimension
+from Util import hdf5_dimension
 from math import sqrt
 from CTC import CTCOp
 from BestPathDecoder import BestPathDecodeOp
@@ -12,53 +13,52 @@ from BestPathDecoder import BestPathDecodeOp
         META LAYER
 """
 class Container(object):
-  def __init__(self, name):
-    self.params = []
+  def __init__(self, layer_class, name = ""):
+    self.params = {}
+    self.attrs = {}
+    self.layer_class = layer_class
     self.name = name
   
   @staticmethod
   def initialize():
     Layer.rng = numpy.random.RandomState(1234)
     
-  def print_param(self, p):
-    matrix = p.get_value().tolist()
-    shape = numpy.shape(matrix)
-    dim = len(shape)
-    if dim == 2: return ";".join([",".join([str(x) for x in row]) for row in matrix])
-    else: return ",".join([str(x) for x in matrix])
-    
-  def save(self, out):
-    print >> out, self.name,
-    for p in self.params:
-      print >> out, self.print_param(p),
-    print >> out, ''
+  def save(self, head):
+    grp = head.create_group(self.name)
+    grp.attrs['class'] = self.layer_class
+    for p in self.params.keys():
+      value = self.params[p].get_value()
+      dset = grp.create_dataset(p, value.shape, dtype='f')
+      dset[...] = value
+    for p in self.attrs.keys():
+      grp.attrs[p] = self.attrs[p]
 
-  def load(self, layer):
-    layer = layer.strip().split()
-    assert layer[0] == self.name or layer[0] == 'bisoftmax', "invalid layer name (expected " + self.name + " got " + layer[0] + ")"
-    assert len(layer) - 1 == len(self.params), "invalid parameter count for layer " + self.name + " (expected " + str(len(self.params)) + " got " + str(len(layer) - 1) + ")"
-    for l in xrange(len(layer) - 1):
-      rows = layer[l + 1].split(';')
-      if len(rows) == 1:
-        value = numpy.array([float(x) for x in rows[0].split(',')], dtype=theano.config.floatX)
-      else: # nr of rows as n_in, nr of cols as n_out
-        value = numpy.array([[float(x) for x in row.split(',')] for row in rows], dtype=theano.config.floatX)
-      assert self.params[l].get_value().shape == value.shape, "invalid layer parameter shape (expected  " + str(self.params[l].get_value().shape) + " got " + str(value.shape) + ")"
-      self.params[l].set_value(value)
+  def load(self, head):
+    grp = head[self.name]
+    assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+    for p in grp:
+      assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
+      self.params[p].set_value(grp[p][...])
+    for p in grp.attrs.keys():
+      self.attrs[p] = grp.attrs[p]
         
   def num_params(self):
-    return sum([numpy.prod(p.get_value().shape[0:]) for p in self.params])
+    return sum([numpy.prod(self.params[p].get_value().shape[0:]) for p in self.params.keys()])
   
   def get_params(self):
-    return [ p.get_value() for p in self.params ]
-    
+    return { p : self.params[p].get_value() for p in self.params.keys() }
+  
   def set_params(self, params):
-    for p,q in zip(self.params, params):
-      p.set_value(q)
+    for p in params.keys():
+      self.params[p].set_value(params[p])
       
-  def add_param(self, param):
-    self.params.append(param)
+  def add_param(self, param, name = ""):
+    if name == "": name = "param_%d" % len(self.params)
+    self.params[name] = param
     return param
+
+  def set_attr(self, name, value):
+    self.attrs[name] = value
       
   def create_bias(self, n):
     return theano.shared(value = numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name = 'b_' + self.name)
@@ -79,11 +79,11 @@ class Container(object):
     return self.create_random_weights(n, m, scale)
   
 class Layer(Container):
-  def __init__(self, n_in, n_out, name, mask = "unity", dropout = 0):
-    super(Layer, self).__init__(name)
+  def __init__(self, n_in, n_out, layer_class, mask = "unity", dropout = 0, name = ""):
+    super(Layer, self).__init__(layer_class, name = name)
     self.n_in = n_in
     self.n_out = n_out
-    self.b = self.add_param(self.create_bias(n_out))
+    self.b = self.add_param(self.create_bias(n_out), 'b')
     self.mass = T.constant(1.)
     if mask == "unity":
       self.mask = T.constant(1.)
@@ -98,10 +98,10 @@ class Layer(Container):
 """
 
 class OutputLayer(Layer):
-  def __init__(self, sources, index, n_out, loss = 'ce', dropout = 0, mask = "unity", name = "softmax"):
-    super(OutputLayer, self).__init__(sum([s.n_out for s in sources]), n_out, name, mask, dropout)
+  def __init__(self, sources, index, n_out, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
+    super(OutputLayer, self).__init__(sum([s.n_out for s in sources]), n_out, layer_class, mask, dropout, name = name)
     self.z = self.b
-    self.W_in = [ self.add_param(self.create_forward_weights(source.n_out, n_out)) for source in sources ]
+    self.W_in = [ self.add_param(self.create_forward_weights(source.n_out, n_out), "W") for source in sources ]
     for source, W in zip(sources, self.W_in): self.z += T.dot(source.output, self.mass * self.mask * W)
     self.index = index
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
@@ -153,32 +153,34 @@ class OutputLayer(Layer):
 """
 
 class HiddenLayer(Layer):
-  def __init__(self, source, n_in, n_out, activation, dropout = 0, mask = "unity", name = "hidden"):
-    super(HiddenLayer, self).__init__(n_in, n_out, name, mask, dropout)
+  def __init__(self, source, n_in, n_out, activation, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
+    super(HiddenLayer, self).__init__(n_in, n_out, layer_class, mask, dropout, name = name)
     self.n_in = n_in
     self.n_out = n_out
     self.activation = activation
-    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out))
+    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out), 'W_in')
     self.source = source
     
 class ForwardLayer(HiddenLayer):
-  def __init__(self, source, n_in, n_out, activation=T.tanh, dropout = 0, mask = "unity", name = "hidden"):
-    super(ForwardLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, name = name)
+  def __init__(self, source, n_in, n_out, activation=T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
+    super(ForwardLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, layer_class = layer_class, name = name)
     self.W_in.set_value(self.create_uniform_weights(n_in, n_out).get_value())
     z = T.dot(source, self.mass * self.mask * self.W_in) + self.b
     self.output = (z if self.activation is None else self.activation(z))
     
 class RecurrentLayer(HiddenLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", name = "recurrent"):
-    super(RecurrentLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, name = name)
+  def __init__(self, source, index, n_in, n_out, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", layer_class = "recurrent", name = ""):
+    super(RecurrentLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, layer_class = layer_class, name = name)
     self.act = self.create_bias(n_out)
     W_in, self.W_re = self.create_recurrent_weights(n_in, n_out)
     self.W_in.set_value(W_in.get_value())
-    self.add_param(self.W_re)
+    self.add_param(self.W_re, 'W_re')
     self.index = T.cast(index, theano.config.floatX)
     self.o = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
     self.reverse = reverse
     self.truncation = truncation
+    self.set_attr('reverse', reverse)
+    self.set_attr('truncation', truncation)
     if compile: self.compile()
   
   def compile(self):
@@ -200,11 +202,12 @@ class RecurrentLayer(HiddenLayer):
     return self.create_random_weights(n, m, nin), self.create_random_weights(m, m, nin)
    
 class LstmLayer(RecurrentLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", name = "lstm"):
-    super(LstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, name = name)
+  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", layer_class = "lstm", name = ""):
+    super(LstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, layer_class = layer_class, name = name)
     if not isinstance(activation, (list, tuple)):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+    self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.act = self.create_bias(n_out)
     self.state = self.create_bias(n_out)
@@ -221,16 +224,16 @@ class LstmLayer(RecurrentLayer):
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
-        self.add_param(LstmLayer.sharpgates)
+        self.add_param(LstmLayer.sharpgates, 'gate_scaling')
       self.sharpness = LstmLayer.sharpgates
     elif sharpgates == 'single':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(1)
-        self.add_param(LstmLayer.sharpgates)
+        self.add_param(LstmLayer.sharpgates, 'gate_scaling')
       self.sharpness = LstmLayer.sharpgates
     else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda') #self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness)
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
     
     def step(x_t, i_t, s_p, h_p, mask):
       i = T.outer(i_t, self.o)
@@ -394,15 +397,17 @@ class LayerNetwork(object):
   
   @classmethod
   def from_config(cls, config, mask = "unity"):
-    num_inputs = netcdf_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+    num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
     loss = config.value('loss', 'ce')
-    num_outputs = netcdf_dimension(config.list('train')[0], 'numLabels')
+    num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
     if loss == 'ctc':
       num_outputs += 1 #add blank
     hidden_size = config.int_list('hidden_size')
     assert len(hidden_size) > 0, "no hidden layers specified"
     hidden_type = config.list('hidden_type')
     assert len(hidden_type) <= len(hidden_size), "too many hidden layer types"
+    hidden_name = config.list('hidden_name')
+    assert len(hidden_name) <= len(hidden_size), "too many hidden layer names"
     if len(hidden_type) != len(hidden_size):
       n_hidden_type = len(hidden_type) 
       for i in xrange(len(hidden_size) - len(hidden_type)):
@@ -410,6 +415,12 @@ class LayerNetwork(object):
           hidden_type.append(hidden_type[0])
         else:  
           hidden_type.append("forward")
+    if len(hidden_name) != len(hidden_size):
+      for i in xrange(len(hidden_size) - len(hidden_name)):
+        hidden_name.append("_")
+    for i, name in enumerate(hidden_name):
+      if name == "_": hidden_name[i] = "hidden_%d" % i
+
     task = config.value('task', 'train')
     L1_reg = config.float('L1_reg', 0.0)
     L2_reg = config.float('L2_reg', 0.0)
@@ -447,89 +458,102 @@ class LayerNetwork(object):
       else:
         assert activations.has_key(actfct[i]), "invalid activation function: " + actfct[i]
         acts = activations[actfct[i]]
-      network.add_hidden(hidden_size[i], hidden_type[i], acts)
+      network.add_hidden(hidden_name[i], hidden_size[i], hidden_type[i], acts)
     if task == 'pretrain':
       loss = 'layer'
       task = 'train'
-      network.add_hidden(config.int('pretrain_layer_size', hidden_size[-1]),
+      network.add_hidden("pretrain_layer",
+                         config.int('pretrain_layer_size', hidden_size[-1]),
                          config.value('pretrain_layer_type', hidden_type[-1]),
                          config.value('pretrain_layer_activation', actfct[-1]))
     network.initialize(loss, L1_reg, L2_reg, dropout, bidirectional, truncation, sharpgates, entropy)
     return network
     
-  def add_hidden(self, size, layer_type = 'forward', activation = T.tanh):
-    self.hidden_info.append((layer_type, size, activation))
+  def add_hidden(self, name, size, layer_type = 'forward', activation = T.tanh):
+    self.hidden_info.append((layer_type, size, activation, name))
   
   def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
-    self.hidden = []
-    self.reverse_hidden = []
+    self.hidden = {}
     self.params = []
     n_in = self.n_in
     x_in = self.x
     L1 = T.constant(0)
     L2 = T.constant(0)
     self.recurrent = False
+    self.bidirectional = bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
+      params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      if x_in != self.x: self.hidden[name].set_attr('from', name)
       if info[0] == 'forward':
-        self.hidden.append(ForwardLayer(source = x_in, n_in = n_in, n_out = info[1], activation = info[2], dropout = drop, mask = self.mask))
+        self.hidden[name] = ForwardLayer(**params)
       else:
         self.recurrent = True
+        params['index'] = self.i
+        if self.bidirectional:
+          params['name'] = info[3] + "_fw"
+        name = params['name']
         if info[0] == 'recurrent':
-          self.hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
+            self.hidden[name] = RecurrentLayer(**params)
         elif info[0] == 'lstm':
-          self.hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+          self.hidden[name] = LstmLayer(sharpgates = sharpgates, **params)
         elif info[0] == 'gatelstm':
-          self.hidden.append(GateLstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+          self.hidden[name] = GateLstmLayer(sharpgates = sharpgates, **params)
         elif info[0] == 'peep_lstm':
-          self.hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], truncation = truncation, dropout = drop, mask = self.mask))
+          self.hidden[name] = LstmPeepholeLayer(**params)
         else: assert False, "invalid layer type: " + info[0]
-        L1 += abs(self.hidden[-1].W_re.sum())
-        L2 += (self.hidden[-1].W_re ** 2).sum()
-      L1 += abs(self.hidden[-1].W_in.sum())
-      L2 += (self.hidden[-1].W_in ** 2).sum()
+        L1 += abs(self.hidden[name].W_re.sum())
+        L2 += (self.hidden[name].W_re ** 2).sum()
+      L1 += abs(self.hidden[name].W_in.sum())
+      L2 += (self.hidden[name].W_in ** 2).sum()
       n_in = info[1]
-      x_in = self.hidden[-1].output
-      self.params = self.params + self.hidden[-1].params
+      x_in = self.hidden[name].output
+      self.params = self.params + self.hidden[name].params.values()
+    sources = [self.hidden[name]]
     # create backward layers
-    self.bidirectional = bidirectional and self.recurrent
+    assert self.recurrent or not self.bidirectional, "non-recurrent networks can not be bidirectional"
     if self.bidirectional:
       n_in = self.n_in
       x_in = self.x
       for info, drop in zip(self.hidden_info, dropout[:-1]):
+        params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         if info[0] == 'forward':
-          self.reverse_hidden.append(ForwardLayer(source = x_in, n_in = n_in, n_out = info[1], activation = info[2], dropout = drop, mask = self.mask))
+          self.hidden[name] = ForwardLayer(**params)
         else:
+          params['index'] = self.i
+          if self.bidirectional:
+            params['reverse'] = True
+          name = params['name']
           if info[0] == 'recurrent':
-            self.reverse_hidden.append(RecurrentLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
+            self.hidden[name] = RecurrentLayer(**params)
           elif info[0] == 'lstm':
-            self.reverse_hidden.append(LstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+            self.hidden[name] = LstmLayer(sharpgates = sharpgates, **params)
           elif info[0] == 'gatelstm':
-            self.reverse_hidden.append(GateLstmLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, sharpgates = sharpgates, dropout = drop, mask = self.mask))
+            self.hidden[name] = GateLstmLayer(sharpgates = sharpgates, **params)
           elif info[0] == 'peep_lstm':
-            self.reverse_hidden.append(LstmPeepholeLayer(source = x_in, index = self.i, n_in = n_in, n_out = info[1], activation = info[2], reverse = True, truncation = truncation, dropout = drop, mask = self.mask))
+            self.hidden[name] = LstmPeepholeLayer(**params)
           else: assert False, "invalid layer type: " + info[0]
-          L1 += abs(self.reverse_hidden[-1].W_re.sum())
-          L2 += (self.reverse_hidden[-1].W_re ** 2).sum()
-        L1 += abs(self.reverse_hidden[-1].W_in.sum())
-        L2 += (self.reverse_hidden[-1].W_in ** 2).sum()
+          L1 += abs(self.hidden[name].W_re.sum())
+          L2 += (self.hidden[name].W_re ** 2).sum()
+        L1 += abs(self.hidden[name].W_in.sum())
+        L2 += (self.hidden[name].W_in ** 2).sum()
         n_in = info[1]
-        x_in = self.reverse_hidden[-1].output
-        self.params = self.params + self.reverse_hidden[-1].params
+        x_in = self.hidden[name].output
+        self.params = self.params + self.hidden[name].params.values()
+      sources.append(self.hidden[name])
     self.gparams = self.params[:]
     # create output layer
     self.loss = loss
-    sources = [self.hidden[-1]] + ([self.reverse_hidden[-1]] if self.bidirectional else [])
-    self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask)
-    if loss == 'layer':
-      self.gparams = self.hidden[-1].params + (self.reverse_hidden[-1].params if self.bidirectional else [])
+    self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask, name = "output")
+    #if loss == 'layer':
+    #  self.gparams = self.hidden[-1].params.values() + (self.reverse_hidden[-1].params.values() if self.bidirectional else [])
     for W in self.output.W_in:
       L1 += abs(W.sum())
       L2 += (W ** 2).sum()
-    self.params += self.output.params
-    self.gparams += self.output.params
+    self.params += self.output.params.values()
+    self.gparams += self.output.params.values()
     targets = self.c if self.loss == 'ctc' else self.y
     self.errors = self.output.errors(targets)
     self.cost, self.known_grads = self.output.cost(targets)
@@ -539,43 +563,37 @@ class LayerNetwork(object):
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
   def num_params(self):
-    return sum([h.num_params() for h in self.hidden]) + sum([h.num_params() for h in self.reverse_hidden]) + self.output.num_params()
+    return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()
   
   def get_params(self):
-    params = [self.output.get_params()]
-    for h in self.hidden + self.reverse_hidden:
-      params.append(h.get_params())
+    params = { self.output.name : self.output.get_params() }
+    for h in self.hidden:
+      params[h] = self.hidden[h].get_params()
     return params
   
   def set_params(self, params):
-    self.output.set_params(params[0])
-    for p, h in zip(params[1:], self.hidden + self.reverse_hidden):
-      h.set_params(p)
+    self.output.set_params(params[self.output.name])
+    for h in self.hidden:
+      self.hidden[h].set_params(params[h])
   
   def save(self, name, epoch):
-    model = open(name, 'w')
-    print >> model, epoch, self.bidirectional
-    if self.bidirectional:
-      for g,h in zip(self.hidden, self.reverse_hidden):
-        g.save(model)
-        h.save(model)
-    else:
-      for h in self.hidden:
-        h.save(model)
+    model = h5py.File(name, "w")
+    model.attrs['epoch'] = epoch
+    model.attrs['bidirectional'] = self.bidirectional
+    for h in self.hidden:
+      self.hidden[h].save(model)
     self.output.save(model)
     model.close()
   
   def load(self, name):
-    model = [ line.strip() for line in open(name, 'r').readlines() if len(line.strip().split()) > 0 ]
-    desc = model[0].strip().split()
-    epoch = int(desc[0])
-    self.bidirectional = (len(desc) > 1) and (desc[1].lower() == "true")
-    model = model[1:]
-    num_hidden = len(self.hidden) - (self.loss == 'layer') 
-    assert len(model) == self.bidirectional * num_hidden + num_hidden + 1
-    for i in xrange(num_hidden):
-      self.hidden[i].load(model[i + self.bidirectional * i].strip())
-      if self.bidirectional:
-        self.reverse_hidden[i].load(model[2 * i + 1].strip())
-    self.output.load(model[-1].strip())
+    model = h5py.File(name, "r")
+    epoch = model.attrs['epoch']
+    self.bidirectional = model.attrs['bidirectional']
+    for name in self.hidden:
+      if not name in model:
+        print >> log.v2, "unable to load layer ", name
+      else:
+        self.hidden[name].load(model)
+    self.output.load(model)
+    model.close()
     return epoch

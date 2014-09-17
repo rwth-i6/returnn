@@ -30,16 +30,7 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
     return data, data.initialize()
   return None, 0
   
-if __name__ == '__main__':    
-  import numpy
-  print numpy.__version__
-  print numpy.__file__
-  if len(sys.argv) != 2:
-    print "usage:", sys.argv[0], "config"
-    sys.argv = [sys.argv[0], '/work/cv2/voigtlaender/theano_training/lastconfig']
-    os.chdir('/work/cv2/voigtlaender/theano_training')
-    #sys.exit(1)
-  
+if __name__ == '__main__':
   # initialize config file
   assert os.path.isfile(sys.argv[1]), "config file not found"  
   config = Config()
@@ -71,6 +62,11 @@ if __name__ == '__main__':
   parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
   parser.add_option("-z", "--max_sequences", dest = "max_seqs", help = "[INTEGER] Maximal number of sequences per batch.")
   (options, args) = parser.parse_args()
+  options = vars(options)
+  for opt in options.keys():
+    if options[opt] != None:
+      config.set(opt, options[opt])
+
   # initialize log file
   logs = config.list('log', [])
   log_verbosity = config.int_list('log_verbosity', [])
@@ -93,7 +89,7 @@ if __name__ == '__main__':
       utype = info[0:3]
       uid = info[3:]
       if uid == '*': uid = "[0-9]*"
-      if uid == 'X': device_tags.add(info)
+      if uid == 'X': device_tags[info] = num_batches
       else:
         if utype == 'cpu':
           np = ncpus
