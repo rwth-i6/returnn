@@ -13,3 +13,7 @@ def hdf5_dimension(filename, dimension):
   res = fin.attrs[dimension]
   fin.close()
   return res
+
+def hdf5_strings(handle, name, data):
+  dset = handle.create_dataset(name, (len(data),), dtype="S10")
+  dset[...] = data #numpy.string_(data)

@@ -7,6 +7,7 @@ import time
 import sys
 import theano.tensor as T
 from Log import log
+from Util import hdf5_strings
 from collections import OrderedDict
 import threading
 
@@ -169,6 +170,39 @@ class SprintCacheForwardProcess(Process):
       #times = zip(range(0, len(features)), range(1, len(features) + 1))
       self.toffset += len(features)
       self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
+
+class HDFForwardProcess(Process):
+    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
+      super(HDFForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
+      self.cache = cache
+      self.merge = merge
+      cache.attrs['numSeqs'] = data.num_seqs
+      cache.attrs['numTimesteps'] = data.num_timesteps
+      cache.attrs['inputPattSize'] = data.num_inputs
+      cache.attrs['numDims'] = 1
+      cache.attrs['numLabels'] = len(data.labels)
+
+      cache.create_dataset('seqTags', (data.num_seqs,), dtype = 'S10')
+      hdf5_strings(cache, 'labels', data.labels)
+
+    def initialize(self):
+      self.toffset = 0
+    def evaluate(self, batch, result):
+      features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
+      if self.merge.keys():
+        merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
+        for i in xrange(len(features)): 
+          for j, label in enumerate(self.merge.keys()):
+            for k in self.merge[label]:
+              merged[i, j] += numpy.exp(features[i, k])
+          z = max(numpy.sum(merged[i]), 0.000001)
+          merged[i] = numpy.log(merged[i] / z)
+        features = merged
+      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
+      times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
+      #times = zip(range(0, len(features)), range(1, len(features) + 1))
+      self.toffset += len(features)
+      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
       
 class Engine:      
   def __init__(self, devices, network):
@@ -283,7 +317,7 @@ class Engine:
       errsig = numpy.fromfile(f, sep=' ')
       errsig = errsig.reshape((n_timeframes, errsig.size / n_timeframes))
       
-  def forward(self, device, data, cache_file, combine_labels = ''):
+  def forward_to_sprint(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
@@ -302,6 +336,26 @@ class Engine:
     forwarder = SprintCacheForwardProcess(self.network, self.devices, data, batches, cache, merge)
     forwarder.join(9044006400)
     cache.finalize()
+
+  def forward(self, device, data, cache_file, combine_labels = ''):
+    cache =  h5py.File(filename, "w")
+    batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
+    merge = {}
+    if combine_labels != '':
+      for index, label in enumerate(data.labels):
+        merged = combine_labels.join(label.split(combine_labels)[:-1])
+        if merged == '': merged = label
+        if not merged in merge.keys():
+          merge[merged] = []
+        merge[merged].append(index)
+      import codecs
+      label_file = codecs.open(cache_file + ".labels", encoding = 'utf-8', mode = 'w')
+      for key in merge.keys():
+        label_file.write(key + "\n")
+      label_file.close()
+    forwarder = HDFForwardProcess(self.network, self.devices, data, batches, cache, merge)
+    forwarder.join(9044006400)
+    cache.close()
   
   def classify(self, device, data, label_file):
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
