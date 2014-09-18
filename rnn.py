@@ -44,7 +44,8 @@ if __name__ == '__main__':
   parser.add_option("-g", "--lreg", dest = "lreg", help = "[FLOAT] L1 or L2 regularization.")
   parser.add_option("-i", "--save_interval", dest = "save_interval", help = "[INTEGER] Number of epochs until a new model will be saved.")
   parser.add_option("-j", "--dropout", dest = "dropout", help = "[FLOAT] Dropout probability (0 to disable).")
-  parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
+  #parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
+  parser.add_option("-k", "--output_file", dest = "output_file", help = "[STRING] Path to target file for network output.")
   parser.add_option("-l", "--log", dest = "log", help = "[STRING] Log file path.")
   parser.add_option("-m", "--momentum", dest = "momentum", help = "[FLOAT] Momentum term in gradient descent optimization.")
   parser.add_option("-n", "--num_epochs", dest = "num_epochs", help = "[INTEGER] Number of epochs that should be trained.")
@@ -55,7 +56,7 @@ if __name__ == '__main__':
   parser.add_option("-s", "--hidden_sizes", dest = "hidden_sizes", help = "[INTEGER/LIST] Number of units in hidden layers.")  
   parser.add_option("-t", "--truncate", dest = "truncate", help = "[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
   parser.add_option("-u", "--device", dest = "device", help = "[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
-  parser.add_option("-v", "--verbose", dest = "verbose", help = "[INTEGER] Verbosity level from 0 - 5.")
+  parser.add_option("-v", "--verbose", dest = "log_verbosity", help = "[INTEGER] Verbosity level from 0 - 5.")
   parser.add_option("-w", "--window", dest = "window", help = "[INTEGER] Width of sliding window over sequence.")
   parser.add_option("-x", "--task", dest = "task", help = "[train/forward/analyze] Task of the current program call.")
   parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
@@ -175,10 +176,10 @@ if __name__ == '__main__':
     engine.train_config(config, train, dev, eval, start_epoch)
   elif task == 'forward':
     assert eval != None, 'no eval data provided'
-    assert config.has('cache_file'), 'no output file provided'
+    assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
-    cache_file = config.value('cache_file', '')
-    engine.forward(devices[0], eval, cache_file, combine_labels)
+    output_file = config.value('output_file', '')
+    engine.forward(devices[0], eval, output_file, combine_labels)
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.analyze(devices[0], eval, statistics)

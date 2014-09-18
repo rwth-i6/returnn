@@ -3,6 +3,7 @@
 import SprintCache
 import numpy
 import theano
+import h5py
 import time
 import sys
 import theano.tensor as T
@@ -174,21 +175,31 @@ class SprintCacheForwardProcess(Process):
 class HDFForwardProcess(Process):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
       super(HDFForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
-      self.cache = cache
       self.merge = merge
+      self.cache = cache
       cache.attrs['numSeqs'] = data.num_seqs
       cache.attrs['numTimesteps'] = data.num_timesteps
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
-      cache.attrs['numLabels'] = len(data.labels)
+      cache.attrs['numLabels'] = data.num_outputs
 
-      cache.create_dataset('seqTags', (data.num_seqs,), dtype = 'S10')
       hdf5_strings(cache, 'labels', data.labels)
+      hdf5_strings(cache, 'seqTags', data.tags)
+
+      self.targets = cache.create_dataset("targetClasses", (data.num_timesteps,), dtype='i')
+      self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
+      self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
+
+      if data.timestamps:
+        times = cache.create_dataset("times", data.timestamps.shape, dtype='i')
+        times[...] = data.timestamps
 
     def initialize(self):
       self.toffset = 0
     def evaluate(self, batch, result):
-      features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
+      features = numpy.concatenate(result, axis = 1)
+      if not "inputs" in self.cache:
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
         for i in xrange(len(features)): 
@@ -198,11 +209,12 @@ class HDFForwardProcess(Process):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
-      times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
-      #times = zip(range(0, len(features)), range(1, len(features) + 1))
-      self.toffset += len(features)
-      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
+
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[batch]
+      self.seq_dims[batch] = [features.shape[1]]
+      self.seq_lengths[batch] = features.shape[1]
+      self.inputs[self.toffset:self.toffset + features.shape[1]] = features
+      self.toffset += features.shape[1]
       
 class Engine:      
   def __init__(self, devices, network):
@@ -337,8 +349,8 @@ class Engine:
     forwarder.join(9044006400)
     cache.finalize()
 
-  def forward(self, device, data, cache_file, combine_labels = ''):
-    cache =  h5py.File(filename, "w")
+  def forward(self, device, data, output_file, combine_labels = ''):
+    cache =  h5py.File(output_file, "w")
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
     if combine_labels != '':
