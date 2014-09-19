@@ -209,7 +209,6 @@ class HDFForwardProcess(Process):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-
       print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[batch]
       self.seq_dims[batch] = [features.shape[1]]
       self.seq_lengths[batch] = features.shape[1]
@@ -305,10 +304,10 @@ class Engine:
       trainer.join(9044006400)
       start_batch = 0
       if trainer.score == None:
-        self.network.save(model + ".crash_" + str(trainer.error), epoch - 1)
+        self.save_model(model + ".crash_" + str(trainer.error), epoch - 1)
         sys.exit(1)
       if model and (epoch % interval == 0):
-        self.network.save(model + ".%03d" % epoch, epoch)
+        self.save_model(model + ".%03d" % epoch, epoch)
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]
@@ -318,16 +317,15 @@ class Engine:
             trainer.elapsed += tester.elapsed
         print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score,
     if model:
-      self.network.save(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
+      self.save_model(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
     if tester:
       if len(self.devices) > 1: tester.join(9044006400)
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
 
-  def run_daemon(self, train, dev, eval):
-    with open('/u/voigtlaender/Desktop/trainset_b01-057-10_1') as f:
-      n_timeframes = int(f.readline())
-      errsig = numpy.fromfile(f, sep=' ')
-      errsig = errsig.reshape((n_timeframes, errsig.size / n_timeframes))
+  def save_model(self, filename, epoch):
+    model = h5py.File(filename, "w")
+    self.network.save(model, epoch)
+    model.close()
       
   def forward_to_sprint(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)

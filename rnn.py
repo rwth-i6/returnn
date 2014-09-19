@@ -13,6 +13,7 @@ import os
 import sys
 import time
 
+import h5py
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
@@ -136,17 +137,24 @@ if __name__ == '__main__':
   eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = "0", batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
-  # initialize network
-  network = LayerNetwork.from_config(config)
   task = config.value('task', 'train')
   start_batch = config.int('start_batch', 0)
   if config.has('load'):
     weights = config.value('load', '')
     print >> log.v1, "loading weights from", weights
-    start_epoch = network.load(weights)
+    model = h5py.File(weights, "r")
+    if config.bool('initialize_from_model', False):
+      print >> log.v5, "initializing network topology from model"
+      network = LayerNetwork.from_model(model)
+    else:
+      network = LayerNetwork.from_config(config)
+    start_epoch = network.load(model)
     if start_batch > 0:
       print >> log.v3, "starting at batch", start_batch
-  else: start_epoch = 0
+    model.close()
+  else:
+    network = LayerNetwork.from_config(config)
+    start_epoch = 0
   # print task properties
   print >> log.v2, "Network:"
   print >> log.v2, "input:", train.num_inputs, "x", train.window

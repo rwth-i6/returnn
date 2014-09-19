@@ -67,12 +67,19 @@ class Device():
   def initialize(self, config):
     import theano
     import theano.tensor as T
+    import h5py
     self.network_task = config.value('task', 'train')
     mask = "unity"
     if sum(config.float_list('dropout', [0])) > 0.0:
       mask = "dropout"
-    self.trainnet = LayerNetwork.from_config(config, mask)
-    self.testnet = LayerNetwork.from_config(config, "unity")
+    if config.bool('initialize_from_model', False) and config.has('load'):
+      model = h5py.File(config.value('load', ''), "r")
+      self.trainnet = LayerNetwork.from_model(model, mask)
+      self.testnet = LayerNetwork.from_model(model, "unity")
+      model.close()
+    else:
+      self.trainnet = LayerNetwork.from_config(config, mask)
+      self.testnet = LayerNetwork.from_config(config, "unity")
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)

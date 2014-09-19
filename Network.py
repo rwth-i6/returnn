@@ -1,7 +1,6 @@
 #! /usr/bin/python2.7
 
 import numpy
-import h5py
 import theano
 import theano.tensor as T
 from Util import hdf5_dimension
@@ -83,6 +82,10 @@ class Layer(Container):
     super(Layer, self).__init__(layer_class, name = name)
     self.n_in = n_in
     self.n_out = n_out
+    self.set_attr('mask', mask)
+    self.set_attr('dropout', dropout)
+    self.set_attr('n_in', n_in)
+    self.set_attr('n_out', n_out)
     self.b = self.add_param(self.create_bias(n_out), 'b')
     self.mass = T.constant(1.)
     if mask == "unity":
@@ -137,6 +140,7 @@ class OutputLayer(Layer):
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     else: assert False
+
     #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   def entropy(self):
     return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
@@ -160,6 +164,7 @@ class HiddenLayer(Layer):
     self.activation = activation
     self.W_in = self.add_param(self.create_forward_weights(n_in, n_out), 'W_in')
     self.source = source
+    self.set_attr('n_in', n_in)
     
 class ForwardLayer(HiddenLayer):
   def __init__(self, source, n_in, n_out, activation=T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
@@ -179,6 +184,7 @@ class RecurrentLayer(HiddenLayer):
     self.o = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
     self.reverse = reverse
     self.truncation = truncation
+    self.set_attr('recurrent', True)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
     if compile: self.compile()
@@ -208,6 +214,7 @@ class LstmLayer(RecurrentLayer):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
+    self.set_attr('n_out', n_out)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.act = self.create_bias(n_out)
     self.state = self.create_bias(n_out)
@@ -454,10 +461,10 @@ class LayerNetwork(object):
         acts = []
         for a in actfct[i].split(':'):
           assert activations.has_key(a), "invalid activation function: " + a
-          acts.append(activations[a])
+          acts.append((a, activations[a]))
       else:
         assert activations.has_key(actfct[i]), "invalid activation function: " + actfct[i]
-        acts = activations[actfct[i]]
+        acts = (actfct[i], activations[actfct[i]])
       network.add_hidden(hidden_name[i], hidden_size[i], hidden_type[i], acts)
     if task == 'pretrain':
       loss = 'layer'
@@ -468,57 +475,148 @@ class LayerNetwork(object):
                          config.value('pretrain_layer_activation', actfct[-1]))
     network.initialize(loss, L1_reg, L2_reg, dropout, bidirectional, truncation, sharpgates, entropy)
     return network
+
+  @classmethod
+  def from_model(cls, model, mask = None):
+    grp = model['training']
+    if mask == None: mask = grp.attrs['mask']
+    network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
+    network.bidirectional = model.attrs['bidirectional']
+    network.L1_reg = grp.attrs['L1_reg']
+    network.L2_reg = grp.attrs['L2_reg']
+    network.hidden = {}
+    network.params = []
+    network.L1 = T.constant(0)
+    network.L2 = T.constant(0)
+    layer = model.attrs['output']
+    activations = { 'logistic' : T.nnet.sigmoid,
+                    'tanh' : T.tanh,
+                    'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
+                    'identity' : lambda z : z,
+                    'one' : lambda z : 1,
+                    'zero' : lambda z : 0,
+                    'softsign': lambda z : z / (1.0 + abs(z)),
+                    'softsquare': lambda z : 1 / (1.0 + z * z),
+                    'maxout': lambda z : T.max(z, axis = 0),
+                    'sin' : T.sin,
+                    'cos' : T.cos }
+    network.recurrent = False
+
+    def traverse(model, layer, network):
+      n_in = 0
+      if 'from' in model[layer].attrs:
+        x_in = []
+        for s in model[layer].attrs['from'].split(','):
+          traverse(model, s, network)
+          x_in.append(network.hidden[s].output)
+          n_in += network.hidden[s].n_out
+        if len(x_in) == 1: x_in = x_in[0]
+      else:
+        x_in = network.x
+        n_in = network.n_in
+      if layer != model.attrs['output']:
+        cl = model[layer].attrs['class']
+        act = model[layer].attrs['activation']
+        params = { 'source': x_in,
+                   'n_in': n_in,
+                   'n_out': model[layer].attrs['n_out'],
+                   'activation': activations[act],
+                   'dropout': model[layer].attrs['dropout'],
+                   'name': layer,
+                   'mask': mask }
+        network.recurrent = network.recurrent or (cl != 'hidden')
+        if cl == 'hidden':
+          network.add_layer(layer, ForwardLayer(**params), act)
+        elif cl == 'recurrent':
+          network.add_layer(layer, RecurrentLayer(index = network.i, **params), act)
+        elif cl == 'lstm':
+          network.add_layer(layer, LstmLayer(index = network.i, sharpgates = model[layer].attrs['sharpgates'], **params), act)
+        for a in model[layer].attrs:
+          network.hidden[layer].attrs[a] = model[layer].attrs[a]
+    output = model.attrs['output']
+    traverse(model, output, network)
+    sources = model[output].attrs['from'].split(',')
+    network.make_classifier(sources, grp.attrs['loss'], model[output].attrs['dropout'])
+    return network
     
-  def add_hidden(self, name, size, layer_type = 'forward', activation = T.tanh):
+  def add_hidden(self, name, size, layer_type = 'forward', activation = ("tanh", T.tanh)):
     self.hidden_info.append((layer_type, size, activation, name))
+
+  def add_layer(self, name, layer, activation):
+    self.hidden[name] = layer
+    self.hidden[name].set_attr('activation', activation)
+    if 'recurrent' in layer.attrs.keys() and layer.attrs['recurrent']:
+      self.L1 += abs(self.hidden[name].W_re.sum())
+      self.L2 += (self.hidden[name].W_re ** 2).sum()
+    self.L1 += abs(self.hidden[name].W_in.sum())
+    self.L2 += (self.hidden[name].W_in ** 2).sum()
+    self.params += self.hidden[name].params.values()
+
+  def make_classifier(self, sources, loss, dropout = 0):
+    self.gparams = self.params[:]
+    self.loss = loss
+    self.output = OutputLayer(sources = [self.hidden[s] for s in sources], index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = self.mask, name = "output")
+    self.output.set_attr('from', ",".join(sources))
+    for W in self.output.W_in:
+      self.L1 += abs(W.sum())
+      self.L2 += (W ** 2).sum()
+    self.params += self.output.params.values()
+    self.gparams += self.output.params.values()
+    targets = self.c if self.loss == 'ctc' else self.y
+    self.errors = self.output.errors(targets)
+    self.cost, self.known_grads = self.output.cost(targets)
+    self.objective = self.cost + self.L1_reg * self.L1 + self.L2_reg * self.L2 #+ entropy * self.output.entropy()
+    if hasattr(LstmLayer, 'sharpgates'):
+      self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
+    #self.jacobian = T.jacobian(self.output.z, self.x)
   
   def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
     self.hidden = {}
     self.params = []
     n_in = self.n_in
     x_in = self.x
-    L1 = T.constant(0)
-    L2 = T.constant(0)
+    self.L1 = T.constant(0)
+    self.L2 = T.constant(0)
+    self.L1_reg = L1_reg
+    self.L2_reg = L2_reg
     self.recurrent = False
     self.bidirectional = bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
-      params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2], 'dropout': drop, 'name': info[3], 'mask': self.mask }
-      if x_in != self.x: self.hidden[name].set_attr('from', name)
+      params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       if info[0] == 'forward':
-        self.hidden[name] = ForwardLayer(**params)
+        self.add_layer(name, ForwardLayer(**params))
       else:
         self.recurrent = True
         params['index'] = self.i
+        params['truncation'] = truncation
         if self.bidirectional:
           params['name'] = info[3] + "_fw"
         name = params['name']
+        pname = name
         if info[0] == 'recurrent':
-            self.hidden[name] = RecurrentLayer(**params)
+          self.add_layer(name, RecurrentLayer(**params), info[2][0])
         elif info[0] == 'lstm':
-          self.hidden[name] = LstmLayer(sharpgates = sharpgates, **params)
+          self.add_layer(name, LstmLayer(sharpgates = sharpgates, **params), info[2][0])
         elif info[0] == 'gatelstm':
-          self.hidden[name] = GateLstmLayer(sharpgates = sharpgates, **params)
+          self.add_layer(name, GateLstmLayer(sharpgates = sharpgates, **params), info[2][0])
         elif info[0] == 'peep_lstm':
-          self.hidden[name] = LstmPeepholeLayer(**params)
+          self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
         else: assert False, "invalid layer type: " + info[0]
-        L1 += abs(self.hidden[name].W_re.sum())
-        L2 += (self.hidden[name].W_re ** 2).sum()
-      L1 += abs(self.hidden[name].W_in.sum())
-      L2 += (self.hidden[name].W_in ** 2).sum()
+      if self.hidden[name].source != self.x:
+        self.hidden[name].set_attr('from', pname)
       n_in = info[1]
       x_in = self.hidden[name].output
-      self.params = self.params + self.hidden[name].params.values()
-    sources = [self.hidden[name]]
+    sources = [name]
     # create backward layers
     assert self.recurrent or not self.bidirectional, "non-recurrent networks can not be bidirectional"
     if self.bidirectional:
       n_in = self.n_in
       x_in = self.x
       for info, drop in zip(self.hidden_info, dropout[:-1]):
-        params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
+        params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         if info[0] == 'forward':
           self.hidden[name] = ForwardLayer(**params)
         else:
@@ -526,42 +624,23 @@ class LayerNetwork(object):
           if self.bidirectional:
             params['reverse'] = True
           name = params['name']
+          pname = name
           if info[0] == 'recurrent':
-            self.hidden[name] = RecurrentLayer(**params)
+            self.add_layer(name, RecurrentLayer(**params), info[2][0])
           elif info[0] == 'lstm':
-            self.hidden[name] = LstmLayer(sharpgates = sharpgates, **params)
+            self.add_layer(name, LstmLayer(sharpgates = sharpgates, **params), info[2][0])
           elif info[0] == 'gatelstm':
-            self.hidden[name] = GateLstmLayer(sharpgates = sharpgates, **params)
+            self.add_layer(name, GateLstmLayer(sharpgates = sharpgates, **params), info[2][0])
           elif info[0] == 'peep_lstm':
-            self.hidden[name] = LstmPeepholeLayer(**params)
+            self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
           else: assert False, "invalid layer type: " + info[0]
-          L1 += abs(self.hidden[name].W_re.sum())
-          L2 += (self.hidden[name].W_re ** 2).sum()
-        L1 += abs(self.hidden[name].W_in.sum())
-        L2 += (self.hidden[name].W_in ** 2).sum()
+        if self.hidden[name].source != self.x:
+          self.hidden[name].set_attr('from', pname)
         n_in = info[1]
         x_in = self.hidden[name].output
-        self.params = self.params + self.hidden[name].params.values()
-      sources.append(self.hidden[name])
-    self.gparams = self.params[:]
-    # create output layer
-    self.loss = loss
-    self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout[-1], mask = self.mask, name = "output")
-    #if loss == 'layer':
-    #  self.gparams = self.hidden[-1].params.values() + (self.reverse_hidden[-1].params.values() if self.bidirectional else [])
-    for W in self.output.W_in:
-      L1 += abs(W.sum())
-      L2 += (W ** 2).sum()
-    self.params += self.output.params.values()
-    self.gparams += self.output.params.values()
-    targets = self.c if self.loss == 'ctc' else self.y
-    self.errors = self.output.errors(targets)
-    self.cost, self.known_grads = self.output.cost(targets)
-    self.objective = self.cost + L1_reg * L1 + L2_reg * L2 #+ entropy * self.output.entropy()
-    if hasattr(LstmLayer, 'sharpgates'):
-      self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
-    #self.jacobian = T.jacobian(self.output.z, self.x)
-  
+      sources.append(name)
+    self.make_classifier(sources, loss, dropout[-1])
+
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()
   
@@ -576,17 +655,22 @@ class LayerNetwork(object):
     for h in self.hidden:
       self.hidden[h].set_params(params[h])
   
-  def save(self, name, epoch):
-    model = h5py.File(name, "w")
+  def save(self, model, epoch):
+    grp = model.create_group('training')
+    grp.attrs['L1_reg'] = self.L1_reg
+    grp.attrs['L2_reg'] = self.L2_reg
+    grp.attrs['loss'] = self.loss
+    grp.attrs['mask'] = self.mask
     model.attrs['epoch'] = epoch
     model.attrs['bidirectional'] = self.bidirectional
+    model.attrs['output'] = self.output.name
+    model.attrs['n_in'] = self.n_in
+    model.attrs['n_out'] = self.n_out
     for h in self.hidden:
       self.hidden[h].save(model)
     self.output.save(model)
-    model.close()
   
-  def load(self, name):
-    model = h5py.File(name, "r")
+  def load(self, model):
     epoch = model.attrs['epoch']
     self.bidirectional = model.attrs['bidirectional']
     for name in self.hidden:
@@ -595,5 +679,4 @@ class LayerNetwork(object):
       else:
         self.hidden[name].load(model)
     self.output.load(model)
-    model.close()
     return epoch
