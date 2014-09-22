@@ -586,8 +586,9 @@ class LayerNetwork(object):
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
       params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      name = params['name']
       if info[0] == 'forward':
-        self.add_layer(name, ForwardLayer(**params))
+        self.add_layer(name, ForwardLayer(**params), info[2][0])
       else:
         self.recurrent = True
         params['index'] = self.i
@@ -617,8 +618,9 @@ class LayerNetwork(object):
       x_in = self.x
       for info, drop in zip(self.hidden_info, dropout[:-1]):
         params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
+        name = params['name']
         if info[0] == 'forward':
-          self.hidden[name] = ForwardLayer(**params)
+          self.hidden[name] = self.add_layer(name, ForwardLayer(**params), info[2][0])
         else:
           params['index'] = self.i
           if self.bidirectional:
