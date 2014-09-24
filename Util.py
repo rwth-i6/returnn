@@ -15,5 +15,6 @@ def hdf5_dimension(filename, dimension):
   return res
 
 def hdf5_strings(handle, name, data):
-  dset = handle.create_dataset(name, (len(data),), dtype="S10")
-  dset[...] = data #numpy.string_(data)
+  S=max([len(d) for d in data])
+  dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
+  dset[...] = data
