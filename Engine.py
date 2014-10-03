@@ -175,6 +175,7 @@ class SprintCacheForwardProcess(Process):
 class HDFForwardProcess(Process):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
       super(HDFForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
+      self.tags = []
       self.merge = merge
       self.cache = cache
       cache.attrs['numSeqs'] = data.num_seqs
@@ -182,12 +183,10 @@ class HDFForwardProcess(Process):
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
       cache.attrs['numLabels'] = data.num_outputs
-
       hdf5_strings(cache, 'labels', data.labels)
       self.targets = cache.create_dataset("targetClasses", (data.num_timesteps,), dtype='i')
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
       self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
-
       if data.timestamps:
         times = cache.create_dataset("times", data.timestamps.shape, dtype='i')
         times[...] = data.timestamps
