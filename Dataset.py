@@ -54,11 +54,6 @@ class Dataset:
     self.num_running_chars = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
-    
-  def read_tags(self, filename):
-    # super frustrating resignation solution because there is no way to read ncChars in python
-    call = "ncdump -v seqTags " + filename + " | grep \"^  \\\"\" | cut -d \\\" -f 2"
-    return cmd(call)
 
   def add_file(self, filename):
     fin = h5py.File(filename, "r")

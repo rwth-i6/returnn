@@ -184,8 +184,6 @@ class HDFForwardProcess(Process):
       cache.attrs['numLabels'] = data.num_outputs
 
       hdf5_strings(cache, 'labels', data.labels)
-      hdf5_strings(cache, 'seqTags', data.tags)
-
       self.targets = cache.create_dataset("targetClasses", (data.num_timesteps,), dtype='i')
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
       self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
@@ -196,6 +194,9 @@ class HDFForwardProcess(Process):
 
     def initialize(self):
       self.toffset = 0
+    def finalize(self):
+      hdf5_strings(self.cache, 'seqTags', self.tags)
+
     def evaluate(self, batch, result):
       features = numpy.concatenate(result, axis = 1)
       if not "inputs" in self.cache:
@@ -214,6 +215,7 @@ class HDFForwardProcess(Process):
       self.seq_lengths[batch] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = features
       self.toffset += features.shape[1]
+      self.tags.append(self.data.tags[self.data.seq_index[batch]])
       
 class Engine:      
   def __init__(self, devices, network):
