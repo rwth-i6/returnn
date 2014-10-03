@@ -57,11 +57,11 @@ class Dataset:
 
   def add_file(self, filename):
     fin = h5py.File(filename, "r")
-    labels = fin["labels"][...].tolist()
+    labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]
     if not self.labels:
       self.labels = labels
     assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
-    tags = fin["seqTags"][...].tolist()
+    tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]
     self.files.append(filename)
     seq_start = [0]
     if 'times' in fin:

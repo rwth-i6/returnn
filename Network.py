@@ -596,7 +596,6 @@ class LayerNetwork(object):
         if self.bidirectional:
           params['name'] = info[3] + "_fw"
         name = params['name']
-        pname = name
         if info[0] == 'recurrent':
           self.add_layer(name, RecurrentLayer(**params), info[2][0])
         elif info[0] == 'lstm':
@@ -608,6 +607,7 @@ class LayerNetwork(object):
         else: assert False, "invalid layer type: " + info[0]
       if self.hidden[name].source != self.x:
         self.hidden[name].set_attr('from', pname)
+      pname = name
       n_in = info[1]
       x_in = self.hidden[name].output
     sources = [name]
@@ -626,7 +626,6 @@ class LayerNetwork(object):
           if self.bidirectional:
             params['reverse'] = True
           name = params['name']
-          pname = name
           if info[0] == 'recurrent':
             self.add_layer(name, RecurrentLayer(**params), info[2][0])
           elif info[0] == 'lstm':
@@ -638,6 +637,7 @@ class LayerNetwork(object):
           else: assert False, "invalid layer type: " + info[0]
         if self.hidden[name].source != self.x:
           self.hidden[name].set_attr('from', pname)
+        pname = name
         n_in = info[1]
         x_in = self.hidden[name].output
       sources.append(name)
