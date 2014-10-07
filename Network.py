@@ -566,8 +566,8 @@ class LayerNetwork(object):
     self.errors = self.output.errors(targets)
     self.cost, self.known_grads = self.output.cost(targets)
     self.objective = self.cost + self.L1_reg * self.L1 + self.L2_reg * self.L2 #+ entropy * self.output.entropy()
-    if hasattr(LstmLayer, 'sharpgates'):
-      self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
+    #if hasattr(LstmLayer, 'sharpgates'):
+      #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
   def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
