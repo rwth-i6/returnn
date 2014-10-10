@@ -210,8 +210,8 @@ class HDFForwardProcess(Process):
           merged[i] = numpy.log(merged[i] / z)
         features = merged
       print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
-      self.seq_dims[self.data.seq_index[batch]] = [features.shape[1]]
-      self.seq_lengths[self.data.seq_index[batch]] = features.shape[1]
+      self.seq_dims[batch] = [features.shape[1]]
+      self.seq_lengths[batch] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
       self.tags.append(self.data.tags[self.data.seq_index[batch]])
