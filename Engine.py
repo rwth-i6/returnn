@@ -166,7 +166,7 @@ class SprintCacheForwardProcess(Process):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[batch]
+      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
       #times = zip(range(0, len(features)), range(1, len(features) + 1))
       self.toffset += len(features)
@@ -209,10 +209,10 @@ class HDFForwardProcess(Process):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[batch]
-      self.seq_dims[batch] = [features.shape[1]]
-      self.seq_lengths[batch] = features.shape[1]
-      self.inputs[self.toffset:self.toffset + features.shape[1]] = features
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
+      self.seq_dims[self.data.seq_index[batch]] = [features.shape[1]]
+      self.seq_lengths[self.data.seq_index[batch]] = features.shape[1]
+      self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
       self.tags.append(self.data.tags[self.data.seq_index[batch]])
       
