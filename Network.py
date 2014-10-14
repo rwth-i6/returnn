@@ -530,10 +530,11 @@ class LayerNetwork(object):
         else:
           params['truncation'] = model[layer].attrs['truncation']
           params['reverse'] = model[layer].attrs['reverse']
+          params['index'] = network.i
           if cl == 'recurrent':
-            network.add_layer(layer, RecurrentLayer(index = network.i, **params), act)
+            network.add_layer(layer, RecurrentLayer(**params), act)
           elif cl == 'lstm':
-            network.add_layer(layer, LstmLayer(index = network.i, sharpgates = model[layer].attrs['sharpgates'], truncation = model[layer].attrs['truncation'], **params), act)
+            network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
         for a in model[layer].attrs:
           network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
