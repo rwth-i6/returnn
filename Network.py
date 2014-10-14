@@ -488,7 +488,6 @@ class LayerNetwork(object):
     network.params = []
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
-    layer = model.attrs['output']
     activations = { 'logistic' : T.nnet.sigmoid,
                     'tanh' : T.tanh,
                     'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
@@ -676,7 +675,9 @@ class LayerNetwork(object):
     epoch = model.attrs['epoch']
     self.bidirectional = model.attrs['bidirectional']
     for name in self.hidden:
-      assert name in model, "unable to load layer " + name
-      self.hidden[name].load(model)
+      if not name in model:
+        print >> log.v2, "unable to load layer ", name
+      else:
+        self.hidden[name].load(model)
     self.output.load(model)
     return epoch
