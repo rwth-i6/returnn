@@ -676,9 +676,7 @@ class LayerNetwork(object):
     epoch = model.attrs['epoch']
     self.bidirectional = model.attrs['bidirectional']
     for name in self.hidden:
-      if not name in model:
-        print >> log.v2, "unable to load layer ", name
-      else:
-        self.hidden[name].load(model)
+      assert name in model, "unable to load layer " + name
+      self.hidden[name].load(model)
     self.output.load(model)
     return epoch
