@@ -2,6 +2,7 @@
 
 import numpy
 import theano
+import json
 import theano.tensor as T
 from Util import hdf5_dimension
 from math import sqrt
@@ -86,6 +87,8 @@ class Layer(Container):
     self.set_attr('dropout', dropout)
     self.set_attr('n_in', n_in)
     self.set_attr('n_out', n_out)
+    self.set_attr('L1', 0.0)
+    self.set_attr('L2', 0.0)
     self.b = self.add_param(self.create_bias(n_out), 'b')
     self.mass = T.constant(1.)
     if mask == "unity":
@@ -167,17 +170,22 @@ class HiddenLayer(Layer):
     self.set_attr('n_in', n_in)
     
 class ForwardLayer(HiddenLayer):
-  def __init__(self, source, n_in, n_out, activation=T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
+  def __init__(self, source, n_in, n_out, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
     super(ForwardLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, layer_class = layer_class, name = name)
     self.W_in.set_value(self.create_uniform_weights(n_in, n_out).get_value())
     z = T.dot(source, self.mass * self.mask * self.W_in) + self.b
     self.output = (z if self.activation is None else self.activation(z))
     
 class RecurrentLayer(HiddenLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", layer_class = "recurrent", name = ""):
+  def __init__(self, source, index, n_in, n_out, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", projection = None, layer_class = "recurrent", name = ""):
     super(RecurrentLayer, self).__init__(source, n_in, n_out, activation, dropout, mask, layer_class = layer_class, name = name)
     self.act = self.create_bias(n_out)
     W_in, self.W_re = self.create_recurrent_weights(n_in, n_out)
+    if projection:
+      self.W_proj = self.create_forward_weights(n_out, projection)
+      self.add_param(self.W_proj, 'W_proj')
+    else:
+      self.W_proj = None
     self.W_in.set_value(W_in.get_value())
     self.add_param(self.W_re, 'W_re')
     self.index = T.cast(index, theano.config.floatX)
@@ -187,12 +195,16 @@ class RecurrentLayer(HiddenLayer):
     self.set_attr('recurrent', True)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
+    self.set_attr('projection', projection)
     if compile: self.compile()
   
   def compile(self):
     def step(x_t, i_t, h_p):
       i = T.outer(i_t, self.o)
-      z = T.dot(x_t, self.mass * self.mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
+      if self.W_proj:
+        z = T.dot(x_t, self.mass * self.mask * self.W_in) + T.dot(T.dot(h_p, self.W_proj), self.W_re) + self.b
+      else:
+        z = T.dot(x_t, self.mass * self.mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
       #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
       return h_t * i    
@@ -208,8 +220,8 @@ class RecurrentLayer(HiddenLayer):
     return self.create_random_weights(n, m, nin), self.create_random_weights(m, m, nin)
    
 class LstmLayer(RecurrentLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", layer_class = "lstm", name = ""):
-    super(LstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, layer_class = layer_class, name = name)
+  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
+    super(LstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
     if not isinstance(activation, (list, tuple)):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
@@ -244,7 +256,10 @@ class LstmLayer(RecurrentLayer):
     
     def step(x_t, i_t, s_p, h_p, mask):
       i = T.outer(i_t, self.o)
-      z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
+      if self.W_proj:
+        z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(T.dot(h_p, self.W_proj), self.W_re) + self.b
+      else:
+        z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
       partition = z.shape[1] / 4
       input = CI(z[:,:partition])
       ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
@@ -477,11 +492,60 @@ class LayerNetwork(object):
     return network
 
   @classmethod
+  def from_json(cls, json_content, n_in, n_out, mask = None):
+    network = cls(n_in, n_out, mask)
+    topology = json.loads(json_content)
+    network.hidden = {}
+    network.params = []
+    network.L1 = T.constant(0)
+    network.L2 = T.constant(0)
+    activations = { 'logistic' : T.nnet.sigmoid,
+                    'tanh' : T.tanh,
+                    'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
+                    'identity' : lambda z : z,
+                    'one' : lambda z : 1,
+                    'zero' : lambda z : 0,
+                    'softsign': lambda z : z / (1.0 + abs(z)),
+                    'softsquare': lambda z : 1 / (1.0 + z * z),
+                    'maxout': lambda z : T.max(z, axis = 0),
+                    'sin' : T.sin,
+                    'cos' : T.cos }
+    def traverse(content, layer, network):
+      source = []
+      n_in = 0
+      act = cl = content[layer].pop('activation', None)
+      if not content[layer].has_key('from'):
+        source = [network.x]
+        n_in = network.n_in
+      else:
+        for prev in content[layer]['from']:
+          if not network.hidden.has_key(prev):
+            traverse(content, prev, network)
+          source.append(network.hidden[prev].output)
+          n_in += network.hidden[prev].n_out
+      content[layer].pop('from', None)
+      cl = content[layer].pop('class', None)
+      params = { 'source': source, 'n_in' : n_in }
+      params.update(content[layer])
+      network.recurrent = network.recurrent or (cl != 'hidden')
+      if cl == 'softmax':
+          network.make_classifier(**params)
+      if cl == 'hidden':
+        network.add_layer(layer, ForwardLayer(**params), act)
+      else:
+        params['index'] = network.i
+        if cl == 'recurrent':
+          network.add_layer(layer, RecurrentLayer(**params), act)
+        elif cl == 'lstm':
+          network.add_layer(layer, LstmLayer(**params), act)
+    traverse(json_content, json_content.keys()[0], network)
+    return network
+
+  @classmethod
   def from_model(cls, model, mask = None):
     grp = model['training']
     if mask == None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
-    network.bidirectional = model.attrs['bidirectional']
     network.L1_reg = grp.attrs['L1_reg']
     network.L2_reg = grp.attrs['L2_reg']
     network.hidden = {}
@@ -527,8 +591,6 @@ class LayerNetwork(object):
         if cl == 'hidden':
           network.add_layer(layer, ForwardLayer(**params), act)
         else:
-          params['truncation'] = model[layer].attrs['truncation']
-          params['reverse'] = model[layer].attrs['reverse']
           params['index'] = network.i
           if cl == 'recurrent':
             network.add_layer(layer, RecurrentLayer(**params), act)
@@ -667,7 +729,6 @@ class LayerNetwork(object):
     grp.attrs['loss'] = self.loss
     grp.attrs['mask'] = self.mask
     model.attrs['epoch'] = epoch
-    model.attrs['bidirectional'] = self.bidirectional
     model.attrs['output'] = self.output.name
     model.attrs['n_in'] = self.n_in
     model.attrs['n_out'] = self.n_out
@@ -677,7 +738,6 @@ class LayerNetwork(object):
   
   def load(self, model):
     epoch = model.attrs['epoch']
-    self.bidirectional = model.attrs['bidirectional']
     for name in self.hidden:
       if not name in model:
         print >> log.v2, "unable to load layer ", name
