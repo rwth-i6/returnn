@@ -423,7 +423,7 @@ class LayerNetwork(object):
     num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
     loss = config.value('loss', 'ce')
     if config.has('initialize_from_json'):
-      json_file = config.value('initialize_from_json')
+      json_file = config.value('initialize_from_json', '')
       assert os.path.isfile(json_file), "json file not found: " + json_file
       return Network.from_json(open(json_file).read(), num_inputs, num_outputs)
     if loss == 'ctc':
