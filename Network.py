@@ -4,7 +4,7 @@ import numpy
 import theano
 import json
 import theano.tensor as T
-from Util import hdf5_dimension
+from Util import hdf5_dimension, strtoact
 from math import sqrt
 from CTC import CTCOp
 from BestPathDecoder import BestPathDecodeOp
@@ -420,8 +420,12 @@ class LayerNetwork(object):
   @classmethod
   def from_config(cls, config, mask = "unity"):
     num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
-    loss = config.value('loss', 'ce')
     num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
+    loss = config.value('loss', 'ce')
+    if config.has('initialize_from_json'):
+      json_file = config.value('initialize_from_json')
+      assert os.path.isfile(json_file), "json file not found: " + json_file
+      return Network.from_json(open(json_file).read(), num_inputs, num_outputs)
     if loss == 'ctc':
       num_outputs += 1 #add blank
     hidden_size = config.int_list('hidden_size')
@@ -460,26 +464,13 @@ class LayerNetwork(object):
         dropout.append(0.0)
     dropout = [float(d) for d in dropout]
     network = cls(num_inputs, num_outputs, mask)
-    activations = { 'logistic' : T.nnet.sigmoid,
-                    'tanh' : T.tanh,
-                    'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
-                    'identity' : lambda z : z,
-                    'one' : lambda z : 1,
-                    'zero' : lambda z : 0,
-                    'softsign': lambda z : z / (1.0 + abs(z)),
-                    'softsquare': lambda z : 1 / (1.0 + z * z),
-                    'maxout': lambda z : T.max(z, axis = 0),
-                    'sin' : T.sin,
-                    'cos' : T.cos }
     for i in xrange(len(hidden_size)):
       if ':' in actfct[i]:
         acts = []
         for a in actfct[i].split(':'):
-          assert activations.has_key(a), "invalid activation function: " + a
-          acts.append((a, activations[a]))
+          acts.append((a, strtoact(a)))
       else:
-        assert activations.has_key(actfct[i]), "invalid activation function: " + actfct[i]
-        acts = (actfct[i], activations[actfct[i]])
+        acts = (actfct[i], strtoact(actfct[i]))
       network.add_hidden(hidden_name[i], hidden_size[i], hidden_type[i], acts)
     if task == 'pretrain':
       loss = 'layer'
@@ -499,21 +490,11 @@ class LayerNetwork(object):
     network.params = []
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
-    activations = { 'logistic' : T.nnet.sigmoid,
-                    'tanh' : T.tanh,
-                    'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
-                    'identity' : lambda z : z,
-                    'one' : lambda z : 1,
-                    'zero' : lambda z : 0,
-                    'softsign': lambda z : z / (1.0 + abs(z)),
-                    'softsquare': lambda z : 1 / (1.0 + z * z),
-                    'maxout': lambda z : T.max(z, axis = 0),
-                    'sin' : T.sin,
-                    'cos' : T.cos }
     def traverse(content, layer, network):
       source = []
       n_in = 0
-      act = cl = content[layer].pop('activation', None)
+      act = content[layer].pop('activation', None)
+      cl = content[layer].pop('class', None)
       if not content[layer].has_key('from'):
         source = [network.x]
         n_in = network.n_in
@@ -525,7 +506,7 @@ class LayerNetwork(object):
           n_in += network.hidden[prev].n_out
       content[layer].pop('from', None)
       cl = content[layer].pop('class', None)
-      params = { 'source': source, 'n_in' : n_in }
+      params = { 'source': source, 'n_in' : n_in, 'activation' : strtoact(act) }
       params.update(content[layer])
       network.recurrent = network.recurrent or (cl != 'hidden')
       if cl == 'softmax':
@@ -552,17 +533,6 @@ class LayerNetwork(object):
     network.params = []
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
-    activations = { 'logistic' : T.nnet.sigmoid,
-                    'tanh' : T.tanh,
-                    'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
-                    'identity' : lambda z : z,
-                    'one' : lambda z : 1,
-                    'zero' : lambda z : 0,
-                    'softsign': lambda z : z / (1.0 + abs(z)),
-                    'softsquare': lambda z : 1 / (1.0 + z * z),
-                    'maxout': lambda z : T.max(z, axis = 0),
-                    'sin' : T.sin,
-                    'cos' : T.cos }
     network.recurrent = False
 
     def traverse(model, layer, network):
@@ -583,7 +553,7 @@ class LayerNetwork(object):
         params = { 'source': x_in,
                    'n_in': n_in,
                    'n_out': model[layer].attrs['n_out'],
-                   'activation': activations[act],
+                   'activation': strtoact(act),
                    'dropout': model[layer].attrs['dropout'],
                    'name': layer,
                    'mask': model[layer].attrs['mask'] }

@@ -32,7 +32,7 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
   
 if __name__ == '__main__':
   # initialize config file
-  assert os.path.isfile(sys.argv[1]), "config file not found"  
+  assert os.path.isfile(sys.argv[1]), "config file not found"
   config = Config()
   config.load_file(sys.argv[1])
   parser = OptionParser()
@@ -146,9 +146,6 @@ if __name__ == '__main__':
     if config.bool('initialize_from_model', False):
       print >> log.v5, "initializing network topology from model"
       network = LayerNetwork.from_model(model)
-    elif config.value('initialize_from_json', '') != '':
-      print >> log.v5, "initializing network topology from json file"
-      network = LayerNetwork.from_json(config.value('initialize_from_json'))
     else:
       network = LayerNetwork.from_config(config)
     start_epoch = network.load(model)
