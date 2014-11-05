@@ -195,7 +195,7 @@ class RecurrentLayer(HiddenLayer):
     self.set_attr('recurrent', True)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
-    self.set_attr('projection', projection)
+    if projection: self.set_attr('projection', projection)
     if compile: self.compile()
   
   def compile(self):

@@ -14,7 +14,7 @@ def get_gpu_names():
 def get_device_attributes():
   attributes = { "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
-                 #"GeForce GTX 680" : (1536, 324, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024), 

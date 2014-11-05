@@ -32,6 +32,7 @@ class Process(threading.Thread):
       self.task = task
       self.data = data
       self.daemon = True
+      self.elapsed = 0
       self.start()
       
     def allocate_devices(self, start_batch):
@@ -304,8 +305,8 @@ class Engine:
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join(9044006400)
       start_batch = 0
-      if trainer.score == None:
-        self.save_model(model + ".crash_" + str(trainer.error), epoch - 1)
+      if trainer.score == -1:
+        self.save_model(model + ".crash_" + str(trainer.last_batch), epoch - 1)
         sys.exit(1)
       if model and (epoch % interval == 0):
         self.save_model(model + ".%03d" % epoch, epoch)

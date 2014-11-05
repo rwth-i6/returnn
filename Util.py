@@ -20,16 +20,17 @@ def hdf5_strings(handle, name, data):
   dset[...] = data
 
 def strtoact(act):
-  activations = { 'logistic' : theano.tensor.nnet.sigmoid,
-                  'tanh' : theano.tensor.tanh,
-                  'relu': lambda z : (theano.tensor.sgn(z) + 1) * z * 0.5,
+  import theano.tensor as T
+  activations = { 'logistic' : T.nnet.sigmoid,
+                  'tanh' : T.tanh,
+                  'relu': lambda z : (T.sgn(z) + 1) * z * 0.5,
                   'identity' : lambda z : z,
                   'one' : lambda z : 1,
                   'zero' : lambda z : 0,
                   'softsign': lambda z : z / (1.0 + abs(z)),
                   'softsquare': lambda z : 1 / (1.0 + z * z),
-                  'maxout': lambda z : theano.tensor.max(z, axis = 0),
-                  'sin' : theano.tensor.sin,
-                  'cos' : theano.tensor.cos }
+                  'maxout': lambda z : T.max(z, axis = 0),
+                  'sin' : T.sin,
+                  'cos' : T.cos }
   assert activations.has_key(act), "invalid activation function: " + act
   return activations[act]
