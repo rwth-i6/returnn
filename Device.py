@@ -63,6 +63,16 @@ class Device():
     while not self.input_queue.empty(): self.input_queue.get()
     while not self.output_queue.empty(): self.output_queue.get()
     self.proc.start()
+
+  def detect_nan(self, i, node, fn):
+    for output in fn.outputs:
+      if numpy.isnan(output[0]).any():
+        import theano
+        print '*** NaN detected ***'
+        #theano.printing.debugprint(node)
+        print 'Inputs : %s' % [input[0] for input in fn.inputs]
+        print 'Outputs: %s' % [output[0] for output in fn.outputs]
+        break
     
   def initialize(self, config):
     import theano
@@ -108,7 +118,8 @@ class Device():
         test_givens = self.make_givens(self.testnet)
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
-                                     givens = train_givens)
+                                     givens = train_givens,
+                                     mode=theano.compile.MonitorMode(post_func=self.detect_nan))
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
                                     givens = test_givens)
