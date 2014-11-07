@@ -503,7 +503,6 @@ class LayerNetwork(object):
     network.L2 = T.constant(0)
     network.recurrent = False
     def traverse(content, layer, network):
-      print layer
       source = []
       n_in = 0
       obj = content[layer].copy()
@@ -531,7 +530,6 @@ class LayerNetwork(object):
           if cl == 'recurrent':
             network.add_layer(layer, RecurrentLayer(**params), act)
           elif cl == 'lstm':
-            print params
             network.add_layer(layer, LstmLayer(**params), act)
           else:
             assert False, "invalid layer type: " + cl
