@@ -555,7 +555,6 @@ class LayerNetwork(object):
         for s in model[layer].attrs['from'].split(','):
           traverse(model, s, network)
           x_in.append(network.hidden[s])
-        if len(x_in) == 1: x_in = x_in[0]
       else:
         x_in = [SourceLayer(network.n_in, network.x, name = 'data')]
       if layer != model.attrs['output']:
