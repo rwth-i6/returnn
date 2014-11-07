@@ -550,22 +550,18 @@ class LayerNetwork(object):
     network.recurrent = False
 
     def traverse(model, layer, network):
-      n_in = 0
       if 'from' in model[layer].attrs:
         x_in = []
         for s in model[layer].attrs['from'].split(','):
           traverse(model, s, network)
           x_in.append(network.hidden[s])
-          n_in += network.hidden[s].n_out
         if len(x_in) == 1: x_in = x_in[0]
       else:
         x_in = [SourceLayer(network.n_in, network.x, name = 'data')]
-        n_in = network.n_in
       if layer != model.attrs['output']:
         cl = model[layer].attrs['class']
         act = model[layer].attrs['activation']
         params = { 'source': x_in,
-                   'n_in': n_in,
                    'n_out': model[layer].attrs['n_out'],
                    'activation': strtoact(act),
                    'dropout': model[layer].attrs['dropout'],
