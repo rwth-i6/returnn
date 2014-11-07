@@ -14,6 +14,7 @@ import sys
 import time
 
 import h5py
+import json
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
@@ -67,12 +68,17 @@ if __name__ == '__main__':
   for opt in options.keys():
     if options[opt] != None:
       config.set(opt, options[opt])
-
   # initialize log file
   logs = config.list('log', [])
   log_verbosity = config.int_list('log_verbosity', [])
   log_format = config.list('log_format', [])
   log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
+  # initialize postprocess config file
+  if config.has('initialize_from_json'):
+    json_file = config.value('initialize_from_json', '')
+    assert os.path.isfile(json_file), "json file not found: " + json_file
+    print >> log.v5, "loading network topology from json:", json_file
+    config.json = open(json_file).read()
   # initialize devices
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
@@ -155,6 +161,10 @@ if __name__ == '__main__':
   else:
     network = LayerNetwork.from_config(config)
     start_epoch = 0
+  if config.has('dump_json'):
+    fout = open(config.value('dump_json', ''), 'w')
+    print >> fout, json.dumps(network.to_json(), indent = 2)
+    fout.close()
   # print task properties
   print >> log.v2, "Network:"
   print >> log.v2, "input:", train.num_inputs, "x", train.window
