@@ -65,14 +65,13 @@ class Device():
     self.proc.start()
 
   def detect_nan(self, i, node, fn):
+    import theano
     for output in fn.outputs:
       if numpy.isnan(output[0]).any():
-        import theano
-        print '*** NaN detected ***'
         #theano.printing.debugprint(node)
         print 'Inputs : %s' % [input[0] for input in fn.inputs]
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
-        break
+        assert False, '*** NaN detected ***'
     
   def initialize(self, config):
     import theano
@@ -119,7 +118,7 @@ class Device():
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
                                      givens = train_givens,
-                                     mode=theano.compile.MonitorMode(post_func=self.detect_nan))
+                                     mode = theano.compile.MonitorMode(post_func=self.detect_nan))
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
                                     givens = test_givens)
