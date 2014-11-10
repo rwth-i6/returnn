@@ -40,8 +40,8 @@ class Container(object):
     for p in grp:
       assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
       self.params[p].set_value(grp[p][...])
-    for p in grp.attrs.keys():
-      self.attrs[p] = grp.attrs[p]
+    for p in self.attrs.keys():
+      self.attrs[p] = grp.attrs.get(p, None)
         
   def num_params(self):
     return sum([numpy.prod(self.params[p].get_value().shape[0:]) for p in self.params.keys()])
@@ -556,12 +556,10 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_model(cls, model, mask = None):
+  def from_model(cls, model, mask = "unity"):
     grp = model['training']
     if mask == None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
-    network.L1_reg = grp.attrs['L1_reg']
-    network.L2_reg = grp.attrs['L2_reg']
     network.hidden = {}
     network.params = []
     network.L1 = T.constant(0)
@@ -741,7 +739,7 @@ class LayerNetwork(object):
           out[h].pop('from', None)
         else:
           out[h]['from'] = out[h]['from'].split(',')
-    return out
+    return str(out)
   
   def load(self, model):
     epoch = model.attrs['epoch']

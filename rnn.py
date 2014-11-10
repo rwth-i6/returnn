@@ -163,7 +163,19 @@ if __name__ == '__main__':
     start_epoch = 0
   if config.has('dump_json'):
     fout = open(config.value('dump_json', ''), 'w')
-    print >> fout, json.dumps(network.to_json(), indent = 2)
+    try:
+      json_content = network.to_json()
+      print json_content
+      print "---------------"
+      json_data = json.loads(json_content)
+      print json_data
+      print "---------------"
+      print json.dumps(json_data, indent = 2)
+      print "---------------"
+      print >> fout, json.dumps(json_data, indent = 2)
+    except ValueError:
+      print >> log.v5, network.to_json()
+      assert False, "JSON parsing failed"
     fout.close()
   # print task properties
   print >> log.v2, "Network:"
