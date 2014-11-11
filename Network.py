@@ -622,7 +622,7 @@ class LayerNetwork(object):
       self.L1 += self.output.attrs['L1'] * abs(W.sum())
       self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
     self.params += self.output.params.values()
-    self.gparams += self.output.params.values()
+    self.gparams += self.output.params.values()[:]
     targets = self.c if self.loss == 'ctc' else self.y
     self.errors = self.output.errors(targets)
     self.cost, self.known_grads = self.output.cost(targets)

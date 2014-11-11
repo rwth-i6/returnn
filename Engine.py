@@ -268,15 +268,19 @@ class Engine:
     num_epochs = config.int('num_epochs', 5)
     max_seqs = config.int('max_seqs', -1)
     start_batch = config.int('start_batch', 0)
-    self.train(num_epochs, learning_rate, batch_size, batch_step, train, dev, eval, momentum, model, interval, start_epoch, start_batch, max_seqs)
+    adagrad = config.bool('adagrad', False)
+    self.train(num_epochs, learning_rate, batch_size, batch_step, train, dev, eval, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0.9, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1):
+  def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0.9, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
     self.data = {}    
     if dev: self.data["dev"] = dev
     if eval: self.data["eval"] = eval
     for name in self.data.keys():
       self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_size)) # max(max(self.data[name].seq_lengths), batch_size)))
-    deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
+    if momentum > 0:
+      deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
+    if adagrad:
+      sqrsum = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
     self.learning_rate = learning_rate
     updates = []
     if self.network.loss == 'priori':
@@ -284,9 +288,13 @@ class Engine:
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
     for param in self.network.gparams:
-        #upd = momentum * deltas[param] - learning_rate * self.gparams[param]
-        upd = momentum * deltas[param] - self.rate * self.gparams[param]
-        updates.append((deltas[param], upd))
+        upd = - self.rate * self.gparams[param]
+        if momentum > 0:
+          upd += momentum * deltas[param]
+          updates.append((deltas[param], upd))
+        if adagrad:
+          updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
+          upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
         updates.append((param, param + upd))
     updater = theano.function(inputs = [self.rate], updates = updates)
     train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
