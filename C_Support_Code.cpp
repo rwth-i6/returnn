@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <iostream>
+#include <stdint.h>
 
 using namespace std;
 
@@ -447,6 +448,42 @@ private:
 	T * data_;
 };
 
+template <typename T>
+T& data(PyArrayObject* arr)
+{
+  return *reinterpret_cast<T*>(PyArray_DATA(arr));
+}
+
+unsigned int& datau(PyArrayObject* arr)
+{
+  return data<unsigned int>(arr);
+}
+
+uint64_t& datau64(PyArrayObject* arr)
+{
+  return data<uint64_t>(arr);
+}
+
+int32_t& datai(PyArrayObject* arr)
+{
+  return data<int32_t>(arr);
+}
+
+int64_t& datai64(PyArrayObject* arr)
+{
+  return data<int64_t>(arr);
+}
+
+void*& datavoid(PyArrayObject* arr)
+{
+  return data<void*>(arr);
+}
+
+float& dataf(PyArrayObject* arr)
+{
+  return data<float>(arr);
+}
+
 //http://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C.2B.2B
 template<class T>
 int levenshteinDist(const T &s1, const T & s2) 
@@ -468,4 +505,14 @@ int levenshteinDist(const T &s1, const T & s2)
         col.swap(prevCol);
     }
     return (int) prevCol[len2];
+}
+
+void verify(bool pred, const char * msg = "")
+{
+  if(!pred)
+  {
+    cerr << "assertion failed: " << msg << endl;
+    cout << "assertion failed: " << msg << endl;
+    exit(1);
+  }
 }

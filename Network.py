@@ -109,9 +109,9 @@ class SourceLayer(Container):
 """
         OUTPUT LAYERS
 """
-class OutputLayer(Layer):
+class FramewiseOutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
-    super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
+    super(FramewiseOutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
     self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out), "W") for source in sources ]
     for source, W in zip(sources, self.W_in): self.z += T.dot(source.output, self.mass * self.mask * W)
@@ -145,23 +145,53 @@ class OutputLayer(Layer):
     elif self.loss == 'sse':
       y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[(self.i > 0).nonzero()] - y_oh[(self.i > 0).nonzero()])), known_grads
-    elif self.loss == 'ctc':
-      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0))
-      known_grads = {self.z: grad}
-      return err.sum(), known_grads
     else: assert False
 
     #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
   def entropy(self):
     return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
 
-  def errors(self, y):
-    if self.loss == 'ctc': return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0)))
+  def errors(self, y):    
     y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32') #y_f = y.flatten(ndim=1)
     if y_f.dtype.startswith('int'):
       return T.sum(T.neq(self.y_pred[(self.i > 0).nonzero()], y_f[(self.i > 0).nonzero()]))
     else: raise NotImplementedError()
-       
+	
+#TODO use common base class (e.g. OutputLayer) for Framewise and Sequence OutputLayer?
+class SequenceOutputLayer(Layer):
+  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
+    pass #TODO
+	#TODO prior_scale, log_prior and ce_smoothing
+	
+  def initialize(self):
+    pass #TODO
+	
+  def cost(self, y):
+    if self.loss == 'sprint':
+      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
+      known_grads = {self.z: grad}
+      return err.sum(), known_grads
+    elif self.loss == 'sprint_smoothed':
+      assert prior_scale is not None
+      assert log_prior is not None
+      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
+      err *= (1.0 - ce_smoothing)
+      err = err.sum()
+      grad *= (1.0 - ce_smoothing)
+      y_m_prior = T.reshape(self.z + prior_scale * log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+      p_y_given_x_prior = T.nnet.softmax(y_m_prior)
+      pcx = p_y_given_x_prior[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
+      ce = ce_smoothing * (-1.0) * T.sum(T.log(pcx))
+      err += ce
+      known_grads = {self.z: grad + T.grad(ce, self.z)}
+      return err, known_grads
+	
+  def entropy(self):
+    return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+	
+  def errors(self, y):
+    if self.loss == 'ctc': return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0)))
+    pass #TODO
 """
         HIDDEN LAYERS
 """
@@ -617,7 +647,7 @@ class LayerNetwork(object):
   def make_classifier(self, sources, loss, dropout = 0, mask = "unity"):
     self.gparams = self.params[:]
     self.loss = loss
-    self.output = OutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
+    self.output = FramewiseOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
     for W in self.output.W_in:
       self.L1 += self.output.attrs['L1'] * abs(W.sum())
       self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
