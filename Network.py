@@ -32,7 +32,10 @@ class Container(object):
       dset = grp.create_dataset(p, value.shape, dtype='f')
       dset[...] = value
     for p in self.attrs.keys():
-      grp.attrs[p] = self.attrs[p]
+      try:
+        grp.attrs[p] = self.attrs[p]
+      except TypeError:
+        print >> log.v3, "invalid type of attribute", "\"" + p + "\"", "(" + type(self.attrs[p]) + ")", "in layer", self.name
 
   def load(self, head):
     grp = head[self.name]
