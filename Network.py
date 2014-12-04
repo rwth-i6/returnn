@@ -18,7 +18,7 @@ class Container(object):
     self.params = {}
     self.attrs = {}
     self.layer_class = layer_class
-    self.name = name
+    self.name = name.encode("utf8")
   
   @staticmethod
   def initialize():
@@ -35,7 +35,7 @@ class Container(object):
       try:
         grp.attrs[p] = self.attrs[p]
       except TypeError:
-        print >> log.v3, "invalid type of attribute", "\"" + p + "\"", "(" + type(self.attrs[p]) + ")", "in layer", self.name
+        print >> log.v3, "invalid type of attribute", "\"" + p + "\"", "(" + str(type(self.attrs[p])) + ")", "in layer", self.name
 
   def load(self, head):
     grp = head[self.name]
