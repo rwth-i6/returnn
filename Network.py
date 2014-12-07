@@ -207,9 +207,9 @@ class ForwardLayer(HiddenLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
     super(ForwardLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     z = self.b
-    for s,W_in in zip(source, self.W_in):
+    for s,W_in in zip(sources, self.W_in):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out).get_value())
-      z += T.dot(source, self.mass * self.mask * W_in)
+      z += T.dot(s.output, self.mass * self.mask * W_in)
     self.output = (z if self.activation is None else self.activation(z))
     
 class RecurrentLayer(HiddenLayer):
@@ -676,7 +676,9 @@ class LayerNetwork(object):
       del LstmLayer.sharpgates
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
-      params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      sources = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
+      params = { 'sources': sources, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       name = params['name']
       if info[0] == 'forward':
         self.add_layer(name, ForwardLayer(**params), info[2][0])
@@ -696,8 +698,9 @@ class LayerNetwork(object):
         elif info[0] == 'peep_lstm':
           self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
         else: assert False, "invalid layer type: " + info[0]
-      if self.hidden[name].source != self.x:
-        self.hidden[name].set_attr('from', pname)
+      #TODO
+      #if self.hidden[name].source != self.x:
+      #  self.hidden[name].set_attr('from', pname)
       pname = name
       n_in = info[1]
       x_in = self.hidden[name].output
@@ -732,6 +735,8 @@ class LayerNetwork(object):
         n_in = info[1]
         x_in = self.hidden[name].output
       sources.append(name)
+    #TODO
+    sources = [self.hidden[name] for name in sources]
     self.make_classifier(sources, loss, dropout[-1])
 
   def num_params(self):
