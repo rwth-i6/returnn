@@ -9,6 +9,8 @@ from math import sqrt
 from CTC import CTCOp
 from Log import log
 from BestPathDecoder import BestPathDecodeOp
+from SprintErrorSignals import SprintErrorSigOp
+from SprintCommunicator import SprintCommunicator 
 
 """
         META LAYER
@@ -109,9 +111,10 @@ class SourceLayer(Container):
 """
         OUTPUT LAYERS
 """
-class FramewiseOutputLayer(Layer):
+
+class OutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
-    super(FramewiseOutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
+    super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
     self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out), "W") for source in sources ]
     for source, W in zip(sources, self.W_in): self.z += T.dot(source.output, self.mass * self.mask * W)
@@ -120,24 +123,31 @@ class FramewiseOutputLayer(Layer):
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
     self.loss = loss
     if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
+
+  def entropy(self):
+    return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+
+  def errors(self, y):    
+    y_f = y.flatten()
+    if y_f.dtype.startswith('int'):
+      return T.sum(T.neq(self.y_pred[(self.i > 0).nonzero()], y_f[(self.i > 0).nonzero()]))
+    else: raise NotImplementedError()
+
+class FramewiseOutputLayer(OutputLayer):
+  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
+    super(FramewiseOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
     self.initialize()
     
   def initialize(self):
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    #self.y_m = T.dimshuffle(T.flatten(T.dimshuffle(self.z, (2, 0, 1)), ndim = 2), (1, 0))
-    #self.y_m = self.z.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
-    #self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
-    elif self.loss == 'ctc': self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.p_y_given_x, axis = -1)
 
   def cost(self, y):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
-    #y_f = y.dimshuffle(2, 0, 1).flatten(ndim = 2).dimshuffle(1, 0)
-    #y_f = y.flatten()
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
@@ -147,51 +157,58 @@ class FramewiseOutputLayer(Layer):
       return T.mean(T.sqr(self.p_y_given_x[(self.i > 0).nonzero()] - y_oh[(self.i > 0).nonzero()])), known_grads
     else: assert False
 
-    #* T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
-  def entropy(self):
-    return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
-
-  def errors(self, y):    
-    y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32') #y_f = y.flatten(ndim=1)
-    if y_f.dtype.startswith('int'):
-      return T.sum(T.neq(self.y_pred[(self.i > 0).nonzero()], y_f[(self.i > 0).nonzero()]))
-    else: raise NotImplementedError()
-	
-#TODO use common base class (e.g. OutputLayer) for Framewise and Sequence OutputLayer?
 class SequenceOutputLayer(Layer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
-    pass #TODO
-	#TODO prior_scale, log_prior and ce_smoothing
+  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = "", prior_scale = 0.0, log_prior = None, ce_smoothing = 0.0, sh_mem_key = None):
+    super(SequenceOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
+    self.prior_scale = prior_scale
+    self.log_prior = log_prior
+    self.ce_smoothing = ce_smoothing
+    self.sh_mem_key = sh_mem_key
+    #TODO somewhere (probably not here), we have to subtract the log_prior from the initialization model (if desired)
+    #TODO somewhere (probably not here), we need to tell the communicator, which segments are currently active
+    #TODO somewhere (probably not here), the communicator should be finalized (freeing the sh_mem)
+    self.initialize()
 	
   def initialize(self):
-    pass #TODO
+    assert self.loss in ('ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
+    self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+    p_y_given_x = T.nnet.softmax(self.y_m)
+    self.y_pred = T.argmax(p_y_given_x, axis = -1)
+    self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    if self.loss in ('sprint', 'sprint_smoothed'):
+      assert self.sh_mem_key is not None
+      self.comm = SprintCommunicator(self.sh_mem_key)
+      SprintErrorSigOp.com = com
 	
   def cost(self, y):
+    y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
+    known_grads = None
     if self.loss == 'sprint':
       err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'sprint_smoothed':
-      assert prior_scale is not None
-      assert log_prior is not None
+      assert self.log_prior is not None
       err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
       err *= (1.0 - ce_smoothing)
       err = err.sum()
       grad *= (1.0 - ce_smoothing)
-      y_m_prior = T.reshape(self.z + prior_scale * log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+      y_m_prior = T.reshape(self.z + self.prior_scale * self.log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
       p_y_given_x_prior = T.nnet.softmax(y_m_prior)
       pcx = p_y_given_x_prior[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
-      ce = ce_smoothing * (-1.0) * T.sum(T.log(pcx))
+      ce = self.ce_smoothing * (-1.0) * T.sum(T.log(pcx))
       err += ce
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
-	
-  def entropy(self):
-    return -T.sum(self.p_y_given_x[(self.i > 0).nonzero()] * T.log(self.p_y_given_x[(self.i > 0).nonzero()]))
+    elif self.loss == 'ctc':
+      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0))
+      known_grads = {self.z: grad}
+      return err.sum(), known_grads
 	
   def errors(self, y):
     if self.loss == 'ctc': return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0)))
-    pass #TODO
+    return super(SequenceOutputLayer, self).errors(y)
+
 """
         HIDDEN LAYERS
 """
