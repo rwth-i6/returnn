@@ -231,6 +231,11 @@ class ForwardLayer(HiddenLayer):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out).get_value())
       z += T.dot(s.output, self.mass * self.mask * W_in)
     self.output = (z if self.activation is None else self.activation(z))
+
+class ConvPoolLayer(ForwardLayer):
+  def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "convpool", name = ""):
+    super(ConvPoolLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
+    
     
 class RecurrentLayer(HiddenLayer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", projection = None, layer_class = "recurrent", name = ""):
