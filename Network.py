@@ -235,7 +235,7 @@ class ForwardLayer(HiddenLayer):
 class ConvPoolLayer(ForwardLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "convpool", name = ""):
     super(ConvPoolLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
-    
+
     
 class RecurrentLayer(HiddenLayer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", projection = None, layer_class = "recurrent", name = ""):
@@ -353,7 +353,7 @@ class LstmLayer(RecurrentLayer):
 
 class MaxLstmLayer(RecurrentLayer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, n_cores = 2, layer_class = "maxlstm", name = ""):
-    super(MaxLstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
+    super(MaxLstmLayer, self).__init__(sources, index, n_out * (2 + n_cores * 2), L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
     if not isinstance(activation, (list, tuple)):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
@@ -363,12 +363,12 @@ class MaxLstmLayer(RecurrentLayer):
     self.act = self.create_uniform_weights(n_out, n_cores)
     self.state = self.create_uniform_weights(n_out, n_cores)
     n_in = sum([s.attrs['n_out'] for s in sources])
-    W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4)
+    W_re = self.create_uniform_weights(n_out, n_out * (2 + n_cores * 2), n_in + n_out  + n_out * (2 + n_cores * 2))
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4).get_value())
+      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out + n_out * (2 + n_cores * 2)).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))    
-    self.set_attr('n_out', self.attrs['n_out'] / 4)
+    self.set_attr('n_out', self.attrs['n_out'] / (2 + n_cores * 2))
     if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
@@ -392,17 +392,18 @@ class MaxLstmLayer(RecurrentLayer):
       mask = args[self.num_sources + 3]
       i = T.outer(i_t, self.o)
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      z = T.dot(h_pp, self.W_re) + self.b 
+      z = T.dot(h_pp, self.W_re) + self.b
       for x_t, W in zip(x_ts, self.W_in):
-        z += T.dot(x_t, self.mass * mask * W) 
-      partition = z.shape[1] / 4
+        z += T.dot(x_t, self.mass * mask * W)
+      partition = z.shape[1] / (2 + self.attrs['n_cores'] * 2)
       input = CI(z[:,:partition])
-      ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
-      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
-      s_t = input * ingate + s_p * forgetgate
+      for core in xrange(self.attrs['n_cores']):
+        ingate = GI(self.sharpness[0] * z[:,partition: partition + core * partition / self.attrs['n_cores']])
+        forgetgate = GF(self.sharpness[1] * z[:,2 * partition: 2 * partition + core * partition / self.attrs['n_cores']])
+        s_p[core] = input * ingate + s_p[core] * forgetgate
       outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
       h_t = CO(T.max(s_t, axis=1)) * outgate
-      return s_t * i, h_t * i
+      return s_p * i, h_t * i
     
     [state, self.output], _ = theano.scan(step,
                                           truncate_gradient = self.truncation,
@@ -410,8 +411,8 @@ class MaxLstmLayer(RecurrentLayer):
                                           #sequences = [T.stack(*[ s.output for s in self.sources]), self.index],
                                           sequences = [ s.output for s in self.sources ] + [self.index],
                                           non_sequences = [self.mask],
-                                          outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']),
-                                                           T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']), ])
+                                          outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_cores'], self.attrs['n_out']),
+                                                           T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
     self.output = self.output[::-(2 * self.reverse - 1)]
   
   def create_lstm_weights(self, n, m):
