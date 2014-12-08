@@ -308,20 +308,7 @@ class LstmLayer(RecurrentLayer):
     else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda') #self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
-    
-    def stepo(x_t, i_t, s_p, h_p, mask):
-      i = T.outer(i_t, self.o)
-      h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      z = T.dot(h_pp, self.W_re) + self.b + T.sum(T.tensordot(T.stack(*self.W_in), x_t, axes = [1, 2]))
-      partition = z.shape[1] / 4
-      input = CI(z[:,:partition])
-      ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
-      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
-      s_t = input * ingate + s_p * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
-      h_t = CO(s_t) * outgate
-      return s_t * i, h_t * i
-
+   
     def step(*args):
       x_ts = args[:self.num_sources]
       i_t = args[self.num_sources]
@@ -358,7 +345,76 @@ class LstmLayer(RecurrentLayer):
     #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
     #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
     return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
+
+class MaxLstmLayer(RecurrentLayer):
+  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, n_cores = 2, layer_class = "maxlstm", name = ""):
+    super(MaxLstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
+    if not isinstance(activation, (list, tuple)):
+      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+    self.set_attr('sharpgates', sharpgates)
+    self.set_attr('n_cores', n_cores)
+    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    self.act = self.create_uniform_weights(n_out, n_cores)
+    self.state = self.create_uniform_weights(n_out, n_cores)
+    n_in = sum([s.attrs['n_out'] for s in sources])
+    W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(sources, self.W_in):
+      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4).get_value())
+    self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))    
+    self.set_attr('n_out', self.attrs['n_out'] / 4)
+    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    elif sharpgates == 'shared':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(3)
+        self.add_param(LstmLayer.sharpgates, 'gate_scaling')
+      self.sharpness = LstmLayer.sharpgates
+    elif sharpgates == 'single':
+      if not hasattr(LstmLayer, 'sharpgates'):
+        LstmLayer.sharpgates = self.create_bias(1)
+        self.add_param(LstmLayer.sharpgates, 'gate_scaling')
+      self.sharpness = LstmLayer.sharpgates
+    else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda') #self.create_bias(3)
+    self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
+   
+    def step(*args):
+      x_ts = args[:self.num_sources]
+      i_t = args[self.num_sources]
+      s_p = args[self.num_sources + 1]
+      h_p = args[self.num_sources + 2]
+      mask = args[self.num_sources + 3]
+      i = T.outer(i_t, self.o)
+      h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
+      z = T.dot(h_pp, self.W_re) + self.b 
+      for x_t, W in zip(x_ts, self.W_in):
+        z += T.dot(x_t, self.mass * mask * W) 
+      partition = z.shape[1] / 4
+      input = CI(z[:,:partition])
+      ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
+      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
+      s_t = input * ingate + s_p * forgetgate
+      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
+      h_t = CO(T.max(s_t, axis=1)) * outgate
+      return s_t * i, h_t * i
+    
+    [state, self.output], _ = theano.scan(step,
+                                          truncate_gradient = self.truncation,
+                                          go_backwards = self.reverse,
+                                          #sequences = [T.stack(*[ s.output for s in self.sources]), self.index],
+                                          sequences = [ s.output for s in self.sources ] + [self.index],
+                                          non_sequences = [self.mask],
+                                          outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']),
+                                                           T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']), ])
+    self.output = self.output[::-(2 * self.reverse - 1)]
   
+  def create_lstm_weights(self, n, m):
+    n_in = n + 4 * m + m + 4 * m
+    #scale = numpy.sqrt(12. / (n_in))
+    #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
+    #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
+    return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
   
 class GateLstmLayer(RecurrentLayer):
   def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", name = "lstm"):
@@ -600,6 +656,8 @@ class LayerNetwork(object):
             network.add_layer(layer, RecurrentLayer(**params), act)
           elif cl == 'lstm':
             network.add_layer(layer, LstmLayer(**params), act)
+          elif cl == 'maxlstm':
+            network.add_layer(layer, MaxLstmLayer(**params), act)
           else:
             assert False, "invalid layer type: " + cl
     traverse(topology, 'output', network)
@@ -642,6 +700,8 @@ class LayerNetwork(object):
             network.add_layer(layer, RecurrentLayer(**params), act)
           elif cl == 'lstm':
             network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
+          elif cl == 'maxlstm':
+            network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
         for a in model[layer].attrs:
           network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
