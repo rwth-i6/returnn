@@ -111,7 +111,7 @@ if __name__ == '__main__':
   assert config.has('train'), "no train files specified"
   tags = sorted(device_tags.keys())
   if config.bool('multiprocessing', True):
-    devices = [Device(tag, config, num_batches = device_tags[tag]) for tag in tags]
+    devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
   else:
     import theano.tensor as T
     devices = [ Device(tags[0], config, blocking = True) ]
