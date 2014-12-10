@@ -166,8 +166,6 @@ class SequenceOutputLayer(OutputLayer):
     self.prior_scale = prior_scale
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
-    #TODO somewhere (probably not here), we have to subtract the log_prior from the initialization model (if desired)
-    #TODO somewhere (probably not here), we need to tell the communicator, which segments are currently active
     self.initialize()
 	
   def initialize(self):
