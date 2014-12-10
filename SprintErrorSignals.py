@@ -37,9 +37,9 @@ class SprintErrorSigOp(theano.Op):
     
     n_rows = log_posteriors.shape[0]
     n_cols = log_posteriors.shape[2]
-    assert len(SprintCommunicator.segments) > 0
+    assert len(SprintCommunicator.instance.segments) > 0
 
-    loss, errsig = SprintErrorSigOp.comm.get_error_signal(SprintCommunicator.segments, log_posteriors, seq_lengths)
+    loss, errsig = SprintCommunicator.instance.get_error_signal(SprintCommunicator.instance.segments, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
     outputs[0][0] = loss
     outputs[1][0] = errsig

@@ -20,6 +20,8 @@ from Device import Device, get_num_devices
 from Config import Config
 from optparse import OptionParser
 
+from SprintCommunicator import SprintCommunicator
+
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
   window = config.int('window', 1)
   if chunking == "chunking": chunking = config.value("chunking", "0")
@@ -79,6 +81,10 @@ if __name__ == '__main__':
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
     config.json = open(json_file).read()
+  # initialize SprintCommunicator (if required)  
+  if config.has('sh_mem_key'):
+    SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
+    
   # initialize devices
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
@@ -222,4 +228,6 @@ if __name__ == '__main__':
     engine.run_daemon(train, dev, eval)
   for device in devices:
     device.terminate()
+  if config.has('sh_mem_key'):
+    SprintCommunicator.instance.finalize()
   print >> log.v3, ("elapsed: %f" % (time.time() - st))

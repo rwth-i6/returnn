@@ -263,9 +263,11 @@ class WriteSegmentNameOp(ShMemOp):
 
 class SprintCommunicator:
   IDLE, REQUEST_ERRORSIGNAL, ERRORSIGNAL_WRITTEN, TERMINATED = [0,1,2,4]
-  segments = []
+  instance = None
   
   def __init__(self, key):    
+    self.segments = []  
+      
     t_key = T.scalar('key', dtype='int32')
     t_sh_mem = T.scalar('sh_mem', dtype='int64')
     t_status = T.scalar('status', dtype='uint32')
