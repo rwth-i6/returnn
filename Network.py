@@ -160,16 +160,12 @@ class FramewiseOutputLayer(OutputLayer):
       return T.mean(T.sqr(self.p_y_given_x[(self.i > 0).nonzero()] - y_oh[(self.i > 0).nonzero()])), known_grads
     else: assert False
 
-class SequenceOutputLayer(Layer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = "", prior_scale = 0.0, log_prior = None, ce_smoothing = 0.0, sh_mem_key = None):
+class SequenceOutputLayer(OutputLayer):
+  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = "", prior_scale = 0.0, log_prior = None, ce_smoothing = 0.0):
     super(SequenceOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
     self.prior_scale = prior_scale
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
-    self.sh_mem_key = sh_mem_key
-    #TODO somewhere (probably not here), we have to subtract the log_prior from the initialization model (if desired)
-    #TODO somewhere (probably not here), we need to tell the communicator, which segments are currently active
-    #TODO somewhere (probably not here), the communicator should be finalized (freeing the sh_mem)
     self.initialize()
 	
   def initialize(self):
@@ -178,10 +174,6 @@ class SequenceOutputLayer(Layer):
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-    if self.loss in ('sprint', 'sprint_smoothed'):
-      assert self.sh_mem_key is not None
-      self.comm = SprintCommunicator(self.sh_mem_key)
-      SprintErrorSigOp.com = com
 	
   def cost(self, y):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
@@ -733,7 +725,10 @@ class LayerNetwork(object):
   def make_classifier(self, sources, loss, dropout = 0, mask = "unity"):
     self.gparams = self.params[:]
     self.loss = loss
-    self.output = FramewiseOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
+    if loss in ('ctc','sprint','sprint_smoothed'):
+      self.output = SequenceOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
+    else:
+      self.output = FramewiseOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
     for W in self.output.W_in:
       self.L1 += self.output.attrs['L1'] * abs(W.sum())
       self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
@@ -763,8 +758,8 @@ class LayerNetwork(object):
     # create forward layers
     for info, drop in zip(self.hidden_info, dropout[:-1]):
       #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
-      sources = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
-      params = { 'sources': sources, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
+      params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       name = params['name']
       if info[0] == 'forward':
         self.add_layer(name, ForwardLayer(**params), info[2][0])
@@ -797,7 +792,9 @@ class LayerNetwork(object):
       n_in = self.n_in
       x_in = self.x
       for info, drop in zip(self.hidden_info, dropout[:-1]):
-        params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
+        #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
+        srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
+        params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         name = params['name']
         if info[0] == 'forward':
           self.add_layer(name, ForwardLayer(**params), info[2][0])
@@ -815,8 +812,9 @@ class LayerNetwork(object):
           elif info[0] == 'peep_lstm':
             self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
           else: assert False, "invalid layer type: " + info[0]
-        if self.hidden[name].source != self.x:
-          self.hidden[name].set_attr('from', pname)
+        #TODO
+        #if self.hidden[name].source != self.x:
+        #  self.hidden[name].set_attr('from', pname)
         pname = name
         n_in = info[1]
         x_in = self.hidden[name].output

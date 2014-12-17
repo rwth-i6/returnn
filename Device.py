@@ -112,6 +112,9 @@ class Device():
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_ctc_givens(self.trainnet)
         test_givens = self.make_ctc_givens(self.testnet)
+      elif self.trainnet.loss == 'sprint':
+        train_givens = self.make_sprint_givens(self.trainnet)
+        test_givens = self.make_givens(self.testnet)
       else:
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
@@ -314,5 +317,7 @@ class Device():
       return [(network.x, self.x), (network.i, self.i)]
     else:
       return [(network.x, self.x)]
+  def make_sprint_givens(self, network):
+    return [(network.x, self.x), (network.i, self.i)]
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]

@@ -7,8 +7,6 @@ Tfloat = theano.config.floatX  # @UndefinedVariable
 
 #(for now) there should be only 1 instance at a time of this class
 class SprintErrorSigOp(theano.Op):
-  comm = None
-
   def __eq__(self, other):
     return type(self) == type(other)
 
@@ -25,7 +23,6 @@ class SprintErrorSigOp(theano.Op):
     return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), posteriors.type()])
     
   def perform(self, node, inputs, outputs):
-    assert SprintErrorSigOp.comm is not None
     log_posteriors, seq_lengths = inputs
     
     if numpy.isnan(log_posteriors).any():
@@ -37,9 +34,9 @@ class SprintErrorSigOp(theano.Op):
     
     n_rows = log_posteriors.shape[0]
     n_cols = log_posteriors.shape[2]
-    assert len(SprintCommunicator.segments) > 0
+    assert len(SprintCommunicator.instance.segments) > 0
 
-    loss, errsig = SprintErrorSigOp.comm.get_error_signal(SprintCommunicator.segments, log_posteriors, seq_lengths)
+    loss, errsig = SprintCommunicator.instance.get_error_signal(SprintCommunicator.instance.segments, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
     outputs[0][0] = loss
     outputs[1][0] = errsig

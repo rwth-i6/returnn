@@ -11,6 +11,7 @@ from Log import log
 from Util import hdf5_strings
 from collections import OrderedDict
 import threading
+from SprintCommunicator import SprintCommunicator
 
 class Batch:
   def __init__(self, start = [0, 0]):
@@ -48,6 +49,7 @@ class Process(threading.Thread):
         device.targets = numpy.zeros(shape, dtype = theano.config.floatX)
         device.ctc_targets = numpy.zeros((shape[1], self.data.max_ctc_length), dtype = theano.config.floatX)
         device.index = numpy.zeros(shape, dtype = 'int8')
+        device.tags = [None] * shape[1] #TODO
         offset = 0
         for batch in self.batches[num_batches : device_batches]:
           if self.network.recurrent:
@@ -62,6 +64,7 @@ class Process(threading.Thread):
               device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
               if self.data.ctc_targets is not None:
                 device.ctc_targets[q] = self.data.ctc_targets[ids]
+              device.tags[q] = self.data.tags[ids] #TODO
               device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
             offset += batch.shape[1]
           else:
@@ -96,6 +99,8 @@ class Process(threading.Thread):
           if device.num_batches == 1: print >> log.v5, "of batch", batch,
           else: print >> log.v5, "of batches", str(batch) + "-" + str(batch + device.num_batches - 1),
           print >> log.v5, "/", num_data_batches, "on device", device.name
+          if SprintCommunicator.instance is not None:
+            SprintCommunicator.instance.segments = device.tags #TODO
           device.run(self.task, self.network)
           batch += device.num_batches
         batch = num_batches

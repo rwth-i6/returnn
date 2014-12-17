@@ -15,10 +15,13 @@ import time
 
 import h5py
 import json
+import numpy
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
 from optparse import OptionParser
+
+from SprintCommunicator import SprintCommunicator
 
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
   window = config.int('window', 1)
@@ -30,6 +33,16 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
       data.add_file(f)
     return data, data.initialize()
   return None, 0
+
+def subtract_priors(network, train, config):
+  if config.bool('subtract_priors', False):
+    prior_scale = config.float('prior_scale', 0.0)
+    priors = train.calculate_priori()
+    priors[priors == 0] = 1e-10 #avoid priors of zero which would yield a bias of inf
+    l = [p for p in self.network.params if p.name == 'b_softmax']
+    assert len(l) == 1, len(l)
+    b_softmax = l[0]
+    b_softmax.set_value(b_softmax.get_value() - priori_scale * numpy.log(priors))
   
 if __name__ == '__main__':
   # initialize config file
@@ -79,6 +92,10 @@ if __name__ == '__main__':
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
     config.json = open(json_file).read()
+  # initialize SprintCommunicator (if required)  
+  if config.has('sh_mem_key'):
+    SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
+    
   # initialize devices
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
@@ -152,6 +169,7 @@ if __name__ == '__main__':
     if config.bool('initialize_from_model', False):
       print >> log.v5, "initializing network topology from model"
       network = LayerNetwork.from_model(model)
+      subtract_priors(network, train, config)
     else:
       network = LayerNetwork.from_config(config)
     start_epoch = network.load(model)
@@ -218,8 +236,8 @@ if __name__ == '__main__':
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.classify(devices[0], eval, label_file)
-  elif task == "daemon":                                            
-    engine.run_daemon(train, dev, eval)
   for device in devices:
     device.terminate()
+  if config.has('sh_mem_key'):
+    SprintCommunicator.instance.finalize()
   print >> log.v3, ("elapsed: %f" % (time.time() - st))
