@@ -99,8 +99,8 @@ class Process(threading.Thread):
           if device.num_batches == 1: print >> log.v5, "of batch", batch,
           else: print >> log.v5, "of batches", str(batch) + "-" + str(batch + device.num_batches - 1),
           print >> log.v5, "/", num_data_batches, "on device", device.name
-          if SprintCommunicator.instance is not None:
-            SprintCommunicator.instance.segments = device.tags #TODO
+          #if SprintCommunicator.instance is not None:
+          #  SprintCommunicator.instance.segments = device.tags #TODO
           device.run(self.task, self.network)
           batch += device.num_batches
         batch = num_batches

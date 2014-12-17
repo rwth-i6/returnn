@@ -390,11 +390,13 @@ class MaxLstmLayer(RecurrentLayer):
         z += T.dot(x_t, self.mass * mask * W)
       partition = z.shape[1] / (2 + self.attrs['n_cores'] * 2)
       input = CI(z[:,:partition])
-      ingate = T.reshape(GI(self.sharpness[0] * z[:,partition:partition + partition * self.attrs['n_cores']]), z.shape[0], partition, self.attrs['n_cores'])
-      forgetgate = T.reshape(GF(self.sharpness[1] * z[:,partition + partition * self.attrs['n_cores']:partition + 2 * partition * self.attrs['n_cores']]), z.shape[0], partition, self.attrs['n_cores'])
+      #input = T.stack([CI(z[:,:partition])] * self.attrs['n_cores'])
+      ingate = T.reshape(GI(self.sharpness[0] * z[:,partition:partition + partition * self.attrs['n_cores']]), (z.shape[0], partition, self.attrs['n_cores']))
+      forgetgate = T.reshape(GF(self.sharpness[1] * z[:,partition + partition * self.attrs['n_cores']:partition + 2 * partition * self.attrs['n_cores']]), (z.shape[0], partition, self.attrs['n_cores']))
       s_t = input * ingate + s_p * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,-partition:])
-      h_t = CO(T.max(s_t, axis=2)) * outgate
+      outgate = GO(self.sharpness[2] * z[:,-partition:]) 
+      #outgate = T.stack([ GO(self.sharpness[2] * z[:,-partition:]) ] * self.attrs['n_cores'])
+      h_t = CO(s_t) * outgate
       return s_t * i, h_t * i
     
     [state, self.output], _ = theano.scan(step,
@@ -404,7 +406,8 @@ class MaxLstmLayer(RecurrentLayer):
                                           sequences = [ s.output for s in self.sources ] + [self.index],
                                           non_sequences = [self.mask],
                                           outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']),
-                                                           T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
+                                                           T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']), ])
+    self.output = T.max(self.output, axis = 2)
     self.output = self.output[::-(2 * self.reverse - 1)]
   
   def create_lstm_weights(self, n, m):
