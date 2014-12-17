@@ -125,6 +125,7 @@ class OutputLayer(Layer):
     self.index = index
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
     self.loss = loss
+    self.attrs['loss'] = loss
     if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
 
   def entropy(self):
@@ -672,12 +673,14 @@ class LayerNetwork(object):
     network.recurrent = False
 
     def traverse(model, layer, network):
-      print layer
       if 'from' in model[layer].attrs:
         x_in = []
         for s in model[layer].attrs['from'].split(','):
-          traverse(model, s, network)
-          x_in.append(network.hidden[s])
+          if s != 'data':
+            traverse(model, s, network)
+            x_in.append(network.hidden[s])
+          else:
+            x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
       else:
         x_in = [SourceLayer(network.n_in, network.x, name = 'data')]
       if layer != model.attrs['output']:
@@ -704,8 +707,9 @@ class LayerNetwork(object):
           network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
     traverse(model, output, network)
-    sources = model[output].attrs['from'].split(',')
-    network.make_classifier(sources, grp.attrs['loss'], model[output].attrs['dropout'])
+    sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
+    loss = 'ce' if not 'loss' in model[output].attrs else model[output].attrs['loss']
+    network.make_classifier(sources, loss, model[output].attrs['dropout'])
     return network
     
   def add_hidden(self, name, size, layer_type = 'forward', activation = ("tanh", T.tanh)):
