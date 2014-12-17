@@ -397,13 +397,12 @@ class MaxLstmLayer(RecurrentLayer):
         z += T.dot(x_t, self.mass * mask * W)
       partition = z.shape[1] / (2 + self.attrs['n_cores'] * 2)
       input = CI(z[:,:partition])
-      for core in xrange(self.attrs['n_cores']):
-        ingate = GI(self.sharpness[0] * z[:,partition: partition + core * partition / self.attrs['n_cores']])
-        forgetgate = GF(self.sharpness[1] * z[:,2 * partition: 2 * partition + core * partition / self.attrs['n_cores']])
-        s_p[core] = input * ingate + s_p[core] * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
-      h_t = CO(T.max(s_t, axis=1)) * outgate
-      return s_p * i, h_t * i
+      ingate = T.reshape(GI(self.sharpness[0] * z[:,partition:partition + partition * self.attrs['n_cores']]), z.shape[0], partition, self.attrs['n_cores'])
+      forgetgate = T.reshape(GF(self.sharpness[1] * z[:,partition + partition * self.attrs['n_cores']:partition + 2 * partition * self.attrs['n_cores']]), z.shape[0], partition, self.attrs['n_cores'])
+      s_t = input * ingate + s_p * forgetgate
+      outgate = GO(self.sharpness[2] * z[:,-partition:])
+      h_t = CO(T.max(s_t, axis=2)) * outgate
+      return s_t * i, h_t * i
     
     [state, self.output], _ = theano.scan(step,
                                           truncate_gradient = self.truncation,
@@ -411,7 +410,7 @@ class MaxLstmLayer(RecurrentLayer):
                                           #sequences = [T.stack(*[ s.output for s in self.sources]), self.index],
                                           sequences = [ s.output for s in self.sources ] + [self.index],
                                           non_sequences = [self.mask],
-                                          outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_cores'], self.attrs['n_out']),
+                                          outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']),
                                                            T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
     self.output = self.output[::-(2 * self.reverse - 1)]
   
@@ -681,6 +680,7 @@ class LayerNetwork(object):
     network.recurrent = False
 
     def traverse(model, layer, network):
+      print layer
       if 'from' in model[layer].attrs:
         x_in = []
         for s in model[layer].attrs['from'].split(','):
