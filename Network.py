@@ -124,8 +124,8 @@ class OutputLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in sources]))
     self.index = index
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
-    self.loss = loss
-    self.attrs['loss'] = loss
+    self.loss = loss.encode("utf8")
+    self.attrs['loss'] = self.loss
     if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
 
   def entropy(self):
@@ -389,12 +389,14 @@ class MaxLstmLayer(RecurrentLayer):
       for x_t, W in zip(x_ts, self.W_in):
         z += T.dot(x_t, self.mass * mask * W)
       partition = z.shape[1] / (2 + self.attrs['n_cores'] * 2)
-      input = CI(z[:,:partition])
+      #input = CI(z[:,:partition])
+      input = CI(T.tile(z[:,:partition], (1, self.attrs['n_cores'])))
       #input = T.stack([CI(z[:,:partition])] * self.attrs['n_cores'])
       ingate = T.reshape(GI(self.sharpness[0] * z[:,partition:partition + partition * self.attrs['n_cores']]), (z.shape[0], partition, self.attrs['n_cores']))
       forgetgate = T.reshape(GF(self.sharpness[1] * z[:,partition + partition * self.attrs['n_cores']:partition + 2 * partition * self.attrs['n_cores']]), (z.shape[0], partition, self.attrs['n_cores']))
       s_t = input * ingate + s_p * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,-partition:]) 
+      #outgate = GO(self.sharpness[2] * z[:,-partition:])
+      outgate = CI(T.tile(GO(self.sharpness[2] * z[:,-partition:]), (1, self.attrs['n_cores'])))
       #outgate = T.stack([ GO(self.sharpness[2] * z[:,-partition:]) ] * self.attrs['n_cores'])
       h_t = CO(s_t) * outgate
       return s_t * i, h_t * i
