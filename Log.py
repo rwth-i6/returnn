@@ -1,4 +1,5 @@
 import logging
+import sys
 import os
 
 import StringIO
@@ -63,6 +64,7 @@ class Log:
     self.v3 = Stream(self.v[3], logging.DEBUG)
     self.v4 = Stream(self.v[4], logging.DEBUG)
     self.v5 = Stream(self.v[5], logging.DEBUG)
+
   def write(self, msg): 
     self.info(msg)
 

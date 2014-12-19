@@ -202,7 +202,7 @@ if __name__ == '__main__':
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
   engine = Engine(devices, network)
   st = time.time()
-  if task == 'train':    
+  if task == 'train':
     engine.train_config(config, train, dev, eval, start_epoch)
   elif task == 'forward':
     assert eval != None, 'no eval data provided'

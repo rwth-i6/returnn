@@ -143,7 +143,11 @@ class FramewiseOutputLayer(OutputLayer):
     
   def initialize(self):
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m)
+    if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
+    #if self.loss == 'ce':
+    #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
+    #  y_mmin = self.y_m.min(axis = 1, keepdims = True)
+    #  self.p_y_given_x = T.nnet.softmax(self.y_m - (0.5 * (y_mmax - y_mmin) + y_mmin))
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
@@ -681,7 +685,7 @@ class LayerNetwork(object):
     network.recurrent = False
 
     def traverse(model, layer, network):
-      if 'from' in model[layer].attrs:
+      if 'from' in model[layer].attrs and model[layer].attrs['from'] != 'data':
         x_in = []
         for s in model[layer].attrs['from'].split(','):
           traverse(model, s, network)
@@ -712,8 +716,9 @@ class LayerNetwork(object):
           network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
     traverse(model, output, network)
-    sources = model[output].attrs['from'].split(',')
-    network.make_classifier(sources, grp.attrs['loss'], model[output].attrs['dropout'])
+    sources = [ network.hidden[layer] for layer in model[output].attrs['from'].split(',') ]
+    loss = grp.attrs['loss'] if 'loss' in grp.attrs else 'ce'
+    network.make_classifier(sources, loss, model[output].attrs['dropout'])
     return network
     
   def add_hidden(self, name, size, layer_type = 'forward', activation = ("tanh", T.tanh)):

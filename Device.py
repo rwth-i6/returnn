@@ -117,8 +117,8 @@ class Device():
         test_givens = self.make_givens(self.testnet)
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
-                                     givens = train_givens,
-                                     mode = theano.compile.MonitorMode(post_func=self.detect_nan))
+                                     givens = train_givens)#,
+                                     #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
                                     givens = test_givens)

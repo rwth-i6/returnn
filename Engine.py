@@ -8,7 +8,7 @@ import time
 import sys
 import theano.tensor as T
 from Log import log
-from Util import hdf5_strings
+from Util import hdf5_strings, terminal_size
 from collections import OrderedDict
 import threading
 
@@ -86,10 +86,14 @@ class Process(threading.Thread):
       num_data_batches = len(self.batches)
       num_batches = self.start_batch
       self.initialize()
+      terminal_width, _ = terminal_size()
+      interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting process", self.task
+      run_times = []
       while num_batches < num_data_batches:
         alloc_devices, num_alloc_batches = self.allocate_devices(num_batches)
         batch = num_batches
+        run_time = time.time()
         for device in alloc_devices:
           if self.network.recurrent: print >> log.v5, "running", device.data.shape[1], "sequences (" + str(device.data.shape[0] * device.data.shape[1]) + " nts)", 
           else: print >> log.v5, "running", device.data.shape[0], "frames",
@@ -109,8 +113,36 @@ class Process(threading.Thread):
             self.score = -1
             return -1
           device_results.append(result)
+
+        if interactive or log.v[5]:
+          def hms(s):
+            m, s = divmod(s, 60)
+            h, m = divmod(m, 60)
+            return "%d:%02d:%02d"%(h,m,s)
+
+          start_elapsed = time.time() - start_time
+          run_elapsed = time.time() - run_time
+          run_times.append(run_elapsed)
+          if len(run_times) * run_elapsed > 60: run_times = run_times[1:]
+          time_factor = float(sum(run_times)) / (len(run_times) * sum([d.num_batches for d in alloc_devices]))
+          complete = float(num_batches + num_alloc_batches) / num_data_batches
+          progress = "%.02f%%" % (complete * 100)
+          print >> log.v5, "elapsed %s, exp. remaining %s, complete %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress)
+          if interactive:
+            remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
+            terminal_width, _ = terminal_size()
+            ntotal = terminal_width - len(progress) - len(remaining) - 5
+            bars = int(complete * ntotal) * '|'
+            spaces = (ntotal - int(complete * ntotal)) * ' '
+            bar = bars + spaces
+            sys.stdout.write("\r%s" % remaining + " [" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]")
+            sys.stdout.flush()
+
         self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
+      if interactive:
+        sys.stdout.write("\n") #\r%s" % " " * terminal_width)
+        sys.stdout.flush()
       self.finalize()
       self.elapsed = (time.time() - start_time)
         
