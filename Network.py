@@ -19,7 +19,7 @@ class Container(object):
   def __init__(self, layer_class, name = ""):
     self.params = {}
     self.attrs = {}
-    self.layer_class = layer_class
+    self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
   
   @staticmethod
@@ -43,7 +43,7 @@ class Container(object):
     grp = head[self.name]
     assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
-      assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
+      assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape for parameter " + p + " of layer " + self.name + " (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
       self.params[p].set_value(grp[p][...])
     for p in self.attrs.keys():
       self.attrs[p] = grp.attrs.get(p, None)
@@ -57,10 +57,6 @@ class Container(object):
   def set_params(self, params):
     for p in params.keys():
       self.params[p].set_value(params[p])
-
-  def concat_params(self, params, axis = 1):
-    for p in params.keys():
-      numpy.concatenate((self.params[p].get_value(), params[p].get_value()), axis = max(len(self.params[p].get_value().shape) - 1, axis))
       
   def add_param(self, param, name = ""):
     if name == "": name = "param_%d" % len(self.params)
@@ -91,6 +87,9 @@ class Container(object):
 
   def to_json(self):
     attrs = self.attrs.copy()
+    for k in attrs.keys():
+      if isinstance(attrs[k], numpy.bool_):
+        attrs[k] = True if attrs[k] else False
     if 'from' in attrs:
       if attrs['from'] == 'data':
         attrs.pop('from', None)
@@ -120,8 +119,15 @@ class Layer(Container):
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
-    self.concat_params(other.params, axis)
+    for p in other.params.keys():
+      if p != 'b':
+        self.params[p].set_value(numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = min(len(self.params[p].get_value().shape) - 1, axis)))
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
+
+  def to_json(self):
+    attrs = super(Layer, self).to_json()
+    attrs['class'] = self.layer_class
+    return attrs
 
 class SourceLayer(Container):
   def __init__(self, n_out, x_out, name = ""):
@@ -269,7 +275,6 @@ class RecurrentLayer(HiddenLayer):
     self.o = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
     self.reverse = reverse
     self.truncation = truncation
-    self.set_attr('recurrent', True)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
     if projection: self.set_attr('projection', projection)
@@ -358,7 +363,7 @@ class LstmLayer(RecurrentLayer):
                                           non_sequences = [self.mask],
                                           outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out']),
                                                            T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
-    self.output = self.output[::-(2 * self.reverse - 1)]
+    self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
   
   def create_lstm_weights(self, n, m):
     n_in = n + 4 * m + m + 4 * m
@@ -371,24 +376,25 @@ class LstmLayer(RecurrentLayer):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
     special_names = [ self.W_re.name ] + [ W_in.name for W_in in self.W_in ] #+ [] if not self.projection else [ self.projection.name ]
     for p in other.params.keys():
-      print p, self.params[p], type(self.params[p])
       paxis = min(len(self.params[p].get_value().shape) - 1, axis)
-      if p in special_names:
-        pself = self.params[p].get_value().reshape((self.params[p].shape[0], self.params[p].shape[1] / 4, 4))
-        pother = other.params[p].get_value().reshape((other.params[p].shape[0], other.params[p].shape[1] / 4, 4))
-        pconcat = numpy.concatenate((pself, pother), axis = paxis)
+      if self.params[p].name in special_names:
+        sshape = self.params[p].get_value().shape
+        oshape = other.params[p].get_value().shape
+        pself = self.params[p].get_value().reshape((sshape[0], sshape[1] / 4, 4))
+        pother = other.params[p].get_value().reshape((oshape[0], oshape[1] / 4, 4))
         if p == "W_re":
-          if pconcat.shape[0] < pconcat.shape[1] / 4:
-            pad = numpy.zeros((pconcat.shape[1] / 4 - pconcat.shape[0], pconcat.shape[1]))
-            pconcat = numpy.concatenate((pconcat, pad), axis = 0)
-          if pconcat.shape[0] > pconcat.shape[1]:
-            pad = numpy.zeros((pconcat.shape[0], pconcat.shape[0] - pconcat.shape[1]))
-            pconcat = numpy.concatenate((pconcat, pad), axis = 1)
-        concatenation = pconcat.reshape((pconcat.shape[0], pconcat.shape[1] * 4))
+          dim = pself.shape[0] + pother.shape[0]
+          pconcat = numpy.zeros((dim, dim, 4), dtype = theano.config.floatX)
+          pconcat[:pself.shape[0],:pself.shape[1],:] = pself
+          pconcat[pself.shape[0]:pself.shape[0] + pother.shape[0],pself.shape[1]:pself.shape[1] + pother.shape[1],:] = pother
+          concatenation = pconcat.reshape((pconcat.shape[0], pconcat.shape[1] * 4))
+        else:
+          pconcat = numpy.concatenate((pself, pother), axis = paxis)
+          concatenation = pconcat.reshape((pconcat.shape[0], pconcat.shape[1] * 4))
       else:
-        concatenation = numpy.concatenate((self.params[p].get_value(), self.params[p].get_value()), axis = paxis)
-    self.params[p].set_value(concatenation)
-    if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
+        concatenation = numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = paxis)
+      self.params[p].set_value(concatenation)
+    if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.attrs['n_out'])
 
 class MaxLstmLayer(RecurrentLayer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, n_cores = 2, layer_class = "maxlstm", name = ""):
@@ -694,7 +700,7 @@ class LayerNetwork(object):
       params.update(obj)
       network.recurrent = network.recurrent or (cl != 'hidden')
       if cl == 'softmax':
-        network.make_classifier(**params)
+        network.make_classifier(params['sources'], params['loss'])
       else:
         params.update({'activation' : strtoact(act), 'name' : layer })
         if cl == 'hidden':
@@ -769,7 +775,7 @@ class LayerNetwork(object):
   def add_layer(self, name, layer, activation):
     self.hidden[name] = layer
     self.hidden[name].set_attr('activation', activation)
-    if 'recurrent' in layer.attrs.keys() and layer.attrs['recurrent']:
+    if isinstance(layer, RecurrentLayer):
       self.L1 += self.hidden[name].attrs['L1'] * abs(self.hidden[name].W_re.sum())
       self.L2 += self.hidden[name].attrs['L2'] * (self.hidden[name].W_re ** 2).sum()
     for W in self.hidden[name].W_in:

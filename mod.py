@@ -6,7 +6,7 @@ import h5py
 import json
 
 from optparse import OptionParser
-from Network import LayerNetwork
+from Network import LayerNetwork, OutputLayer
 
 if __name__ == '__main__':
   # initialize config file
@@ -30,6 +30,7 @@ if __name__ == '__main__':
   com = json.loads(open(options.json, 'r').read())
   network_layers = {}
   network_json = {}
+  n_in, n_out = 0, 0
   for name in com:
     #print "layer: ", name,
     sources = []
@@ -37,39 +38,58 @@ if __name__ == '__main__':
     assert "units" in layer, "no unit source specified for layer %s"  % layer
     for source in layer["units"]:
       n, h = source
-      sources.append(LayerNetwork.from_model(models[n], 'unity').hidden[h])
-    meta = 0 if not "meta" in layer else layer ['meta']
-    axis = 1 if not "axis" in layer else layer ['axis']
+      net = LayerNetwork.from_model(models[n], 'unity')
+      if h == net.output.name:
+        sources.append(net.output)
+      else:
+        try:
+          sources.append(net.hidden[h])
+        except KeyError:
+          print >> sys.stderr, "unable to find layer \"%s\" in model number %d" % (h, n)
+          sys.exit(1)
+    meta = 0 if not "meta" in layer else layer['meta']
+    axis = 1 if not "axis" in layer else layer['axis']
     if "modify_attrs" in layer:
-      for p in layer['modify_attrs'].keys():
-        sources[meta].attrs[p] = layer['modify_attrs'][p]
+      sources[meta].attrs.update(layer['modify_attrs'])
     if "overwrite_attrs" in layer:
-      for p in layer['overwrite_attrs'].keys():
-        s, l = layer['overwrite_attrs'][p]
-        sources[meta].attrs[p] = sources[s].attrs[p]
+      sources[meta].attrs.update(layer['overwrite_attrs'])
     if "overwrite_names" in layer:
       for p in layer['overwrite_names']:
         s, m = p
-        sources[s].params.update(m)
-    for s in sources[1:]:
-      sources[meta].concat_units(s, axis)  
+        for q in m.keys():
+          sources[s].params[m[q]] = sources[s].params.pop(q)
+    for i, s in enumerate(sources):
+      if i != meta:
+        sources[meta].concat_units(s, axis)
+    if sources[meta].sources[0].name == "data":
+      if axis == 0:
+        n_in = sum([ sum([t.attrs['n_out'] for t in s.sources]) for s in sources ])
+      else:
+        n_in = sum([t.attrs['n_out'] for t in sources[meta].sources])
+    if isinstance(sources[meta], OutputLayer):
+      n_out = sources[meta].attrs['n_out']
     network_layers[name] = sources[meta]
     network_json[name] = sources[meta].to_json()
     #print ""
 
-json_content = json.dumps(network_json)
+json_content = json.dumps(network_json, indent=4)
 if options.dump:
   out = open(options.dump, "w")
   print >> out, json_content
   out.close()
 
-network = LayerNetwork.from_json(json.dumps(network_json))
-for layer in network_layers:
+if n_in == 0: print >> sys.stderr, "missing network input"
+if n_out == 0: print >> sys.stderr, "missing network output"
+if n_in * n_out == 0: sys.exit(1)
+
+network = LayerNetwork.from_json(json_content, n_in, n_out)
+for k in network_layers.keys():
+  layer = network_layers[k]
   if layer.name == network.output.name:
     network.output.set_params(layer.get_params())
   else:
     network.hidden[layer.name].set_params(layer.get_params())
 
-model = h5py.File(filename, "w")
-network.save(model, 0)
+model = h5py.File(options.output, "w")
+network.save(model, 1)
 model.close()
