@@ -119,7 +119,6 @@ class Process(threading.Thread):
             m, s = divmod(s, 60)
             h, m = divmod(m, 60)
             return "%d:%02d:%02d"%(h,m,s)
-
           start_elapsed = time.time() - start_time
           run_elapsed = time.time() - run_time
           run_times.append(run_elapsed)
@@ -141,7 +140,7 @@ class Process(threading.Thread):
         self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
       if interactive:
-        sys.stdout.write("\n") #\r%s" % " " * terminal_width)
+        sys.stdout.write("\n")
         sys.stdout.flush()
       self.finalize()
       self.elapsed = (time.time() - start_time)
@@ -426,7 +425,7 @@ class Engine:
       num_batches += len(alloc_devices)
     out.close()
 
-  def analyze(self, device, data, statistics):
+  def analyze(self, device, data, statistics):      
     num_labels = len(data.labels)
     if "mle" in statistics:
       mle_labels = list(OrderedDict.fromkeys([ label.split('_')[0] for label in data.labels ]))

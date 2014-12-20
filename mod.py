@@ -2,42 +2,74 @@
 
 import os
 import sys
+import h5py
+import json
 
-from Log import log
-from Config import Config
 from optparse import OptionParser
 from Network import LayerNetwork
 
-if __name__ == '__main__':  
-  if len(sys.argv) != 2:
-    print "usage:", sys.argv[0], "[params] network_1 network_2 ..."
-    sys.exit(1)
-  
+if __name__ == '__main__':
   # initialize config file
-  assert os.path.isfile(sys.argv[1]), "config file not found"  
   parser = OptionParser()
-  parser.add_option("-a", "--add", dest = "add",
-                    help = "[INTEGER/LIST] Add specified number of neurons.")
-  parser.add_option("-b", "--bias", action = 'store_true', dest = "bias",
-                    help = "[BOOL] Insert / Remove bias.")
-  parser.add_option("-c", "--config", dest = "config",
-                    help = "[STRING] Config file.")
-  parser.add_option("-d", "--delete", dest = "delete",
-                    help = "[INTEGER/LIST] Delete specified number of neurons.")
-  parser.add_option("-l", "--layer", dest = "layer",
-                    help = "[INTEGER/LIST] Select layers.")
-  parser.add_option("-n", "--name", dest = "name",
-                    help = "[STRING] Change name of specified layers")
+  parser.add_option("-j", "--json", dest = "json",
+                    help = "[STRING] Path to combination file.")
+  parser.add_option("-o", "--output", dest = "output",
+                    help = "[STRING] Output model.")
+  parser.add_option("-d", "--dump", dest = "dump",
+                    help = "[STRING] Dump json file of output model.")
   
   (options, args) = parser.parse_args()
-  config = Config()
-  if options.config: config.load_file(options.config)
-  #for arg in args:
-  assert options.has_key('layer'), "no layers specified"
-  
-  
-  # initialize log file
-  logs = config.list('log', [])
-  log_verbosity = config.int_list('log_verbosity', [])
-  log_format = config.list('log_format', [])
-  log.initialize(logs = ['stdout', verbosity = [], formatter = [])
+
+  assert options.json, "no combination file specified"
+  assert options.output, "no output file specified"
+
+  models = []
+  for m in args:
+    models.append(h5py.File(m, "r"))
+
+  com = json.loads(open(options.json, 'r').read())
+  network_layers = {}
+  network_json = {}
+  for name in com:
+    #print "layer: ", name,
+    sources = []
+    layer = com[name]
+    assert "units" in layer, "no unit source specified for layer %s"  % layer
+    for source in layer["units"]:
+      n, h = source
+      sources.append(LayerNetwork.from_model(models[n], 'unity').hidden[h])
+    meta = 0 if not "meta" in layer else layer ['meta']
+    axis = 1 if not "axis" in layer else layer ['axis']
+    if "modify_attrs" in layer:
+      for p in layer['modify_attrs'].keys():
+        sources[meta].attrs[p] = layer['modify_attrs'][p]
+    if "overwrite_attrs" in layer:
+      for p in layer['overwrite_attrs'].keys():
+        s, l = layer['overwrite_attrs'][p]
+        sources[meta].attrs[p] = sources[s].attrs[p]
+    if "overwrite_names" in layer:
+      for p in layer['overwrite_names']:
+        s, m = p
+        sources[s].params.update(m)
+    for s in sources[1:]:
+      sources[meta].concat_units(s, axis)  
+    network_layers[name] = sources[meta]
+    network_json[name] = sources[meta].to_json()
+    #print ""
+
+json_content = json.dumps(network_json)
+if options.dump:
+  out = open(options.dump, "w")
+  print >> out, json_content
+  out.close()
+
+network = LayerNetwork.from_json(json.dumps(network_json))
+for layer in network_layers:
+  if layer.name == network.output.name:
+    network.output.set_params(layer.get_params())
+  else:
+    network.hidden[layer.name].set_params(layer.get_params())
+
+model = h5py.File(filename, "w")
+network.save(model, 0)
+model.close()

@@ -210,6 +210,11 @@ if __name__ == '__main__':
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
     engine.forward(devices[0], eval, output_file, combine_labels)
+  elif task == 'theano_graph':
+    import theano
+    for task in config.list('theano_graph.task', ['train']):
+      theano.printing.pydotprint(devices[-1].compute(task), format = 'png', var_with_name_simple = True,
+                                 outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.analyze(devices[0], eval, statistics)

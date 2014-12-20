@@ -108,7 +108,7 @@ class Device():
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
       gparams.append(gparam)
     # initialize functions
-    if self.network_task == 'train':
+    if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_ctc_givens(self.trainnet)
         test_givens = self.make_ctc_givens(self.testnet)
@@ -185,7 +185,7 @@ class Device():
     elif cmd == "analyze":
       proc = self.analyzer
     else: assert False, "invalid command: " + cmd
-    return proc()
+    return proc
   
   def process(self, device, config, input_queue, output_queue):
     if device[0:3] == 'gpu':
@@ -226,7 +226,7 @@ class Device():
         try:
           if cmd == "train": self.trainnet.set_params(params)
           else: self.testnet.set_params(params)
-          result = self.compute(cmd)
+          result = self.compute(cmd)()
         except RuntimeError:
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.put("error")
@@ -258,7 +258,7 @@ class Device():
     if self.blocking:
       if task == "train": self.trainnet.set_params(network.get_params())
       else: self.testnet.set_params(network.get_params())
-      self.output = self.compute(task)
+      self.output = self.compute(task)()
     else:
       self.input_queue.put(task)
       self.input_queue.put(network.get_params())
