@@ -99,7 +99,7 @@ class Device():
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     gparams = []
     for pi, param in enumerate(self.trainnet.gparams):
-      if log.v[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
+      if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
       if False and param.name == 'lambda':
         f = theano.function(inputs = [],
@@ -109,7 +109,7 @@ class Device():
         print >> log.v3, "-------------------------------------------"
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
       gparams.append(theano.Out(gparam, borrow = True))
-    if log.v[5]: progress_bar()
+    if log.verbose[4]: progress_bar()
     # initialize functions
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':

@@ -280,10 +280,8 @@ class RecurrentLayer(HiddenLayer):
     for s, W in zip(sources, self.W_in):
       W.set_value(self.create_random_weights(s.attrs['n_out'], self.attrs['n_out'], n_in, self.name + "_" + s.name).get_value())
     self.add_param(self.W_re, 'W_re')
-    self.index = T.cast(index, theano.config.floatX)
-    self.o = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
-    self.reverse = reverse
-    self.truncation = truncation
+    self.index = index
+    self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
     if projection: self.set_attr('projection', projection)
@@ -319,10 +317,8 @@ class LstmLayer(RecurrentLayer):
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    self.act = self.create_bias(n_out, 'act')
     self.state = self.create_bias(n_out, 'state')
-    #self.act = theano.shared(value = numpy.zeros((1, self.attrs['n_out']), dtype=theano.config.floatX), borrow=True, name = "act_%s"%self.name)
-    #self.state = theano.shared(value = numpy.zeros((1, self.attrs['n_out']), dtype=theano.config.floatX), borrow=True, name = "state_%s"%self.name) #self.create_bias(n_out, "act")
+    self.act = self.create_bias(n_out, 'act')
     n_in = sum([s.attrs['n_out'] for s in sources])
     W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4)
     self.W_re.set_value(W_re.get_value())
@@ -344,41 +340,41 @@ class LstmLayer(RecurrentLayer):
     else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda') #self.create_bias(3)
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
-   
-    def step(*args):
-      x_ts = args[:self.num_sources]
-      i_t = args[self.num_sources]
-      s_p = args[self.num_sources + 1]
-      h_p = args[self.num_sources + 2]
-      if self.mask: mask = args[self.num_sources + 3]
-      i = T.outer(i_t, self.o)
+
+    z = self.b
+    for x_t, W in zip(self.sources, self.W_in):
+      if self.attrs['mask'] == "unity":
+        z += T.dot(x_t.output, W)
+      else:
+        z += T.dot(x_t.output, self.mass * mask * W)
+
+    def step(z, i_t, s_p, h_p):
+      if self.mask: mask = args[4]
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      z = T.dot(h_pp, self.W_re) + self.b
-      for x_t, W in zip(x_ts, self.W_in):
-        if self.attrs['mask'] == "unity":
-          z += T.dot(x_t, W)
-        else:
-          z += T.dot(x_t, self.mass * mask * W)
+      z += T.dot(h_pp, self.W_re)
+      i = T.outer(i_t, self.o)
       partition = z.shape[1] / 4
+      if sharpgates != 'none':
+        ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
+        forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
+        outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
+      else:
+        ingate = GI(z[:,partition: 2 * partition])
+        forgetgate = GF(z[:,2 * partition:3 * partition])
+        outgate = GO(z[:,3 * partition:4 * partition])
       input = CI(z[:,:partition])
-      ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
-      forgetgate = GF(self.sharpness[1] * z[:,2 * partition:3 * partition])
       s_t = input * ingate + s_p * forgetgate
-      outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
       h_t = CO(s_t) * outgate
       return s_t * i, h_t * i
 
-    shape = (self.sources[0].output.shape[1], self.attrs['n_out'])
-    [state, self.output], _ = theano.scan(step,
+    [self.state, self.act], _ = theano.scan(step,
                                           name = "scan_%s"%self.name,
-                                          truncate_gradient = self.truncation,
-                                          go_backwards = self.reverse,
-                                          sequences = [ s.output for s in self.sources ] + [self.index],
-                                          non_sequences = [self.mask] if self.mask else [],
-                                          #outputs_info = [ dict(initial = T.alloc(self.state, *shape)), dict(initial = T.alloc(self.act, *shape)) ])
+                                          truncate_gradient = self.attrs['truncation'],
+                                          go_backwards = self.attrs['reverse'],
+                                          sequences = [ z, self.index ],
                                           outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out']),
                                                            T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
-    self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
+    self.output = self.act[::-(2 * self.attrs['reverse'] - 1)]
   
   def create_lstm_weights(self, n, m):
     n_in = n + 4 * m + m + 4 * m
@@ -645,7 +641,6 @@ class LayerNetwork(object):
         hidden_name.append("_")
     for i, name in enumerate(hidden_name):
       if name == "_": hidden_name[i] = "hidden_%d" % i
-
     task = config.value('task', 'train')
     L1_reg = config.float('L1_reg', 0.0)
     L2_reg = config.float('L2_reg', 0.0)
@@ -792,11 +787,11 @@ class LayerNetwork(object):
     self.hidden[name] = layer
     self.hidden[name].set_attr('activation', activation)
     if isinstance(layer, RecurrentLayer):
-      self.L1 += self.hidden[name].attrs['L1'] * abs(self.hidden[name].W_re.sum())
-      self.L2 += self.hidden[name].attrs['L2'] * (self.hidden[name].W_re ** 2).sum()
+      if self.hidden[name].attrs['L1'] > 0.0: self.L1 += self.hidden[name].attrs['L1'] * abs(self.hidden[name].W_re.sum())
+      if self.hidden[name].attrs['L2'] > 0.0: self.L2 += self.hidden[name].attrs['L2'] * (self.hidden[name].W_re ** 2).sum()
     for W in self.hidden[name].W_in:
-      self.L1 += self.hidden[name].attrs['L1'] * abs(W.sum())
-      self.L2 += self.hidden[name].attrs['L2'] * (W ** 2).sum()
+      if self.hidden[name].attrs['L1'] > 0.0: self.L1 += self.hidden[name].attrs['L1'] * abs(W.sum())
+      if self.hidden[name].attrs['L2'] > 0.0: self.L2 += self.hidden[name].attrs['L2'] * (W ** 2).sum()
     self.params += self.hidden[name].params.values()
 
   def make_classifier(self, sources, loss, dropout = 0, mask = "unity"):
@@ -807,8 +802,8 @@ class LayerNetwork(object):
     else:
       self.output = FramewiseOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
     for W in self.output.W_in:
-      self.L1 += self.output.attrs['L1'] * abs(W.sum())
-      self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
+      if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
+      if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
     self.params += self.output.params.values()
     self.gparams += self.output.params.values()[:]
     targets = self.c if self.loss == 'ctc' else self.y

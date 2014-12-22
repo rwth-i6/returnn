@@ -118,7 +118,6 @@ class Process(threading.Thread):
             self.score = -1
             return -1
           device_results.append(result)
-          
         if interactive or log.v[5]:
           def hms(s):
             m, s = divmod(s, 60)
@@ -131,7 +130,7 @@ class Process(threading.Thread):
           time_factor = float(sum(run_times)) / (len(run_times) * sum([d.num_batches for d in alloc_devices]))
           complete = float(num_batches + num_alloc_batches) / num_data_batches
           remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
-          if log.v[5]:
+          if log.verbose[5]:
             progress = "%.02f%%" % (complete * 100)
             mem_usage = "/".join([str(device.get_memory_info().used / (1024*1024)) + ' MB' for device in alloc_devices])
             print >> log.v5, "elapsed %s, exp. remaining %s, complete %s, memory %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress, mem_usage)
