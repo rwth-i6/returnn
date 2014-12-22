@@ -109,7 +109,7 @@ if __name__ == '__main__':
         num_batches = int(info.split(':')[1])
         info = info.split(':')[0]
       if len(info) == 3: info += "X"
-      assert len(info) > 3, "invalid device: " + str(info[:-1])
+      assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
       utype = info[0:3]
       uid = info[3:]
       if uid == '*': uid = "[0-9]*"

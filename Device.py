@@ -1,9 +1,10 @@
 from multiprocessing import Process, Queue
 from Queue import Empty
-from Util import cmd
+from Util import cmd, progress_bar
 from Log import log
 from Network import LayerNetwork, GateLstmLayer
 import numpy
+import pynvml
 
 def get_num_devices():
   return len(cmd('cat /proc/cpuinfo | grep processor')), len(cmd('nvidia-smi -L'))
@@ -30,6 +31,7 @@ def get_device_attributes():
 
 class Device():
   def __init__(self, device, config, blocking = False, num_batches = 1):
+    pynvml.nvmlInit()
     self.input_queue = Queue()
     self.output_queue = Queue()
     self.num_batches = num_batches
@@ -91,13 +93,13 @@ class Device():
       self.testnet = LayerNetwork.from_config(config, "unity")
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
-    self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
-    self.y = T.cast(self.t, 'int32')
+    self.y = theano.shared(numpy.zeros((1, 1), dtype = 'int32'), borrow=True)
     self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
     self.c = T.cast(self.cp, 'int32')
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     gparams = []
-    for param in self.trainnet.gparams:
+    for pi, param in enumerate(self.trainnet.gparams):
+      if log.v[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
       if False and param.name == 'lambda':
         f = theano.function(inputs = [],
@@ -106,7 +108,8 @@ class Device():
         print >> log.v3, theano.printing.pp(gparam)
         print >> log.v3, "-------------------------------------------"
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
-      gparams.append(gparam)
+      gparams.append(theano.Out(gparam, borrow = True))
+    if log.v[5]: progress_bar()
     # initialize functions
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -120,11 +123,11 @@ class Device():
         test_givens = self.make_givens(self.testnet)
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
-                                     givens = train_givens)#,
+                                     givens = train_givens, no_default_updates=True)#,
                                      #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
-                                    givens = test_givens)
+                                    givens = test_givens, no_default_updates=True)
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
@@ -209,6 +212,9 @@ class Device():
     output_queue.put(device_name)
     self.initialize(config)
     output_queue.put(len(self.trainnet.gparams))
+    pynvml.nvmlInit()
+    hmap = [2, 3, 1, 0]
+    handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[device_id])
     while True:
       cmd = input_queue.get()
       if cmd == "stop":
@@ -221,9 +227,9 @@ class Device():
         if self.trainnet.loss == 'ctc':
           c = input_queue.get()
           self.cp.set_value(c)
-        self.x.set_value(x)
-        self.t.set_value(t)
-        self.i.set_value(i)
+        self.x.set_value(x.astype('float32'), borrow = True)
+        self.y.set_value(t.astype('int32'), borrow = True)
+        self.i.set_value(i.astype('int8'), borrow = True)
       else:
         params = input_queue.get()
         try:
@@ -242,9 +248,9 @@ class Device():
 
   def update_data(self):
     if self.blocking:
-      self.x.set_value(self.data)
-      self.t.set_value(self.targets)
-      self.i.set_value(self.index)
+      self.x.set_value(self.data, borrow = True)
+      self.t.set_value(self.targets, borrow = True)
+      self.i.set_value(self.index, borrow = True)
       if self.trainnet.loss == 'ctc':
         self.cp.set_value(self.ctc_targets)
     else:
@@ -309,7 +315,12 @@ class Device():
     if self.name[0:3] != 'cpu':
       self.memory = int(cmd("nvidia-smi -i "+ str(self.id) + " -q | grep -A 3 \"Memory Usage\" | tail -n 1 | cut -d ':' -f 2 | cut -d ' ' -f 2")[0])
     return self.memory
-    
+
+  def get_memory_info(self):
+    hmap = [2, 3, 1, 0]
+    handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
+    return pynvml.nvmlDeviceGetMemoryInfo(handle)
+
   def make_givens(self, network):
     return [(network.x, self.x), (network.y, self.y), (network.i, self.i)]
   def make_input_givens(self, network):

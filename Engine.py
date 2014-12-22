@@ -8,7 +8,7 @@ import time
 import sys
 import theano.tensor as T
 from Log import log
-from Util import hdf5_strings, terminal_size
+from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading
 from SprintCommunicator import SprintCommunicator
@@ -118,7 +118,7 @@ class Process(threading.Thread):
             self.score = -1
             return -1
           device_results.append(result)
-
+          
         if interactive or log.v[5]:
           def hms(s):
             m, s = divmod(s, 60)
@@ -130,23 +130,15 @@ class Process(threading.Thread):
           if len(run_times) * run_elapsed > 60: run_times = run_times[1:]
           time_factor = float(sum(run_times)) / (len(run_times) * sum([d.num_batches for d in alloc_devices]))
           complete = float(num_batches + num_alloc_batches) / num_data_batches
-          progress = "%.02f%%" % (complete * 100)
-          print >> log.v5, "elapsed %s, exp. remaining %s, complete %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress)
+          remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
+          if log.v[5]:
+            progress = "%.02f%%" % (complete * 100)
+            mem_usage = "/".join([str(device.get_memory_info().used / (1024*1024)) + ' MB' for device in alloc_devices])
+            print >> log.v5, "elapsed %s, exp. remaining %s, complete %s, memory %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress, mem_usage)
           if interactive:
-            remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
-            terminal_width, _ = terminal_size()
-            ntotal = terminal_width - len(progress) - len(remaining) - 5
-            bars = int(complete * ntotal) * '|'
-            spaces = (ntotal - int(complete * ntotal)) * ' '
-            bar = bars + spaces
-            sys.stdout.write("\r%s" % remaining + " [" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]")
-            sys.stdout.flush()
-
+            progress_bar(complete, remaining)
         self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
-      if interactive:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
       self.finalize()
       self.elapsed = (time.time() - start_time)
         
@@ -165,10 +157,10 @@ class TrainProcess(Process):
       for res in result:
         self.score += res[0]
         for p,q in zip(self.network.gparams, res[1:]):
-          self.gparams[p].set_value(self.gparams[p].get_value() + numpy.array(q))
+          self.gparams[p].set_value(self.gparams[p].get_value(borrow=True, return_internal_type=True) + numpy.array(q), borrow=True)
       self.updater(self.learning_rate)
       for p in self.network.gparams:
-        self.gparams[p].set_value(numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))
+        self.gparams[p].set_value(numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX), borrow=True)
   def finalize(self):
     self.score /= float(self.data.num_timesteps)
 
@@ -300,23 +292,23 @@ class Engine:
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
     learning_rate = config.float('learning_rate', 0.01)
-    momentum = config.float("momentum", 0.9)
+    momentum = config.float("momentum", 0)
     num_epochs = config.int('num_epochs', 5)
     max_seqs = config.int('max_seqs', -1)
     start_batch = config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
     self.train(num_epochs, learning_rate, batch_size, batch_step, train, dev, eval, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0.9, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
+  def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
     self.data = {}    
     if dev: self.data["dev"] = dev
     if eval: self.data["eval"] = eval
     for name in self.data.keys():
       self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_size)) # max(max(self.data[name].seq_lengths), batch_size)))
     if momentum > 0:
-      deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
+      deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "deltas_%s"%p)) for p in self.network.gparams])
     if adagrad:
-      sqrsum = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
+      sqrsum = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "sqrsum_%s"%p)) for p in self.network.gparams])
     self.learning_rate = learning_rate
     updates = []
     if self.network.loss == 'priori':
@@ -324,14 +316,14 @@ class Engine:
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
     for param in self.network.gparams:
-        upd = - self.rate * self.gparams[param]
-        if momentum > 0:
-          upd += momentum * deltas[param]
-          updates.append((deltas[param], upd))
-        if adagrad:
-          updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
-          upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
-        updates.append((param, param + upd))
+      upd = - self.rate * self.gparams[param]
+      if momentum > 0:
+        upd += momentum * deltas[param]
+        updates.append((deltas[param], upd))
+      if adagrad:
+        updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
+        upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
+      updates.append((param, param + upd))
     updater = theano.function(inputs = [self.rate], updates = updates)
     train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
     tester = None

@@ -57,10 +57,29 @@ def terminal_size(): # this will probably work on linux only
         pass
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
-
-    ### Use get(key[, default]) instead of a try/catch
-    #try:
-    #    cr = (env['LINES'], env['COLUMNS'])
-    #except:
-    #    cr = (25, 80)
   return int(cr[1]), int(cr[0])
+
+def hms(s):
+  m, s = divmod(s, 60)
+  h, m = divmod(m, 60)
+  return "%d:%02d:%02d"%(h,m,s)
+
+def progress_bar(complete = 1.0, prefix = "", suffix = ""):
+  import sys
+  terminal_width, _ = terminal_size()
+  if terminal_width == -1: return
+  if complete == 1.0:
+    sys.stdout.write("\r%s"%(terminal_width * ' '))
+    sys.stdout.flush()
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+    return
+  progress = "%.02f%%" % (complete * 100)
+  if prefix != "": prefix = prefix + " "
+  if suffix != "": suffix = " " + suffix
+  ntotal = terminal_width - len(progress) - len(prefix) - len(suffix) - 4
+  bars = int(complete * ntotal) * '|'
+  spaces = (ntotal - int(complete * ntotal)) * ' '
+  bar = bars + spaces
+  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
+  sys.stdout.flush()

@@ -11,6 +11,7 @@ from Log import log
 from BestPathDecoder import BestPathDecodeOp
 from SprintErrorSignals import SprintErrorSigOp
 from SprintCommunicator import SprintCommunicator 
+from theano.ifelse import ifelse
 
 """
         META LAYER
@@ -49,14 +50,14 @@ class Container(object):
       self.attrs[p] = grp.attrs.get(p, None)
         
   def num_params(self):
-    return sum([numpy.prod(self.params[p].get_value().shape[0:]) for p in self.params.keys()])
+    return sum([numpy.prod(self.params[p].get_value(borrow = True, return_internal_type = True).shape[0:]) for p in self.params.keys()])
   
   def get_params(self):
-    return { p : self.params[p].get_value() for p in self.params.keys() }
+    return { p : self.params[p].get_value(borrow = True, return_internal_type = True) for p in self.params.keys() }
   
   def set_params(self, params):
     for p in params.keys():
-      self.params[p].set_value(params[p])
+      self.params[p].set_value(params[p], borrow = True)
       
   def add_param(self, param, name = ""):
     if name == "": name = "param_%d" % len(self.params)
@@ -66,8 +67,9 @@ class Container(object):
   def set_attr(self, name, value):
     self.attrs[name] = value
       
-  def create_bias(self, n):
-    return theano.shared(value = numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name = 'b_' + self.name)
+  def create_bias(self, n, prefix = 'b'):
+    name = "%s_%s"%(prefix, self.name)
+    return theano.shared(value = numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name = name)
   
   def create_random_weights(self, n, m, s, name = None):
     if name is None: name = self.name
@@ -110,7 +112,7 @@ class Layer(Container):
     self.b = self.add_param(self.create_bias(n_out), 'b')
     self.mass = T.constant(1., name = "mass_%s" % self.name)
     if mask == "unity":
-      self.mask = T.constant(1., name = "mask_%s" % self.name)
+      self.mask = None
       if dropout > 0:
         self.mass = T.constant(dropout)
     elif mask == "dropout":
@@ -143,8 +145,12 @@ class OutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
     super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
-    self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out), "W_%s"%source.name ) for source in sources ]
-    for source, W in zip(sources, self.W_in): self.z += T.dot(source.output, self.mass * self.mask * W)
+    self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out, name = "W_%s"%source.name), "W_%s"%source.name ) for source in sources ]
+    for source, W in zip(sources, self.W_in):
+      if mask == "unity":
+        self.z += T.dot(source.output, W)
+      else:
+        self.z += T.dot(source.output, self.mass * self.mask * W)
     self.set_attr('from', ",".join([s.name for s in sources]))
     self.index = index
     self.i = self.index.flatten() #T.cast(T.reshape(index, (self.z.shape[0] * self.z.shape[1],)), 'int8')
@@ -179,7 +185,7 @@ class FramewiseOutputLayer(OutputLayer):
     self.y_pred = T.argmax(self.p_y_given_x, axis = -1)
 
   def cost(self, y):
-    y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
+    y_f = y.flatten() #T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       pcx = self.p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
@@ -250,7 +256,10 @@ class ForwardLayer(HiddenLayer):
     z = self.b
     for s,W_in in zip(sources, self.W_in):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out).get_value())
-      z += T.dot(s.output, self.mass * self.mask * W_in)
+      if mask == "unity":
+        z += T.dot(s.output, W_in)
+      else:
+        z += T.dot(s.output, self.mass * self.mask * W_in)
     self.output = (z if self.activation is None else self.activation(z))
 
 class ConvPoolLayer(ForwardLayer):
@@ -310,14 +319,16 @@ class LstmLayer(RecurrentLayer):
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    self.act = self.create_bias(n_out)
-    self.state = self.create_bias(n_out)
+    self.act = self.create_bias(n_out, 'act')
+    self.state = self.create_bias(n_out, 'state')
+    #self.act = theano.shared(value = numpy.zeros((1, self.attrs['n_out']), dtype=theano.config.floatX), borrow=True, name = "act_%s"%self.name)
+    #self.state = theano.shared(value = numpy.zeros((1, self.attrs['n_out']), dtype=theano.config.floatX), borrow=True, name = "state_%s"%self.name) #self.create_bias(n_out, "act")
     n_in = sum([s.attrs['n_out'] for s in sources])
     W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
       W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4).get_value())
-    self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))    
+    self.o.set_value(numpy.ones((n_out,), dtype='int8')) #theano.config.floatX))
     self.set_attr('n_out', self.attrs['n_out'] / 4)
     if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
@@ -339,12 +350,15 @@ class LstmLayer(RecurrentLayer):
       i_t = args[self.num_sources]
       s_p = args[self.num_sources + 1]
       h_p = args[self.num_sources + 2]
-      mask = args[self.num_sources + 3]
+      if self.mask: mask = args[self.num_sources + 3]
       i = T.outer(i_t, self.o)
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      z = T.dot(h_pp, self.W_re) + self.b 
+      z = T.dot(h_pp, self.W_re) + self.b
       for x_t, W in zip(x_ts, self.W_in):
-        z += T.dot(x_t, self.mass * mask * W)
+        if self.attrs['mask'] == "unity":
+          z += T.dot(x_t, W)
+        else:
+          z += T.dot(x_t, self.mass * mask * W)
       partition = z.shape[1] / 4
       input = CI(z[:,:partition])
       ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
@@ -353,14 +367,15 @@ class LstmLayer(RecurrentLayer):
       outgate = GO(self.sharpness[2] * z[:,3 * partition:4 * partition])
       h_t = CO(s_t) * outgate
       return s_t * i, h_t * i
-    
+
+    shape = (self.sources[0].output.shape[1], self.attrs['n_out'])
     [state, self.output], _ = theano.scan(step,
                                           name = "scan_%s"%self.name,
                                           truncate_gradient = self.truncation,
                                           go_backwards = self.reverse,
-                                          #sequences = [T.stack(*[ s.output for s in self.sources]), self.index],
                                           sequences = [ s.output for s in self.sources ] + [self.index],
-                                          non_sequences = [self.mask],
+                                          non_sequences = [self.mask] if self.mask else [],
+                                          #outputs_info = [ dict(initial = T.alloc(self.state, *shape)), dict(initial = T.alloc(self.act, *shape)) ])
                                           outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out']),
                                                            T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
     self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
@@ -435,6 +450,7 @@ class MaxLstmLayer(RecurrentLayer):
       s_p = args[self.num_sources + 1]
       h_p = args[self.num_sources + 2]
       mask = args[self.num_sources + 3]
+      return s_p, h_p
       i = T.outer(i_t, self.o)
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
       z = T.dot(h_pp, self.W_re) + self.b
