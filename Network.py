@@ -349,7 +349,6 @@ class LstmLayer(RecurrentLayer):
         z += T.dot(x_t.output, self.mass * mask * W)
 
     def step(z, i_t, s_p, h_p):
-      if self.mask: mask = args[4]
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
       z += T.dot(h_pp, self.W_re)
       i = T.outer(i_t, self.o)
