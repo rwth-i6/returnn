@@ -27,6 +27,7 @@ def get_device_attributes():
   for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
     attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
     cpu += 1
+  attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024)
   return attributes
 
 class Device():
@@ -93,10 +94,11 @@ class Device():
       self.testnet = LayerNetwork.from_config(config, "unity")
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
-    self.y = theano.shared(numpy.zeros((1, 1), dtype = 'int32'), borrow=True)
-    self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
-    self.c = T.cast(self.cp, 'int32')
+    self.y = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
+    if self.trainnet.loss == 'ctc':
+      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+      self.c = T.cast(self.cp, 'int32')
     gparams = []
     for pi, param in enumerate(self.trainnet.gparams):
       if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
@@ -121,10 +123,12 @@ class Device():
       else:
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
+
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
                                      givens = train_givens, no_default_updates=True)#,
                                      #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
+
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
                                     givens = test_givens, no_default_updates=True)
@@ -212,9 +216,6 @@ class Device():
     output_queue.put(device_name)
     self.initialize(config)
     output_queue.put(len(self.trainnet.gparams))
-    pynvml.nvmlInit()
-    hmap = [2, 3, 1, 0]
-    handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[device_id])
     while True:
       cmd = input_queue.get()
       if cmd == "stop":
@@ -249,14 +250,15 @@ class Device():
   def update_data(self):
     if self.blocking:
       self.x.set_value(self.data, borrow = True)
-      self.t.set_value(self.targets, borrow = True)
+      #self.t.set_value(self.targets, borrow = True)
+      self.t.set_value(self.targets.flatten(), borrow = True)
       self.i.set_value(self.index, borrow = True)
       if self.trainnet.loss == 'ctc':
         self.cp.set_value(self.ctc_targets)
     else:
       self.input_queue.put("update")
       self.input_queue.put(self.data)
-      self.input_queue.put(self.targets)
+      self.input_queue.put(self.targets.flatten())
       self.input_queue.put(self.index)
       if self.config.value('loss','') == 'ctc':
         self.input_queue.put(self.ctc_targets)

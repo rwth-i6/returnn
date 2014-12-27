@@ -156,8 +156,11 @@ if __name__ == '__main__':
       cache_size *= 1024
     cache_size = int(cache_size) + 1 if int(cache_size) > 0 else 0    
     cache_sizes.append(cache_size)
-  dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = "0", batching = "sorted")
-  eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = "0", batching = "sorted")
+  chunking = "0"
+  if config.value("on_size_limit", "ignore") == "chunk":
+    chunking = config.value("batch_size", "0")
+  dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = chunking, batching = "sorted")
+  eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
   task = config.value('task', 'train')

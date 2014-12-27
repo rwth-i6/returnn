@@ -11,6 +11,7 @@ from Log import log
 from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading
+import Device
 from SprintCommunicator import SprintCommunicator
 
 class Batch:
@@ -147,19 +148,28 @@ class TrainProcess(Process):
     self.updater = updater
     self.learning_rate = learning_rate
     self.gparams = gparams
+    self.zparams = {}
+    for p in gparams:
+      self.zparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
+
   def initialize(self):
     self.score = 0
+    
   def evaluate(self, batch, result):
     if result == None:
       self.score = None
     else:
+      gparams = {}
+      for p in self.network.gparams:
+        gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
       for res in result:
         self.score += res[0]
         for p,q in zip(self.network.gparams, res[1:]):
-          self.gparams[p].set_value(self.gparams[p].get_value(borrow=True, return_internal_type=True) + numpy.array(q), borrow=True)
-      self.updater(self.learning_rate)
+          gparams[p] += q
       for p in self.network.gparams:
-        self.gparams[p].set_value(numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX), borrow=True)
+        self.gparams[p].set_value(gparams[p], borrow=True)
+      self.updater(self.learning_rate)
+
   def finalize(self):
     self.score /= float(self.data.num_timesteps)
 
@@ -296,10 +306,11 @@ class Engine:
     max_seqs = config.int('max_seqs', -1)
     start_batch = config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
+    if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127: self.devices.append(Device.Device("cpu127", config))
     self.train(num_epochs, learning_rate, batch_size, batch_step, train, dev, eval, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
   def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
-    self.data = {}    
+    self.data = {}
     if dev: self.data["dev"] = dev
     if eval: self.data["eval"] = eval
     for name in self.data.keys():
@@ -329,7 +340,7 @@ class Engine:
     #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
     #testing_device = self.devices[-1]
     training_devices = self.devices
-    testing_device = self.devices[0]
+    testing_device = self.devices[-1]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
       trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
