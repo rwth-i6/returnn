@@ -323,8 +323,9 @@ class LstmLayer(RecurrentLayer):
     self.state = self.create_bias(n_out, 'state')
     self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
-    W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
-    self.W_proj.set_value(W_proj.get_value())
+    if projection:
+      W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
+      self.W_proj.set_value(W_proj.get_value())
     W_re = self.create_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
