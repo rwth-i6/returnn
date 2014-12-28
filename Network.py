@@ -271,15 +271,16 @@ class RecurrentLayer(HiddenLayer):
     super(RecurrentLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     self.act = self.create_bias(n_out)
     n_in = sum([s.attrs['n_out'] for s in sources])
-    self.W_re = self.create_random_weights(n_out, n_out, n_in, "W_re_%s"%self.name) #self.create_recurrent_weights(self.attrs['n_in'], n_out)
     if projection:
+      self.W_re = self.create_random_weights(projection, n_out, n_in, "W_re_%s"%self.name) #self.create_recurrent_weights(self.attrs['n_in'], n_out)
       self.W_proj = self.create_forward_weights(n_out, projection)
-      self.add_param(self.W_proj, 'W_proj')
+      self.add_param(self.W_proj, 'W_proj_%s'%self.name)
     else:
+      self.W_re = self.create_random_weights(n_out, n_out, n_in, "W_re_%s"%self.name) #self.create_recurrent_weights(self.attrs['n_in'], n_out)
       self.W_proj = None
     for s, W in zip(sources, self.W_in):
       W.set_value(self.create_random_weights(s.attrs['n_out'], self.attrs['n_out'], n_in, "W_in_%s_%s"%(s.name,self.name)).get_value())
-    self.add_param(self.W_re, 'W_re')
+    self.add_param(self.W_re, 'W_re_%s'%self.name)
     self.index = index
     self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
     self.set_attr('reverse', reverse)
@@ -317,15 +318,21 @@ class LstmLayer(RecurrentLayer):
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    n_in = sum([s.attrs['n_out'] for s in sources])
+    n_re = projection if projection != None else n_out
     self.state = self.create_bias(n_out, 'state')
     self.act = self.create_bias(n_out, 'act')
-    n_in = sum([s.attrs['n_out'] for s in sources])
-    W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4, "W_re_%s"%self.name)
+    W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
+    self.W_proj.set_value(W_proj.get_value())
+    W_re = self.create_uniform_weights(n_re, n_out * 4, n_in + n_re + n_out * 4, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
       W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
-    self.o.set_value(numpy.ones((n_out,), dtype='int8')) #theano.config.floatX))
-    self.set_attr('n_out', self.attrs['n_out'] / 4)
+    self.o.set_value(numpy.ones((n_out,), dtype='int8'))
+    if projection:
+      self.set_attr('n_out', projection)
+    else:
+      self.set_attr('n_out', self.attrs['n_out'] / 4)
     if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
@@ -349,8 +356,7 @@ class LstmLayer(RecurrentLayer):
         z += T.dot(x_t.output, self.mass * mask * W)
 
     def step(z, i_t, s_p, h_p):
-      h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      z += T.dot(h_pp, self.W_re)
+      z += T.dot(h_p, self.W_re)
       i = T.outer(i_t, self.o)
       partition = z.shape[1] / 4
       if sharpgates != 'none':
@@ -364,7 +370,9 @@ class LstmLayer(RecurrentLayer):
       input = CI(z[:,:partition])
       s_t = input * ingate + s_p * forgetgate
       h_t = CO(s_t) * outgate
-      return s_t * i, h_t * i
+      if self.W_proj: h_q = CO(T.dot(h_t, self.W_proj))
+      else: h_q = h_t
+      return s_t * i, h_q * i
 
     [state, act], _ = theano.scan(step,
                                   name = "scan_%s"%self.name,
@@ -372,7 +380,8 @@ class LstmLayer(RecurrentLayer):
                                   go_backwards = self.attrs['reverse'],
                                   sequences = [ z, self.index ],
                                   outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out']),
-                                                   T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out']), ])
+                                                   T.alloc(self.act, self.sources[0].output.shape[1], n_re)]) #self.attrs['n_out']), ])
+
     self.output = act[::-(2 * self.attrs['reverse'] - 1)]
 
 class WLstmLayer(RecurrentLayer):
