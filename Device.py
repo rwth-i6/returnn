@@ -251,7 +251,7 @@ class Device():
     if self.blocking:
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
-      self.t.set_value(self.targets.flatten(), borrow = True)
+      self.y.set_value(self.targets.flatten().astype('int32'), borrow = True)
       self.i.set_value(self.index, borrow = True)
       if self.trainnet.loss == 'ctc':
         self.cp.set_value(self.ctc_targets)
