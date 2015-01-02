@@ -320,8 +320,8 @@ class LstmLayer(RecurrentLayer):
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     n_in = sum([s.attrs['n_out'] for s in sources])
     n_re = projection if projection != None else n_out
-    self.state = self.create_bias(n_out, 'state')
-    self.act = self.create_bias(n_re, 'act')
+    #self.state = self.create_bias(n_out, 'state')
+    #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
     if projection:
       W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
@@ -359,8 +359,8 @@ class LstmLayer(RecurrentLayer):
 
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
-      i = T.outer(i_t, T.alloc(numpy.ones((n_out,), 'int8'), n_out))
-      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.ones((n_re,), 'int8'), n_re))
+      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
+      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       if sharpgates != 'none':
         ingate = GI(self.sharpness[0] * z[:,n_out: 2 * n_out])
         forgetgate = GF(self.sharpness[1] * z[:,2 * n_out:3 * n_out])
@@ -380,8 +380,8 @@ class LstmLayer(RecurrentLayer):
                                   truncate_gradient = self.attrs['truncation'],
                                   go_backwards = self.attrs['reverse'],
                                   sequences = [ z, self.index ],
-                                  outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], n_out),
-                                                   T.alloc(self.act, self.sources[0].output.shape[1], n_re), ])
+                                  outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
+                                                   T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re), ])
 
     self.output = act[::-(2 * self.attrs['reverse'] - 1)]
 
@@ -959,7 +959,8 @@ class LayerNetwork(object):
         x_in = []
         for s in model[layer].attrs['from'].split(','):
           if s != 'data':
-            traverse(model, s, network)
+            if not network.hidden.has_key(s):
+              traverse(model, s, network)
             x_in.append(network.hidden[s])
           else:
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
