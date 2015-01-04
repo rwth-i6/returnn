@@ -909,7 +909,6 @@ class LayerNetwork(object):
     network.recurrent = False
     def traverse(content, layer, network):
       source = []
-      n_in = 0
       obj = content[layer].copy()
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
@@ -953,19 +952,18 @@ class LayerNetwork(object):
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
-
     def traverse(model, layer, network):
       if 'from' in model[layer].attrs and model[layer].attrs['from'] != 'data':
         x_in = []
         for s in model[layer].attrs['from'].split(','):
-          if s != 'data':
+          if s == 'data':
+            x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
+          else:
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
-          else:
-            x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
       else:
-        x_in = [SourceLayer(network.n_in, network.x, name = 'data')]
+        x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
       if layer != model.attrs['output']:
         cl = model[layer].attrs['class']
         act = model[layer].attrs['activation']
@@ -986,8 +984,10 @@ class LayerNetwork(object):
             network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
           elif cl == 'maxlstm':
             network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
-        for a in model[layer].attrs:
-          network.hidden[layer].attrs[a] = model[layer].attrs[a]
+        else:
+            assert False, "invalid layer type: " + cl
+        #for a in model[layer].attrs:
+        #  network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
