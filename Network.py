@@ -984,8 +984,8 @@ class LayerNetwork(object):
             network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
           elif cl == 'maxlstm':
             network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
-        else:
-            assert False, "invalid layer type: " + cl
+          else:
+              assert False, "invalid layer type: " + cl
         #for a in model[layer].attrs:
         #  network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
