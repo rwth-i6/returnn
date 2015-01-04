@@ -978,6 +978,9 @@ class LayerNetwork(object):
           network.add_layer(layer, ForwardLayer(**params), act)
         else:
           params['index'] = network.i
+          for p in [ 'truncation', 'projection', 'reverse' ]:
+            if p in model[layer].attrs:
+              params[p] = model[layer].attrs[p]
           if cl == 'recurrent':
             network.add_layer(layer, RecurrentLayer(**params), act)
           elif cl == 'lstm':
