@@ -1,9 +1,9 @@
 #! /usr/bin/python2.7
 
 __author__ = "Patrick Doetsch"
-__copyright__ = "Copyright 2014"
+__copyright__ = "Copyright 2015"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
-__license__ = "GPL"
+__license__ = "RWTHASR"
 __version__ = "0.9"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
@@ -81,10 +81,10 @@ class Dataset:
           l -= shift
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
-    self.num_seqs += nseqs #nc.dimensions['numSeqs']
+    self.num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
-    self.num_timesteps = sum(self.seq_lengths) #nc.dimensions['numTimesteps']
+    self.num_timesteps = sum(self.seq_lengths)
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
@@ -245,7 +245,7 @@ class Dataset:
   def load_seqs(self, start, end, free = True, fill = True):
     if self.is_cached(start, end): return
     if self.cache_size > 0 and free:
-      weight = self.seq_start[end] - self.seq_start[start] #sum([self.seq_lengths[self.seq_index[i]] for i in xrange(start, end)])
+      weight = self.seq_start[end] - self.seq_start[start]
       if self.temp_cache_size < weight:
         self.temp_cache_size += self.delete(weight - self.temp_cache_size)
         gc.collect()

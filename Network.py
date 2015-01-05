@@ -989,8 +989,6 @@ class LayerNetwork(object):
             network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
           else:
               assert False, "invalid layer type: " + cl
-        #for a in model[layer].attrs:
-        #  network.hidden[layer].attrs[a] = model[layer].attrs[a]
     output = model.attrs['output']
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]

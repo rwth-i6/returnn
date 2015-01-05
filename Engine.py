@@ -128,7 +128,8 @@ class Process(threading.Thread):
           run_elapsed = time.time() - run_time
           run_times.append(run_elapsed)
           if len(run_times) * run_elapsed > 60: run_times = run_times[1:]
-          time_factor = float(sum(run_times)) / (len(run_times) * sum([d.num_batches for d in alloc_devices]))
+          time_domain = len(run_times) * sum([d.num_batches for d in alloc_devices])
+          time_factor = 0.0 if time_domain == 0.0 else float(sum(run_times)) / time_domain
           complete = float(num_batches + num_alloc_batches) / num_data_batches
           remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
           if log.verbose[5]:

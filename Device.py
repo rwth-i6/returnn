@@ -32,7 +32,10 @@ def get_device_attributes():
 
 class Device():
   def __init__(self, device, config, blocking = False, num_batches = 1):
-    pynvml.nvmlInit()
+    try:
+      pynvml.nvmlInit()
+    except:
+      pass
     self.input_queue = Queue()
     self.output_queue = Queue()
     self.num_batches = num_batches
