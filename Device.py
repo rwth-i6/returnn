@@ -44,7 +44,14 @@ class Device():
       self.initialize(config)
       self.nparams = len(self.trainnet.gparams)
       if device[0:3] == 'gpu':
-        import cuda_ndarray.cuda_ndarray as cuda
+        import theano.sandbox.cuda as theano_cuda
+        assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
+        if not theano_cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
+          theano_cuda.use(device=device, force=True)
+        try:
+          import cuda_ndarray.cuda_ndarray as cuda
+        except ImportError as exc:
+          raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number()
         self.device_name = cuda.active_device_name()
       else:
