@@ -830,8 +830,16 @@ class LayerNetwork(object):
   
   @classmethod
   def from_config(cls, config, mask = "unity"):
-    num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
-    num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
+    num_inputs = config.int('num_inputs', 0)
+    num_outputs = config.int('num_outputs', 0)
+    if config.list('train'):
+      _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+      _num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
+      if num_inputs: assert num_inputs == _num_inputs
+      if num_outputs: assert num_outputs == _num_outputs
+      num_inputs = _num_inputs
+      num_outputs = _num_outputs
+    assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     loss = config.value('loss', 'ce')
     if config.has('initialize_from_json'):
       return LayerNetwork.from_json(config.json, num_inputs, num_outputs)
