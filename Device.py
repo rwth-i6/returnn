@@ -7,7 +7,7 @@ import numpy
 import pynvml
 
 def get_num_devices():
-  return len(cmd('cat /proc/cpuinfo | grep processor')), len(cmd('nvidia-smi -L'))
+  return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
 
 def get_gpu_names():
   return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
@@ -28,6 +28,8 @@ def get_device_attributes():
     attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
     cpu += 1
   attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024)
+  if not cpu:
+    attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
   return attributes
 
 class Device():
