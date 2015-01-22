@@ -153,6 +153,7 @@ class OutputLayer(Layer):
       else:
         self.z += T.dot(source.output, self.mass * self.mask * W)
     self.set_attr('from', ",".join([s.name for s in sources]))
+    self.index = index
     self.i = (index.flatten() > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
