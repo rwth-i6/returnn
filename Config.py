@@ -16,7 +16,7 @@ class Config:
       if len(line.strip()) == 0 or line.strip()[0] == '#':
         continue
       line = line.strip().split()
-      assert len(line) == 2, "unable to parse config line: " + line
+      assert len(line) == 2, "unable to parse config line: %r" % line
       key = line[0]
       value = line[1]
       if value.find(',') > 0:
