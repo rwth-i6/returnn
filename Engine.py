@@ -354,9 +354,9 @@ class Engine:
         if False and len(self.devices) > 1:
           if tester.isAlive(): 
             #print >> log.v3, "warning: waiting for test score of previous epoch"
-            tester.join(9044006400)
+            tester.join()
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
-      trainer.join(9044006400)
+      trainer.join()
       start_batch = 0
       if trainer.score == -1:
         self.save_model(model + ".crash_" + str(trainer.last_batch), epoch - 1)
@@ -368,13 +368,13 @@ class Engine:
           data, num_batches = self.data[name]
           tester = EvalProcess(self.network, [testing_device], data, num_batches)
           if True or len(self.devices) == 1:
-            tester.join(9044006400)
+            tester.join()
             trainer.elapsed += tester.elapsed
         print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score,
     if model:
       self.save_model(model + ".%03d" % (start_epoch + num_epochs), start_epoch + num_epochs)
     if tester:
-      if len(self.devices) > 1: tester.join(9044006400)
+      if len(self.devices) > 1: tester.join()
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
 
   def save_model(self, filename, epoch):
@@ -399,7 +399,7 @@ class Engine:
         label_file.write(key + "\n")
       label_file.close()
     forwarder = SprintCacheForwardProcess(self.network, self.devices, data, batches, cache, merge)
-    forwarder.join(9044006400)
+    forwarder.join()
     cache.finalize()
 
   def forward(self, device, data, output_file, combine_labels = ''):
@@ -419,7 +419,7 @@ class Engine:
         label_file.write(key + "\n")
       label_file.close()
     forwarder = HDFForwardProcess(self.network, self.devices, data, batches, cache, merge)
-    forwarder.join(9044006400)
+    forwarder.join()
     cache.close()
   
   def classify(self, device, data, label_file):
