@@ -4,7 +4,6 @@ from Util import cmd, progress_bar
 from Log import log
 from Network import LayerNetwork, GateLstmLayer
 import numpy
-import pynvml
 
 def get_num_devices():
   return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
@@ -35,9 +34,14 @@ def get_device_attributes():
 class Device():
   def __init__(self, device, config, blocking = False, num_batches = 1):
     try:
-      pynvml.nvmlInit()
-    except:
+      import pynvml
+    except ImportError:
       pass
+    else:
+      try:
+        pynvml.nvmlInit()
+      except Exception as exc:
+        print >> log.v3, "nvmlInit failed: %s" % exc
     self.input_queue = Queue()
     self.output_queue = Queue()
     self.num_batches = num_batches
@@ -157,10 +161,10 @@ class Device():
           feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
           feat = T.log(feat)
           source.append(feat)
-      	elif extract == "ce-errsig":
-      	  feat = T.grad(self.testnet.cost, self.testnet.output.z) #TODO
-      	  source.append(feat)
-      	  givens = self.make_givens(self.testnet)
+        elif extract == "ce-errsig":
+          feat = T.grad(self.testnet.cost, self.testnet.output.z) #TODO
+          source.append(feat)
+          givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
           idx = int(extract.split('_')[1])
           source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output, (self.testnet.hidden[idx].output.shape[0] * self.testnet.hidden[idx].output.shape[1], self.testnet.hidden[idx].output.shape[2])))))
@@ -331,6 +335,10 @@ class Device():
     return self.memory
 
   def get_memory_info(self):
+    try:
+      import pynvml
+    except ImportError as exc:
+      raise Exception("pynvml not available: %s" % exc)
     hmap = [2, 3, 1, 0]
     handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
     return pynvml.nvmlDeviceGetMemoryInfo(handle)
