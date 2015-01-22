@@ -219,7 +219,7 @@ class FileArchive:
                     raise NotImplementedError("No support for weighted "
                                               "alignments yet.")
             else:
-                raise Error("No valid alignment header found. Wrong cache?")
+                raise Exception("No valid alignment header found. Wrong cache?")
                 
 
     def getState(self, mix):
