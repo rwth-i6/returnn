@@ -12,18 +12,19 @@ from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading
 import Device
-from SprintCommunicator import SprintCommunicator
+
 
 class Batch:
-  def __init__(self, start = [0, 0]):
+  def __init__(self, start = (0, 0)):
     self.shape = [0, 0]
-    self.start = start
+    self.start = list(start)
     self.nseqs = 1
   def try_sequence(self, length): return [max(self.shape[0], length), self.shape[1] + 1]
   def add_sequence(self, length): self.shape = self.try_sequence(length)
   def add_frames(self, length): self.shape = [self.shape[0] + length, max(self.shape[1], 1)]
   def size(self): return self.shape[0] * self.shape[1]
   
+
 class Process(threading.Thread):
     def __init__(self, task, network, devices, data, batches, start_batch = 0):
       threading.Thread.__init__(self)
@@ -143,6 +144,7 @@ class Process(threading.Thread):
       self.finalize()
       self.elapsed = (time.time() - start_time)
         
+
 class TrainProcess(Process):
   def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
     super(TrainProcess, self).__init__('train', network, devices, data, batches, start_batch)
@@ -174,6 +176,7 @@ class TrainProcess(Process):
   def finalize(self):
     self.score /= float(self.data.num_timesteps)
 
+
 class EvalProcess(Process):
     def __init__(self, network, devices, data, batches, start_batch = 0):
       super(EvalProcess, self).__init__('eval', network, devices, data, batches, start_batch)
@@ -187,6 +190,7 @@ class EvalProcess(Process):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)
       
+
 class SprintCacheForwardProcess(Process):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
       super(SprintCacheForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
@@ -210,6 +214,7 @@ class SprintCacheForwardProcess(Process):
       #times = zip(range(0, len(features)), range(1, len(features) + 1))
       self.toffset += len(features)
       self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
+
 
 class HDFForwardProcess(Process):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
@@ -255,7 +260,8 @@ class HDFForwardProcess(Process):
       self.toffset += features.shape[1]
       self.tags.append(self.data.tags[self.data.seq_index[batch]])
       
-class Engine:      
+
+class Engine:
   def __init__(self, devices, network):
     self.network = network
     self.devices = devices
@@ -479,7 +485,7 @@ class Engine:
               top.append([mle_labels[i] + " -> " + mle_labels[j], confusion_matrix[i,j]]) 
             else:
               top.append([data.labels[i] + " -> " + data.labels[j], confusion_matrix[i,j]])
-      top.sort(key = lambda x:x[1], reverse = True)
+      top.sort(key = lambda x: x[1], reverse = True)
       for i in xrange(n):
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
