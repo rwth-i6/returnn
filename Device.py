@@ -36,7 +36,7 @@ class Device():
     try:
       import pynvml
     except ImportError:
-      pass
+      print "pynvml not available, memory information missing"
     else:
       try:
         pynvml.nvmlInit()
@@ -346,7 +346,9 @@ class Device():
     try:
       import pynvml
     except ImportError as exc:
-      raise Exception("pynvml not available: %s" % exc)
+      class DummyInfo:
+        used = 0
+      return DummyInfo
     hmap = [2, 3, 1, 0]
     handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
     return pynvml.nvmlDeviceGetMemoryInfo(handle)
