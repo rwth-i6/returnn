@@ -408,7 +408,7 @@ class Engine:
           merge[merged] = []
         merge[merged].append(index)
       import codecs
-      label_file = codecs.open(cache_file + ".labels", encoding = 'utf-8', mode = 'w')
+      label_file = codecs.open(output_file + ".labels", encoding = 'utf-8', mode = 'w')
       for key in merge.keys():
         label_file.write(key + "\n")
       label_file.close()
