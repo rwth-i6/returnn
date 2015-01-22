@@ -2,7 +2,7 @@
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2015"
-__credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
+__credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 __license__ = "RWTHASR"
 __version__ = "0.9"
 __maintainer__ = "Patrick Doetsch"

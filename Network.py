@@ -202,14 +202,14 @@ class SequenceOutputLayer(OutputLayer):
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
     self.initialize()
-	
+
   def initialize(self):
     assert self.loss in ('ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-	
+
   def cost(self, y):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
     known_grads = None
@@ -1038,7 +1038,7 @@ class LayerNetwork(object):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
   
-  def initialize(self, loss, L1_reg, L2_reg, dropout = 0, bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
+  def initialize(self, loss, L1_reg, L2_reg, dropout = (), bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
     self.hidden = {}
     self.params = []
     n_in = self.n_in
