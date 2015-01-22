@@ -122,7 +122,8 @@ class Device():
       if False and param.name == 'lambda':
         f = theano.function(inputs = [],
                             outputs = [gparam],
-                            givens = self.make_givens(self.trainnet))
+                            givens = self.make_givens(self.trainnet),
+                            name = "f via trainnet")
         print >> log.v3, theano.printing.pp(gparam)
         print >> log.v3, "-------------------------------------------"
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
@@ -142,12 +143,16 @@ class Device():
 
       self.trainer = theano.function(inputs = [],
                                      outputs = [self.trainnet.cost] + gparams,
-                                     givens = train_givens, no_default_updates=True)#,
+                                     givens = train_givens,
+                                     no_default_updates = True,
+                                     name = "trainer")#,
                                      #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
 
       self.tester = theano.function(inputs = [],
                                     outputs = [self.testnet.cost, self.testnet.errors],
-                                    givens = test_givens, no_default_updates=True)
+                                    givens = test_givens,
+                                    no_default_updates = True,
+                                    name = "tester")
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
@@ -187,18 +192,21 @@ class Device():
         else: assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
                                        outputs = source,
-                                       givens = givens)
+                                       givens = givens,
+                                       name = "extractor")
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
                                         outputs = [T.argmax(self.testnet.output.p_y_given_x, axis = 1)],
-                                        givens = self.make_input_givens(self.testnet))
+                                        givens = self.make_input_givens(self.testnet),
+                                        name = "classifier")
     elif self.network_task == 'analyze':
       self.analyzer = theano.function(inputs = [],
                                       outputs = [self.testnet.output.p_y_given_x],
                                               #+ [self.testnet.jacobian],
                                               #+ [hidden.output for hidden in self.network.hidden]
                                               #+ [hidden.output for hidden in self.network.reverse_hidden],
-                                      givens = self.make_input_givens(self.testnet))
+                                      givens = self.make_input_givens(self.testnet),
+                                      name = "analyzer")
   def compute(self, cmd):
     if cmd == "train":
       proc = self.trainer

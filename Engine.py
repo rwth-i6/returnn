@@ -335,7 +335,7 @@ class Engine:
         updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
         upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
       updates.append((param, param + upd))
-    updater = theano.function(inputs = [self.rate], updates = updates)
+    updater = theano.function(inputs = [self.rate], updates = updates, name = "updater")
     train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
     tester = None
     #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices

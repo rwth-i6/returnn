@@ -275,7 +275,7 @@ class SprintCommunicator:
     t_segment_name_int = T.ivector()
     
     #alloc sh_mem
-    f = theano.function([t_key], AllocShMemOp()(t_key))
+    f = theano.function([t_key], AllocShMemOp()(t_key), name="SprintCommunicator")
     print >> log.v4, 'Allocating shared memory with key', key, '...' 
     shId, self.sh_mem = f(key)
         
