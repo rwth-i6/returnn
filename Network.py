@@ -118,7 +118,7 @@ class Layer(Container):
         self.mass = T.constant(dropout)
     elif mask == "dropout":
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(s.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
+      self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -191,6 +191,7 @@ class FramewiseOutputLayer(OutputLayer):
       pcx = self.p_y_given_x[self.i, y[self.i]] 
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
+      y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
     else: assert False
@@ -220,9 +221,9 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'sprint_smoothed':
       assert self.log_prior is not None
       err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
-      err *= (1.0 - ce_smoothing)
+      err *= (1.0 - self.ce_smoothing)
       err = err.sum()
-      grad *= (1.0 - ce_smoothing)
+      grad *= (1.0 - self.ce_smoothing)
       y_m_prior = T.reshape(self.z + self.prior_scale * self.log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
       p_y_given_x_prior = T.nnet.softmax(y_m_prior)
       pcx = p_y_given_x_prior[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]] 
@@ -293,7 +294,7 @@ class RecurrentLayer(HiddenLayer):
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
       i = T.outer(i_t, self.o)
       z = T.dot(h_pp, self.W_re) + self.b
-      for i in len(sources):
+      for i in len(self.sources):
         z += T.dot(x_t[i], self.mass * self.mask[i] * self.W_in[i])
       #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
