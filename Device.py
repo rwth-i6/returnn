@@ -116,9 +116,11 @@ class Device():
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
       self.c = T.cast(self.cp, 'int32')
     gparams = []
+    self.gradients = {}
     for pi, param in enumerate(self.trainnet.gparams):
       if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
+      self.gradients[param] = gparam
       if False and param.name == 'lambda':
         f = theano.function(inputs = [],
                             outputs = [gparam],
