@@ -17,7 +17,7 @@ def get_device_attributes():
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
-                 "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024), 
+                 "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024)}
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
@@ -73,7 +73,7 @@ class Device():
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device[0:3] + str(self.id)
     self.config = config
-    
+
   def restart(self):
     self.proc.terminate()
     #os.kill(self.proc.pid, signal.SIGKILL)
@@ -91,7 +91,7 @@ class Device():
         print 'Inputs : %s' % [input[0] for input in fn.inputs]
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
-    
+
   def initialize(self, config):
     import theano
     import theano.tensor as T
@@ -222,7 +222,7 @@ class Device():
       proc = self.analyzer
     else: assert False, "invalid command: " + cmd
     return proc
-  
+
   def process(self, device, config, input_queue, output_queue):
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
@@ -274,6 +274,7 @@ class Device():
           output_queue.put(output)
 
   def update_data(self):
+    # self.data is set in Engine.allocate_devices()
     if self.blocking:
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
@@ -288,7 +289,7 @@ class Device():
       self.input_queue.put(self.index)
       if self.config.value('loss','') == 'ctc':
         self.input_queue.put(self.ctc_targets)
-  
+
   def run(self, task, network):
     self.task = task
     self.update_data()
@@ -299,7 +300,7 @@ class Device():
     else:
       self.input_queue.put(task)
       self.input_queue.put(network.get_params())
-      
+
   def clear_memory(self, network):
     #self.data = numpy.zeros((1, 1, 1), dtype = theano.config.floatX)
     #self.targets = numpy.zeros((1, 1), dtype = theano.config.floatX)
@@ -327,8 +328,8 @@ class Device():
         self.output += [ self.output_queue.get() for p in xrange(self.nparams) ]
       elif self.task == "eval":
         self.output.append(self.output_queue.get())
-    return self.output 
-    
+    return self.output
+
   def terminate(self):
     if not self.blocking and self.proc.is_alive():
       self.input_queue.put('stop')
