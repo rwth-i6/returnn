@@ -75,7 +75,7 @@ class Device():
       self.proc.start()
       self.id = self.output_queue.get(); """ :type: int """
       self.device_name = self.output_queue.get(); """ :type: str """
-      self.nparams = self.output_queue.get()
+      self.nparams = self.output_queue.get(); """ :type: int """  # = len(trainnet.gparams)
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device[0:3] + str(self.id)
     self.config = config
