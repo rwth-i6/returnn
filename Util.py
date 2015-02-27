@@ -3,6 +3,10 @@ import h5py
 from scipy.io.netcdf import NetCDFFile
 
 def cmd(cmd):
+  """
+  :type cmd: list[str] | str
+  :rtype: list[str]
+  """
   p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True)
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()

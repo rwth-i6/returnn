@@ -21,7 +21,7 @@ import gc
 
 class Dataset:
   def __init__(self, window = 1, cache_size = 0, chunking = "0", batching = 'default'):
-    self.files = []
+    self.files = []; """ :type: list[str] """
     self.num_inputs = 0
     self.num_outputs = 0
     self.window = window
@@ -175,7 +175,7 @@ class Dataset:
 
   def _modify_alloc_intervals(self, start, end, invert):
     i = 0
-    selection = []
+    selection = []; """ :type: list[int] """
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
     while i < len(self.alloc_intervals) - invert:
       ni = self.alloc_intervals[i + invert][1 - invert]
@@ -207,6 +207,11 @@ class Dataset:
     return self._modify_alloc_intervals(start, end, False)
 
   def is_cached(self, start, end):
+    """
+    :param int start: start
+    :param int end: start
+    :rtype: bool
+    """
     s = 0
     e = len(self.alloc_intervals)
     while s < e:
@@ -237,6 +242,11 @@ class Dataset:
     return -1
 
   def delete(self, nframes):
+    """
+    :param int nframes: how much frames to delete max
+    :return: number of frames deleted
+    :rtype: int
+    """
     start = self.num_seqs
     deleted = 0
     end = 0
@@ -252,6 +262,17 @@ class Dataset:
     return deleted
 
   def load_seqs(self, start, end, free=True, fill=True):
+    """
+    Load data sequences.
+    As a side effect, will modify / fill-up:
+      self.alloc_intervals
+      self.targets
+
+    :param int start: start
+    :param int end: end
+    :param bool free: free
+    :param bool fill: fill
+    """
     if self.is_cached(start, end): return
     if self.cache_size > 0 and free:
       weight = self.seq_start[end] - self.seq_start[start]
@@ -283,7 +304,7 @@ class Dataset:
         return
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
-    file_info = [ [] for l in xrange(len(self.files)) ]
+    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[list[int]] """
     for idc in selection:
       ids = self.seq_index[idc]
       file_info[self.file_index[ids]].append((idc,ids))
@@ -302,7 +323,7 @@ class Dataset:
         o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
         l = self.seq_lengths[ids]
         if 'targetClasses' in fin:
-          y = targs[p : p + l]
+          y = targs[p : p + l]; """ :type: int """
           self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
         x = inputs[p : p + l]
         x = self.preprocess(x)
@@ -314,14 +335,15 @@ class Dataset:
 
   def set_batching(self, batching):
     self.batching = batching
-    self.seq_index = range(self.num_seqs)
+    self.seq_index = range(self.num_seqs); """ :type: list[int] """
     if self.batching == 'sorted':
-      zipped = zip(self.seq_index, self.seq_lengths)
-      zipped.sort(key = lambda x:x[1])
-      self.seq_index = [ y[0] for y in zipped ]
+      zipped = zip(self.seq_index, self.seq_lengths); """ :type: list[list[int]] """
+      zipped.sort(key = lambda x: x[1])  # sort by length
+      self.seq_index = [y[0] for y in zipped]
     elif self.batching == 'random':
       random.shuffle(self.seq_index)
-    else: assert self.batching == 'default', "invalid batching specified: " + self.batching
+    else:
+      assert self.batching == 'default', "invalid batching specified: " + self.batching
     self.seq_start = [0]
     self.transcription_start = [0]
     self.cached_bytes = 0

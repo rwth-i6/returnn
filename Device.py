@@ -33,6 +33,12 @@ def get_device_attributes():
 
 class Device():
   def __init__(self, device, config, blocking = False, num_batches = 1):
+    """
+    :param str device: name, "gpu*" or "cpu*"
+    :param Config.Config config: config
+    :param bool blocking: False -> multiprocessing, otherwise its blocking
+    :param int num_batches: num batches to train on this device
+    """
     try:
       import pynvml
     except ImportError:
@@ -58,8 +64,8 @@ class Device():
           import cuda_ndarray.cuda_ndarray as cuda
         except ImportError as exc:
           raise Exception("Theano CUDA support seems broken: %s" % exc)
-        self.id = cuda.active_device_number()
-        self.device_name = cuda.active_device_name()
+        self.id = cuda.active_device_number(); """ :type: int """
+        self.device_name = cuda.active_device_name(); """ :type: str """
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
@@ -67,8 +73,8 @@ class Device():
       self.proc = Process(target = self.process, args = (device, config, self.input_queue, self.output_queue))
       self.proc.daemon = True
       self.proc.start()
-      self.id = self.output_queue.get()
-      self.device_name = self.output_queue.get()
+      self.id = self.output_queue.get(); """ :type: int """
+      self.device_name = self.output_queue.get(); """ :type: str """
       self.nparams = self.output_queue.get()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device[0:3] + str(self.id)
@@ -279,7 +285,7 @@ class Device():
     """
     import theano
     self.data = numpy.zeros(shape, dtype=theano.config.floatX)
-    self.targets = numpy.zeros(shape[0:2], dtype=theano.config.floatX)
+    self.targets = numpy.zeros(shape[0:2], dtype=theano.config.floatX)  # is actually the int idx of the target class
     self.ctc_targets = numpy.zeros((shape[1], max_ctc_length), dtype=theano.config.floatX)
     self.index = numpy.zeros(shape[0:2], dtype='int8')
     self.tags = [None] * shape[1]  # TODO
