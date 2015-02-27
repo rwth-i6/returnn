@@ -43,7 +43,7 @@ def subtract_priors(network, train, config):
     assert len(l) == 1, len(l)
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
-  
+
 if __name__ == '__main__':
   # initialize config file
   assert os.path.isfile(sys.argv[1]), "config file not found"
@@ -68,7 +68,7 @@ if __name__ == '__main__':
   parser.add_option("-p", "--loss", dest = "loss", help = "[loglik/sse/ctc] Objective function to be optimized.")
   parser.add_option("-q", "--cache", dest = "cache", help = "[INTEGER] Cache size in bytes (supports notation for kilo (K), mega (M) and gigabtye (G)).")
   parser.add_option("-r", "--learning_rate", dest = "learning_rate", help = "[FLOAT] Learning rate in gradient descent optimization.")
-  parser.add_option("-s", "--hidden_sizes", dest = "hidden_sizes", help = "[INTEGER/LIST] Number of units in hidden layers.")  
+  parser.add_option("-s", "--hidden_sizes", dest = "hidden_sizes", help = "[INTEGER/LIST] Number of units in hidden layers.")
   parser.add_option("-t", "--truncate", dest = "truncate", help = "[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
   parser.add_option("-u", "--device", dest = "device", help = "[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
   parser.add_option("-v", "--verbose", dest = "log_verbosity", help = "[INTEGER] Verbosity level from 0 - 5.")
@@ -92,10 +92,10 @@ if __name__ == '__main__':
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
     config.json = open(json_file).read()
-  # initialize SprintCommunicator (if required)  
+  # initialize SprintCommunicator (if required)
   if config.has('sh_mem_key'):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
-    
+
   # initialize devices
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
@@ -130,17 +130,15 @@ if __name__ == '__main__':
   if config.bool('multiprocessing', True):
     devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
   else:
-    import theano.tensor as T
     devices = [ Device(tags[0], config, blocking = True) ]
   # load data
-  import theano.tensor as T
   from Dataset import Dataset
   from Network import LayerNetwork
   from Engine import Engine
   cache_sizes_user = config.list('cache_size', ["0"])
   sets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
-  if len(cache_sizes_user) == 1: 
+  if len(cache_sizes_user) == 1:
     cache_sizes_user = cache_sizes_user * 3
     cache_factor /= float(sets)
   assert len(cache_sizes_user) == 3, "invalid amount of cache sizes specified"
@@ -154,7 +152,7 @@ if __name__ == '__main__':
       cache_size *= 1024 * 1024
     elif cache_size_user.find('K') > 0:
       cache_size *= 1024
-    cache_size = int(cache_size) + 1 if int(cache_size) > 0 else 0    
+    cache_size = int(cache_size) + 1 if int(cache_size) > 0 else 0
     cache_sizes.append(cache_size)
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
