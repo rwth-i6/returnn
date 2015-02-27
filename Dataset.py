@@ -36,11 +36,11 @@ class Dataset:
     self.seq_start = [0]
     self.seq_shift = [0]
     self.file_start = [0]
-    self.file_seq_start = []
+    self.file_seq_start = []; """ :type: list[list[int]] """
     self.timestamps = []
-    self.file_index = []
+    self.file_index = []; """ :type: list[int] """
     self.seq_lengths = []; """ :type: list[int] """
-    self.labels = []
+    self.labels = []; """ :type: list[str] """
     self.tags = []; """ :type: list[str] """
     self.num_seqs = 0
     self.num_timesteps = 0
@@ -330,8 +330,9 @@ class Dataset:
         else:
           self.cached_bytes += nbytes
     self.temp_cache_size += self.cached_bytes
-    self.alloc_intervals = [[0,0,numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)],
-                            [self.num_seqs,self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)]]
+    self.alloc_intervals = \
+      [[0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)],
+       [self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)]]
     self.temp_cache_size -= self.cached_bytes
     if num_cached > 0:
       self.load_seqs(0, num_cached, free = False)
