@@ -275,12 +275,23 @@ class HDFForwardTaskThread(TaskThread):
 
 class Engine:
   def __init__(self, devices, network):
+    """
+    :type devices: list[Device.Device]
+    :type network: Network.LayerNetwork
+    """
     self.network = network
     self.devices = devices
     self.gparams = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
     self.rate = T.scalar('r')
 
   def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
+    """
+    :type data: Dataset.Dataset
+    :type batch_size: int
+    :type batch_step: int
+    :type max_seqs: int
+    :rtype list[Batch]
+    """
     batches = []
     batch = Batch([0,0])
     if max_seqs == -1: max_seqs = data.num_seqs
@@ -325,11 +336,29 @@ class Engine:
     max_seqs = config.int('max_seqs', -1)
     start_batch = config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
-    if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127: self.devices.append(Device.Device("cpu127", config))
+    if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127:
+      self.devices.append(Device.Device("cpu127", config))
     self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
   def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data = None, eval_data = None, momentum = 0, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
+    """
+    :type num_epochs: int
+    :type learning_rate: float
+    :type batch_size: int
+    :type batch_step: int
+    :type train_data: Dataset.Dataset
+    :type dev_data: Dataset.Dataset | None
+    :type eval_data: Dataset.Dataset | None
+    :type momentum: float
+    :type model:
+    :type interval: int
+    :type start_epoch: int
+    :type start_batch: int
+    :type max_seqs: int
+    :type adagrad: bool
+    """
     self.data = {}
+    """ :type: dict[str,Dataset.Dataset] """
     if dev_data: self.data["dev"] = dev_data
     if eval_data: self.data["eval"] = eval_data
     for name in self.data.keys():
