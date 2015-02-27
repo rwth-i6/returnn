@@ -303,7 +303,7 @@ class Engine:
     batches.append(batch)
     return batches
   
-  def train_config(self, config, train, dev = None, eval = None, start_epoch = 0):
+  def train_config(self, config, train_data, dev_data = None, eval_data = None, start_epoch = 0):
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
@@ -314,12 +314,12 @@ class Engine:
     start_batch = config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
     if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127: self.devices.append(Device.Device("cpu127", config))
-    self.train(num_epochs, learning_rate, batch_size, batch_step, train, dev, eval, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
+    self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step, train, dev = None, eval = None, momentum = 0, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
+  def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data = None, eval_data = None, momentum = 0, model = None, interval = 1, start_epoch = 0, start_batch = 0, max_seqs = -1, adagrad = False):
     self.data = {}
-    if dev: self.data["dev"] = dev
-    if eval: self.data["eval"] = eval
+    if dev_data: self.data["dev"] = dev_data
+    if eval_data: self.data["eval"] = eval_data
     for name in self.data.keys():
       self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_size)) # max(max(self.data[name].seq_lengths), batch_size)))
     if momentum > 0:
@@ -329,7 +329,7 @@ class Engine:
     self.learning_rate = learning_rate
     updates = []
     if self.network.loss == 'priori':
-      prior = train.calculate_priori()
+      prior = train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
     for param in self.network.gparams:
@@ -342,14 +342,14 @@ class Engine:
         upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
       updates.append((param, param + upd))
     updater = theano.function(inputs = [self.rate], updates = updates, name = "updater")
-    train_batches = self.set_batch_size(train, batch_size, batch_step, max_seqs)
+    train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
     tester = None
     #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
     #testing_device = self.devices[-1]
     training_devices = self.devices
     testing_device = self.devices[-1]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
-      trainer = TrainTaskThread(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
+      trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if False and len(self.devices) > 1:
           if tester.isAlive(): 
