@@ -47,7 +47,7 @@ class Dataset:
     self.chunk_size = int(chunking.split(':')[0])
     if ':' in chunking:
       self.chunk_step = int(chunking.split(':')[1])
-      assert self.chunk_step > 0, "chunking step must be positive" 
+      assert self.chunk_step > 0, "chunking step must be positive"
     else:
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
@@ -102,20 +102,20 @@ class Dataset:
         tmp = numpy.pad(tmp, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
         pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
         self.ctc_targets = numpy.pad(self.ctc_targets, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
-        self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))      
-      self.num_running_chars = numpy.sum(self.ctc_targets != -1)  
+        self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
+      self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     fin.close()
-    
+
   def sliding_window(self, xr):
     x = numpy.concatenate([self.zpad, xr, self.zpad])
     return ast(x,
                shape = (x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
                strides = (x.strides[0], x.strides[1] * self.num_inputs) + x.strides).reshape((xr.shape[0], self.num_inputs * self.window))
-    
+
   def preprocess(self, seq):
     return seq
-    
-  def _insert_alloc_interval(self, pos, value): 
+
+  def _insert_alloc_interval(self, pos, value):
     ci = self.alloc_intervals[pos][1]
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
@@ -142,7 +142,7 @@ class Dataset:
     else:
       self.alloc_intervals.insert(pos + 1, value + [numpy.zeros((self.seq_start[value[1]] - self.seq_start[value[0]], self.num_inputs * self.window), dtype = theano.config.floatX)])
       return 1
-    
+
   def _remove_alloc_interval(self, pos, value):
     ci = self.alloc_intervals[pos][0]
     ni = self.alloc_intervals[pos][1]
@@ -163,7 +163,7 @@ class Dataset:
       self.alloc_intervals.insert(pos, [ci, value[0], xi[:self.seq_start[value[0]] - self.seq_start[ci]]])
       del self.alloc_intervals[pos + 2]
       return 1
-    
+
   def _modify_alloc_intervals(self, start, end, invert):
     i = 0
     selection = []
@@ -191,12 +191,12 @@ class Dataset:
     if self.alloc_intervals[-1][1] != self.num_seqs:
       self.alloc_intervals.append([self.num_seqs,self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)])
     return selection
-  
+
   def insert_alloc_interval(self, start, end):
     return self._modify_alloc_intervals(start, end, True)
   def remove_alloc_interval(self, start, end):
     return self._modify_alloc_intervals(start, end, False)
-  
+
   def is_cached(self, start, end):
     s = 0
     e = len(self.alloc_intervals)
@@ -211,7 +211,7 @@ class Dataset:
         if e == i: return False
         e = i
     return False
-  
+
   def alloc_interval_index(self, ids):
     s = 0
     e = len(self.alloc_intervals)
@@ -226,7 +226,7 @@ class Dataset:
         if e == i: return -1
         e = i
     return -1
-  
+
   def delete(self, nframes):
     start = self.num_seqs
     deleted = 0
@@ -238,10 +238,10 @@ class Dataset:
         s = max(ai[0], self.num_cached)
         start = min(start, s)
         end = max(end, ai[1])
-        deleted += sum([self.seq_lengths[self.seq_index[i]] for i in self.remove_alloc_interval(s, ai[1])]) # len(self.remove_alloc_interval(s, ai[1])) 
+        deleted += sum([self.seq_lengths[self.seq_index[i]] for i in self.remove_alloc_interval(s, ai[1])]) # len(self.remove_alloc_interval(s, ai[1]))
       i += 1
     return deleted
-  
+
   def load_seqs(self, start, end, free = True, fill = True):
     if self.is_cached(start, end): return
     if self.cache_size > 0 and free:
@@ -298,11 +298,11 @@ class Dataset:
         x = inputs[p : p + l]
         x = self.preprocess(x)
         if self.window > 1:
-          x = self.sliding_window(x) 
+          x = self.sliding_window(x)
         self.alloc_intervals[idi][2][o:o + l] = x
       fin.close()
     gc.collect()
-    
+
   def set_batching(self, batching):
     self.batching = batching
     self.seq_index = range(self.num_seqs)
@@ -333,7 +333,7 @@ class Dataset:
     if num_cached > 0:
       self.load_seqs(0, num_cached, free = False)
     self.num_cached = num_cached
- 
+
   def initialize(self):
     self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
     if self.window > 1:
@@ -354,9 +354,9 @@ class Dataset:
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     self.theano_init = True
     return extra
-  
+
   def calculate_priori(self):
-    priori = numpy.zeros((self.num_outputs), dtype = theano.config.floatX)
+    priori = numpy.zeros((self.num_outputs,), dtype = theano.config.floatX)
     for i in xrange(self.num_seqs):
       self.load_seqs(i, i + 1)
       for t in self.targets[self.seq_start[i] : self.seq_start[i] + self.seq_lengths[self.seq_index[i]]]:
