@@ -321,7 +321,7 @@ class Engine:
     if dev_data: self.data["dev"] = dev_data
     if eval_data: self.data["eval"] = eval_data
     for name in self.data.keys():
-      self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_size)) # max(max(self.data[name].seq_lengths), batch_size)))
+      self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
     if momentum > 0:
       deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "deltas_%s"%p)) for p in self.network.gparams])
     if adagrad:
