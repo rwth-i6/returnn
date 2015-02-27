@@ -23,12 +23,12 @@ class Batch:
   def add_sequence(self, length): self.shape = self.try_sequence(length)
   def add_frames(self, length): self.shape = [self.shape[0] + length, max(self.shape[1], 1)]
   def size(self): return self.shape[0] * self.shape[1]
-  
+
 
 class TaskThread(threading.Thread):
     def __init__(self, task, network, devices, data, batches, start_batch = 0):
       threading.Thread.__init__(self)
-      self.start_batch = start_batch 
+      self.start_batch = start_batch
       self.devices = devices
       self.network = network
       self.batches = batches
@@ -37,7 +37,7 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.start()
-      
+
     def allocate_devices(self, start_batch):
       devices = []
       num_batches = start_batch
@@ -81,7 +81,7 @@ class TaskThread(threading.Thread):
         num_batches = device_batches
         devices.append(device)
       return devices, num_batches - start_batch
-      
+
     def evaluate(self, batch, result):
       self.result = result
     def initialize(self): pass
@@ -100,7 +100,7 @@ class TaskThread(threading.Thread):
         batch = num_batches
         run_time = time.time()
         for device in alloc_devices:
-          if self.network.recurrent: print >> log.v5, "running", device.data.shape[1], "sequences (" + str(device.data.shape[0] * device.data.shape[1]) + " nts)", 
+          if self.network.recurrent: print >> log.v5, "running", device.data.shape[1], "sequences (" + str(device.data.shape[0] * device.data.shape[1]) + " nts)",
           else: print >> log.v5, "running", device.data.shape[0], "frames",
           if device.num_batches == 1: print >> log.v5, "of batch", batch,
           else: print >> log.v5, "of batches", str(batch) + "-" + str(batch + device.num_batches - 1),
@@ -143,7 +143,7 @@ class TaskThread(threading.Thread):
         num_batches += num_alloc_batches
       self.finalize()
       self.elapsed = (time.time() - start_time)
-        
+
 
 class TrainTaskThread(TaskThread):
   def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
@@ -157,7 +157,7 @@ class TrainTaskThread(TaskThread):
 
   def initialize(self):
     self.score = 0
-    
+
   def evaluate(self, batch, result):
     if result == None:
       self.score = None
@@ -184,12 +184,12 @@ class EvalTaskThread(TaskThread):
       self.score = 0
       self.error = 0
     def evaluate(self, batch, result):
-      self.score += sum([res[0] for res in result]) 
+      self.score += sum([res[0] for res in result])
       self.error += sum([res[1] for res in result])
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)
-      
+
 
 class SprintCacheForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
@@ -202,7 +202,7 @@ class SprintCacheForwardTaskThread(TaskThread):
       features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
-        for i in xrange(len(features)): 
+        for i in xrange(len(features)):
           for j, label in enumerate(self.merge.keys()):
             for k in self.merge[label]:
               merged[i, j] += numpy.exp(features[i, k])
@@ -246,7 +246,7 @@ class HDFForwardTaskThread(TaskThread):
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
-        for i in xrange(len(features)): 
+        for i in xrange(len(features)):
           for j, label in enumerate(self.merge.keys()):
             for k in self.merge[label]:
               merged[i, j] += numpy.exp(features[i, k])
@@ -259,7 +259,7 @@ class HDFForwardTaskThread(TaskThread):
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
       self.tags.append(self.data.tags[self.data.seq_index[batch]])
-      
+
 
 class Engine:
   def __init__(self, devices, network):
@@ -267,12 +267,12 @@ class Engine:
     self.devices = devices
     self.gparams = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
     self.rate = T.scalar('r')
-    
+
   def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
     batches = []
     batch = Batch([0,0])
     if max_seqs == -1: max_seqs = data.num_seqs
-    if batch_step == -1: batch_step = batch_size 
+    if batch_step == -1: batch_step = batch_size
     s = 0
     while s < data.num_seqs:
       length = data.seq_lengths[data.seq_index[s]]
@@ -302,7 +302,7 @@ class Engine:
       s += 1
     batches.append(batch)
     return batches
-  
+
   def train_config(self, config, train_data, dev_data = None, eval_data = None, start_epoch = 0):
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
@@ -352,7 +352,7 @@ class Engine:
       trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if False and len(self.devices) > 1:
-          if tester.isAlive(): 
+          if tester.isAlive():
             #print >> log.v3, "warning: waiting for test score of previous epoch"
             tester.join()
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
@@ -381,7 +381,7 @@ class Engine:
     model = h5py.File(filename, "w")
     self.network.save(model, epoch)
     model.close()
-      
+
   def forward_to_sprint(self, device, data, cache_file, combine_labels = ''):
     cache = SprintCache.FileArchive(cache_file)
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
@@ -421,7 +421,7 @@ class Engine:
     forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
     forwarder.join()
     cache.close()
-  
+
   def classify(self, device, data, label_file):
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     num_data_batches = len(batches)
@@ -439,7 +439,7 @@ class Engine:
       num_batches += len(alloc_devices)
     out.close()
 
-  def analyze(self, device, data, statistics):      
+  def analyze(self, device, data, statistics):
     num_labels = len(data.labels)
     if "mle" in statistics:
       mle_labels = list(OrderedDict.fromkeys([ label.split('_')[0] for label in data.labels ]))
@@ -482,11 +482,11 @@ class Engine:
         for j in xrange(confusion_matrix.shape[1]):
           if i != j:
             if "mle" in statistics:
-              top.append([mle_labels[i] + " -> " + mle_labels[j], confusion_matrix[i,j]]) 
+              top.append([mle_labels[i] + " -> " + mle_labels[j], confusion_matrix[i,j]])
             else:
               top.append([data.labels[i] + " -> " + data.labels[j], confusion_matrix[i,j]])
       top.sort(key = lambda x: x[1], reverse = True)
       for i in xrange(n):
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
-      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps) 
+      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
