@@ -124,9 +124,15 @@ class Dataset:
     xc = self.alloc_intervals[pos][2]
     xn = self.alloc_intervals[pos + 1][2]
     if value[0] == ci and value[1] == ni:
-      self.alloc_intervals.insert(pos, [self.alloc_intervals[pos][0],
-                                        self.alloc_intervals[pos + 1][1],
-                                        numpy.concatenate([xc, numpy.zeros((self.seq_start[ni] - self.seq_start[ci], self.num_inputs * self.window), dtype = theano.config.floatX), xn])])
+      self.alloc_intervals.insert(pos,
+        [self.alloc_intervals[pos][0],
+         self.alloc_intervals[pos + 1][1],
+         numpy.concatenate(
+           [xc,
+            numpy.zeros(
+              (self.seq_start[ni] - self.seq_start[ci], self.num_inputs * self.window),
+              dtype=theano.config.floatX),
+            xn])])
       del self.alloc_intervals[pos + 1]
       del self.alloc_intervals[pos + 1]
       return 0
