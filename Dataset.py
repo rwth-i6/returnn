@@ -251,7 +251,7 @@ class Dataset:
       i += 1
     return deleted
 
-  def load_seqs(self, start, end, free = True, fill = True):
+  def load_seqs(self, start, end, free=True, fill=True):
     if self.is_cached(start, end): return
     if self.cache_size > 0 and free:
       weight = self.seq_start[end] - self.seq_start[start]
@@ -269,7 +269,7 @@ class Dataset:
             break
           self.temp_cache_size -= weight
           end += 1
-        self.load_seqs(start, end, False)
+        self.load_seqs(start, end, free=False)
         if end == self.num_seqs:
           end = self.num_cached
           while end < start:
@@ -279,7 +279,7 @@ class Dataset:
             self.temp_cache_size -= weight
             end += 1
           if end != self.num_cached:
-            self.load_seqs(self.num_cached, end, False)
+            self.load_seqs(self.num_cached, end, free=False)
         return
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
@@ -341,7 +341,7 @@ class Dataset:
        [self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)]]
     self.temp_cache_size -= self.cached_bytes
     if num_cached > 0:
-      self.load_seqs(0, num_cached, free = False)
+      self.load_seqs(0, num_cached, free=False)
     self.num_cached = num_cached
 
   def initialize(self):
