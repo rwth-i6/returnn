@@ -122,7 +122,7 @@ class TaskThread(threading.Thread):
         for device in alloc_devices:
           try: result = device.result()
           except RuntimeError: result = None
-          if result == None:
+          if result is None:
             print >> log.v2, "device", device.name, "crashed on batch", batch
             self.last_batch = batch
             self.score = -1
