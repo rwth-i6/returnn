@@ -291,6 +291,10 @@ class Device():
         self.input_queue.put(self.ctc_targets)
 
   def run(self, task, network):
+    """
+    :type network: LayerNetwork
+    :type task: str
+    """
     self.task = task
     self.update_data()
     if self.blocking:

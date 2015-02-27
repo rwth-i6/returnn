@@ -16,7 +16,7 @@ import Device
 
 class Batch:
   def __init__(self, start = (0, 0)):
-    self.shape = [0, 0]
+    self.shape = [0, 0]  # format (time,batch)
     self.start = list(start)
     self.nseqs = 1
   def try_sequence(self, length): return [max(self.shape[0], length), self.shape[1] + 1]
@@ -27,6 +27,14 @@ class Batch:
 
 class TaskThread(threading.Thread):
     def __init__(self, task, network, devices, data, batches, start_batch = 0):
+      """
+      :type task: str
+      :type network: Network.LayerNetwork
+      :type devices: list[Device.Device]
+      :type data: Dataset.Dataset
+      :type batches: list[Batch]
+      :type start_batch: int
+      """
       threading.Thread.__init__(self)
       self.start_batch = start_batch
       self.devices = devices
@@ -39,9 +47,13 @@ class TaskThread(threading.Thread):
       self.start()
 
     def allocate_devices(self, start_batch):
+      """
+      :rtype: (list[Device.Device], int)
+      """
       devices = []
       num_batches = start_batch
       for device in self.devices:
+        # The final device.data.shape is in format (time,batch,feature).
         shape = [0, 0]
         device_batches = min(num_batches + device.num_batches, len(self.batches))
         for batch in self.batches[num_batches : device_batches]:
