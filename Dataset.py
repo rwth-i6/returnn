@@ -334,8 +334,11 @@ class Dataset:
     gc.collect()
 
   def set_batching(self, batching):
+    """
+    :param str batching: batching type, "default" (= identity), "sorted" or "random"
+    """
     self.batching = batching
-    self.seq_index = range(self.num_seqs); """ :type: list[int] """
+    self.seq_index = range(self.num_seqs); """ :type: list[int]. the real seq idx after sorting """
     if self.batching == 'sorted':
       zipped = zip(self.seq_index, self.seq_lengths); """ :type: list[list[int]] """
       zipped.sort(key = lambda x: x[1])  # sort by length

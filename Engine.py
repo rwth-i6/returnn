@@ -17,12 +17,15 @@ import Device
 class Batch:
   """
   A batch can consists of several sequences (= segments).
-  Note that self.shape[1] is a different kind of batch - related to the data-batch-idx.
+  Note that self.shape[1] is a different kind of batch - related to the data-batch-idx (= seq-idx).
   """
 
   def __init__(self, start = (0, 0)):
+    """
+    :type start: list[int]
+    """
     self.shape = [0, 0]  # format (time,batch)
-    self.start = list(start)
+    self.start = list(start)  # format (start seq idx in data, start frame idx in seq)
     self.nseqs = 1  # number of sequences which we cover (not data-batches self.shape[1])
 
   def try_sequence(self, length):
@@ -102,7 +105,7 @@ class TaskThread(threading.Thread):
             self.data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
             idi = self.data.alloc_interval_index(batch.start[0])
             for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
-              ids = self.data.seq_index[s]
+              ids = self.data.seq_index[s]  # the real seq idx after sorting
               l = self.data.seq_lengths[ids]
               o = self.data.seq_start[s] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
               q = s - batch.start[0] + offset
