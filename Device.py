@@ -273,6 +273,17 @@ class Device():
         for output in result:
           output_queue.put(output)
 
+  def alloc_data(self, shape, max_ctc_length):
+    """
+    :param list[int] shape: format (time,batch,features)
+    """
+    import theano
+    self.data = numpy.zeros(shape, dtype=theano.config.floatX)
+    self.targets = numpy.zeros(shape[0:2], dtype=theano.config.floatX)
+    self.ctc_targets = numpy.zeros((shape[1], max_ctc_length), dtype=theano.config.floatX)
+    self.index = numpy.zeros(shape[0:2], dtype='int8')
+    self.tags = [None] * shape[1]  # TODO
+
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
     if self.blocking:

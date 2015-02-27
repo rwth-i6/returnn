@@ -59,11 +59,7 @@ class TaskThread(threading.Thread):
         for batch in self.batches[num_batches : device_batches]:
           shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
         if shape[1] == 0: break
-        device.data = numpy.zeros(shape + [self.data.num_inputs * self.data.window], dtype=theano.config.floatX)
-        device.targets = numpy.zeros(shape, dtype = theano.config.floatX)
-        device.ctc_targets = numpy.zeros((shape[1], self.data.max_ctc_length), dtype = theano.config.floatX)
-        device.index = numpy.zeros(shape, dtype = 'int8')
-        device.tags = [None] * shape[1] #TODO
+        device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length)
         offset = 0
         for batch in self.batches[num_batches : device_batches]:
           if self.network.recurrent:
