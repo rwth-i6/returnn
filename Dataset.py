@@ -39,9 +39,9 @@ class Dataset:
     self.file_seq_start = []
     self.timestamps = []
     self.file_index = []
-    self.seq_lengths = []
+    self.seq_lengths = []; """ :type: list[int] """
     self.labels = []
-    self.tags = []
+    self.tags = []; """ :type: list[str] """
     self.num_seqs = 0
     self.num_timesteps = 0
     self.chunk_size = int(chunking.split(':')[0])
@@ -56,12 +56,15 @@ class Dataset:
     self.ctc_targets = None
 
   def add_file(self, filename):
+    """
+    :type filename: str
+    """
     fin = h5py.File(filename, "r")
-    labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]
+    labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
     if not self.labels:
       self.labels = labels
     assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
-    tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]
+    tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     seq_start = [0]
     if 'times' in fin:

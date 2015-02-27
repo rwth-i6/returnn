@@ -11,7 +11,7 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 class Config:
   def __init__(self):
-    self.dict = {}
+    self.dict = {}; """ :type: dict[str, list[str]] """
 
   def load_file(self, filename):
     for line in open(filename).readlines():
@@ -34,6 +34,12 @@ class Config:
     self.dict[key] = value
 
   def value(self, key, default, index=0):
+    """
+    :type key: str
+    :type default: T
+    :type index: int
+    :rtype: str | T
+    """
     if key not in self.dict:
       return default
     return self.dict[key][index]
@@ -53,6 +59,11 @@ class Config:
     return float(self.value(key, default, index))
 
   def list(self, key, default=None):
+    """
+    :type key: str
+    :type default: T
+    :rtype: list[str] | T
+    """
     if default is None: default = []
     if key not in self.dict:
       return default

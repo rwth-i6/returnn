@@ -24,6 +24,13 @@ from optparse import OptionParser
 from SprintCommunicator import SprintCommunicator
 
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
+  """
+  :type config: Config
+  :type cache_size: int
+  :type key: str
+  :type chunking: str
+  :type batching: str
+  """
   window = config.int('window', 1)
   if chunking == "chunking": chunking = config.value("chunking", "0")
   if batching == "batching": batching = config.value("batching", 'default')
