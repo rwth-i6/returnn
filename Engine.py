@@ -25,7 +25,7 @@ class Batch:
   def size(self): return self.shape[0] * self.shape[1]
   
 
-class Process(threading.Thread):
+class TaskThread(threading.Thread):
     def __init__(self, task, network, devices, data, batches, start_batch = 0):
       threading.Thread.__init__(self)
       self.start_batch = start_batch 
@@ -145,9 +145,9 @@ class Process(threading.Thread):
       self.elapsed = (time.time() - start_time)
         
 
-class TrainProcess(Process):
+class TrainTaskThread(TaskThread):
   def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
-    super(TrainProcess, self).__init__('train', network, devices, data, batches, start_batch)
+    super(TrainTaskThread, self).__init__('train', network, devices, data, batches, start_batch)
     self.updater = updater
     self.learning_rate = learning_rate
     self.gparams = gparams
@@ -177,9 +177,9 @@ class TrainProcess(Process):
     self.score /= float(self.data.num_timesteps)
 
 
-class EvalProcess(Process):
+class EvalTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, start_batch = 0):
-      super(EvalProcess, self).__init__('eval', network, devices, data, batches, start_batch)
+      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, start_batch)
     def initialize(self):
       self.score = 0
       self.error = 0
@@ -191,9 +191,9 @@ class EvalProcess(Process):
       self.error /= float(self.data.num_timesteps)
       
 
-class SprintCacheForwardProcess(Process):
+class SprintCacheForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
-      super(SprintCacheForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
+      super(SprintCacheForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
       self.cache = cache
       self.merge = merge
     def initialize(self):
@@ -216,9 +216,9 @@ class SprintCacheForwardProcess(Process):
       self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
 
 
-class HDFForwardProcess(Process):
+class HDFForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
-      super(HDFForwardProcess, self).__init__('extract', network, devices, data, batches, start_batch)
+      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
       self.tags = []
       self.merge = merge
       self.cache = cache
@@ -349,7 +349,7 @@ class Engine:
     training_devices = self.devices
     testing_device = self.devices[-1]
     for epoch in xrange(start_epoch + 1, start_epoch + num_epochs + 1):
-      trainer = TrainProcess(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
+      trainer = TrainTaskThread(self.network, training_devices, train, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if False and len(self.devices) > 1:
           if tester.isAlive(): 
@@ -366,7 +366,7 @@ class Engine:
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]
-          tester = EvalProcess(self.network, [testing_device], data, num_batches)
+          tester = EvalTaskThread(self.network, [testing_device], data, num_batches)
           if True or len(self.devices) == 1:
             tester.join()
             trainer.elapsed += tester.elapsed
@@ -398,7 +398,7 @@ class Engine:
       for key in merge.keys():
         label_file.write(key + "\n")
       label_file.close()
-    forwarder = SprintCacheForwardProcess(self.network, self.devices, data, batches, cache, merge)
+    forwarder = SprintCacheForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
     forwarder.join()
     cache.finalize()
 
@@ -418,7 +418,7 @@ class Engine:
       for key in merge.keys():
         label_file.write(key + "\n")
       label_file.close()
-    forwarder = HDFForwardProcess(self.network, self.devices, data, batches, cache, merge)
+    forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
     forwarder.join()
     cache.close()
   
