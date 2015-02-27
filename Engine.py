@@ -48,9 +48,18 @@ class TaskThread(threading.Thread):
 
     def allocate_devices(self, start_batch):
       """
+      Sets the device data, i.e. the next batches, via self.batches.
+      This sets:
+        device.data
+        device.targets
+        device.ctc_targets
+        device.tags
+        device.index
+      :param int start_batch: start batch index, index of self.batches
       :rtype: (list[Device.Device], int)
+      :return list of used devices, and number of batches which were allocated
       """
-      devices = []
+      devices = []; """ :type: list[Device.Device] """
       num_batches = start_batch
       for device in self.devices:
         # The final device.data.shape is in format (time,batch,feature).
