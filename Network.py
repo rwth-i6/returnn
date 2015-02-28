@@ -18,8 +18,8 @@ from theano.ifelse import ifelse
 """
 class Container(object):
   def __init__(self, layer_class, name = ""):
-    self.params = {}
-    self.attrs = {}
+    self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
+    self.attrs = {}; """ :type: dict[str,object] """
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
 
@@ -50,14 +50,14 @@ class Container(object):
       self.attrs[p] = grp.attrs.get(p, None)
 
   def num_params(self):
-    return sum([numpy.prod(self.params[p].get_value(borrow = True, return_internal_type = True).shape[0:]) for p in self.params.keys()])
+    return sum([numpy.prod(v.get_value(borrow=True, return_internal_type=True).shape[0:]) for v in self.params.values()])
 
   def get_params(self):
-    return { p : self.params[p].get_value(borrow = True, return_internal_type = True) for p in self.params.keys() }
+    return {p: v.get_value(borrow=True, return_internal_type=True) for (p, v) in self.params.items()}
 
   def set_params(self, params):
-    for p in params.keys():
-      self.params[p].set_value(params[p], borrow = True)
+    for p, v in params.items():
+      self.params[p].set_value(v, borrow=True)
 
   def add_param(self, param, name = ""):
     if name == "": name = "param_%d" % len(self.params)
@@ -68,13 +68,13 @@ class Container(object):
     self.attrs[name] = value
 
   def create_bias(self, n, prefix = 'b'):
-    name = "%s_%s"%(prefix, self.name)
-    return theano.shared(value = numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name = name)
+    name = "%s_%s" % (prefix, self.name)
+    return theano.shared(value=numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name=name)
 
   def create_random_weights(self, n, m, s, name = None):
     if name is None: name = self.name
-    values = numpy.asarray(self.rng.normal(loc = 0.0, scale = s, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value = values, borrow = True, name = name)
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=s, size=(n, m)), dtype=theano.config.floatX)
+    return theano.shared(value=values, borrow=True, name=name)
 
   def create_uniform_weights(self, n, m, p = 0, name = None):
     if name is None: name = 'W_' + self.name
@@ -102,6 +102,17 @@ class Container(object):
 
 class Layer(Container):
   def __init__(self, sources, n_out, L1, L2, layer_class, mask = "unity", dropout = 0, name = ""):
+    """
+    :param sources:
+    :param n_out:
+    :param L1:
+    :param L2:
+    :param layer_class:
+    :param str mask: "unity" or "dropout"
+    :type dropout: float
+    :type name: str
+    :return:
+    """
     super(Layer, self).__init__(layer_class, name = name)
     self.sources = sources
     self.num_sources = len(sources)
@@ -819,19 +830,29 @@ class LstmPeepholeLayer(LstmLayer):
 """
 
 class LayerNetwork(object):
-  def __init__(self, n_in, n_out, mask = "unity"):
+  def __init__(self, n_in, n_out, mask="unity"):
+    """
+    :param int n_in: input dim of the network
+    :param int n_out: output dim of the network
+    :param str mask: e.g. "unity"
+    """
     self.x = T.tensor3('x')
     self.y = T.ivector('y')
     self.c = T.imatrix('c')
     self.i = T.bmatrix('i')
     Layer.initialize()
-    self.hidden_info = []
+    self.hidden_info = []; """ :type: list[(str,int,str,str)]. (layer_type, size, activation, name) """
     self.n_in = n_in
     self.n_out = n_out
     self.mask = mask
 
   @classmethod
-  def from_config(cls, config, mask = "unity"):
+  def from_config(cls, config, mask="unity"):
+    """
+    :type config: Config.Config
+    :param str mask: e.g. "unity"
+    :rtype: LayerNetwork
+    """
     num_inputs = config.int('num_inputs', 0)
     num_outputs = config.int('num_outputs', 0)
     if config.list('train'):
@@ -954,6 +975,11 @@ class LayerNetwork(object):
 
   @classmethod
   def from_model(cls, model, mask = "unity"):
+    """
+    :param object model: with attribs
+    :param str mask: e.g. "unity"
+    :rtype: LayerNetwork
+    """
     grp = model['training']
     if mask == None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
@@ -1006,7 +1032,13 @@ class LayerNetwork(object):
     network.make_classifier(sources, loss, model[output].attrs['dropout'])
     return network
 
-  def add_hidden(self, name, size, layer_type = 'forward', activation = ("tanh", T.tanh)):
+  def add_hidden(self, name, size, layer_type='forward', activation=("tanh", T.tanh)):
+    """
+    :param str name: name of the hidden layer
+    :param int size: hidden size
+    :param str layer_type: 'forward'
+    :param (str,function) activation: activation function
+    """
     self.hidden_info.append((layer_type, size, activation, name))
 
   def add_layer(self, name, layer, activation):
@@ -1020,7 +1052,13 @@ class LayerNetwork(object):
       if self.hidden[name].attrs['L2'] > 0.0: self.L2 += self.hidden[name].attrs['L2'] * (W ** 2).sum()
     self.params += self.hidden[name].params.values()
 
-  def make_classifier(self, sources, loss, dropout = 0, mask = "unity"):
+  def make_classifier(self, sources, loss, dropout=0, mask="unity"):
+    """
+    :param sources:
+    :param str loss: loss type, "ce", "ctc" etc
+    :type dropout: float
+    :param str mask: e.g. "unity"
+    """
     self.gparams = self.params[:]
     self.loss = loss
     if loss in ('ctc','sprint','sprint_smoothed'):

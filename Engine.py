@@ -385,7 +385,7 @@ class Engine:
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
     :type momentum: float
-    :type model:
+    :param str model: model filename (prefix)
     :type interval: int
     :type start_epoch: int
     :type start_batch: int
