@@ -13,14 +13,13 @@ import random
 from numpy.lib.stride_tricks import as_strided as ast
 import h5py
 from Log import log
-from Util import cmd
-import SprintCache
 import theano
 import theano.tensor as T
 import gc
 
+
 class Dataset:
-  def __init__(self, window = 1, cache_size = 0, chunking = "0", batching = 'default'):
+  def __init__(self, window=1, cache_size=0, chunking="0", batching='default'):
     self.files = []; """ :type: list[str] """
     self.num_inputs = 0
     self.num_outputs = 0
