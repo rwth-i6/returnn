@@ -17,7 +17,11 @@ from theano.ifelse import ifelse
         META LAYER
 """
 class Container(object):
-  def __init__(self, layer_class, name = ""):
+  def __init__(self, layer_class, name=""):
+    """
+    :param str layer_class: name of layer type, e.g. "hidden"
+    :param str name: custom layer name, e.g. "hidden_2"
+    """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,object] """
     self.layer_class = layer_class.encode("utf8")
@@ -28,6 +32,9 @@ class Container(object):
     Layer.rng = numpy.random.RandomState(1234)
 
   def save(self, head):
+    """
+    :type head: h5py.File
+    """
     grp = head.create_group(self.name)
     grp.attrs['class'] = self.layer_class
     for p in self.params.keys():
@@ -103,16 +110,16 @@ class Container(object):
 class Layer(Container):
   def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
     """
-    :param sources:
+    :param list[Layer] sources: list of source layers
     :param int n_out: output dim
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
-    :param str layer_class: name of layer type
+    :param str layer_class: name of layer type, e.g. "hidden"
     :param str mask: "unity" or "dropout"
     :type dropout: float
-    :type name: str
+    :param str name: custom layer name, e.g. "hidden_2"
     """
-    super(Layer, self).__init__(layer_class, name = name)
+    super(Layer, self).__init__(layer_class, name=name)
     self.sources = sources
     self.num_sources = len(sources)
     self.set_attr('mask', mask)
@@ -258,7 +265,7 @@ class SequenceOutputLayer(OutputLayer):
 class HiddenLayer(Layer):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, activation=T.tanh, dropout=0.0, mask="unity", connection="full", layer_class="hidden", name=""):
     """
-    :param sources:
+    :param list[Layer] sources: list of source layers
     :type n_out: int
     :type L1: float
     :type L2: float
@@ -269,7 +276,7 @@ class HiddenLayer(Layer):
     :param str layer_class: layer class name
     :param str name: name
     """
-    super(HiddenLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
+    super(HiddenLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name=name)
     self.activation = activation
     self.W_in = [ self.add_param(self.create_forward_weights(s.attrs['n_out'], self.attrs['n_out'], name = self.name + "_" + s.name), "W_in_%s_%s"%(s.name, self.name)) for s in sources ]
     self.set_attr('from', ",".join([s.name for s in sources]))
@@ -1101,7 +1108,7 @@ class LayerNetwork(object):
     #self.jacobian = T.jacobian(self.output.z, self.x)
 
   def initialize(self, loss, L1_reg, L2_reg, dropout=(), bidirectional=True, truncation=-1, sharpgates='none', entropy=0):
-    self.hidden = {}
+    self.hidden = {}; """ :type: dict[str,Layer] """
     self.params = []
     n_in = self.n_in
     x_in = self.x
