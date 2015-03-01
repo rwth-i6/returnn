@@ -101,17 +101,16 @@ class Container(object):
     return attrs
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1, L2, layer_class, mask = "unity", dropout = 0, name = ""):
+  def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
     """
     :param sources:
-    :param n_out:
-    :param L1:
-    :param L2:
-    :param layer_class:
+    :param int n_out: output dim
+    :param float L1: l1-param-norm regularization
+    :param float L2: l2-param-norm regularization
+    :param str layer_class: name of layer type
     :param str mask: "unity" or "dropout"
     :type dropout: float
     :type name: str
-    :return:
     """
     super(Layer, self).__init__(layer_class, name = name)
     self.sources = sources
@@ -154,7 +153,7 @@ class SourceLayer(Container):
 """
 
 class OutputLayer(Layer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
+  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
     super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
     self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out, name = "W_in_%s_%s"%(source.name, self.name)), "W_in_%s_%s"%(source.name, self.name)) for source in sources ]
@@ -179,8 +178,8 @@ class OutputLayer(Layer):
     else: raise NotImplementedError()
 
 class FramewiseOutputLayer(OutputLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = ""):
-    super(FramewiseOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
+  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
+    super(FramewiseOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name=name)
     self.initialize()
 
   def initialize(self):
@@ -209,7 +208,7 @@ class FramewiseOutputLayer(OutputLayer):
     else: assert False
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, loss = 'ce', dropout = 0, mask = "unity", layer_class = "softmax", name = "", prior_scale = 0.0, log_prior = None, ce_smoothing = 0.0):
+  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name="", prior_scale=0.0, log_prior=None, ce_smoothing=0.0):
     super(SequenceOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
     self.prior_scale = prior_scale
     self.log_prior = log_prior
@@ -257,7 +256,19 @@ class SequenceOutputLayer(OutputLayer):
 """
 
 class HiddenLayer(Layer):
-  def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", connection = "full", layer_class = "hidden", name = ""):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, activation=T.tanh, dropout=0.0, mask="unity", connection="full", layer_class="hidden", name=""):
+    """
+    :param sources:
+    :type n_out: int
+    :type L1: float
+    :type L2: float
+    :type activation: theano.Op
+    :type dropout: float
+    :param str mask: mask
+    :param str connection: unused
+    :param str layer_class: layer class name
+    :param str name: name
+    """
     super(HiddenLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.activation = activation
     self.W_in = [ self.add_param(self.create_forward_weights(s.attrs['n_out'], self.attrs['n_out'], name = self.name + "_" + s.name), "W_in_%s_%s"%(s.name, self.name)) for s in sources ]
@@ -841,7 +852,13 @@ class LayerNetwork(object):
     self.c = T.imatrix('c')
     self.i = T.bmatrix('i')
     Layer.initialize()
-    self.hidden_info = []; """ :type: list[(str,int,str,str)]. (layer_type, size, activation, name) """
+    self.hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
+    """
+    That represents (layer_type, size, activation, name),
+    where activation is either a list of activation functions or a single one.
+    Such activation function is a tuple (str,theano.Op).
+    name is a custom name for the layer, such as "hidden_2".
+    """
     self.n_in = n_in
     self.n_out = n_out
     self.mask = mask
@@ -905,7 +922,7 @@ class LayerNetwork(object):
     network = cls(num_inputs, num_outputs, mask)
     for i in xrange(len(hidden_size)):
       if ':' in actfct[i]:
-        acts = []
+        acts = []; """ :type: list[(str,theano.Op)] """
         for a in actfct[i].split(':'):
           acts.append((a, strtoact(a)))
       else:
@@ -922,7 +939,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask = None):
+  def from_json(cls, json_content, n_in, n_out, mask=None):
     network = cls(n_in, n_out, mask)
     try:
       topology = json.loads(json_content)
@@ -974,9 +991,9 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_model(cls, model, mask = "unity"):
+  def from_model(cls, model, mask="unity"):
     """
-    :param object model: with attribs
+    :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
@@ -1034,14 +1051,19 @@ class LayerNetwork(object):
 
   def add_hidden(self, name, size, layer_type='forward', activation=("tanh", T.tanh)):
     """
-    :param str name: name of the hidden layer
+    :param str name: custom name of the hidden layer, such as "hidden_2"
     :param int size: hidden size
     :param str layer_type: 'forward'
-    :param (str,function) activation: activation function
+    :param (str,theano.Op) activation: activation function
     """
     self.hidden_info.append((layer_type, size, activation, name))
 
   def add_layer(self, name, layer, activation):
+    """
+    :type name: str
+    :type layer: Layer
+    :param str activation: activation function name
+    """
     self.hidden[name] = layer
     self.hidden[name].set_attr('activation', activation)
     if isinstance(layer, RecurrentLayer):
@@ -1062,9 +1084,9 @@ class LayerNetwork(object):
     self.gparams = self.params[:]
     self.loss = loss
     if loss in ('ctc','sprint','sprint_smoothed'):
-      self.output = SequenceOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
+      self.output = SequenceOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
     else:
-      self.output = FramewiseOutputLayer(sources = sources, index = self.i, n_out = self.n_out, loss = loss, dropout = dropout, mask = mask, name = "output")
+      self.output = FramewiseOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
     for W in self.output.W_in:
       if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
       if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
@@ -1078,7 +1100,7 @@ class LayerNetwork(object):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
 
-  def initialize(self, loss, L1_reg, L2_reg, dropout = (), bidirectional = True, truncation = -1, sharpgates = 'none', entropy = 0):
+  def initialize(self, loss, L1_reg, L2_reg, dropout=(), bidirectional=True, truncation=-1, sharpgates='none', entropy=0):
     self.hidden = {}
     self.params = []
     n_in = self.n_in
@@ -1096,7 +1118,7 @@ class LayerNetwork(object):
       #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
       params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
-      name = params['name']
+      name = params['name']; """ :type: str """
       if info[0] == 'forward':
         self.add_layer(name, ForwardLayer(**params), info[2][0])
       else:
@@ -1174,6 +1196,10 @@ class LayerNetwork(object):
       self.hidden[h].set_params(params[h])
 
   def save(self, model, epoch):
+    """
+    :type model: h5py.File
+    :type epoch: int
+    """
     grp = model.create_group('training')
     model.attrs['epoch'] = epoch
     model.attrs['output'] = self.output.name

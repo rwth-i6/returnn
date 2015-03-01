@@ -24,6 +24,10 @@ def hdf5_strings(handle, name, data):
   dset[...] = data
 
 def strtoact(act):
+  """
+  :param str act: activation function name
+  :rtype: theano.Op
+  """
   import theano.tensor as T
   activations = { 'logistic' : T.nnet.sigmoid,
                   'tanh' : T.tanh,
