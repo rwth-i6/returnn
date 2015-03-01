@@ -197,9 +197,16 @@ class OutputLayer(Layer):
     if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
 
   def entropy(self):
+    """
+    :rtype: theano.Variable
+    """
     return -T.sum(self.p_y_given_x[self.i] * T.log(self.p_y_given_x[self.i]))
 
   def errors(self, y):
+    """
+    :type y: theano.Variable
+    :rtype: theano.Variable
+    """
     if y.dtype.startswith('int'):
       return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
     else: raise NotImplementedError()
@@ -874,9 +881,9 @@ class LayerNetwork(object):
     :param int n_out: output dim of the network
     :param str mask: e.g. "unity"
     """
-    self.x = T.tensor3('x')
-    self.y = T.ivector('y')
-    self.c = T.imatrix('c')
+    self.x = T.tensor3('x'); """ :type: theano.Variable """
+    self.y = T.ivector('y'); """ :type: theano.Variable """
+    self.c = T.imatrix('c'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
     Layer.initialize()
     self.hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
@@ -1108,7 +1115,7 @@ class LayerNetwork(object):
     :type dropout: float
     :param str mask: e.g. "unity"
     """
-    self.gparams = self.params[:]
+    self.gparams = self.params[:]; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.loss = loss
     if loss in ('ctc','sprint','sprint_smoothed'):
       self.output = SequenceOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")

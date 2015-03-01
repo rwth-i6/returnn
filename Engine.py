@@ -194,13 +194,23 @@ class TaskThread(threading.Thread):
 
 class TrainTaskThread(TaskThread):
   def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
+    """
+    :type network: Network.LayerNetwork
+    :type devices: list[Device.Device]
+    :type data: Dataset.Dataset
+    :type batches: list[Batch]
+    :type learning_rate: float
+    :type gparams: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable]
+    :type updater: theano.Function
+    :type start_batch: int
+    """
     super(TrainTaskThread, self).__init__('train', network, devices, data, batches, start_batch)
     self.updater = updater
     self.learning_rate = learning_rate
     self.gparams = gparams
-    self.zparams = {}
-    for p in gparams:
-      self.zparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
+    self.zparams = {}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,numpy.array] """
+    for p in gparams.keys():
+      self.zparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
 
   def initialize(self):
     self.score = 0
@@ -316,7 +326,7 @@ class Engine:
     """
     self.network = network
     self.devices = devices
-    self.gparams = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX))) for p in self.network.gparams])
+    self.gparams = {p: theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX)) for p in self.network.gparams}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] """
     self.rate = T.scalar('r')
 
   def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
