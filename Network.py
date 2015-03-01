@@ -23,7 +23,7 @@ class Container(object):
     :param str name: custom layer name, e.g. "hidden_2"
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
-    self.attrs = {}; """ :type: dict[str,object] """
+    self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
 
@@ -66,7 +66,12 @@ class Container(object):
     for p, v in params.items():
       self.params[p].set_value(v, borrow=True)
 
-  def add_param(self, param, name = ""):
+  def add_param(self, param, name=""):
+    """
+    :type param: T
+    :type name: str
+    :rtype: T
+    """
     if name == "": name = "param_%d" % len(self.params)
     self.params[name] = param
     return param
@@ -161,6 +166,18 @@ class SourceLayer(Container):
 
 class OutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
+    """
+    :param list[Layer] sources: list of source layers
+    :param theano.Variable index: index for batches
+    :param int n_out: output dim
+    :param float L1: l1-param-norm regularization
+    :param float L2: l2-param-norm regularization
+    :param str loss: e.g. 'ce'
+    :type dropout: float
+    :param str mask: "unity" or "dropout"
+    :param str layer_class: name of layer type, e.g. "hidden"
+    :param str name: custom layer name, e.g. "hidden_2"
+    """
     super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
     self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out, name = "W_in_%s_%s"%(source.name, self.name)), "W_in_%s_%s"%(source.name, self.name)) for source in sources ]
@@ -857,7 +874,7 @@ class LayerNetwork(object):
     self.x = T.tensor3('x')
     self.y = T.ivector('y')
     self.c = T.imatrix('c')
-    self.i = T.bmatrix('i')
+    self.i = T.bmatrix('i'); """ :type: theano.Variable """
     Layer.initialize()
     self.hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
     """
