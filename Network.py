@@ -48,6 +48,9 @@ class Container(object):
         print >> log.v3, "invalid type of attribute", "\"" + p + "\"", "(" + str(type(self.attrs[p])) + ")", "in layer", self.name
 
   def load(self, head):
+    """
+    :type head: h5py.File
+    """
     grp = head[self.name]
     assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
@@ -1100,7 +1103,7 @@ class LayerNetwork(object):
 
   def make_classifier(self, sources, loss, dropout=0, mask="unity"):
     """
-    :param sources:
+    :param list[Layer] sources: source layers
     :param str loss: loss type, "ce", "ctc" etc
     :type dropout: float
     :param str mask: e.g. "unity"
@@ -1126,7 +1129,7 @@ class LayerNetwork(object):
 
   def initialize(self, loss, L1_reg, L2_reg, dropout=(), bidirectional=True, truncation=-1, sharpgates='none', entropy=0):
     self.hidden = {}; """ :type: dict[str,Layer] """
-    self.params = []
+    self.params = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     n_in = self.n_in
     x_in = self.x
     self.L1 = T.constant(0)
@@ -1242,6 +1245,9 @@ class LayerNetwork(object):
     return str(out)
 
   def load(self, model):
+    """
+    :type model: h5py.File
+    """
     epoch = model.attrs['epoch']
     for name in self.hidden:
       if not name in model:
