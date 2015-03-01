@@ -325,7 +325,7 @@ class Engine:
     :type batch_size: int
     :type batch_step: int
     :type max_seqs: int
-    :rtype list[Batch]
+    :rtype: list[Batch]
     """
     batches = []
     batch = Batch([0,0])
@@ -392,12 +392,12 @@ class Engine:
     :type max_seqs: int
     :type adagrad: bool
     """
-    self.data = {}
-    """ :type: dict[str,Dataset.Dataset] """
-    if dev_data: self.data["dev"] = dev_data
-    if eval_data: self.data["eval"] = eval_data
-    for name in self.data.keys():
-      self.data[name] = (self.data[name], self.set_batch_size(self.data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
+    data = {}; """ :type: dict[str,Dataset.Dataset] """
+    if dev_data: data["dev"] = dev_data
+    if eval_data: data["eval"] = eval_data
+    self.data = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
+    for name in data.keys():
+      self.data[name] = (data[name], self.set_batch_size(data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
     if momentum > 0:
       deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "deltas_%s"%p)) for p in self.network.gparams])
     if adagrad:
@@ -454,6 +454,10 @@ class Engine:
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
 
   def save_model(self, filename, epoch):
+    """
+    :param str filename: full filename for model
+    :param int epoch: save epoch idx
+    """
     model = h5py.File(filename, "w")
     self.network.save(model, epoch)
     model.close()
