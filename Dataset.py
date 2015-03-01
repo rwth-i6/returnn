@@ -32,13 +32,13 @@ class Dataset:
     else: self.temp_cache_size = cache_size - self.cache_size
     self.num_cached = 0
     self.cached_bytes = 0
-    self.seq_start = [0]
+    self.seq_start = [0]  # uses sorted seq idx, see set_batching()
     self.seq_shift = [0]
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.timestamps = []
     self.file_index = []; """ :type: list[int] """
-    self.seq_lengths = []; """ :type: list[int] """
+    self.seq_lengths = []; """ :type: list[int] """  # uses real seq idx
     self.labels = []; """ :type: list[str] """
     self.tags = []; """ :type: list[str] """
     self.num_seqs = 0
@@ -226,6 +226,11 @@ class Dataset:
     return False
 
   def alloc_interval_index(self, ids):
+    """
+    :param int ids: index of ...
+    :return index in self.alloc_intervals
+    :rtype: int
+    """
     s = 0
     e = len(self.alloc_intervals)
     while s < e:
@@ -303,7 +308,8 @@ class Dataset:
         return
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
-    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[list[int]] """
+    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[(int,int)] """
+    # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
       ids = self.seq_index[idc]
       file_info[self.file_index[ids]].append((idc,ids))
@@ -346,7 +352,7 @@ class Dataset:
       random.shuffle(self.seq_index)
     else:
       assert self.batching == 'default', "invalid batching specified: " + self.batching
-    self.seq_start = [0]
+    self.seq_start = [0]  # idx like in seq_index, *not* real idx
     self.transcription_start = [0]
     self.cached_bytes = 0
     num_cached = self.num_seqs
@@ -363,6 +369,10 @@ class Dataset:
     self.alloc_intervals = \
       [[0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)],
        [self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)]]
+    """ :type: list[(int,int,numpy.array)] """
+    # self.alloc_intervals[i] is (idx start, idx end, data), where
+    # idx start/end is the sorted seq idx start/end, end exclusive,
+    # and data is a numpy.array.
     self.temp_cache_size -= self.cached_bytes
     if num_cached > 0:
       self.load_seqs(0, num_cached, free=False)
