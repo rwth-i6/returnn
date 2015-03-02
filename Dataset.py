@@ -56,6 +56,12 @@ class Dataset:
 
   def add_file(self, filename):
     """
+    Setups data:
+      self.seq_lengths
+      self.file_index
+      self.file_start
+      self.file_seq_start
+    Use load_seqs() to load the actual data.
     :type filename: str
     """
     fin = h5py.File(filename, "r")
@@ -109,12 +115,20 @@ class Dataset:
     fin.close()
 
   def sliding_window(self, xr):
+    """
+    :type xr: numpy.ndarray
+    :rtype: numpy.ndarray
+    """
     x = numpy.concatenate([self.zpad, xr, self.zpad])
     return ast(x,
                shape = (x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
                strides = (x.strides[0], x.strides[1] * self.num_inputs) + x.strides).reshape((xr.shape[0], self.num_inputs * self.window))
 
   def preprocess(self, seq):
+    """
+    :type xr: numpy.ndarray
+    :rtype: numpy.ndarray
+    """
     return seq
 
   def _insert_alloc_interval(self, pos, value):
@@ -337,7 +351,7 @@ class Dataset:
         continue
       print >> log.v4, "loading file", self.files[i]
       fin = h5py.File(self.files[i], 'r')
-      inputs = fin['inputs'][...]
+      inputs = fin['inputs'][...]; """ :type: numpy.ndarray """
       if 'targetClasses' in fin:
         targs = fin['targetClasses'][...]
       for idc, ids in file_info[i]:
@@ -347,7 +361,7 @@ class Dataset:
         o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
         l = self.seq_lengths[ids]
         if 'targetClasses' in fin:
-          y = targs[p : p + l]; """ :type: int """
+          y = targs[p : p + l]; """ :type: list[int] """
           self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
         x = inputs[p : p + l]
         x = self.preprocess(x)
@@ -359,6 +373,9 @@ class Dataset:
 
   def set_batching(self, batching):
     """
+    Initialize lists:
+      self.seq_start
+      self.seq_index  # sorted seq idx
     :param str batching: batching type, "default" (= identity), "sorted" or "random"
     """
     self.batching = batching
