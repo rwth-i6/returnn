@@ -118,61 +118,80 @@ class Dataset:
     return seq
 
   def _insert_alloc_interval(self, pos, value):
+    """
+    :param int pos: idx in self.alloc_intervals
+    :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
+    :rtype: int
+    """
     ci = self.alloc_intervals[pos][1]
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
     xn = self.alloc_intervals[pos + 1][2]
     if value[0] == ci and value[1] == ni:
       self.alloc_intervals.insert(pos,
-        [self.alloc_intervals[pos][0],
+        (self.alloc_intervals[pos][0],
          self.alloc_intervals[pos + 1][1],
          numpy.concatenate(
            [xc,
             numpy.zeros(
               (self.seq_start[ni] - self.seq_start[ci], self.num_inputs * self.window),
               dtype=theano.config.floatX),
-            xn])])
+            xn])))
       del self.alloc_intervals[pos + 1]
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[0] == ci:
-      self.alloc_intervals.insert(pos, [self.alloc_intervals[pos][0],
+      self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
                                         value[1],
-                                        numpy.concatenate([xc, numpy.zeros((self.seq_start[value[1]] - self.seq_start[ci], self.num_inputs * self.window), dtype = theano.config.floatX)])])
+                                        numpy.concatenate([xc, numpy.zeros((self.seq_start[value[1]] - self.seq_start[ci], self.num_inputs * self.window), dtype=theano.config.floatX)])))
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
-      self.alloc_intervals.insert(pos + 1, [value[0],
+      self.alloc_intervals.insert(pos + 1, (value[0],
                                             self.alloc_intervals[pos + 1][1],
-                                            numpy.concatenate([numpy.zeros((self.seq_start[ni] - self.seq_start[value[0]], self.num_inputs * self.window), dtype = theano.config.floatX), xc])])
+                                            numpy.concatenate([numpy.zeros((self.seq_start[ni] - self.seq_start[value[0]], self.num_inputs * self.window), dtype=theano.config.floatX), xc])))
       del self.alloc_intervals[pos + 2]
       return 0
     else:
-      self.alloc_intervals.insert(pos + 1, value + [numpy.zeros((self.seq_start[value[1]] - self.seq_start[value[0]], self.num_inputs * self.window), dtype = theano.config.floatX)])
+      self.alloc_intervals.insert(pos + 1,
+        value + (numpy.zeros(
+            (self.seq_start[value[1]] - self.seq_start[value[0]],
+             self.num_inputs * self.window),
+            dtype=theano.config.floatX),))
       return 1
 
   def _remove_alloc_interval(self, pos, value):
-    ci = self.alloc_intervals[pos][0]
-    ni = self.alloc_intervals[pos][1]
-    xi = self.alloc_intervals[pos][2]
+    """
+    :param int pos: idx in self.alloc_intervals
+    :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
+    :rtype: int
+    """
+    ci, ni, xi = self.alloc_intervals[pos]
     if value[0] == ci and value[1] == ni:
       del self.alloc_intervals[pos]
       return -1
     elif value[0] == ci:
-      self.alloc_intervals.insert(pos, [value[1], ni, xi[self.seq_start[value[1]] - self.seq_start[ci]:]])
+      self.alloc_intervals.insert(pos, (value[1], ni, xi[self.seq_start[value[1]] - self.seq_start[ci]:]))
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
-      self.alloc_intervals.insert(pos, [ci, value[0], xi[:self.seq_start[value[0]] - self.seq_start[ci]]])
+      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self.seq_start[value[0]] - self.seq_start[ci]]))
       del self.alloc_intervals[pos + 1]
       return 0
     else:
-      self.alloc_intervals.insert(pos, [value[1], ni, xi[self.seq_start[value[1]] - self.seq_start[ci]:]])
-      self.alloc_intervals.insert(pos, [ci, value[0], xi[:self.seq_start[value[0]] - self.seq_start[ci]]])
+      self.alloc_intervals.insert(pos, (value[1], ni, xi[self.seq_start[value[1]] - self.seq_start[ci]:]))
+      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self.seq_start[value[0]] - self.seq_start[ci]]))
       del self.alloc_intervals[pos + 2]
       return 1
 
   def _modify_alloc_intervals(self, start, end, invert):
+    """
+    :param int start: like in load_seqs(), sorted seq idx
+    :param int end: like in load_seqs(), sorted seq idx
+    :param bool invert: True->insert, False->remove
+    :rtype: list[int]
+    :return selection list
+    """
     i = 0
     selection = []; """ :type: list[int] """
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
@@ -180,24 +199,24 @@ class Dataset:
       ni = self.alloc_intervals[i + invert][1 - invert]
       if ni >= self.num_cached:
         ci = max(self.num_cached, self.alloc_intervals[i][invert])
-        flag = [ (start >= ci and start < ni), (end > ci and end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end) ]
+        flag = ( (ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end) )
         if not flag[0] and not flag[1]:
           if not flag[2]:
             selection.extend(range(ci, ni))
-            i += modify(i, [ci, ni])
+            i += modify(i, (ci, ni))
         elif flag[1]:
-          v = [ start if flag[0] else ci, end]
+          v = (start if flag[0] else ci, end)
           selection.extend(range(v[0], v[1]))
           i += modify(i, v)
           break
         elif flag[0]:
           selection.extend(range(start, ni))
-          i += modify(i, [start, ni])
+          i += modify(i, (start, ni))
       i += 1
     if self.alloc_intervals[0][0] != 0:
-      self.alloc_intervals.insert(0, [0,0, numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)])
+      self.alloc_intervals.insert(0, (0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
     if self.alloc_intervals[-1][1] != self.num_seqs:
-      self.alloc_intervals.append([self.num_seqs,self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype = theano.config.floatX)])
+      self.alloc_intervals.append((self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
     return selection
 
   def insert_alloc_interval(self, start, end):
@@ -207,16 +226,16 @@ class Dataset:
 
   def is_cached(self, start, end):
     """
-    :param int start: start
-    :param int end: start
+    :param int start: like in load_seqs(), sorted seq idx
+    :param int end: like in load_seqs(), sorted seq idx
     :rtype: bool
     """
     s = 0
     e = len(self.alloc_intervals)
     while s < e:
       i = (s + e) / 2
-      if self.alloc_intervals[i][0] <= start and start < self.alloc_intervals[i][1]:
-        return self.alloc_intervals[i][0] < end and end <= self.alloc_intervals[i][1]
+      if self.alloc_intervals[i][0] <= start < self.alloc_intervals[i][1]:
+        return self.alloc_intervals[i][0] < end <= self.alloc_intervals[i][1]
       elif self.alloc_intervals[i][0] <= start:
         if s == i: return False
         s = i
@@ -235,7 +254,7 @@ class Dataset:
     e = len(self.alloc_intervals)
     while s < e:
       i = (s + e) / 2
-      if self.alloc_intervals[i][0] <= ids and ids < self.alloc_intervals[i][1]:
+      if self.alloc_intervals[i][0] <= ids < self.alloc_intervals[i][1]:
         return i
       elif self.alloc_intervals[i][0] <= ids:
         if s == i: return -1
@@ -272,8 +291,8 @@ class Dataset:
       self.alloc_intervals
       self.targets
 
-    :param int start: start
-    :param int end: end
+    :param int start: start sorted seq idx
+    :param int end: end sorted seq idx
     :param bool free: free
     :param bool fill: fill
     """
@@ -367,9 +386,8 @@ class Dataset:
           self.cached_bytes += nbytes
     self.temp_cache_size += self.cached_bytes
     self.alloc_intervals = \
-      [[0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)],
-       [self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)]]
-    """ :type: list[(int,int,numpy.array)] """
+      [(0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)),
+       (self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX))]
     # self.alloc_intervals[i] is (idx start, idx end, data), where
     # idx start/end is the sorted seq idx start/end, end exclusive,
     # and data is a numpy.array.
