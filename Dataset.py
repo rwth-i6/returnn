@@ -10,7 +10,6 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 import numpy
 import random
-from numpy.lib.stride_tricks import as_strided as ast
 import h5py
 from Log import log
 import theano
@@ -119,10 +118,12 @@ class Dataset:
     :type xr: numpy.ndarray
     :rtype: numpy.ndarray
     """
+    from numpy.lib.stride_tricks import as_strided as ast
     x = numpy.concatenate([self.zpad, xr, self.zpad])
     return ast(x,
-               shape = (x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
-               strides = (x.strides[0], x.strides[1] * self.num_inputs) + x.strides).reshape((xr.shape[0], self.num_inputs * self.window))
+               shape=(x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
+               strides=(x.strides[0], x.strides[1] * self.num_inputs) + x.strides
+               ).reshape((xr.shape[0], self.num_inputs * self.window))
 
   def preprocess(self, seq):
     """
