@@ -365,19 +365,28 @@ class Dataset:
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
-        idi = self.alloc_interval_index(idc)
-        o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
         l = self.seq_lengths[ids]
         if 'targetClasses' in fin:
           y = targs[p : p + l]; """ :type: list[int] """
           self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
         x = inputs[p : p + l]
-        x = self.preprocess(x)
-        if self.window > 1:
-          x = self.sliding_window(x)
-        self.alloc_intervals[idi][2][o:o + l] = x
+        self._set_alloc_intervals_data(idc, data=x)
       fin.close()
     gc.collect()
+
+  def _set_alloc_intervals_data(self, idc, data):
+    """
+    :param int idc: index of sorted seq idx
+    :param numpy.ndarray data: raw data
+    """
+    idi = self.alloc_interval_index(idc)
+    o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
+    l = data.shape[0]
+    x = data
+    x = self.preprocess(x)
+    if self.window > 1:
+      x = self.sliding_window(x)
+    self.alloc_intervals[idi][2][o:o + l] = x
 
   def set_batching(self, batching):
     """
