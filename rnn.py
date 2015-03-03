@@ -204,17 +204,28 @@ def initData():
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
 
-def initNeuralNetwork():
+def initNeuralNetwork(init_from_last_epoch=None):
   """
   Load neural network.
+  :type init_from_last_epoch: int | None
+  :param init_from_last_epoch: if set, will load the specific epoch model
   :rtype: Network.LayerNetwork
   """
   global last_epoch
   from Network import LayerNetwork
-  if config.has('load'):
-    weights = config.value('load', '')
-    print >> log.v1, "loading weights from", weights
-    model = h5py.File(weights, "r")
+
+  modelFileName = None
+  if init_from_last_epoch is not None:
+    modelFileName = config.value('model', '')
+    assert modelFileName
+    modelFileName += ".%03d" % init_from_last_epoch
+    print >> log.v1, "loading weights from prev epoch model %s" % modelFileName
+  elif config.has('load'):
+    modelFileName = config.value('load', '')
+    print >> log.v1, "loading weights from", modelFileName
+
+  if modelFileName is not None:
+    model = h5py.File(modelFileName, "r")
     if config.bool('initialize_from_model', False):
       print >> log.v5, "initializing network topology from model"
       network = LayerNetwork.from_model(model)
@@ -227,6 +238,10 @@ def initNeuralNetwork():
     model.close()
   else:
     network = LayerNetwork.from_config(config)
+    last_epoch = 0
+
+  if init_from_last_epoch is not None:
+    assert init_from_last_epoch == last_epoch
 
   if config.has('dump_json'):
     fout = open(config.value('dump_json', ''), 'w')
