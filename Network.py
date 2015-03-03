@@ -1032,7 +1032,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     grp = model['training']
-    if mask == None: mask = grp.attrs['mask']
+    if mask is None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
     network.hidden = {}
     network.params = []

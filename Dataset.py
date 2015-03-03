@@ -397,7 +397,7 @@ class Dataset:
       self.seq_start.append(self.seq_start[-1] + self.seq_lengths[ids])
       nbytes = self.seq_lengths[ids] * self.nbytes
       if num_cached == self.num_seqs:
-        if self.cache_size > 0 and self.cached_bytes + nbytes > self.cache_size:
+        if 0 < self.cache_size < self.cached_bytes + nbytes:
           num_cached = i
         else:
           self.cached_bytes += nbytes
@@ -424,7 +424,7 @@ class Dataset:
     self.temp_cache_size += self.cache_size - self.cached_bytes
     print >> log.v4, "cached", self.num_cached, "seqs", self.cached_bytes / float(1024 * 1024 * 1024), "GB (" + str(max(self.temp_cache_size / float(1024 * 1024 * 1024), 0)), "GB temp)"
     extra = self.temp_cache_size if self.num_cached == self.num_seqs else 0
-    self.temp_cache_size = self.temp_cache_size / self.nbytes
+    self.temp_cache_size /= self.nbytes
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = T.cast(self.t, 'int32')
