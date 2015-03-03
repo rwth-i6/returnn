@@ -12,15 +12,13 @@ import re
 import os
 import sys
 import time
-
+from optparse import OptionParser
 import h5py
 import json
 import numpy
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
-from optparse import OptionParser
-
 from SprintCommunicator import SprintCommunicator
 
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
@@ -31,6 +29,7 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
   :type chunking: str
   :type batching: str
   """
+  from Dataset import Dataset
   window = config.int('window', 1)
   if chunking == "chunking": chunking = config.value("chunking", "0")
   if batching == "batching": batching = config.value("batching", 'default')
@@ -51,11 +50,11 @@ def subtract_priors(network, train, config):
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
 
-if __name__ == '__main__':
+def main(configFilename, commandLineOptions):
   # initialize config file
-  assert os.path.isfile(sys.argv[1]), "config file not found"
+  assert os.path.isfile(configFilename), "config file not found"
   config = Config()
-  config.load_file(sys.argv[1])
+  config.load_file(configFilename)
   parser = OptionParser()
   parser.add_option("-a", "--activation", dest = "activation", help = "[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
   parser.add_option("-b", "--batch_size", dest = "batch_size", help = "[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
@@ -83,7 +82,7 @@ if __name__ == '__main__':
   parser.add_option("-x", "--task", dest = "task", help = "[train/forward/analyze] Task of the current program call.")
   parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
   parser.add_option("-z", "--max_sequences", dest = "max_seqs", help = "[INTEGER] Maximal number of sequences per batch.")
-  (options, args) = parser.parse_args()
+  (options, args) = parser.parse_args(commandLineOptions)
   options = vars(options)
   for opt in options.keys():
     if options[opt] != None:
@@ -138,8 +137,8 @@ if __name__ == '__main__':
     devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
   else:
     devices = [ Device(tags[0], config, blocking = True) ]
+
   # load data
-  from Dataset import Dataset
   from Network import LayerNetwork
   from Engine import Engine
   cache_sizes_user = config.list('cache_size', ["0"])
@@ -203,6 +202,7 @@ if __name__ == '__main__':
       print >> log.v5, network.to_json()
       assert False, "JSON parsing failed"
     fout.close()
+
   # print task properties
   print >> log.v2, "Network:"
   print >> log.v2, "input:", train.num_inputs, "x", train.window
@@ -226,6 +226,7 @@ if __name__ == '__main__':
     print >> log.v3, device.name + ":", device.device_name,
     print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+
   engine = Engine(devices, network)
   st = time.time()
   if task == 'train':
@@ -254,3 +255,6 @@ if __name__ == '__main__':
   if config.has('sh_mem_key'):
     SprintCommunicator.instance.finalize()
   print >> log.v3, ("elapsed: %f" % (time.time() - st))
+
+if __name__ == '__main__':
+  main(sys.argv[1], sys.argv[2:])
