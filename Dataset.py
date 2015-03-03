@@ -133,6 +133,7 @@ class Dataset:
 
   def _insert_alloc_interval(self, pos, value):
     """
+    Insert np.zeros into self.alloc_intervals.
     :param int pos: idx in self.alloc_intervals
     :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
     :rtype: int
@@ -176,6 +177,7 @@ class Dataset:
 
   def _remove_alloc_interval(self, pos, value):
     """
+    Remove data from self.alloc_intervals.
     :param int pos: idx in self.alloc_intervals
     :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
     :rtype: int
@@ -200,11 +202,12 @@ class Dataset:
 
   def _modify_alloc_intervals(self, start, end, invert):
     """
+    Inserts/removes sorted seq idx range (start,end).
     :param int start: like in load_seqs(), sorted seq idx
     :param int end: like in load_seqs(), sorted seq idx
     :param bool invert: True->insert, False->remove
     :rtype: list[int]
-    :return selection list
+    :return selection list, modified sorted seq idx in self.alloc_intervals
     """
     i = 0
     selection = []; """ :type: list[int] """
@@ -243,6 +246,8 @@ class Dataset:
     :param int start: like in load_seqs(), sorted seq idx
     :param int end: like in load_seqs(), sorted seq idx
     :rtype: bool
+    :returns whether we have the full range (start,end) of sorted seq idx
+      cached in self.alloc_intervals (end is exclusive).
     """
     s = 0
     e = len(self.alloc_intervals)
@@ -260,7 +265,7 @@ class Dataset:
 
   def alloc_interval_index(self, ids):
     """
-    :param int ids: index of ...
+    :param int ids: index of sorted seq idx
     :return index in self.alloc_intervals
     :rtype: int
     """
@@ -280,7 +285,9 @@ class Dataset:
 
   def delete(self, nframes):
     """
-    :param int nframes: how much frames to delete max
+    :param int nframes: how much frames to delete max.
+      Note that this limit is not strict. We can end up
+      deleting more than nframes.
     :return: number of frames deleted
     :rtype: int
     """
@@ -294,7 +301,7 @@ class Dataset:
         s = max(ai[0], self.num_cached)
         start = min(start, s)
         end = max(end, ai[1])
-        deleted += sum([self.seq_lengths[self.seq_index[i]] for i in self.remove_alloc_interval(s, ai[1])]) # len(self.remove_alloc_interval(s, ai[1]))
+        deleted += sum([self.seq_lengths[self.seq_index[i]] for i in self.remove_alloc_interval(s, ai[1])])
       i += 1
     return deleted
 
