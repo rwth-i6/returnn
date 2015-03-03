@@ -154,15 +154,16 @@ def initDevices():
     devices = [ Device(tags[0], config, blocking = True) ]
   return devices
 
-def initData():
+def getCacheSizes():
   """
-  Inits the globals train,dev,eval of type Dataset.
+  :rtype: (int,int,int)
+  :returns cache size for (train,dev,eval)
   """
   cache_sizes_user = config.list('cache_size', ["0"])
   sets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
-    cache_sizes_user = cache_sizes_user * 3
+    cache_sizes_user *= 3
     cache_factor /= float(sets)
   assert len(cache_sizes_user) == 3, "invalid amount of cache sizes specified"
   cache_sizes = []
@@ -177,6 +178,13 @@ def initData():
       cache_size *= 1024
     cache_size = int(cache_size) + 1 if int(cache_size) > 0 else 0
     cache_sizes.append(cache_size)
+  return cache_sizes
+
+def initData():
+  """
+  Inits the globals train,dev,eval of type Dataset.
+  """
+  cache_sizes = getCacheSizes()
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
