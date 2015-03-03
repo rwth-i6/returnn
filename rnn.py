@@ -329,7 +329,7 @@ def executeMainTask():
   if task == 'train':
     engine.train_config(config, train, dev, eval, start_epoch=last_epoch+1)
   elif task == 'forward':
-    assert eval != None, 'no eval data provided'
+    assert eval is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
@@ -343,7 +343,7 @@ def executeMainTask():
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.analyze(engine.devices[0], eval, statistics)
   elif task == "classify":
-    assert eval != None, 'no eval data provided'
+    assert eval is not None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.classify(engine.devices[0], eval, label_file)
