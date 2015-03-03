@@ -251,23 +251,30 @@ def printTaskProperties(devices, network):
   :type devices: list[Device]
   :type network: Network.LayerNetwork
   """
-  print >> log.v2, "Network:"
-  print >> log.v2, "input:", train.num_inputs, "x", train.window
+  print >> log.v2, "Network layer topology:"
+  print >> log.v2, "  input #:", network.n_in
   for i in xrange(len(network.hidden_info)):
-    print >> log.v2, network.hidden_info[i][0] + ":", network.hidden_info[i][1]
-  print >> log.v2, "output:", train.num_outputs
-  print >> log.v2, "weights:", network.num_params()
-  print >> log.v2, "train:"
-  print >> log.v2, "sequences:", train.num_seqs
-  print >> log.v2, "frames:", train.num_timesteps
+    print >> log.v2, "  " + network.hidden_info[i][0] + " #:", network.hidden_info[i][1]
+  print >> log.v2, "  output #:", network.n_out
+  print >> log.v2, "net weights #:", network.num_params()
+  print >> log.v2, "net params:", network.gparams
+  print >> log.v5, "net output:", network.output
+
+  if train:
+    print >> log.v2, "Train data:"
+    print >> log.v2, "input:", train.num_inputs, "x", train.window
+    print >> log.v2, "output:", train.num_outputs
+    print >> log.v2, "sequences:", train.num_seqs
+    print >> log.v2, "frames:", train.num_timesteps
   if dev:
-    print >> log.v2, "dev:"
+    print >> log.v2, "Dev data:"
     print >> log.v2, "sequences:", dev.num_seqs
     print >> log.v2, "frames:", dev.num_timesteps
   if eval:
-    print >> log.v2, "eval:"
+    print >> log.v2, "Eval data:"
     print >> log.v2, "sequences:", eval.num_seqs
     print >> log.v2, "frames:", eval.num_timesteps
+
   print >> log.v3, "Devices:"
   for device in devices:
     print >> log.v3, device.name + ":", device.device_name,
