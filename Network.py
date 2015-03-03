@@ -1254,6 +1254,8 @@ class LayerNetwork(object):
   def load(self, model):
     """
     :type model: h5py.File
+    :returns last epoch this was trained on
+    :rtype: int
     """
     epoch = model.attrs['epoch']
     for name in self.hidden:
