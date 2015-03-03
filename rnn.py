@@ -23,6 +23,17 @@ from Engine import Engine
 from Dataset import Dataset
 from SprintCommunicator import SprintCommunicator
 
+
+TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+
+config = None; """ :type: Config """
+engine = None; """ :type: Engine """
+start_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
+train = None; """ :type: Dataset """
+dev   = None; """ :type: Dataset """
+eval  = None; """ :type: Dataset """
+
+
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
   """
   :type config: Config
@@ -50,14 +61,6 @@ def subtract_priors(network, train, config):
     assert len(l) == 1, len(l)
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
-
-
-config = None; """ :type: Config """
-engine = None; """ :type: Engine """
-start_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
-train = None; """ :type: Dataset """
-dev   = None; """ :type: Dataset """
-eval  = None; """ :type: Dataset """
 
 
 def initConfig(configFilename, commandLineOptions):
@@ -126,7 +129,14 @@ def initDevices():
   """
   :rtype: list[Device]
   """
+  multiproc = config.bool('multiprocessing', True)
   device_info = config.list('device', ['cpu0'])
+  if "device" in TheanoFlags:
+    if multiproc:
+      assert not TheanoFlags["device"].startswith("gpu"), "the main proc is not supposed to use the GPU"
+    else:
+      print >> log.v2, "devices: use %s via THEANO_FLAGS instead of %s" % (TheanoFlags["device"], ", ".join(device_info))
+      device_info = [TheanoFlags["device"]]
   device_tags = {}
   ncpus, ngpus = get_num_devices()
   if "all" in device_info:
@@ -156,7 +166,7 @@ def initDevices():
         assert match, "invalid device specified: " + info
   assert config.has('train'), "no train files specified"
   tags = sorted(device_tags.keys())
-  if config.bool('multiprocessing', True):
+  if multiproc:
     devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
   else:
     devices = [ Device(tags[0], config, blocking = True) ]
@@ -217,6 +227,7 @@ def initNeuralNetwork():
     model.close()
   else:
     network = LayerNetwork.from_config(config)
+
   if config.has('dump_json'):
     fout = open(config.value('dump_json', ''), 'w')
     try:
@@ -287,7 +298,7 @@ def init(configFilename, commandLineOptions):
 def finalize():
   for device in engine.devices:
     device.terminate()
-  if config.has('sh_mem_key'):
+  if SprintCommunicator.instance is not None:
     SprintCommunicator.instance.finalize()
 
 def executeMainTask():
