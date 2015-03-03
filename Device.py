@@ -229,6 +229,26 @@ class Device():
     else: assert False, "invalid command: " + cmd
     return proc
 
+  def _checkGpuFuncs(self, device):
+    if device[0:3] != 'gpu': return
+    # Check if we use the GPU.
+    # http://deeplearning.net/software/theano/tutorial/modes.html
+    theano_func = self.trainer
+    if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
+                for x in theano_func.maker.fgraph.toposort()]):
+      print >> log.v1, device + ":", "It seems as if we don't use the GPU although we requested it."
+      theano.printing.debugprint(theano_func.maker.fgraph.outputs[0])
+    else:
+      print >> log.v3, device + ":", "Our Theano trainer functions looks like it will run on the GPU."
+
+    try:
+      import theano.sandbox.cuda
+      theano_cuda = theano.sandbox.cuda.cuda_ndarray.cuda_ndarray
+      devProps = theano_cuda.device_properties(device.id)
+      print >> log.v3, device + ":", "CUDA version %i" % devProps["driverVersion"]
+    except Exception as exc:
+      print >> log.v3, device + ":", "Exception while getting CUDA information. %s" % exc
+
   def process(self, device, config, input_queue, output_queue):
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
@@ -238,15 +258,17 @@ class Device():
       #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
       device_id = cuda.active_device_number()
       device_name = cuda.active_device_name()
+      device = "gpu%i" % device_id
     else:
       try:
         device_id = int(device[3:])
       except ValueError:
         device_id = 0
-      device_name = 'cpu' + str(device_id)
+      device_name = 'cpu%i' % device_id
     output_queue.put(device_id)
     output_queue.put(device_name)
     self.initialize(config)
+    self._checkGpuFuncs(device)
     output_queue.put(len(self.trainnet.gparams))
     while True:
       cmd = input_queue.get()
