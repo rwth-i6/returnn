@@ -19,6 +19,8 @@ import numpy
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
+from Engine import Engine
+from Dataset import Dataset
 from SprintCommunicator import SprintCommunicator
 
 def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
@@ -29,7 +31,6 @@ def load_data(config, cache_size, key, chunking = "chunking", batching = "batchi
   :type chunking: str
   :type batching: str
   """
-  from Dataset import Dataset
   window = config.int('window', 1)
   if chunking == "chunking": chunking = config.value("chunking", "0")
   if batching == "batching": batching = config.value("batching", 'default')
@@ -50,9 +51,23 @@ def subtract_priors(network, train, config):
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
 
-def main(configFilename, commandLineOptions):
-  # initialize config file
+
+config = None; """ :type: Config """
+engine = None; """ :type: Engine """
+start_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
+train = None; """ :type: Dataset """
+dev   = None; """ :type: Dataset """
+eval  = None; """ :type: Dataset """
+
+
+def initConfig(configFilename, commandLineOptions):
+  """
+  :type str configFilename:
+  :type commandLineOptions: list[str]
+  Inits the global config.
+  """
   assert os.path.isfile(configFilename), "config file not found"
+  global config
   config = Config()
   config.load_file(configFilename)
   parser = OptionParser()
@@ -87,22 +102,30 @@ def main(configFilename, commandLineOptions):
   for opt in options.keys():
     if options[opt] != None:
       config.set(opt, options[opt])
-  # initialize log file
+
+def initLog():
   logs = config.list('log', [])
   log_verbosity = config.int_list('log_verbosity', [])
   log_format = config.list('log_format', [])
   log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
+
+def initConfigJson():
   # initialize postprocess config file
   if config.has('initialize_from_json'):
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
     config.json = open(json_file).read()
+
+def maybeInitSprintCommunicator():
   # initialize SprintCommunicator (if required)
   if config.has('sh_mem_key'):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
 
-  # initialize devices
+def initDevices():
+  """
+  :rtype: list[Device]
+  """
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
   ncpus, ngpus = get_num_devices()
@@ -137,10 +160,12 @@ def main(configFilename, commandLineOptions):
     devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
   else:
     devices = [ Device(tags[0], config, blocking = True) ]
+  return devices
 
-  # load data
-  from Network import LayerNetwork
-  from Engine import Engine
+def initData():
+  """
+  Inits the globals train,dev,eval of type Dataset.
+  """
   cache_sizes_user = config.list('cache_size', ["0"])
   sets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
@@ -163,12 +188,19 @@ def main(configFilename, commandLineOptions):
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
+  global train, dev, eval
   dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = chunking, batching = "sorted")
   eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
-  task = config.value('task', 'train')
-  start_batch = config.int('start_batch', 0)
+
+def initNeuralNetwork():
+  """
+  Load neural network.
+  :rtype: Network.LayerNetwork
+  """
+  global start_epoch
+  from Network import LayerNetwork
   if config.has('load'):
     weights = config.value('load', '')
     print >> log.v1, "loading weights from", weights
@@ -180,12 +212,11 @@ def main(configFilename, commandLineOptions):
     else:
       network = LayerNetwork.from_config(config)
     start_epoch = network.load(model)
-    if start_batch > 0:
-      print >> log.v3, "starting at batch", start_batch
+    start_batch = config.int('start_batch', 0)
+    print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     model.close()
   else:
     network = LayerNetwork.from_config(config)
-    start_epoch = 0
   if config.has('dump_json'):
     fout = open(config.value('dump_json', ''), 'w')
     try:
@@ -202,8 +233,13 @@ def main(configFilename, commandLineOptions):
       print >> log.v5, network.to_json()
       assert False, "JSON parsing failed"
     fout.close()
+  return network
 
-  # print task properties
+def printTaskProperties(devices, network):
+  """
+  :type devices: list[Device]
+  :type network: Network.LayerNetwork
+  """
   print >> log.v2, "Network:"
   print >> log.v2, "input:", train.num_inputs, "x", train.window
   for i in xrange(len(network.hidden_info)):
@@ -227,8 +263,36 @@ def main(configFilename, commandLineOptions):
     print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
 
+def initEngine(devices, network):
+  """
+  :type devices: list[Device]
+  :type network: Network.LayerNetwork
+  Inits global engine.
+  """
+  global engine
   engine = Engine(devices, network)
+
+def init(configFilename, commandLineOptions):
+  initConfig(configFilename, commandLineOptions)
+  initLog()
+  print >> log.v3, "crnn starting up"
+  initConfigJson()
+  maybeInitSprintCommunicator()
+  devices = initDevices()
+  initData()
+  network = initNeuralNetwork()
+  printTaskProperties(devices, network)
+  initEngine(devices, network)
+
+def finalize():
+  for device in engine.devices:
+    device.terminate()
+  if config.has('sh_mem_key'):
+    SprintCommunicator.instance.finalize()
+
+def executeMainTask():
   st = time.time()
+  task = config.value('task', 'train')
   if task == 'train':
     engine.train_config(config, train, dev, eval, start_epoch)
   elif task == 'forward':
@@ -236,25 +300,30 @@ def main(configFilename, commandLineOptions):
     assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
-    engine.forward(devices[0], eval, output_file, combine_labels)
+    engine.forward(engine.devices[0], eval, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano
     for task in config.list('theano_graph.task', ['train']):
-      theano.printing.pydotprint(devices[-1].compute(task), format = 'png', var_with_name_simple = True,
+      theano.printing.pydotprint(engine.devices[-1].compute(task), format = 'png', var_with_name_simple = True,
                                  outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
-    engine.analyze(devices[0], eval, statistics)
+    engine.analyze(engine.devices[0], eval, statistics)
   elif task == "classify":
     assert eval != None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
-    engine.classify(devices[0], eval, label_file)
-  for device in devices:
-    device.terminate()
-  if config.has('sh_mem_key'):
-    SprintCommunicator.instance.finalize()
+    engine.classify(engine.devices[0], eval, label_file)
+  else:
+    assert False, "unknown task: %s" % task
+
   print >> log.v3, ("elapsed: %f" % (time.time() - st))
 
+def main(argv):
+  assert len(argv) >= 2, "usage: %s <config>" % argv[0]
+  init(configFilename=argv[1], commandLineOptions=argv[2:])
+  executeMainTask()
+  finalize()
+
 if __name__ == '__main__':
-  main(sys.argv[1], sys.argv[2:])
+  main(sys.argv)
