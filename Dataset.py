@@ -18,6 +18,25 @@ import gc
 
 
 class Dataset:
+  @classmethod
+  def load_data(cls, config, cache_size, files_config_key, chunking="chunking", batching="batching"):
+    """
+    :type config: Config.Config
+    :type cache_size: int
+    :type files_config_key: str
+    :type chunking: str
+    :type batching: str
+    """
+    window = config.int('window', 1)
+    if chunking == "chunking": chunking = config.value("chunking", "0")
+    if batching == "batching": batching = config.value("batching", 'default')
+    if config.has(files_config_key):
+      data = cls(window, cache_size, chunking, batching)
+      for f in config.list(files_config_key):
+        data.add_file(f)
+      return data, data.initialize()
+    return None, 0
+
   def __init__(self, window=1, cache_size=0, chunking="0", batching='default'):
     self.files = []; """ :type: list[str] """
     self.num_inputs = 0

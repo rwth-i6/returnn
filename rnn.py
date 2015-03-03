@@ -34,24 +34,6 @@ dev   = None; """ :type: Dataset """
 eval  = None; """ :type: Dataset """
 
 
-def load_data(config, cache_size, key, chunking = "chunking", batching = "batching"):
-  """
-  :type config: Config
-  :type cache_size: int
-  :type key: str
-  :type chunking: str
-  :type batching: str
-  """
-  window = config.int('window', 1)
-  if chunking == "chunking": chunking = config.value("chunking", "0")
-  if batching == "batching": batching = config.value("batching", 'default')
-  if config.has(key):
-    data = Dataset(window, cache_size, chunking, batching)
-    for f in config.list(key):
-      data.add_file(f)
-    return data, data.initialize()
-  return None, 0
-
 def subtract_priors(network, train, config):
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)
@@ -199,10 +181,10 @@ def initData():
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
   global train, dev, eval
-  dev,extra_dev = load_data(config, cache_sizes[1], 'dev', chunking = chunking, batching = "sorted")
-  eval,extra_eval = load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
+  dev,extra_dev = Dataset.load_data(config, cache_sizes[1], 'dev', chunking = chunking, batching = "sorted")
+  eval,extra_eval = Dataset.load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
-  train,extra_train = load_data(config, cache_sizes[0] + extra_cache, 'train')
+  train,extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
 
 def initNeuralNetwork(init_from_last_epoch=None):
   """
