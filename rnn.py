@@ -28,7 +28,7 @@ TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.envir
 
 config = None; """ :type: Config """
 engine = None; """ :type: Engine """
-start_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
+last_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
 train = None; """ :type: Dataset """
 dev   = None; """ :type: Dataset """
 eval  = None; """ :type: Dataset """
@@ -209,7 +209,7 @@ def initNeuralNetwork():
   Load neural network.
   :rtype: Network.LayerNetwork
   """
-  global start_epoch
+  global last_epoch
   from Network import LayerNetwork
   if config.has('load'):
     weights = config.value('load', '')
@@ -221,9 +221,9 @@ def initNeuralNetwork():
       subtract_priors(network, train, config)
     else:
       network = LayerNetwork.from_config(config)
-    start_epoch = network.load(model)
+    last_epoch = network.load(model)
     start_batch = config.int('start_batch', 0)
-    print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
+    print >> log.v3, "starting at epoch %i and batch %i" % (last_epoch + 1, start_batch)
     model.close()
   else:
     network = LayerNetwork.from_config(config)
@@ -312,7 +312,7 @@ def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
-    engine.train_config(config, train, dev, eval, start_epoch)
+    engine.train_config(config, train, dev, eval, start_epoch=last_epoch+1)
   elif task == 'forward':
     assert eval != None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
