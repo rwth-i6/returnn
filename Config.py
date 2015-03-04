@@ -31,6 +31,12 @@ class Config:
     return key in self.dict
 
   def set(self, key, value):
+    """
+    :type key: str
+    :type value: list[str] | str | int | float | bool
+    """
+    if not isinstance(value, (list, tuple)): value = [value]
+    value = [str(v) for v in value]
     self.dict[key] = value
 
   def value(self, key, default, index=0):
