@@ -371,7 +371,7 @@ class Engine:
     batches.append(batch)
     return batches
 
-  def train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1):
+  def train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1, start_batch=0):
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
@@ -379,7 +379,7 @@ class Engine:
     momentum = config.float("momentum", 0)
     num_epochs = config.int('num_epochs', 5)
     max_seqs = config.int('max_seqs', -1)
-    start_batch = config.int('start_batch', 0)
+    start_batch = start_batch or config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
     if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127:
       self.devices.append(Device.Device("cpu127", config))
