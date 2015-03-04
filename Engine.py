@@ -403,6 +403,7 @@ class Engine:
     :type max_seqs: int
     :type adagrad: bool
     """
+    print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     data = {}; """ :type: dict[str,Dataset.Dataset] """
     if dev_data: data["dev"] = dev_data
     if eval_data: data["eval"] = eval_data

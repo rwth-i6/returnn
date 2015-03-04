@@ -223,8 +223,6 @@ def initNeuralNetwork(init_from_last_epoch=None):
     else:
       network = LayerNetwork.from_config(config)
     last_epoch = network.load(model)
-    start_batch = config.int('start_batch', 0)
-    print >> log.v3, "starting at epoch %i and batch %i" % (last_epoch + 1, start_batch)
     model.close()
   else:
     network = LayerNetwork.from_config(config)
