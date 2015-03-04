@@ -17,7 +17,7 @@ import theano.tensor as T
 import gc
 
 
-class Dataset:
+class Dataset(object):
   @classmethod
   def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching"):
     """
