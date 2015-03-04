@@ -371,7 +371,7 @@ class Engine:
     batches.append(batch)
     return batches
 
-  def train_config(self, config, train_data, dev_data = None, eval_data = None, start_epoch = 1):
+  def train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1):
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
@@ -385,7 +385,8 @@ class Engine:
       self.devices.append(Device.Device("cpu127", config))
     self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data = None, eval_data = None, momentum = 0, model = None, interval = 1, start_epoch = 1, start_batch = 0, max_seqs = -1, adagrad = False):
+  def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data=None, eval_data=None,
+            momentum=0, model=None, interval=1, start_epoch=1, start_batch=0, max_seqs=-1, adagrad=False):
     """
     :type num_epochs: int
     :type learning_rate: float
