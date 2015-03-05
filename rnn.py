@@ -47,7 +47,7 @@ def subtract_priors(network, train, config):
 
 def initConfig(configFilename, commandLineOptions):
   """
-  :type str configFilename:
+  :type configFilename: str
   :type commandLineOptions: list[str]
   Inits the global config.
   """
