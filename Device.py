@@ -1,5 +1,4 @@
-from multiprocessing import Process, Queue
-from Queue import Empty
+from multiprocessing import Process, Pipe
 from Util import cmd, progress_bar
 from Log import log
 from Network import LayerNetwork, GateLstmLayer
@@ -48,10 +47,9 @@ class Device():
         pynvml.nvmlInit()
       except Exception as exc:
         print >> log.v3, "nvmlInit failed: %s" % exc
-    self.input_queue = Queue()
-    self.output_queue = Queue()
     self.num_batches = num_batches
     self.blocking = blocking
+    self.config = config
     if blocking:
       self.initialize(config)
       self.nparams = len(self.trainnet.gparams)
@@ -70,24 +68,29 @@ class Device():
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
     else:
-      self.proc = Process(target = self.process, args = (device, config, self.input_queue, self.output_queue))
-      self.proc.daemon = True
-      self.proc.start()
-      self.id = self.output_queue.get(); """ :type: int """
-      self.device_name = self.output_queue.get(); """ :type: str """
-      self.nparams = self.output_queue.get(); """ :type: int """  # = len(trainnet.gparams)
+      self.name = device
+      self.startProc()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device[0:3] + str(self.id)
-    self.config = config
+
+  def startProc(self):
+    assert not self.blocking
+    self.output_queue, self.input_queue = Pipe(duplex=True)
+    self.proc = Process(target=self.process, args=(self.name, self.config, self.input_queue, self.output_queue))
+    self.proc.daemon = True
+    self.proc.start()
+    # We are the parent process. We send/recv over output_queue.
+    # Close input_queue so that the childs get an EOF when it reads and we have died.
+    self.input_queue.close()
+    self.input_queue = self.output_queue
+    self.id = self.output_queue.recv(); """ :type: int """
+    self.device_name = self.output_queue.recv(); """ :type: str """
+    self.nparams = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
 
   def restart(self):
     self.proc.terminate()
     #os.kill(self.proc.pid, signal.SIGKILL)
-    self.proc = Process(target = self.process, args = (self.name, self.config, self.input_queue, self.output_queue))
-    #self.proc.daemon = True
-    while not self.input_queue.empty(): self.input_queue.get()
-    while not self.output_queue.empty(): self.output_queue.get()
-    self.proc.start()
+    self.startProc()
 
   def detect_nan(self, i, node, fn):
     import theano
@@ -250,6 +253,17 @@ class Device():
       print >> log.v3, device + ":", "Exception while getting CUDA information. %s" % exc
 
   def process(self, device, config, input_queue, output_queue):
+    """
+    :type device: str
+    :type config: Config.Config
+    :type input_queue: _multiprocessing.Connection
+    :type output_queue: _multiprocessing.Connection
+    """
+    # We are the child. The queues are a duplex pipe.
+    # We send/recv over the input_queue.
+    # We close the output_queue so that the parent gets an EOF when we die.
+    output_queue.close()
+    output_queue = input_queue
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
       import cuda_ndarray.cuda_ndarray as cuda
@@ -265,41 +279,41 @@ class Device():
       except ValueError:
         device_id = 0
       device_name = 'cpu%i' % device_id
-    output_queue.put(device_id)
-    output_queue.put(device_name)
+    output_queue.send(device_id)
+    output_queue.send(device_name)
     self.initialize(config)
     self._checkGpuFuncs(device)
-    output_queue.put(len(self.trainnet.gparams))
+    output_queue.send(len(self.trainnet.gparams))
     while True:
-      cmd = input_queue.get()
+      cmd = input_queue.recv()
       if cmd == "stop":
-        output_queue.put("done")
+        output_queue.send("done")
         break
       elif cmd == "update":
-        x = input_queue.get()
-        t = input_queue.get()
-        i = input_queue.get()
+        x = input_queue.recv()
+        t = input_queue.recv()
+        i = input_queue.recv()
         if self.trainnet.loss == 'ctc':
-          c = input_queue.get()
+          c = input_queue.recv()
           self.cp.set_value(c)
         self.x.set_value(x.astype('float32'), borrow = True)
         self.y.set_value(t.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
       else:
-        params = input_queue.get()
+        params = input_queue.recv()
         try:
           if cmd == "train": self.trainnet.set_params(params)
           else: self.testnet.set_params(params)
           result = self.compute(cmd)()
         except RuntimeError:
           print >> log.v2, "warning: Runtime error on device", device_name
-          output_queue.put("error")
+          output_queue.send("error")
           return
         except MemoryError:
-          output_queue.put("error")
+          output_queue.send("error")
           raise
         for output in result:
-          output_queue.put(output)
+          output_queue.send(output)
 
   def alloc_data(self, shape, max_ctc_length):
     """
@@ -322,12 +336,12 @@ class Device():
       if self.trainnet.loss == 'ctc':
         self.cp.set_value(self.ctc_targets)
     else:
-      self.input_queue.put("update")
-      self.input_queue.put(self.data)
-      self.input_queue.put(self.targets.flatten())
-      self.input_queue.put(self.index)
+      self.input_queue.send("update")
+      self.input_queue.send(self.data)
+      self.input_queue.send(self.targets.flatten())
+      self.input_queue.send(self.index)
       if self.config.value('loss','') == 'ctc':
-        self.input_queue.put(self.ctc_targets)
+        self.input_queue.send(self.ctc_targets)
 
   def run(self, task, network):
     """
@@ -341,8 +355,8 @@ class Device():
       else: self.testnet.set_params(network.get_params())
       self.output = self.compute(task)()
     else:
-      self.input_queue.put(task)
-      self.input_queue.put(network.get_params())
+      self.input_queue.send(task)
+      self.input_queue.send(network.get_params())
 
   def clear_memory(self, network):
     #self.data = numpy.zeros((1, 1, 1), dtype = theano.config.floatX)
@@ -355,27 +369,28 @@ class Device():
       self.output = []
       timeout = 60 # 5 minutes execution timeout
       while timeout > 0:
-        try:
-          score = self.output_queue.get(timeout = 5)
-          if score == "error": return None
-          self.output.append(score)
-          break
-        except Empty:
-          if not self.proc.is_alive():
-            return None
+        if self.output_queue.poll(timeout=1):
+          try:
+            score = self.output_queue.recv()
+            if score == "error": return None
+            self.output.append(score)
+            break
+          except EOFError:
+            if not self.proc.is_alive():
+              return None
         timeout -= 1
       if timeout == 0:
         print >> log.v3, "Timeout expired for device", self.name
         return None
       if self.task == 'train':
-        self.output += [ self.output_queue.get() for p in xrange(self.nparams) ]
+        self.output += [ self.output_queue.recv() for p in xrange(self.nparams) ]
       elif self.task == "eval":
-        self.output.append(self.output_queue.get())
+        self.output.append(self.output_queue.recv())
     return self.output
 
   def terminate(self):
     if not self.blocking and self.proc.is_alive():
-      self.input_queue.put('stop')
+      self.input_queue.send('stop')
       self.proc.join()
       self.proc.terminate()
   # device properties
