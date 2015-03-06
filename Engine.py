@@ -226,7 +226,7 @@ class TrainTaskThread(TaskThread):
     self.score = 0
 
   def evaluate(self, batch, result):
-    if result == None:
+    if result is None:
       self.score = None
     else:
       gparams = {}
@@ -241,7 +241,8 @@ class TrainTaskThread(TaskThread):
       self.updater(self.learning_rate)
 
   def finalize(self):
-    self.score /= float(self.data.num_timesteps)
+    if self.data.num_timesteps > 0:
+      self.score /= float(self.data.num_timesteps)
 
 
 class EvalTaskThread(TaskThread):
