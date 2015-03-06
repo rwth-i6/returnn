@@ -146,7 +146,6 @@ def initDevices():
             device_tags[utype + str(p)] = num_batches
             match = True
         assert match, "invalid device specified: " + info
-  assert config.has('train'), "no train files specified"
   tags = sorted(device_tags.keys())
   if multiproc:
     devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
@@ -306,6 +305,7 @@ def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
+    assert train.num_seqs > 0, "no train files specified, check train option: %s" % config.value('train', None)
     engine.train_config(config, train, dev, eval, start_epoch=last_epoch+1)
   elif task == 'forward':
     assert eval is not None, 'no eval data provided'
