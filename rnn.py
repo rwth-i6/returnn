@@ -283,7 +283,33 @@ def initEngine(devices, network):
   global engine
   engine = Engine(devices, network)
 
+def initThreadJoinHack():
+  import threading, thread
+  mainThread = threading.currentThread()
+  assert isinstance(mainThread, threading._MainThread)
+  mainThreadId = thread.get_ident()
+  join_orig = threading.Thread.join
+  def join_hacked(threadObj, timeout=None):
+    """
+    :type threadObj: threading.Thread
+    :type timeout: float|None
+    """
+    if timeout is None and thread.get_ident() == mainThreadId:
+      # This is a HACK for Thread.join() if we are in the main thread.
+      # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
+      # because signals will get delivered to other threads and Python would forward
+      # them for delayed handling to the main thread which hangs.
+      # See CPython signalmodule.c.
+      # Currently the best solution I can think of:
+      while threadObj.isAlive():
+        join_orig(threadObj, timeout=0.1)
+    else:
+      # In all other cases, we can use the original.
+      join_orig(threadObj, timeout=timeout)
+  threading.Thread.join = join_hacked
+
 def init(configFilename, commandLineOptions):
+  initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
   print >> log.v3, "crnn starting up"
