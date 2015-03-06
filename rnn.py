@@ -283,6 +283,10 @@ def initEngine(devices, network):
   global engine
   engine = Engine(devices, network)
 
+def initBetterExchook():
+  import better_exchook
+  better_exchook.install()
+
 def initThreadJoinHack():
   import threading, thread
   mainThread = threading.currentThread()
@@ -309,6 +313,7 @@ def initThreadJoinHack():
   threading.Thread.join = join_hacked
 
 def init(configFilename, commandLineOptions):
+  initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
