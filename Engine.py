@@ -134,7 +134,16 @@ class TaskThread(threading.Thread):
       self.result = result
     def initialize(self): pass
     def finalize(self): pass
+
     def run(self):
+      # Wrap run_inner() for better exception printing.
+      # Thread.__bootstrap_inner() ignores sys.excepthook.
+      try:
+        self.run_inner()
+      except BaseException:
+        sys.excepthook(*sys.exc_info())
+
+    def run_inner(self):
       start_time = time.time()
       num_data_batches = len(self.batches)
       num_batches = self.start_batch
