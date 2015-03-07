@@ -228,6 +228,7 @@ class Dataset(object):
     :rtype: list[int]
     :return selection list, modified sorted seq idx in self.alloc_intervals
     """
+    if end is None: end = start + 1
     i = 0
     selection = []; """ :type: list[int] """
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
@@ -255,9 +256,9 @@ class Dataset(object):
       self.alloc_intervals.append((self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
     return selection
 
-  def insert_alloc_interval(self, start, end):
+  def insert_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, True)
-  def remove_alloc_interval(self, start, end):
+  def remove_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, False)
 
   def is_cached(self, start, end):
@@ -398,6 +399,7 @@ class Dataset(object):
     :param numpy.ndarray data: raw data
     """
     idi = self.alloc_interval_index(idc)
+    assert idi >= 0
     o = self.seq_start[idc] - self.seq_start[self.alloc_intervals[idi][0]]
     l = data.shape[0]
     x = data
