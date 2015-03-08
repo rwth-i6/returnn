@@ -416,8 +416,8 @@ class Engine:
     """
     print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     data = {}; """ :type: dict[str,Dataset.Dataset] """
-    if dev_data: data["dev"] = dev_data
-    if eval_data: data["eval"] = eval_data
+    if dev_data and dev_data.num_seqs > 0: data["dev"] = dev_data
+    if eval_data and eval_data.num_seqs > 0: data["eval"] = eval_data
     self.data = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
     for name in data.keys():
       self.data[name] = (data[name], self.set_batch_size(data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
