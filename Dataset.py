@@ -443,13 +443,13 @@ class Dataset(object):
     self.seq_start = [0]  # idx like in seq_index, *not* real idx
     self.transcription_start = [0]
     self.cached_bytes = 0
-    num_cached = self.num_seqs
+    num_cached = -1
     for i in xrange(self.num_seqs):
       ids = self.seq_index[i]
       self.seq_start.append(self.seq_start[-1] + self.seq_lengths[ids])
       if self.isInitialized:
         nbytes = self.seq_lengths[ids] * self.nbytes
-        if num_cached == self.num_seqs:
+        if num_cached < 0:
           if 0 < self.cache_size < self.cached_bytes + nbytes:
             num_cached = i
           else:
