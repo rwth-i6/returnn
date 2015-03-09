@@ -10,7 +10,7 @@ import theano.tensor as T
 from Log import log
 from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
-import threading
+import threading, thread
 import Device
 
 
@@ -141,7 +141,12 @@ class TaskThread(threading.Thread):
       try:
         self.run_inner()
       except BaseException:
-        sys.excepthook(*sys.exc_info())
+        try:
+          print("%s failed" % self)
+          sys.excepthook(*sys.exc_info())
+        finally:
+          # Exceptions are fatal. If we can recover, we should handle it in run_inner().
+          thread.interrupt_main()
 
     def run_inner(self):
       start_time = time.time()
