@@ -32,10 +32,15 @@ class Dataset(object):
     if chunking == "chunking": chunking = config.value("chunking", "0")
     if batching == "batching": batching = config.value("batching", 'default')
     data = cls(window, cache_size, chunking, batching)
-    if files_config_key and config.has(files_config_key):
-      for f in config.list(files_config_key):
-        data.add_file(f)
-    return data, data.initialize()
+    extra = 0
+    if files_config_key:
+      if config.has(files_config_key):
+        for f in config.list(files_config_key):
+          data.add_file(f)
+        extra = data.initialize()
+      else:
+        return None, 0
+    return data, extra
 
   def __init__(self, window=1, cache_size=0, chunking="0", batching='default'):
     self.files = []; """ :type: list[str] """
