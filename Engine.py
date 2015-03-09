@@ -65,7 +65,7 @@ class TaskThread(threading.Thread):
       :type batches: list[Batch]
       :type start_batch: int
       """
-      threading.Thread.__init__(self)
+      threading.Thread.__init__(self, name="TaskThread %s" % task)
       self.start_batch = start_batch
       self.devices = devices
       self.network = network

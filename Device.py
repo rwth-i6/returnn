@@ -76,7 +76,10 @@ class Device():
   def startProc(self):
     assert not self.blocking
     self.output_queue, self.input_queue = Pipe(duplex=True)
-    self.proc = Process(target=self.process, args=(self.name, self.config, self.input_queue, self.output_queue))
+    self.proc = Process(
+      target=self.process,
+      args=(self.name, self.config, self.input_queue, self.output_queue),
+      name="Device %s proc" % self.name)
     self.proc.daemon = True
     self.proc.start()
     # We are the parent process. We send/recv over output_queue.
