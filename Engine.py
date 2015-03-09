@@ -159,6 +159,7 @@ class TaskThread(threading.Thread):
       run_times = []
       while num_batches < num_data_batches:
         alloc_devices, num_alloc_batches = self.allocate_devices(start_batch=num_batches)
+        assert num_alloc_batches > 0
         batch = num_batches
         run_time = time.time()
         for device in alloc_devices:
