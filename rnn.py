@@ -292,6 +292,8 @@ def initThreadJoinHack():
   mainThread = threading.currentThread()
   assert isinstance(mainThread, threading._MainThread)
   mainThreadId = thread.get_ident()
+
+  # Patch Thread.join().
   join_orig = threading.Thread.join
   def join_hacked(threadObj, timeout=None):
     """
@@ -311,6 +313,16 @@ def initThreadJoinHack():
       # In all other cases, we can use the original.
       join_orig(threadObj, timeout=timeout)
   threading.Thread.join = join_hacked
+
+  # Mostly the same for Condition.wait().
+  cond_wait_orig = threading._Condition.wait
+  def cond_wait_hacked(cond, timeout=None):
+    if timeout is None and thread.get_ident() == mainThreadId:
+      # Use a timeout anyway. This should not matter for the underlying code.
+      cond_wait_orig(cond, timeout=0.1)
+    else:
+      cond_wait_orig(cond, timeout=timeout)
+  threading._Condition.wait = cond_wait_hacked
 
 def init(configFilename, commandLineOptions):
   initBetterExchook()
