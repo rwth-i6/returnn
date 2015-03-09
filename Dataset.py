@@ -408,14 +408,11 @@ class Dataset(object):
       x = self.sliding_window(x)
     self.alloc_intervals[idi][2][o:o + l] = x
 
-  def set_batching(self, batching):
+  def init_batching(self):
     """
     Initialize lists:
-      self.seq_start
       self.seq_index  # sorted seq idx
-    :param str batching: batching type, "default" (= identity), "sorted" or "random"
     """
-    self.batching = batching
     self.seq_index = range(self.num_seqs); """ :type: list[int]. the real seq idx after sorting """
     if self.batching == 'sorted':
       zipped = zip(self.seq_index, self.seq_lengths); """ :type: list[list[int]] """
@@ -425,6 +422,14 @@ class Dataset(object):
       random.shuffle(self.seq_index)
     else:
       assert self.batching == 'default', "invalid batching specified: " + self.batching
+    self.init_seqs()
+
+  def init_seqs(self):
+    """
+    Initialize lists:
+      self.seq_start
+      self.alloc_intervals
+    """
     self.seq_start = [0]  # idx like in seq_index, *not* real idx
     self.transcription_start = [0]
     self.cached_bytes = 0
@@ -457,7 +462,7 @@ class Dataset(object):
       self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype = theano.config.floatX)
     self.targets = numpy.zeros((self.num_timesteps, ), dtype = theano.config.floatX)
     self.temp_cache_size += self.cache_size
-    self.set_batching(self.batching)
+    self.init_batching()
     self.temp_cache_size += self.cache_size - self.cached_bytes
     print >> log.v4, "cached", self.num_cached, "seqs", self.cached_bytes / float(1024 * 1024 * 1024), "GB (" + str(max(self.temp_cache_size / float(1024 * 1024 * 1024), 0)), "GB temp)"
     extra = self.temp_cache_size if self.num_cached == self.num_seqs else 0
