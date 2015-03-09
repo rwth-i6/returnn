@@ -15,6 +15,7 @@ from Log import log
 import theano
 import theano.tensor as T
 import gc
+from random import Random
 
 
 class Dataset(object):
@@ -51,6 +52,8 @@ class Dataset(object):
     self.cached_bytes = 0
     self.seq_start = [0]  # uses sorted seq idx, see set_batching()
     self.seq_shift = [0]
+    self.rnd = Random(0)  # Use fixed seed. Call rnd.seed() later for a different one. Make this deterministic!
+    self.rnd_seed = 0  # See init_seq_order().
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.timestamps = []
@@ -70,6 +73,7 @@ class Dataset(object):
     self.num_running_chars = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
+    self.isInitialized = False
 
   def add_file(self, filename):
     """
@@ -408,20 +412,26 @@ class Dataset(object):
       x = self.sliding_window(x)
     self.alloc_intervals[idi][2][o:o + l] = x
 
-  def init_batching(self):
+  def init_seq_order(self, epoch=None):
     """
+    :type epoch: int|None
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    self.seq_index = range(self.num_seqs); """ :type: list[int]. the real seq idx after sorting """
-    if self.batching == 'sorted':
+    if epoch is not None: self.rnd_seed = epoch  # Use some deterministic random seed.
+    self.seq_index = list(range(self.num_seqs)); """ :type: list[int]. the real seq idx after sorting """
+    if self.batching == 'default':
+      pass  # Keep order as-is.
+    elif self.batching == 'sorted':
       zipped = zip(self.seq_index, self.seq_lengths); """ :type: list[list[int]] """
       zipped.sort(key = lambda x: x[1])  # sort by length
       self.seq_index = [y[0] for y in zipped]
     elif self.batching == 'random':
-      random.shuffle(self.seq_index)
+      # Keep this deterministic!
+      self.rnd.seed(self.rnd_seed)
+      self.rnd.shuffle(self.seq_index)
     else:
-      assert self.batching == 'default', "invalid batching specified: " + self.batching
+      assert False, "invalid batching specified: " + self.batching
     self.init_seqs()
 
   def init_seqs(self):
@@ -437,12 +447,13 @@ class Dataset(object):
     for i in xrange(self.num_seqs):
       ids = self.seq_index[i]
       self.seq_start.append(self.seq_start[-1] + self.seq_lengths[ids])
-      nbytes = self.seq_lengths[ids] * self.nbytes
-      if num_cached == self.num_seqs:
-        if 0 < self.cache_size < self.cached_bytes + nbytes:
-          num_cached = i
-        else:
-          self.cached_bytes += nbytes
+      if self.isInitialized:
+        nbytes = self.seq_lengths[ids] * self.nbytes
+        if num_cached == self.num_seqs:
+          if 0 < self.cache_size < self.cached_bytes + nbytes:
+            num_cached = i
+          else:
+            self.cached_bytes += nbytes
     self.temp_cache_size += self.cached_bytes
     self.alloc_intervals = \
       [(0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)),
@@ -451,18 +462,19 @@ class Dataset(object):
     # idx start/end is the sorted seq idx start/end, end exclusive,
     # and data is a numpy.array.
     self.temp_cache_size -= self.cached_bytes
-    if num_cached > 0:
+    if self.isInitialized and num_cached > 0:
       self.load_seqs(0, num_cached, free=False)
-    self.num_cached = num_cached
+      self.num_cached = num_cached
 
   def initialize(self):
+    self.isInitialized = True
     self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
     if self.window > 1:
       if int(self.window) % 2 == 0: self.window += 1
       self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype = theano.config.floatX)
     self.targets = numpy.zeros((self.num_timesteps, ), dtype = theano.config.floatX)
     self.temp_cache_size += self.cache_size
-    self.init_batching()
+    self.init_seq_order()
     self.temp_cache_size += self.cache_size - self.cached_bytes
     print >> log.v4, "cached", self.num_cached, "seqs", self.cached_bytes / float(1024 * 1024 * 1024), "GB (" + str(max(self.temp_cache_size / float(1024 * 1024 * 1024), 0)), "GB temp)"
     extra = self.temp_cache_size if self.num_cached == self.num_seqs else 0

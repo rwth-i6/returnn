@@ -344,6 +344,10 @@ class Engine:
     self.devices = devices
     self.gparams = {p: theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX)) for p in self.network.gparams}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] """
     self.rate = T.scalar('r')
+    self.is_training = False
+    self.training_finished = False
+    self.lock = threading.RLock()
+    self.cond = threading.Condition(lock=self.lock)
 
   def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
     """
@@ -387,13 +391,22 @@ class Engine:
     batches.append(batch)
     return batches
 
+  @classmethod
+  def config_get_num_epochs(cls, config):
+    """ :type config: Config.Config """
+    return config.int('num_epochs', 5)
+
   def train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1, start_batch=0):
+    """
+    :type config: Config.Config
+    :type train_data: Dataset.Dataset
+    """
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
     learning_rate = config.float('learning_rate', 0.01)
     momentum = config.float("momentum", 0)
-    num_epochs = config.int('num_epochs', 5)
+    num_epochs = self.config_get_num_epochs(config)
     max_seqs = config.int('max_seqs', -1)
     start_batch = start_batch or config.int('start_batch', 0)
     adagrad = config.bool('adagrad', False)
@@ -446,13 +459,24 @@ class Engine:
         upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
       updates.append((param, param + upd))
     updater = theano.function(inputs = [self.rate], updates = updates, name = "updater")
-    train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
     tester = None
     #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
     #testing_device = self.devices[-1]
     training_devices = self.devices
     testing_device = self.devices[-1]
+    with self.lock:
+      self.num_epochs = num_epochs
+      self.is_training = True
+      self.training_finished = False
+      self.cond.notify_all()
     for epoch in xrange(start_epoch, start_epoch + num_epochs):
+      print >> log.v1, "start epoch", epoch, "..."
+      with self.lock:
+        self.cur_epoch = epoch
+        self.cond.notify_all()
+      # In case of random seq ordering, we want to reorder each epoch.
+      train_data.init_seq_order(epoch=epoch)
+      train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
       trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
         if False and len(self.devices) > 1:
@@ -480,6 +504,12 @@ class Engine:
     if tester:
       if len(self.devices) > 1: tester.join()
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
+    with self.lock:
+      self.is_training = False
+      self.training_finished = True
+      self.num_epochs = None
+      self.cur_epoch = None
+      self.cond.notify_all()
 
   def save_model(self, filename, epoch):
     """
