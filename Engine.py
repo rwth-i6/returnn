@@ -471,11 +471,12 @@ class Engine:
       self.cond.notify_all()
     for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
       print >> log.v1, "start epoch", epoch, "..."
-      with self.lock:
-        self.cur_epoch = epoch
-        self.cond.notify_all()
       # In case of random seq ordering, we want to reorder each epoch.
       train_data.init_seq_order(epoch=epoch)
+      with self.lock:
+        # Notify about current epoch after we initialized the dataset seq order.
+        self.cur_epoch = epoch
+        self.cond.notify_all()
       train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
       trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches, learning_rate, self.gparams, updater, start_batch)
       if tester:
