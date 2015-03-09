@@ -379,16 +379,21 @@ class Device():
             self.output.append(score)
             break
           except EOFError:
-            if not self.proc.is_alive():
-              return None
+            assert not self.proc.is_alive()
+            return None
         timeout -= 1
       if timeout == 0:
         print >> log.v3, "Timeout expired for device", self.name
         return None
-      if self.task == 'train':
-        self.output += [ self.output_queue.recv() for p in xrange(self.nparams) ]
-      elif self.task == "eval":
-        self.output.append(self.output_queue.recv())
+      try:
+        if self.task == 'train':
+          self.output += [ self.output_queue.recv() for p in xrange(self.nparams) ]
+        elif self.task == "eval":
+          self.output.append(self.output_queue.recv())
+      except EOFError:
+        self.output = []
+        assert not self.proc.is_alive()
+        return None
     return self.output
 
   def terminate(self):
