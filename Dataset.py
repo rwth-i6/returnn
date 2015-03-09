@@ -493,11 +493,6 @@ class Dataset(object):
     self.theano_init = True
     return extra
 
-  def finish_load_seqs_iteration(self):
-    # Called when the engine finished one iteration.
-    # We could free recent loaded seqs or so.
-    pass
-
   def calculate_priori(self):
     priori = numpy.zeros((self.num_outputs,), dtype = theano.config.floatX)
     for i in xrange(self.num_seqs):
