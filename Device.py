@@ -372,7 +372,7 @@ class Device():
       self.output = []
       timeout = 60 # 5 minutes execution timeout
       while timeout > 0:
-        if self.output_queue.poll(timeout=1):
+        if self.output_queue.poll(1):
           try:
             score = self.output_queue.recv()
             if score == "error": return None
