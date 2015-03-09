@@ -474,8 +474,10 @@ class Engine:
     with self.lock:
       self.num_epochs = num_epochs
       self.is_training = True
+      self.cur_epoch = 0
       self.training_finished = False
       self.cond.notify_all()
+    assert start_epoch > 0
     for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
       print >> log.v1, "start epoch", epoch, "..."
       # In case of random seq ordering, we want to reorder each epoch.
