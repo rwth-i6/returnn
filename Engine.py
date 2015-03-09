@@ -28,6 +28,9 @@ class Batch:
     self.start = list(start)  # format (start seq idx in data, start frame idx in seq)
     self.nseqs = 1  # number of sequences which we cover (not data-batches self.shape[1])
 
+  def __repr__(self):
+    return "<Batch %r %r>" % (self.shape, self.start)
+
   def try_sequence(self, length):
     """
     :param int length: number of (time) frames
