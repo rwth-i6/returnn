@@ -469,7 +469,7 @@ class Engine:
       self.is_training = True
       self.training_finished = False
       self.cond.notify_all()
-    for epoch in xrange(start_epoch, start_epoch + num_epochs):
+    for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
       print >> log.v1, "start epoch", epoch, "..."
       with self.lock:
         self.cur_epoch = epoch
