@@ -166,6 +166,10 @@ class TaskThread(threading.Thread):
           #  SprintCommunicator.instance.segments = device.tags #TODO
           device.run(self.task, self.network)
           batch += device.num_batches
+
+        self.data.finish_load_seqs_iteration()
+
+        # Collect results.
         batch = num_batches
         device_results = []
         for device in alloc_devices:
@@ -177,6 +181,7 @@ class TaskThread(threading.Thread):
             self.score = -1
             return -1
           device_results.append(result)
+
         if interactive or log.v[5]:
           def hms(s):
             m, s = divmod(s, 60)
