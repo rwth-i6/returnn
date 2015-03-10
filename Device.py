@@ -319,7 +319,7 @@ class Device():
           output_queue.send("error")
           raise
         for output in result:
-          output_queue.send(output)
+          output_queue.send(numpy.asarray(output))
 
   def alloc_data(self, shape, max_ctc_length):
     """
