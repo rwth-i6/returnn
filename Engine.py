@@ -440,6 +440,7 @@ class Engine:
     :type adagrad: bool
     """
     print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
+    print >> log.v3, "using batch size/step: %i, %i" % (batch_size, batch_step)
     data = {}; """ :type: dict[str,Dataset.Dataset] """
     if dev_data and dev_data.num_seqs > 0: data["dev"] = dev_data
     if eval_data and eval_data.num_seqs > 0: data["eval"] = eval_data

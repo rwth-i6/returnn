@@ -57,6 +57,7 @@ class Device():
         import theano.sandbox.cuda as theano_cuda
         assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
         if not theano_cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
+          if device == 'gpuX': device = 'gpu'
           theano_cuda.use(device=device, force=True)
         try:
           import cuda_ndarray.cuda_ndarray as cuda
@@ -235,7 +236,7 @@ class Device():
     else: assert False, "invalid command: " + cmd
     return proc
 
-  def _checkGpuFuncs(self, device):
+  def _checkGpuFuncs(self, device, device_id):
     if device[0:3] != 'gpu': return
     # Check if we use the GPU.
     # http://deeplearning.net/software/theano/tutorial/modes.html
@@ -250,7 +251,7 @@ class Device():
     try:
       import theano.sandbox.cuda
       theano_cuda = theano.sandbox.cuda.cuda_ndarray.cuda_ndarray
-      devProps = theano_cuda.device_properties(device.id)
+      devProps = theano_cuda.device_properties(device_id)
       print >> log.v3, device + ":", "CUDA version %i" % devProps["driverVersion"]
     except Exception as exc:
       print >> log.v3, device + ":", "Exception while getting CUDA information. %s" % exc
@@ -271,6 +272,8 @@ class Device():
       import theano.sandbox.cuda
       import cuda_ndarray.cuda_ndarray as cuda
       if device == 'gpuX': device = 'gpu'
+      print "Use CUDA in device proc %s" % device
+      assert not theano.sandbox.cuda.cuda_enabled, "Must not yet be enabled. Otherwise sth is screwed."
       theano.sandbox.cuda.use(device, force = True)
       #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
       device_id = cuda.active_device_number()
@@ -285,7 +288,7 @@ class Device():
     output_queue.send(device_id)
     output_queue.send(device_name)
     self.initialize(config)
-    self._checkGpuFuncs(device)
+    self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.gparams))
     while True:
       cmd = input_queue.recv()
