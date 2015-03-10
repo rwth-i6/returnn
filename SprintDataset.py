@@ -37,7 +37,7 @@ class SprintDataset(Dataset):
     self.segmentList = list(segmentList)
     self.segmentsInfo = segmentsInfo
     self.seq_index = list(range(0, self.num_seqs))  # sorted idx -> real idx
-    self.seq_index_reversed = self.seq_index
+    self.seq_index_reversed = list(self.seq_index)
     for i, segName in enumerate(segmentList):
       segmentsInfo[segName]["idx"] = i
     self.seq_lengths = \
