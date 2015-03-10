@@ -429,8 +429,12 @@ class Engine:
       self.devices.append(Device.Device("cpu127", config))
     self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data=None, eval_data=None,
-            momentum=0, model_filename=None, interval=1, start_epoch=1, start_batch=0, max_seqs=-1, adagrad=False):
+  def train(self, num_epochs, learning_rate, batch_size, batch_step,
+            train_data, dev_data=None, eval_data=None,
+            momentum=0,
+            model_filename=None, savemodel_epoch_interval=1,
+            start_epoch=1, start_batch=0,
+            max_seqs=-1, adagrad=False):
     """
     :type num_epochs: int
     :type learning_rate: float
@@ -441,7 +445,7 @@ class Engine:
     :type eval_data: Dataset.Dataset | None
     :type momentum: float
     :param str model_filename: model filename (prefix)
-    :type interval: int
+    :type savemodel_epoch_interval: int
     :type start_epoch: int
     :type start_batch: int
     :type max_seqs: int
@@ -487,6 +491,7 @@ class Engine:
       self.training_finished = False
       self.cond.notify_all()
     assert start_epoch > 0
+    assert start_epoch <= num_epochs, "No epochs to train, start_epoch: %i, num_epochs: %i" % (start_epoch, num_epochs)
     for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
       print >> log.v1, "start epoch", epoch, "..."
       # In case of random seq ordering, we want to reorder each epoch.
@@ -508,7 +513,7 @@ class Engine:
       if trainer.score == -1:
         self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
         sys.exit(1)
-      if model_filename and (epoch % interval == 0):
+      if model_filename and (epoch % savemodel_epoch_interval == 0):
         self.save_model(model_filename + ".%03d" % epoch, epoch)
       if log.verbose[1]:
         for name in self.data.keys():
