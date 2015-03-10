@@ -12,6 +12,7 @@ from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading, thread
 import Device
+from LearningRateControl import loadLearningRateControlFromConfig
 
 
 class Batch:
@@ -419,7 +420,7 @@ class Engine:
     batch_size, batch_step = config.int_pair('batch_size', (1,1))
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
-    learning_rate = config.float('learning_rate', 0.01)
+    learning_rate_control = loadLearningRateControlFromConfig(config)
     momentum = config.float("momentum", 0)
     num_epochs = self.config_get_num_epochs(config)
     max_seqs = config.int('max_seqs', -1)
@@ -427,9 +428,12 @@ class Engine:
     adagrad = config.bool('adagrad', False)
     if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127:
       self.devices.append(Device.Device("cpu127", config))
-    self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
+    self.train(num_epochs, learning_rate_control, batch_size, batch_step,
+               train_data, dev_data, eval_data,
+               momentum, model, interval,
+               start_epoch, start_batch, max_seqs, adagrad)
 
-  def train(self, num_epochs, learning_rate, batch_size, batch_step,
+  def train(self, num_epochs, learning_rate_control, batch_size, batch_step,
             train_data, dev_data=None, eval_data=None,
             momentum=0,
             model_filename=None, savemodel_epoch_interval=1,
@@ -437,7 +441,7 @@ class Engine:
             max_seqs=-1, adagrad=False):
     """
     :type num_epochs: int
-    :type learning_rate: float
+    :type learning_rate_control: LearningRateControl.LearningRateControl
     :type batch_size: int
     :type batch_step: int
     :type train_data: Dataset.Dataset
@@ -453,6 +457,7 @@ class Engine:
     """
     print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     print >> log.v3, "using batch size/step: %i, %i" % (batch_size, batch_step)
+    print >> log.v3, "learning rate control:", learning_rate_control
     data = {}; """ :type: dict[str,Dataset.Dataset] """
     if dev_data and dev_data.num_seqs > 0: data["dev"] = dev_data
     if eval_data and eval_data.num_seqs > 0: data["eval"] = eval_data
@@ -463,7 +468,6 @@ class Engine:
       deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "deltas_%s"%p)) for p in self.network.gparams])
     if adagrad:
       sqrsum = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "sqrsum_%s"%p)) for p in self.network.gparams])
-    self.learning_rate = learning_rate
     updates = []
     if self.network.loss == 'priori':
       prior = train_data.calculate_priori()
@@ -493,7 +497,8 @@ class Engine:
     assert start_epoch > 0
     assert start_epoch <= num_epochs, "No epochs to train, start_epoch: %i, num_epochs: %i" % (start_epoch, num_epochs)
     for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
-      print >> log.v1, "start epoch", epoch, "..."
+      learning_rate = learning_rate_control.getLearningRateForEpoch(epoch)
+      print >> log.v1, "start epoch", epoch, "with learning rate", learning_rate, "..."
       # In case of random seq ordering, we want to reorder each epoch.
       train_data.init_seq_order(epoch=epoch)
       with self.lock:
@@ -515,6 +520,7 @@ class Engine:
         sys.exit(1)
       if model_filename and (epoch % savemodel_epoch_interval == 0):
         self.save_model(model_filename + ".%03d" % epoch, epoch)
+      learning_rate_control.setEpochError(epoch, trainer.score)
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]
