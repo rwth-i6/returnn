@@ -158,7 +158,7 @@ class TaskThread(threading.Thread):
       self.initialize()
       terminal_width, _ = terminal_size()
       interactive = (log.v[3] and terminal_width >= 0)
-      print >> log.v5, "starting process", self.task
+      print >> log.v5, "starting task", self.task
       run_times = []
       while num_batches < num_data_batches:
         alloc_devices, num_alloc_batches = self.allocate_devices(start_batch=num_batches)
@@ -188,6 +188,10 @@ class TaskThread(threading.Thread):
             self.score = -1
             return -1
           device_results.append(result)
+
+        for i in range(len(alloc_devices)):
+          print >> log.v5, "batch %i, dev %i, norm score: %f" % \
+                           (batch, i, device_results[i][0] / (device.data.shape[0] * device.data.shape[1]))
 
         if interactive or log.v[5]:
           def hms(s):
@@ -238,6 +242,10 @@ class TrainTaskThread(TaskThread):
     self.score = 0
 
   def evaluate(self, batch, result):
+    """
+    :param int batch: starting batch idx
+    :param list[(float,params...)] result: result[i] is result for batch + i, result[i][0] is score
+    """
     if result is None:
       self.score = None
     else:
@@ -498,7 +506,7 @@ class Engine:
       trainer.join()
       start_batch = 0
       if trainer.score == -1:
-        self.save_model(model + ".crash_" + str(trainer.last_batch), epoch - 1)
+        self.save_model(model + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
         sys.exit(1)
       if model and (epoch % interval == 0):
         self.save_model(model + ".%03d" % epoch, epoch)
@@ -509,7 +517,7 @@ class Engine:
           if True or len(self.devices) == 1:
             tester.join()
             trainer.elapsed += tester.elapsed
-        print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score,
+        print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score
     if model:
       self.save_model(model + ".%03d" % (start_epoch + num_epochs - 1), start_epoch + num_epochs - 1)
     if tester:
