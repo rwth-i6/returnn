@@ -78,6 +78,7 @@ class TaskThread(threading.Thread):
       self.data = data
       self.daemon = True
       self.elapsed = 0
+      self.finalized = False
       self.start()
 
     def allocate_devices(self, start_batch):
@@ -137,7 +138,8 @@ class TaskThread(threading.Thread):
     def evaluate(self, batch, result):
       self.result = result
     def initialize(self): pass
-    def finalize(self): pass
+    def finalize(self):
+      self.finalized = True
 
     def run(self):
       # Wrap run_inner() for better exception printing.
@@ -231,13 +233,13 @@ class TrainTaskThread(TaskThread):
     :type updater: theano.Function
     :type start_batch: int
     """
-    super(TrainTaskThread, self).__init__('train', network, devices, data, batches, start_batch)
     self.updater = updater
     self.learning_rate = learning_rate
     self.gparams = gparams
     self.zparams = {}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,numpy.array] """
     for p in gparams.keys():
       self.zparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+    super(TrainTaskThread, self).__init__('train', network, devices, data, batches, start_batch)
 
   def initialize(self):
     self.score = 0
@@ -264,6 +266,7 @@ class TrainTaskThread(TaskThread):
   def finalize(self):
     if self.data.num_timesteps > 0:
       self.score /= float(self.data.num_timesteps)
+    super(TrainTaskThread, self).finalize()
 
 
 class EvalTaskThread(TaskThread):
@@ -515,7 +518,7 @@ class Engine:
         print >> log.v1, name + ":", "score", tester.score, "error", tester.error
       trainer.join()
       start_batch = 0
-      if trainer.score == -1:
+      if not trainer.finalized:
         self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
         sys.exit(1)
       if model_filename and (epoch % savemodel_epoch_interval == 0):
