@@ -122,6 +122,8 @@ class SprintDataset(Dataset):
       else:
         self.epoch = epoch
         super(SprintDataset, self).init_seq_order(epoch=epoch)
+        for i, j in enumerate(self.seq_index):
+          self.seq_index_reversed[j] = i
 
   def init_seqs(self):
     super(SprintDataset, self).init_seqs()
