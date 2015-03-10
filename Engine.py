@@ -430,7 +430,7 @@ class Engine:
     self.train(num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data, eval_data, momentum, model, interval, start_epoch, start_batch, max_seqs, adagrad)
 
   def train(self, num_epochs, learning_rate, batch_size, batch_step, train_data, dev_data=None, eval_data=None,
-            momentum=0, model=None, interval=1, start_epoch=1, start_batch=0, max_seqs=-1, adagrad=False):
+            momentum=0, model_filename=None, interval=1, start_epoch=1, start_batch=0, max_seqs=-1, adagrad=False):
     """
     :type num_epochs: int
     :type learning_rate: float
@@ -440,7 +440,7 @@ class Engine:
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
     :type momentum: float
-    :param str model: model filename (prefix)
+    :param str model_filename: model filename (prefix)
     :type interval: int
     :type start_epoch: int
     :type start_batch: int
@@ -506,10 +506,10 @@ class Engine:
       trainer.join()
       start_batch = 0
       if trainer.score == -1:
-        self.save_model(model + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
+        self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
         sys.exit(1)
-      if model and (epoch % interval == 0):
-        self.save_model(model + ".%03d" % epoch, epoch)
+      if model_filename and (epoch % interval == 0):
+        self.save_model(model_filename + ".%03d" % epoch, epoch)
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]
@@ -518,8 +518,8 @@ class Engine:
             tester.join()
             trainer.elapsed += tester.elapsed
         print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score
-    if model:
-      self.save_model(model + ".%03d" % (start_epoch + num_epochs - 1), start_epoch + num_epochs - 1)
+    if model_filename:
+      self.save_model(model_filename + ".%03d" % (start_epoch + num_epochs - 1), start_epoch + num_epochs - 1)
     if tester:
       if len(self.devices) > 1: tester.join()
       print >> log.v1, name + ":", "score", tester.score, "error", tester.error
