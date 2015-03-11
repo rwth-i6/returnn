@@ -59,6 +59,7 @@ class Config:
       return True
     if v == "false" or v == "0":
       return False
+    assert v == "", "invalid bool value for %s: %s" % (key, v)
     return default
 
   def float(self, key, default, index=0):

@@ -6,8 +6,8 @@ import theano
 import h5py
 import time
 import sys
-import theano.tensor as T
 from Log import log
+from Updater import Updater
 from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading, thread
@@ -135,6 +135,11 @@ class TaskThread(threading.Thread):
         devices.append(device)
       return devices, num_batches - start_batch
 
+    def prepare_device_for_batch(self, device):
+      """ :type device: Device.Device """
+      pass
+    def get_device_prepare_args(self):
+      return {"network": self.network, "updater": None}
     def evaluate(self, batch, result):
       self.result = result
     def initialize(self): pass
@@ -146,7 +151,16 @@ class TaskThread(threading.Thread):
       # Thread.__bootstrap_inner() ignores sys.excepthook.
       try:
         self.run_inner()
-      except BaseException:
+      except IOError:  # Such as broken pipe.
+        print >> log.v2, "Some device proc crashed unexpectedly. Maybe just SIGINT."
+        # Just pass on. We have self.finalized == False which indicates the problem.
+      except Exception:
+        # Catch all standard exceptions.
+        # These are not device errors. We should have caught them in the code
+        # and we would leave self.finalized == False.
+        # Don't catch KeyboardInterrupt here because that will get send by the main thread
+        # when it is exiting. It's never by the user because SIGINT will always
+        # trigger KeyboardInterrupt in the main thread only.
         try:
           print("%s failed" % self)
           sys.excepthook(*sys.exc_info())
@@ -158,6 +172,8 @@ class TaskThread(threading.Thread):
       start_time = time.time()
       num_data_batches = len(self.batches)
       num_batches = self.start_batch
+      for device in self.devices:
+        device.prepare(**self.get_device_prepare_args())
       self.initialize()
       terminal_width, _ = terminal_size()
       interactive = (log.v[3] and terminal_width >= 0)
@@ -169,14 +185,20 @@ class TaskThread(threading.Thread):
         batch = num_batches
         run_time = time.time()
         for device in alloc_devices:
-          if self.network.recurrent: print >> log.v5, "running", device.data.shape[1], "sequences (" + str(device.data.shape[0] * device.data.shape[1]) + " nts)",
-          else: print >> log.v5, "running", device.data.shape[0], "frames",
-          if device.num_batches == 1: print >> log.v5, "of batch", batch,
-          else: print >> log.v5, "of batches", str(batch) + "-" + str(batch + device.num_batches - 1),
+          if self.network.recurrent:
+            print >> log.v5, "running", device.data.shape[1], \
+                             "sequences (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
+          else:
+            print >> log.v5, "running", device.data.shape[0], "frames",
+          if device.num_batches == 1:
+            print >> log.v5, "of batch %i" % batch,
+          else:
+            print >> log.v5, "of batches %i-%i" % (batch, batch + device.num_batches - 1),
           print >> log.v5, "/", num_data_batches, "on device", device.name
           #if SprintCommunicator.instance is not None:
           #  SprintCommunicator.instance.segments = device.tags #TODO
-          device.run(self.task, self.network)
+          self.prepare_device_for_batch(device)
+          device.run(self.task)
           batch += device.num_batches
 
         # Collect results.
@@ -188,8 +210,11 @@ class TaskThread(threading.Thread):
           if result is None:
             print >> log.v2, "device", device.name, "crashed on batch", batch
             self.last_batch = batch
-            self.score = -1
-            return -1
+            self.score = None
+            # We leave self.finalized == False. That way, the engine can see that the device crashed.
+            return
+          assert isinstance(result, list)
+          assert len(result) >= 1  # The first entry is expected to be the score as a scalar.
           device_results.append(result)
 
         for i in range(len(alloc_devices)):
@@ -222,27 +247,43 @@ class TaskThread(threading.Thread):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, gparams, updater, start_batch = 0):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch = 0):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
     :type data: Dataset.Dataset
     :type batches: list[Batch]
     :type learning_rate: float
-    :type gparams: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable]
-    :type updater: theano.Function
+    :type updater: Updater
     :type start_batch: int
     """
     self.updater = updater
     self.learning_rate = learning_rate
-    self.gparams = gparams
-    self.zparams = {}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,numpy.array] """
-    for p in gparams.keys():
-      self.zparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-    super(TrainTaskThread, self).__init__('train', network, devices, data, batches, start_batch)
+    # The task is passed to Device.run().
+    if self.updater.updateOnDevice:
+      task = "train_and_update"
+    else:
+      task = "train_distributed"
+    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch)
 
   def initialize(self):
     self.score = 0
+    if self.updater.updateOnDevice:
+      assert len(self.devices) == 1
+      self.devices[0].set_learning_rate(self.learning_rate)
+    else:
+      self.updater.initVars(self.network, None)
+      self.updater.setLearningRate(self.learning_rate)
+      self.updater_func = self.updater.getUpdateFunction()
+
+  def prepare_device_for_batch(self, device):
+    """ :type device: Device.Device """
+    device.maybe_update_network(self.network)
+
+  def get_device_prepare_args(self):
+    kwargs = super(TrainTaskThread, self).get_device_prepare_args()
+    kwargs["updater"] = self.updater
+    return kwargs
 
   def evaluate(self, batch, result):
     """
@@ -252,18 +293,22 @@ class TrainTaskThread(TaskThread):
     if result is None:
       self.score = None
     else:
-      gparams = {}
-      for p in self.network.gparams:
-        gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
-      for res in result:
-        self.score += res[0]
-        for p,q in zip(self.network.gparams, res[1:]):
-          gparams[p] += q
-      for p in self.network.gparams:
-        self.gparams[p].set_value(gparams[p], borrow=True)
-      self.updater(self.learning_rate)
+      if not self.updater.updateOnDevice:
+        gparams = {}
+        for p in self.network.gparams:
+          gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
+        for res in result:
+          self.score += res[0]
+          for p,q in zip(self.network.gparams, res[1:]):
+            gparams[p] += q
+        self.updater.setNetParamDeltas(gparams)
+        self.updater_func()
 
   def finalize(self):
+    if self.updater.updateOnDevice:
+      # Copy over params at the very end. Also only if we did training.
+      assert len(self.devices) == 1
+      self.network.set_params(self.devices[0].get_net_params())
     if self.data.num_timesteps > 0:
       self.score /= float(self.data.num_timesteps)
     super(TrainTaskThread, self).finalize()
@@ -361,8 +406,6 @@ class Engine:
     """
     self.network = network
     self.devices = devices
-    self.gparams = {p: theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX)) for p in self.network.gparams}; """ :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] """
-    self.rate = T.scalar('r')
     self.is_training = False
     self.training_finished = False
     self.lock = threading.RLock()
@@ -424,39 +467,36 @@ class Engine:
     model = config.value('model', None)
     interval = config.int('save_interval', 1)
     learning_rate_control = loadLearningRateControlFromConfig(config)
-    momentum = config.float("momentum", 0)
     num_epochs = self.config_get_num_epochs(config)
     max_seqs = config.int('max_seqs', -1)
     start_batch = start_batch or config.int('start_batch', 0)
-    adagrad = config.bool('adagrad', False)
-    if config.value("on_size_limit", "ignore") == "cpu" and self.devices[-1].id != 127:
-      self.devices.append(Device.Device("cpu127", config))
+    updater = Updater.initFromConfig(config)
     self.train(num_epochs, learning_rate_control, batch_size, batch_step,
+               updater,
                train_data, dev_data, eval_data,
-               momentum, model, interval,
-               start_epoch, start_batch, max_seqs, adagrad)
+               model, interval,
+               start_epoch, start_batch, max_seqs)
 
   def train(self, num_epochs, learning_rate_control, batch_size, batch_step,
+            updater,
             train_data, dev_data=None, eval_data=None,
-            momentum=0,
             model_filename=None, savemodel_epoch_interval=1,
             start_epoch=1, start_batch=0,
-            max_seqs=-1, adagrad=False):
+            max_seqs=-1):
     """
     :type num_epochs: int
     :type learning_rate_control: LearningRateControl.LearningRateControl
     :type batch_size: int
     :type batch_step: int
+    :type updater: Updater
     :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
-    :type momentum: float
     :param str model_filename: model filename (prefix)
     :type savemodel_epoch_interval: int
     :type start_epoch: int
     :type start_batch: int
     :type max_seqs: int
-    :type adagrad: bool
     """
     print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     print >> log.v3, "using batch size/step: %i, %i" % (batch_size, batch_step)
@@ -467,25 +507,10 @@ class Engine:
     self.data = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
     for name in data.keys():
       self.data[name] = (data[name], self.set_batch_size(data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
-    if momentum > 0:
-      deltas = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "deltas_%s"%p)) for p in self.network.gparams])
-    if adagrad:
-      sqrsum = dict([(p, theano.shared(value = numpy.zeros(p.get_value().shape, dtype = theano.config.floatX), borrow = True, name = "sqrsum_%s"%p)) for p in self.network.gparams])
-    updates = []
     if self.network.loss == 'priori':
       prior = train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
-    for param in self.network.gparams:
-      upd = - self.rate * self.gparams[param]
-      if momentum > 0:
-        upd += momentum * deltas[param]
-        updates.append((deltas[param], upd))
-      if adagrad:
-        updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
-        upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
-      updates.append((param, param + upd))
-    updater = theano.function(inputs = [self.rate], updates = updates, name = "updater")
     tester = None
     #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
     #testing_device = self.devices[-1]
@@ -509,7 +534,8 @@ class Engine:
         self.cur_epoch = epoch
         self.cond.notify_all()
       train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
-      trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches, learning_rate, self.gparams, updater, start_batch)
+      trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches,
+                                learning_rate, updater, start_batch)
       if tester:
         if False and len(self.devices) > 1:
           if tester.isAlive():

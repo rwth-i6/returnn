@@ -107,18 +107,13 @@ def maybeInitSprintCommunicator():
   if config.has('sh_mem_key'):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
 
-def initDevices():
+def getDevicesInitArgs(config):
   """
-  :rtype: list[Device]
+  :type config: Config
+  :rtype: list[dict[str]]
   """
   multiproc = config.bool('multiprocessing', True)
   device_info = config.list('device', ['cpu0'])
-  if "device" in TheanoFlags:
-    if multiproc:
-      assert not TheanoFlags["device"].startswith("gpu"), "the main proc is not supposed to use the GPU"
-    else:
-      print >> log.v2, "devices: use %s via THEANO_FLAGS instead of %s" % (TheanoFlags["device"], ", ".join(device_info))
-      device_info = [TheanoFlags["device"]]
   device_tags = {}
   ncpus, ngpus = get_num_devices()
   if "all" in device_info:
@@ -148,9 +143,47 @@ def initDevices():
         assert match, "invalid device specified: " + info
   tags = sorted(device_tags.keys())
   if multiproc:
-    devices = [ Device(tag, config, num_batches = device_tags[tag]) for tag in tags ]
+    assert len(tags) > 0
+    devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag]} for tag in tags ]
+    assert not TheanoFlags.get("device", "").startswith("gpu"), \
+        "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
   else:
-    devices = [ Device(tags[0], config, blocking = True) ]
+    devices = [ {"device": tags[0], "config": config, "blocking": True} ]
+  if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
+    devices.append({"device": "cpu127", "config": config})
+  return devices
+
+def isUpdateOnDevice(config):
+  """
+  :type config: Config
+  :rtype: bool
+  """
+  devArgs = getDevicesInitArgs(config)
+  if config.value("update_on_device", "auto") == "auto":
+    return len(devArgs) == 1
+  updateOnDevice = config.bool("update_on_device", None)
+  assert isinstance(updateOnDevice, bool)
+  if updateOnDevice:
+    assert len(devArgs) == 1, "Devices: update_on_device works only with a single device."
+  return updateOnDevice
+
+def initDevices():
+  """
+  :rtype: list[Device]
+  """
+  if "device" in TheanoFlags:
+    # This is important because Theano likely already has initialized that device.
+    oldDeviceConfig = ",".join(config.list('device', ['default']))
+    config.set("device", TheanoFlags["device"])
+    print >> log.v2, "Devices: Use %s via THEANO_FLAGS instead of %s." % \
+                     (TheanoFlags["device"], oldDeviceConfig)
+  devArgs = getDevicesInitArgs(config)
+  assert len(devArgs) > 0
+  devices = [Device(**kwargs) for kwargs in devArgs]
+  if devices[0].blocking:
+    print >> log.v2, "Devices: Used in blocking / single proc mode."
+  else:
+    print >> log.v2, "Devices: Used in multiprocessing mode."
   return devices
 
 def getCacheSizes():
