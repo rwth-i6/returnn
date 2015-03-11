@@ -104,7 +104,7 @@ class Newbob(LearningRateControl):
     """
     kwargs = super(Newbob, cls).load_initial_kwargs_from_config(config)
     kwargs.update({
-      "relativeErrorThreshold": config.float('newbob_relative_error_threshold', 0.01),
+      "relativeErrorThreshold": config.float('newbob_relative_error_threshold', -0.01),
       "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
     return kwargs
 
