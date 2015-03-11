@@ -87,7 +87,7 @@ class SprintDataset(Dataset):
       assert start >= self.expected_load_seq_start
       if start > self.expected_load_seq_start:
         # Cleanup old data.
-        self.remove_alloc_interval(0, start - 1)
+        self.remove_alloc_interval(0, start)
         self.expected_load_seq_start = start
       assert end >= self.requested_load_seq_end
       self.requested_load_seq_end = end

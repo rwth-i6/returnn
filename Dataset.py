@@ -238,6 +238,8 @@ class Dataset(object):
     :return selection list, modified sorted seq idx in self.alloc_intervals
     """
     if end is None: end = start + 1
+    if start == end: return
+    assert start < end
     i = 0
     selection = []; """ :type: list[int] """
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
