@@ -11,6 +11,7 @@ from Updater import Updater
 from Util import hdf5_strings, terminal_size, progress_bar
 from collections import OrderedDict
 import threading, thread
+import atexit
 import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 
@@ -79,7 +80,14 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.finalized = False
+      # There is no generic way to see whether Python is exiting.
+      # This is our workaround. We check for it in self.run_inner().
+      self.stopped = False
+      atexit.register(self.stop)
       self.start()
+
+    def stop(self):
+      self.stopped = True
 
     def allocate_devices(self, start_batch):
       """
@@ -242,6 +250,13 @@ class TaskThread(threading.Thread):
             progress_bar(complete, remaining)
         self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
+
+        if self.stopped:
+          # This happens when we exit Python.
+          # Without this check, this thread would keep running until all exit handlers of Python are done.
+          print >> log.v5, "%s stopped" % self
+          return
+
       self.finalize()
       self.elapsed = (time.time() - start_time)
 
