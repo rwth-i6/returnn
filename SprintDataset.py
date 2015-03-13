@@ -57,7 +57,7 @@ class SprintDataset(Dataset):
 
   def initialize(self):
     """
-    Called via python_train.
+    Called via SprintInterface.init().
     """
     if self.num_seqs == 0:
       # We have not called initFromSegmentOrder() yet.
@@ -76,7 +76,7 @@ class SprintDataset(Dataset):
     return [self.segmentList[i] for i in self.seq_index]
 
   def load_seqs(self, start, end, free=True, fill=True):
-    print >> log.v5, currentThread().name, ": load_seqs", start, end, free, fill
+    print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end, free, fill
     if start == end: return
     if thread.get_ident() == self.main_thread_id:
       print >> log.v5, "ignore load_seqs from this thread"
@@ -93,9 +93,11 @@ class SprintDataset(Dataset):
       self.requested_load_seq_end = end
       self.cond.notify_all()
       if not self._haveSeqs(start, end):
-        print >> log.v5, "have not seqs. waiting..."
+        print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
       while not self._haveSeqs(start, end):
         assert not self.finalized
+        assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
+        assert end - 1 > self.seq_added_last
         self.cond.wait()
 
   def _haveSeqs(self, start, end=None):
@@ -109,7 +111,7 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
 
   def init_seq_order(self, epoch=None):
-    print >> log.v5, currentThread().name, "init_seq_order", epoch
+    print >> log.v5, "SprintDataset init_seq_order in %s:" % currentThread().name, epoch
     # Sprint can iterate over the segment list before it called the trainer init.
     # The trainer will also control the sequence order itself.
     # Avoid a reinit for the same epoch. This is why we override this method.
@@ -124,6 +126,8 @@ class SprintDataset(Dataset):
         super(SprintDataset, self).init_seq_order(epoch=epoch)
         for i, j in enumerate(self.seq_index):
           self.seq_index_reversed[j] = i
+        self.seq_added_excluded = set()  # Via self.addNewData().
+        self.seq_added_last = -1
 
   def init_seqs(self):
     super(SprintDataset, self).init_seqs()
@@ -151,10 +155,18 @@ class SprintDataset(Dataset):
       assert (seqLen,) == targets.shape
       assert self.alloc_intervals
 
-      print >> log.v5, "addNewData: seq=%i, len=%i" % (idxSorted, seqLen)
+      print >> log.v5, "SprintDataset addNewData: seq=%i, len=%i" % (idxSorted, seqLen)
+
+      # We expect a monotonic increasing sorted seq order.
+      assert self.seq_added_last < idxSorted, "Order messed up, last added idx: %i" % self.seq_added_last
+      if self.seq_added_last < idxSorted - 1:
+        seqLeftOut = range(self.seq_added_last + 1, idxSorted)
+        print >> log.v5, "SprintDataset addNewData: left out seqs: %s" % seqLeftOut
+        self.seq_added_excluded.update(seqLeftOut)
+      self.seq_added_last = idxSorted
 
       if idxSorted > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
-        print >> log.v5, "Cache filled, waiting to get loaded..."
+        print >> log.v5, "SprintDataset addNewData: Cache filled, waiting to get loaded..."
         while idxSorted > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMin:
           self.cond.wait()
 
