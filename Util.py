@@ -72,7 +72,7 @@ def terminal_size(): # this will probably work on linux only
 def hms(s):
   m, s = divmod(s, 60)
   h, m = divmod(m, 60)
-  return "%d:%02d:%02d"%(h,m,s)
+  return "%d:%02d:%02d" % (h, m, s)
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys

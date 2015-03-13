@@ -8,7 +8,7 @@ import time
 import sys
 from Log import log
 from Updater import Updater
-from Util import hdf5_strings, terminal_size, progress_bar
+from Util import hdf5_strings, terminal_size, progress_bar, hms
 from collections import OrderedDict
 import threading, thread
 import atexit
@@ -80,6 +80,7 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.finalized = False
+      self.score = None
       self.device_crash_batch = None
       # There is no generic way to see whether Python is exiting.
       # This is our workaround. We check for it in self.run_inner().
@@ -167,9 +168,16 @@ class TaskThread(threading.Thread):
       pass
     def get_device_prepare_args(self):
       return {"network": self.network, "updater": None}
-    def evaluate(self, batch, result):
-      self.result = result
-    def initialize(self): pass
+    def evaluate(self, batch, results, num_frames):
+      """
+      :param int batch: start batch
+      :param list[list[numpy.ndarray]] result: results from devices
+      :type num_frames: int
+      :returns some score or None
+      """
+      pass
+    def initialize(self):
+      pass
     def finalize(self):
       self.finalized = True
 
@@ -195,25 +203,49 @@ class TaskThread(threading.Thread):
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           thread.interrupt_main()
 
-    def run_inner(self):
-      start_time = time.time()
-      num_data_batches = len(self.batches)
-      num_batches = self.start_batch
-      for device in self.devices:
-        device.prepare(**self.get_device_prepare_args())
-      self.initialize()
-      terminal_width, _ = terminal_size()
-      interactive = (log.v[3] and terminal_width >= 0)
-      print >> log.v5, "starting task", self.task
-      run_times = []
-      while num_batches < num_data_batches:
-        alloc_devices, num_alloc_batches = self.allocate_devices(start_batch=num_batches)
-        assert num_alloc_batches > 0
+    class DeviceBatchRun:
+      def __init__(self, parent, batch_idx):
+        """
+        :type parent: TaskThread
+        """
+        self.parent = parent
+        self.batch_idx = batch_idx
+        self.score = None
+        self.num_frames = 0
+
+      def finish(self):
+        """
+        :returns whether everything is fine.
+        """
+        if not self.alloc_devices:
+          # We skipped segments. That's fine.
+          return True
+
+        device_results = self.device_collect_results(self.alloc_devices)
+        if device_results is None:
+          print >> log.v2, "device crashed on batch", self.batch_idx
+          self.parent.device_crash_batch = self.batch_idx
+          return False
+        assert len(device_results) == len(self.alloc_devices)
+
+        self.score = self.parent.evaluate(self.batch_idx, device_results, self.num_frames)
+
+        self.print_process()
+        return True
+
+      def start(self):
+        self.batch_start_time = time.time()
+        self.alloc_devices, self.num_alloc_batches = self.parent.allocate_devices(start_batch=self.batch_idx)
+        assert self.num_alloc_batches > 0
         # Note that alloc_devices could be empty if we skipped seqs.
-        batch = num_batches
-        run_time = time.time()
-        for device in alloc_devices:
-          if self.network.recurrent:
+        if not self.alloc_devices:
+          return
+        self.device_run()
+
+      def device_run(self):
+        batch = self.batch_idx
+        for device in self.alloc_devices:
+          if self.parent.network.recurrent:
             print >> log.v5, "running", device.data.shape[1], \
                              "sequences (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
           else:
@@ -222,55 +254,119 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batch %i" % batch,
           else:
             print >> log.v5, "of batches %i-%i" % (batch, batch + device.num_batches - 1),
-          print >> log.v5, "/", num_data_batches, "on device", device.name
+          print >> log.v5, "/", len(self.parent.batches), "on device", device.name
           #if SprintCommunicator.instance is not None:
           #  SprintCommunicator.instance.segments = device.tags #TODO
-          self.prepare_device_for_batch(device)
-          device.run(self.task)
+          self.num_frames += device.data.shape[0] * device.data.shape[1]
+          self.parent.prepare_device_for_batch(device)
+          device.run(self.parent.task)
           batch += device.num_batches
 
-        # Collect results.
-        batch = num_batches
+      def device_collect_results(self, alloc_devices):
         device_results = []
         for device in alloc_devices:
-          try: result = device.result()
-          except RuntimeError: result = None
+          try:
+            result = device.result()
+          except RuntimeError:
+            result = None
           if result is None:
-            print >> log.v2, "device", device.name, "crashed on batch", batch
-            self.device_crash_batch = batch
-            self.score = None
-            # We leave self.finalized == False. That way, the engine can see that the device crashed.
-            return
+            return None
           assert isinstance(result, list)
           assert len(result) >= 1  # The first entry is expected to be the score as a scalar.
           device_results.append(result)
+        return device_results
 
-        for i in range(len(alloc_devices)):
-          print >> log.v5, "batch %i, dev %i, norm score: %f" % \
-                           (batch, i, device_results[i][0] / (device.data.shape[0] * device.data.shape[1]))
+      def device_mem_usage_str(self, devices):
+        """
+        :type devices: list[Device.Device]
+        :rtype: str | None
+        """
+        if not devices:
+          return None
+        mem_info = [device.get_memory_info() for device in devices]
+        if len(mem_info) == 1 and mem_info[0] is None:
+          return None
+        mem_usage = [info.used if info else None for info in mem_info]
+        s = ["%s MB" % (mem / (1024*1024)) if mem is not None else "unknown" for mem in mem_usage]
+        return "/".join(s)
 
-        if interactive or log.v[5]:
-          def hms(s):
-            m, s = divmod(s, 60)
-            h, m = divmod(m, 60)
-            return "%d:%02d:%02d"%(h,m,s)
-          start_elapsed = time.time() - start_time
-          run_elapsed = time.time() - run_time
-          run_times.append(run_elapsed)
-          if len(run_times) * run_elapsed > 60: run_times = run_times[1:]
-          time_domain = len(run_times) * sum([d.num_batches for d in alloc_devices])
-          time_factor = 0.0 if time_domain == 0.0 else float(sum(run_times)) / time_domain
-          complete = float(num_batches + num_alloc_batches) / num_data_batches
-          remaining = hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches)))
-          if log.verbose[5]:
-            progress = "%.02f%%" % (complete * 100)
-            mem_usage = "/".join([str(device.get_memory_info().used / (1024*1024)) + ' MB' for device in alloc_devices])
-            print >> log.v5, "elapsed %s, exp. remaining %s, complete %s, memory %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress, mem_usage)
-          if interactive:
-            progress_bar(complete, remaining)
-        if device_results:
-          self.evaluate(num_batches, device_results)
-        num_batches += num_alloc_batches
+      def print_process(self):
+        if not self.parent.interactive and not log.v[5]:
+          return
+        start_elapsed = time.time() - self.parent.start_time
+        run_elapsed = time.time() - self.batch_start_time
+        self.parent.run_times.append(run_elapsed)
+        if len(self.parent.run_times) * run_elapsed > 60: self.parent.run_times = self.parent.run_times[1:]
+        time_domain = len(self.parent.run_times) * sum([d.num_batches for d in self.alloc_devices])
+        time_factor = 0.0 if time_domain == 0.0 else float(sum(self.parent.run_times)) / time_domain
+        complete = float(self.batch_idx + self.num_alloc_batches) / len(self.parent.batches)
+        remaining = hms(int(time_factor * (len(self.parent.batches) - self.batch_idx - self.num_alloc_batches)))
+        if log.verbose[5]:
+          mem_usage = self.device_mem_usage_str(self.alloc_devices)
+          info = [
+            "batch %i" % self.batch_idx,
+            "score %f" % self.score if self.score is not None else None,
+            "elapsed %s" % hms(start_elapsed),
+            "exp. remaining %s" % remaining,
+            "complete %.02f%%" % (complete * 100),
+            "memory %s" % mem_usage if mem_usage else None
+          ]
+          print >> log.v5, ", ".join(filter(None, info))
+        if self.parent.interactive:
+          progress_bar(complete, remaining)
+
+    def device_can_run_async(self):
+      if len(self.devices) != 1:
+        return False
+      if self.devices[0].blocking:
+        # If we are in the same proc (= blocking), nothing can be async.
+        return False
+      if self.devices[0].updater is None:
+        # If nothing needs to be updated, we can run async.
+        return True
+      # We can run async iff we do the updates online.
+      return self.devices[0].updater.updateOnDevice
+
+    def run_inner(self):
+      self.start_time = time.time()
+      for device in self.devices:
+        device.prepare(**self.get_device_prepare_args())
+      self.initialize()
+      terminal_width, _ = terminal_size()
+      self.interactive = (log.v[3] and terminal_width >= 0)
+      print >> log.v5, "starting task", self.task
+      self.run_times = []
+
+      batch_idx = self.start_batch
+      canRunAsync = self.device_can_run_async()
+      remainingDeviceRun = None; " :type: DeviceBatchRun "
+
+      while True:
+        # Note about the async logic:
+        # We start device.run() twice before we do the first device.result() call.
+        # That works because the device proc will push the results on the queue
+        # and device.result() reads it from there without sending another command.
+
+        if batch_idx < len(self.batches):
+          deviceRun = self.DeviceBatchRun(self, batch_idx)
+          deviceRun.start()
+          batch_idx += deviceRun.num_alloc_batches
+        else:
+          deviceRun = None
+
+        if remainingDeviceRun:  # Set when canRunAsync.
+          if not remainingDeviceRun.finish():
+            return
+
+        if not deviceRun:  # Finished loop.
+          break
+
+        if canRunAsync:
+          remainingDeviceRun = deviceRun
+        else:
+          if not deviceRun.finish():
+            # We leave self.finalized == False. That way, the engine can see that the device crashed.
+            return
 
         if self.stopped:
           # This happens when we exit Python.
@@ -279,7 +375,7 @@ class TaskThread(threading.Thread):
           return
 
       self.finalize()
-      self.elapsed = (time.time() - start_time)
+      self.elapsed = (time.time() - self.start_time)
 
 
 class TrainTaskThread(TaskThread):
@@ -321,30 +417,35 @@ class TrainTaskThread(TaskThread):
     kwargs["updater"] = self.updater
     return kwargs
 
-  def evaluate(self, batch, result):
+  def evaluate(self, batch, results, num_frames):
     """
     :param int batch: starting batch idx
-    :param list[(float,params...)] result: result[i] is result for batch + i, result[i][0] is score
+    :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
+    :type num_frames: int
     """
-    if result is None:
-      self.score = None
-    else:
-      if not self.updater.updateOnDevice:
-        gparams = {}
-        for p in self.network.gparams:
-          gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype = theano.config.floatX)
-        for res in result:
-          self.score += res[0]
-          for p,q in zip(self.network.gparams, res[1:]):
-            gparams[p] += q
-        self.updater.setNetParamDeltas(gparams)
-        self.updater_func()
+    assert results
+    score = sum([res[0] for res in results])
+    self.score += score
+    if not self.updater.updateOnDevice:
+      gparams = {}
+      for p in self.network.gparams:
+        gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+      for res in results:
+        for p, q in zip(self.network.gparams, res[1:]):
+          gparams[p] += q
+      self.updater.setNetParamDeltas(gparams)
+      self.updater_func()
+    return score / num_frames
 
   def finalize(self):
     if self.updater.updateOnDevice:
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
-      self.network.set_params(self.devices[0].get_net_params())
+      params = self.devices[0].get_net_params()
+      our_params = self.network.gparams
+      assert len(params) == len(our_params)
+      for i in range(len(params)):
+        our_params[i].set_value(params[i])
     if self.data.num_timesteps > 0:
       self.score /= float(self.data.num_timesteps)
     super(TrainTaskThread, self).finalize()
@@ -356,9 +457,12 @@ class EvalTaskThread(TaskThread):
     def initialize(self):
       self.score = 0
       self.error = 0
-    def evaluate(self, batch, result):
-      self.score += sum([res[0] for res in result])
-      self.error += sum([res[1] for res in result])
+    def evaluate(self, batch, results, num_frames):
+      assert results
+      score = sum([res[0] for res in results])
+      self.score += score
+      self.error += sum([res[1] for res in results])
+      return score / num_frames
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
       self.error /= float(self.data.num_timesteps)

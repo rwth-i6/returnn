@@ -62,6 +62,8 @@ class Device():
     self.blocking = blocking
     self.config = config
     self.output = None; " :type: list[numpy.ndarray] "
+    self.run_called_count = 0
+    self.result_called_count = 0
     self.main_pid = os.getpid()
     if blocking:
       self.initialize(config)
@@ -363,12 +365,16 @@ class Device():
         self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         params = input_queue.recv()
-        self.get_task_network().set_params(params)
+        assert isinstance(params, list)
+        our_params = self.get_task_network().gparams
+        assert len(params) == len(our_params)
+        for i in range(len(params)):
+          our_params[i].set_value(params[i])
       elif cmd == "get-net-params":  # via self.get_net_params()
         output_queue.send("net-params")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        output_queue.send({k: numpy.asarray(v) for (k, v) in self.get_task_network().get_params().items()})
+        output_queue.send([numpy.asarray(p.get_value()) for p in self.get_task_network().gparams])
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -458,7 +464,7 @@ class Device():
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-net-params")
-      self.input_queue.send(network.get_params())
+      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.gparams])
 
   def maybe_update_network(self, network):
     """
@@ -491,6 +497,7 @@ class Device():
     :type task: str
     """
     self.task = task
+    self.run_called_count += 1
     self.update_data()
     if self.blocking:
       self.output = self.compute(task)()
@@ -507,14 +514,15 @@ class Device():
     self.update_data()
 
   def result(self):
+    self.result_called_count += 1
     if self.blocking:
+      assert self.result_called_count == self.run_called_count
       return self.output
     else:
       assert self.main_pid == os.getpid()
-      if not self.proc.is_alive(): return None
-      # output will be set to None in self.run().
-      if self.output is not None:
-        return self.output
+      assert self.result_called_count <= self.run_called_count
+      if not self.proc.is_alive():
+        return None
       timeout = 60 * 5  # 5 minutes execution timeout
       while timeout > 0:
         if self.output_queue.poll(1):
@@ -552,9 +560,7 @@ class Device():
     try:
       import pynvml
     except ImportError as exc:
-      class DummyInfo:
-        used = 0
-      return DummyInfo
+      return None
     hmap = [2, 3, 1, 0]
     handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
     return pynvml.nvmlDeviceGetMemoryInfo(handle)
