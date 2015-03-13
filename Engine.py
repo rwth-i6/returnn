@@ -587,6 +587,7 @@ class Engine:
       if model_filename and (epoch % savemodel_epoch_interval == 0):
         self.save_model(model_filename + ".%03d" % epoch, epoch)
       learning_rate_control.setEpochError(epoch, trainer.score)
+      learning_rate_control.save()
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]

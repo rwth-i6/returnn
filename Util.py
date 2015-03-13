@@ -1,6 +1,8 @@
 import subprocess
 import h5py
 from scipy.io.netcdf import NetCDFFile
+from collections import deque
+import inspect
 
 def cmd(cmd):
   """
@@ -86,8 +88,46 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   if prefix != "": prefix = prefix + " "
   if suffix != "": suffix = " " + suffix
   ntotal = terminal_width - len(progress) - len(prefix) - len(suffix) - 4
-  bars = int(complete * ntotal) * '|'
-  spaces = (ntotal - int(complete * ntotal)) * ' '
+  bars = '|' * int(complete * ntotal)
+  spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
   sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
   sys.stdout.flush()
+
+def betterRepr(o):
+  """
+  The main difference: this one is deterministic.
+  The orig dict.__repr__ has the order undefined for dict or set.
+  For big dicts/sets/lists, add "," at the end to make textual diffs nicer.
+  """
+  if isinstance(o, list):
+    return "[\n%s]" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
+  if isinstance(o, deque):
+    return "deque([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
+  if isinstance(o, tuple):
+    if len(o) == 1: return "(%s,)" % o[0]
+    return "(%s)" % ", ".join(map(betterRepr, o))
+  if isinstance(o, dict):
+    return "{\n%s}" % "".join(map(lambda (k,v): betterRepr(k) + ": " + betterRepr(v) + ",\n", sorted(o.iteritems())))
+  if isinstance(o, set):
+    return "set([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
+  # fallback
+  return repr(o)
+
+def simpleObjRepr(obj):
+  """
+  All self.__init__ args.
+  """
+  return obj.__class__.__name__ + "(%s)" % \
+                                  ", ".join(["%s=%s" % (arg, betterRepr(getattr(obj, arg)))
+                                             for arg in inspect.getargspec(obj.__init__).args[1:]])
+
+class ObjAsDict:
+  def __init__(self, obj):
+    self.__obj = obj
+
+  def __getitem__(self, item):
+    try:
+      return getattr(self.__obj, item)
+    except AttributeError, e:
+      raise KeyError(e)

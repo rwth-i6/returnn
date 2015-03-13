@@ -1,4 +1,7 @@
 
+import os
+from Util import betterRepr, simpleObjRepr, ObjAsDict
+
 
 class LearningRateControl(object):
 
@@ -11,13 +14,17 @@ class LearningRateControl(object):
       self.learningRate = learningRate
       self.error = error
 
+    __repr__ = simpleObjRepr
+
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
     :type config: Config.Config
     :rtype: dict[str]
     """
-    return {"initialLearningRate": config.float('learning_rate', 0.01)}
+    return {
+      "initialLearningRate": config.float('learning_rate', 0.01),
+      "filename": config.value('learning_rate_file', None)}
 
   @classmethod
   def load_initial_from_config(cls, config):
@@ -28,20 +35,26 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, initialLearningRate):
+  def __init__(self, initialLearningRate, filename=None):
     """
     :param float initialLearningRate: learning rate for epoch 1
+    :param str filename: load from and save to file
     """
     self.epochData = {1: self.EpochData(initialLearningRate)}
+    self.filename = filename
+    if filename and os.path.exists(filename):
+      self.load()
 
   @property
   def initialLearningRate(self):
     return self.epochData[1].learningRate
 
-  def __repr__(self):
-    import inspect
-    return self.__class__.__name__ + "(%s)" % \
-      ", ".join(["%s=%r" % (arg, getattr(self, arg)) for arg in inspect.getargspec(self.__init__).args[1:]])
+  __repr__ = simpleObjRepr
+
+  def __str__(self):
+    return "%r, epoch data: %s" % \
+           (self, ", ".join(["%i: %s" % (epoch, self.epochData[epoch])
+                             for epoch in sorted(self.epochData.keys())]))
 
   def calcLearningRateForEpoch(self, epoch):
     """
@@ -68,18 +81,19 @@ class LearningRateControl(object):
     :type error: float
     """
     assert epoch in self.epochData, "You did not called getLearningRateForEpoch(%i)?" % epoch
-    assert self.epochData[epoch].error is None, "Error expected to not be set yet."
     assert isinstance(error, float)
     self.epochData[epoch].error = error
 
-  def save(self, filename):
-    import pickle
-    pickle.dump(self, open(filename, "w"))
+  def save(self):
+    if not self.filename: return
+    f = open(self.filename, "w")
+    f.write(betterRepr(self.epochData))
+    f.write("\n")
+    f.close()
 
-  @staticmethod
-  def load(filename):
-    import pickle
-    return pickle.load(open(filename))
+  def load(self):
+    s = open(self.filename).read()
+    self.epochData = eval(s, {}, ObjAsDict(self))
 
 
 class ConstantLearningRate(LearningRateControl):
@@ -108,13 +122,14 @@ class Newbob(LearningRateControl):
       "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
     return kwargs
 
-  def __init__(self, initialLearningRate, relativeErrorThreshold, learningRateDecayFactor):
+  def __init__(self, initialLearningRate, relativeErrorThreshold, learningRateDecayFactor, filename=None):
     """
     :param float initialLearningRate: learning rate for epoch 1+2
     :type relativeErrorThreshold: float
     :type learningRateDecayFactor: float
+    :type filename: str
     """
-    super(Newbob, self).__init__(initialLearningRate=initialLearningRate)
+    super(Newbob, self).__init__(initialLearningRate=initialLearningRate, filename=filename)
     self.relativeErrorThreshold = relativeErrorThreshold
     self.learningRateDecayFactor = learningRateDecayFactor
 
