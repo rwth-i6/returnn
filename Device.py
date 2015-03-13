@@ -366,7 +366,9 @@ class Device():
         self.get_task_network().set_params(params)
       elif cmd == "get-net-params":  # via self.get_net_params()
         output_queue.send("net-params")
-        output_queue.send(self.get_task_network().get_params())
+        # We can get cuda_ndarray or other references to internal device memory.
+        # We explicitly want to copy them over to CPU memory.
+        output_queue.send({k: numpy.asarray(v) for (k, v) in self.get_task_network().get_params().items()})
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
