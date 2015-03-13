@@ -79,7 +79,7 @@ class SprintDataset(Dataset):
     print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end, free, fill
     if start == end: return
     if thread.get_ident() == self.main_thread_id:
-      print >> log.v5, "ignore load_seqs from this thread"
+      print >> log.v5, "SprintDataset load_seqs: ignore from this thread"
       return
     with self.lock:
       assert self.alloc_intervals  # Must be initialized.
@@ -92,15 +92,33 @@ class SprintDataset(Dataset):
       assert end >= self.requested_load_seq_end
       self.requested_load_seq_end = end
       self.cond.notify_all()
-      if not self._haveSeqs(start, end):
+      if not self._haveSeqsAdded(start, end):
         print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
-      while not self._haveSeqs(start, end):
+      while not self._haveSeqsAdded(start, end):
         assert not self.finalized
         assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
         assert end - 1 > self.seq_added_last
         self.cond.wait()
 
-  def _haveSeqs(self, start, end=None):
+  def have_seqs(self, start, end):
+    """
+    :param int start: start sorted seq idx
+    :param int end: end sorted seq idx
+    :returns whether this dataset includes the seq range.
+    A call to self.load_seqs() must succeed if we return True.
+    """
+    with self.lock:
+      if not super(SprintDataset, self).have_seqs(start, end):
+        return False
+      # Otherwise we cannot tell. Sprint could skip segments for whatever reason,
+      # e.g. the buffer in BufferFeatureExtractor is too small for a segment.
+      if self.seq_added_last < end - 1:
+        print "SprintDataset have_seqs: wait for addNewData..."
+      while self.seq_added_last < end - 1:
+        self.cond.wait()
+      return self._haveSeqsAdded(start, end)
+
+  def _haveSeqsAdded(self, start, end=None):
     if end is None: end = start + 1
     return self.is_cached(start, end)
 
@@ -148,7 +166,7 @@ class SprintDataset(Dataset):
       idxReal = self._realIdxForSegmentName(segmentName)
       assert idxReal < self.num_seqs
       idxSorted = self.seq_index_reversed[idxReal]
-      assert not self._haveSeqs(idxSorted)
+      assert not self._haveSeqsAdded(idxSorted)
       seqStart = self.seq_start[idxSorted]
       seqLen = self.seq_lengths[idxReal]
       assert (seqLen, self.num_inputs) == features.shape

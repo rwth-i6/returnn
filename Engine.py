@@ -102,7 +102,8 @@ class TaskThread(threading.Thread):
         device.index
       :param int start_batch: start batch index, index of self.batches
       :rtype: (list[Device.Device], int)
-      :return list of used devices, and number of batches which were allocated
+      :return list of used devices, and number of batches which were handled
+      Number of batches will always be positive, but devices could be empty on skipped seqs.
       """
       devices = []; """ :type: list[Device.Device] """
       num_batches = start_batch
@@ -115,10 +116,26 @@ class TaskThread(threading.Thread):
         if shape[1] == 0: break
         device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length)
         offset = 0
-        for batch in self.batches[num_batches : device_batches]:
+        incomplete = False
+        batch_idx = num_batches
+        while batch_idx < device_batches:
+          batch = self.batches[batch_idx]
+          batch_idx += 1
           if self.network.recurrent:
-            self.data.load_seqs(batch.start[0], batch.start[0] + batch.shape[1])
-            idi = self.data.alloc_interval_index(batch.start[0])
+            batch_seq_end = batch.start[0] + batch.shape[1]
+          else:
+            batch_seq_end = batch.start[0] + batch.nseqs
+          if not self.data.have_seqs(batch.start[0], batch_seq_end):
+            print >> log.v3, "Skipping batches %s because some seqs of %s are missing" % \
+                             (range(num_batches, batch_idx), range(batch.start[0], batch_seq_end))
+            incomplete = True
+            # We could also just skip those seqs. However, we might want to keep all batches
+            # of similar sizes to have more stable training. Thus, we skip this batch.
+            break
+
+          self.data.load_seqs(batch.start[0], batch_seq_end)
+          idi = self.data.alloc_interval_index(batch.start[0])
+          if self.network.recurrent:
             for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
               ids = self.data.seq_index[s]  # the real seq idx after sorting
               l = self.data.seq_lengths[ids]
@@ -132,17 +149,18 @@ class TaskThread(threading.Thread):
               device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
             offset += batch.shape[1]
           else:
-            self.data.load_seqs(batch.start[0], batch.start[0] + batch.nseqs)
-            idi = self.data.alloc_interval_index(batch.start[0])
             o = self.data.seq_start[batch.start[0]] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
             l = batch.shape[0]
             device.data[offset:offset + l, 0] = self.data.alloc_intervals[idi][2][o:o + l]
             device.targets[offset:offset + l, 0] = self.data.targets[self.data.seq_start[batch.start[0]] + batch.start[1]:self.data.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
             device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
             offset += l
-        num_batches = device_batches
-        devices.append(device)
-      return devices, num_batches - start_batch
+        num_batches = batch_idx
+        if not incomplete:
+          devices.append(device)
+      batch_adv_idx = num_batches - start_batch
+      assert batch_adv_idx > 0
+      return devices, batch_adv_idx
 
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
@@ -191,6 +209,7 @@ class TaskThread(threading.Thread):
       while num_batches < num_data_batches:
         alloc_devices, num_alloc_batches = self.allocate_devices(start_batch=num_batches)
         assert num_alloc_batches > 0
+        # Note that alloc_devices could be empty if we skipped seqs.
         batch = num_batches
         run_time = time.time()
         for device in alloc_devices:
@@ -249,7 +268,8 @@ class TaskThread(threading.Thread):
             print >> log.v5, "elapsed %s, exp. remaining %s, complete %s, memory %s"%(hms(start_elapsed), hms(int(time_factor * (num_data_batches - num_batches - num_alloc_batches))), progress, mem_usage)
           if interactive:
             progress_bar(complete, remaining)
-        self.evaluate(num_batches, device_results)
+        if device_results:
+          self.evaluate(num_batches, device_results)
         num_batches += num_alloc_batches
 
         if self.stopped:

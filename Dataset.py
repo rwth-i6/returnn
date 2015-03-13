@@ -336,6 +336,16 @@ class Dataset(object):
       i += 1
     return deleted
 
+  def have_seqs(self, start, end):
+    """
+    :param int start: start sorted seq idx
+    :param int end: end sorted seq idx
+    :returns whether this dataset includes the seq range
+    """
+    if start < 0: return False
+    if end > self.num_seqs: return False
+    return True
+
   def load_seqs(self, start, end, free=True, fill=True):
     """
     Load data sequences.
