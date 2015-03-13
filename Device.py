@@ -8,13 +8,20 @@ import sys
 import os
 
 def get_num_devices():
-  return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
+  if os.name == 'nt':
+    return 1, 1 #TODO
+  else:
+    return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
 
 def get_gpu_names():
-  return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+  if os.name == 'nt':
+    return "GeForce GTX 770" #TODO
+  else:
+    return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
 
 def get_device_attributes():
-  attributes = { "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
+  attributes = { "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
@@ -25,10 +32,11 @@ def get_device_attributes():
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
   cpu = 0
   #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
-  for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
-    attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
-    cpu += 1
-  attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024)
+  if os.name != 'nt':
+    for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
+      attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
+      cpu += 1
+    attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024)
   if not cpu:
     attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
   return attributes
