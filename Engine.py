@@ -80,6 +80,7 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.finalized = False
+      self.device_crash_batch = None
       # There is no generic way to see whether Python is exiting.
       # This is our workaround. We check for it in self.run_inner().
       self.stopped = False
@@ -217,7 +218,7 @@ class TaskThread(threading.Thread):
           except RuntimeError: result = None
           if result is None:
             print >> log.v2, "device", device.name, "crashed on batch", batch
-            self.last_batch = batch
+            self.device_crash_batch = batch
             self.score = None
             # We leave self.finalized == False. That way, the engine can see that the device crashed.
             return
@@ -560,7 +561,8 @@ class Engine:
       trainer.join()
       start_batch = 0
       if not trainer.finalized:
-        self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.last_batch), epoch - 1)
+        if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
+          self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.device_crash_batch), epoch - 1)
         sys.exit(1)
       if model_filename and (epoch % savemodel_epoch_interval == 0):
         self.save_model(model_filename + ".%03d" % epoch, epoch)
