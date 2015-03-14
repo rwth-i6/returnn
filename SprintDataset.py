@@ -112,9 +112,12 @@ class SprintDataset(Dataset):
         return False
       # Otherwise we cannot tell. Sprint could skip segments for whatever reason,
       # e.g. the buffer in BufferFeatureExtractor is too small for a segment.
+      assert end >= self.requested_load_seq_end
+      self.requested_load_seq_end = end
       if self.seq_added_last < end - 1:
         print "SprintDataset have_seqs: wait for addNewData..."
       while self.seq_added_last < end - 1:
+        assert not self.finalized
         self.cond.wait()
       return self._haveSeqsAdded(start, end)
 
