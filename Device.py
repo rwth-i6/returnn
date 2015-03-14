@@ -446,7 +446,9 @@ class Device():
 
   def get_net_params(self):
     if self.blocking:
-      return self.get_task_network().get_params()
+      #fix by PV
+      #return self.get_task_network().get_params()
+      return [v.get_value(borrow=True, return_internal_type=True) for v in self.get_task_network().params]
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("get-net-params")
