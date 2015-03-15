@@ -405,7 +405,7 @@ class Device():
     else:
       return self.testnet
 
-  def alloc_data(self, shape, max_ctc_length):
+  def alloc_data(self, shape, max_ctc_length, pad=False):
     """
     :param list[int] shape: format (time,batch,features)
     """
@@ -413,7 +413,10 @@ class Device():
     self.data = numpy.zeros(shape, dtype=theano.config.floatX)
     self.targets = numpy.zeros(shape[0:2], dtype=theano.config.floatX)  # is actually the int idx of the target class
     self.ctc_targets = numpy.zeros((shape[1], max_ctc_length), dtype=theano.config.floatX)
-    self.index = numpy.zeros(shape[0:2], dtype='int8')
+    if pad:
+      self.index = numpy.ones(shape[0:2], dtype='int8')
+    else:
+      self.index = numpy.zeros(shape[0:2], dtype='int8')
     self.tags = [None] * shape[1]  # TODO
 
   def update_data(self):

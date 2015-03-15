@@ -61,7 +61,7 @@ class Batch:
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, start_batch = 0):
+    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -69,9 +69,11 @@ class TaskThread(threading.Thread):
       :type data: Dataset.Dataset
       :type batches: list[Batch]
       :type start_batch: int
+      :type pad_batches: bool
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       self.start_batch = start_batch
+      self.pad_batches = pad_batches
       self.devices = devices
       self.network = network
       self.batches = batches
@@ -115,7 +117,7 @@ class TaskThread(threading.Thread):
         for batch in self.batches[num_batches : device_batches]:
           shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
         if shape[1] == 0: break
-        device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length)
+        device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length, pad=self.pad_batches)
         offset = 0
         incomplete = False
         batch_idx = num_batches
@@ -144,6 +146,20 @@ class TaskThread(threading.Thread):
               q = s - batch.start[0] + offset
               device.data[:l, q] = self.data.alloc_intervals[idi][2][o:o + l]
               device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
+              if self.pad_batches:
+                #pad with equivalent to 0
+                #these are the hardcoded values for IAM
+                #TODO load this from somewhere
+                pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
+                            -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
+                            0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
+                            0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
+                device.data[l:, q] = pad_data
+                #also pad targets
+                #hardcoded si for IAM
+                #TODO load this from somewhere
+                pad_target = 189
+                device.targets[l:, q] = pad_target
               #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
               chunking_active = self.data.chunk_size > 0
               if self.data.ctc_targets is not None and not chunking_active:
@@ -382,7 +398,7 @@ class TaskThread(threading.Thread):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch = 0):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch = 0, pad_batches=False):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -391,6 +407,7 @@ class TrainTaskThread(TaskThread):
     :type learning_rate: float
     :type updater: Updater
     :type start_batch: int
+    :type pad_batches: bool
     """
     self.updater = updater
     self.learning_rate = learning_rate
@@ -399,7 +416,7 @@ class TrainTaskThread(TaskThread):
       task = "train_and_update"
     else:
       task = "train_distributed"
-    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch)
+    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch, pad_batches)
 
   def initialize(self):
     self.score = 0
@@ -456,8 +473,8 @@ class TrainTaskThread(TaskThread):
 
 
 class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, start_batch = 0):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, start_batch)
+    def __init__(self, network, devices, data, batches, start_batch = 0, pad_batches=False):
+      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, start_batch, pad_batches)
     def initialize(self):
       self.score = 0
       self.error = 0
@@ -621,18 +638,19 @@ class Engine:
     max_seqs = config.int('max_seqs', -1)
     start_batch = start_batch or config.int('start_batch', 0)
     updater = Updater.initFromConfig(config)
+    pad_batches = config.bool("pad", False)
     self.train(num_epochs, learning_rate_control, batch_size, batch_step,
                updater,
                train_data, dev_data, eval_data,
                model, interval,
-               start_epoch, start_batch, max_seqs)
+               start_epoch, start_batch, max_seqs, pad_batches=pad_batches)
 
   def train(self, num_epochs, learning_rate_control, batch_size, batch_step,
             updater,
             train_data, dev_data=None, eval_data=None,
             model_filename=None, savemodel_epoch_interval=1,
             start_epoch=1, start_batch=0,
-            max_seqs=-1):
+            max_seqs=-1, pad_batches=False):
     """
     :type num_epochs: int
     :type learning_rate_control: LearningRateControl.LearningRateControl
@@ -647,6 +665,7 @@ class Engine:
     :type start_epoch: int
     :type start_batch: int
     :type max_seqs: int
+    :type pad_batches: bool
     """
     print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
     print >> log.v3, "using batch size/step: %i, %i" % (batch_size, batch_step)
@@ -685,7 +704,7 @@ class Engine:
         self.cond.notify_all()
       train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
       trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches,
-                                learning_rate, updater, start_batch)
+                                learning_rate, updater, start_batch, pad_batches=pad_batches)
       if tester:
         if False and len(self.devices) > 1:
           if tester.isAlive():
@@ -705,7 +724,7 @@ class Engine:
       if log.verbose[1]:
         for name in self.data.keys():
           data, num_batches = self.data[name]
-          tester = EvalTaskThread(self.network, [testing_device], data, num_batches)
+          tester = EvalTaskThread(self.network, [testing_device], data, num_batches, pad_batches=pad_batches)
           if True or len(self.devices) == 1:
             tester.join()
             trainer.elapsed += tester.elapsed
