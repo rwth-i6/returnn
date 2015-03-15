@@ -12,17 +12,20 @@ class Updater:
     kwargs = {
       "updateOnDevice": rnn.isUpdateOnDevice(config),
       "adagrad": config.bool('adagrad', False),
+      "adadelta": config.bool('adadelta', False),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
-  def __init__(self, momentum, adagrad, updateOnDevice):
+  def __init__(self, momentum, adagrad, adadelta, updateOnDevice):
     """
     :type momentum: float
     :type adagrad: bool
+    :type adadelta: bool
     :type updateOnDevice: bool
     """
     self.momentum = momentum
     self.adagrad = adagrad
+    self.adadelta = adadelta #TODO use string for training method instead of flags
     self.updateOnDevice = updateOnDevice
     self.pid = -1
 

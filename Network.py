@@ -1219,7 +1219,7 @@ class LayerNetwork(object):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()
 
   def get_params(self):
-    params = { self.output.name : self.output.get_params() }
+    params = {self.output.name : self.output.get_params()}
     for h in self.hidden:
       params[h] = self.hidden[h].get_params()
     return params

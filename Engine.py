@@ -347,6 +347,7 @@ class TaskThread(threading.Thread):
         # That works because the device proc will push the results on the queue
         # and device.result() reads it from there without sending another command.
 
+        #if False: #for fast testing
         if batch_idx < len(self.batches):
           deviceRun = self.DeviceBatchRun(self, batch_idx)
           deviceRun.start()
@@ -442,7 +443,8 @@ class TrainTaskThread(TaskThread):
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
       params = self.devices[0].get_net_params()
-      our_params = self.network.gparams
+      #our_params = self.network.gparams
+      our_params = self.network.params
       assert len(params) == len(our_params)
       for i in range(len(params)):
         our_params[i].set_value(params[i])
@@ -457,6 +459,9 @@ class EvalTaskThread(TaskThread):
     def initialize(self):
       self.score = 0
       self.error = 0
+      for device in self.devices:
+        #device.set_net_params(self.network)
+        device.testnet.set_params(self.network.get_params())
     def evaluate(self, batch, results, num_frames):
       assert results
       score = sum([res[0] for res in results])
