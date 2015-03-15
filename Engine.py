@@ -445,7 +445,6 @@ class TrainTaskThread(TaskThread):
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
       params = self.devices[0].get_net_params()
-      #our_params = self.network.gparams
       our_params = self.network.params
       assert len(params) == len(our_params)
       for i in range(len(params)):
@@ -462,7 +461,6 @@ class EvalTaskThread(TaskThread):
       self.score = 0
       self.error = 0
       for device in self.devices:
-        #device.set_net_params(self.network)
         device.testnet.set_params(self.network.get_params())
     def evaluate(self, batch, results, num_frames):
       assert results
