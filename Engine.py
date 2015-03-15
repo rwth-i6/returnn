@@ -462,7 +462,6 @@ class TrainTaskThread(TaskThread):
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
       params = self.devices[0].get_net_params()
-      #our_params = self.network.gparams
       our_params = self.network.params
       assert len(params) == len(our_params)
       for i in range(len(params)):
@@ -479,7 +478,6 @@ class EvalTaskThread(TaskThread):
       self.score = 0
       self.error = 0
       for device in self.devices:
-        #device.set_net_params(self.network)
         device.testnet.set_params(self.network.get_params())
     def evaluate(self, batch, results, num_frames):
       assert results
@@ -502,7 +500,7 @@ class SprintCacheForwardTaskThread(TaskThread):
       self.merge = merge
     def initialize(self):
       self.toffset = 0
-    def evaluate(self, batch, result):
+    def evaluate(self, batch, result, num_frames):
       features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
@@ -544,7 +542,7 @@ class HDFForwardTaskThread(TaskThread):
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
 
-    def evaluate(self, batch, result):
+    def evaluate(self, batch, result, num_frames):
       features = numpy.concatenate(result, axis = 1)
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
