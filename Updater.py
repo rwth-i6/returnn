@@ -62,6 +62,13 @@ class Updater:
                      value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX), borrow=True,
                      name="sqrsum_%s " % p)
                      for p in self.network.gparams}
+    if self.adadelta:
+      self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
+                  for p in self.network.gparams} #E[g^2]
+      self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
+                  for p in self.network.gparams} #E[\delta x^2]
+      self.dx = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
+                  for p in self.network.gparams} #\delta x
 
   @property
   def isInitialized(self):

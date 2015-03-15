@@ -144,7 +144,9 @@ class TaskThread(threading.Thread):
               q = s - batch.start[0] + offset
               device.data[:l, q] = self.data.alloc_intervals[idi][2][o:o + l]
               device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
-              if self.data.ctc_targets is not None:
+              #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
+              chunking_active = self.data.chunk_size > 0
+              if self.data.ctc_targets is not None and not chunking_active:
                 device.ctc_targets[q] = self.data.ctc_targets[ids]
               device.tags[q] = self.data.tags[ids] #TODO
               device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
