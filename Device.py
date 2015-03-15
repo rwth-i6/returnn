@@ -139,7 +139,7 @@ class Device():
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
-    if self.trainnet.loss == 'ctc':
+    if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
       self.c = T.cast(self.cp, 'int32')
     gparams = []
@@ -164,6 +164,9 @@ class Device():
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_ctc_givens(self.trainnet)
         test_givens = self.make_ctc_givens(self.testnet)
+      elif self.trainnet.loss == 'ce_ctc':
+        train_givens = self.make_givens(self.trainnet)
+        test_givens = self.make_ce_ctc_givens(self.testnet)
       elif self.trainnet.loss == 'sprint':
         train_givens = self.make_sprint_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
@@ -352,7 +355,7 @@ class Device():
         x = input_queue.recv()
         t = input_queue.recv()
         i = input_queue.recv()
-        if self.trainnet.loss == 'ctc':
+        if self.trainnet.loss in ('ctc','ce_ctc'):
           c = input_queue.recv()
           self.cp.set_value(c)
         self.x.set_value(x.astype('float32'), borrow = True)
@@ -420,7 +423,7 @@ class Device():
       #self.t.set_value(self.targets, borrow = True)
       self.y.set_value(self.targets.flatten().astype('int32'), borrow = True)
       self.i.set_value(self.index, borrow = True)
-      if self.trainnet.loss == 'ctc':
+      if self.trainnet.loss in ('ctc','ce_ctc'):
         self.cp.set_value(self.ctc_targets)
     else:
       assert self.main_pid == os.getpid()
@@ -578,3 +581,5 @@ class Device():
     return [(network.x, self.x), (network.i, self.i)]
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
+  def make_ce_ctc_givens(self, network):
+    return [(network.x, self.x), (network.y, self.y), (network.c, self.c), (network.i, self.i)]

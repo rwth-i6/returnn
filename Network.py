@@ -228,7 +228,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
-    self.y_pred = T.argmax(self.p_y_given_x, axis = -1)
+    self.y_pred = T.argmax(self.p_y_given_x, axis=-1)
 
   def cost(self, y):
     known_grads = None
@@ -236,10 +236,11 @@ class FramewiseOutputLayer(OutputLayer):
       pcx = self.p_y_given_x[self.i, y[self.i]]
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
-      y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
+      y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
-    else: assert False
+    else:
+      assert False
 
 class SequenceOutputLayer(OutputLayer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name="", prior_scale=0.0, log_prior=None, ce_smoothing=0.0):
@@ -250,7 +251,7 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
@@ -260,16 +261,16 @@ class SequenceOutputLayer(OutputLayer):
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
-      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
+      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'sprint_smoothed':
       assert self.log_prior is not None
-      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis = 0))
+      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
       err *= (1.0 - self.ce_smoothing)
       err = err.sum()
       grad *= (1.0 - self.ce_smoothing)
-      y_m_prior = T.reshape(self.z + self.prior_scale * self.log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+      y_m_prior = T.reshape(self.z + self.prior_scale * self.log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x_prior = T.nnet.softmax(y_m_prior)
       pcx = p_y_given_x_prior[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
       ce = self.ce_smoothing * (-1.0) * T.sum(T.log(pcx))
@@ -280,10 +281,19 @@ class SequenceOutputLayer(OutputLayer):
       err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
+    elif self.loss == 'ce_ctc':
+      y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+      p_y_given_x = T.nnet.softmax(y_m)
+      #pcx = p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
+      pcx = p_y_given_x[self.i, y[self.i]]
+      ce = -T.sum(T.log(pcx))
+      return ce, known_grads
 
   def errors(self, y):
-    if self.loss == 'ctc': return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0)))
-    return super(SequenceOutputLayer, self).errors(y)
+    if self.loss in ('ctc', 'ce_ctc'):
+      return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis=0)))
+    else:
+      return super(SequenceOutputLayer, self).errors(y)
 
 """
         HIDDEN LAYERS
@@ -917,7 +927,7 @@ class LayerNetwork(object):
     loss = config.value('loss', 'ce')
     if config.has('initialize_from_json'):
       return LayerNetwork.from_json(config.json, num_inputs, num_outputs)
-    if loss == 'ctc':
+    if loss in ('ctc', 'ce_ctc'):
       num_outputs += 1 #add blank
     hidden_size = config.int_list('hidden_size')
     assert len(hidden_size) > 0, "no hidden layers specified"
@@ -1117,7 +1127,7 @@ class LayerNetwork(object):
     """
     self.gparams = self.params[:]; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.loss = loss
-    if loss in ('ctc','sprint','sprint_smoothed'):
+    if loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
       self.output = SequenceOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
     else:
       self.output = FramewiseOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
@@ -1127,7 +1137,8 @@ class LayerNetwork(object):
     self.params += self.output.params.values()
     self.gparams += self.output.params.values()[:]
     targets = self.c if self.loss == 'ctc' else self.y
-    self.errors = self.output.errors(targets)
+    error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
+    self.errors = self.output.errors(error_targets)
     self.cost, self.known_grads = self.output.cost(targets)
     self.objective = self.cost + self.L1 + self.L2 #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
