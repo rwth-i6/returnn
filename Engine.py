@@ -470,7 +470,10 @@ class EvalTaskThread(TaskThread):
       return score / num_frames
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
-      self.error /= float(self.data.num_timesteps)
+      if self.network.loss == 'ctc':
+        self.error /= float(self.data.num_running_chars)
+      else:
+        self.error /= float(self.data.num_timesteps)
 
 
 class SprintCacheForwardTaskThread(TaskThread):
