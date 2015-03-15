@@ -2,7 +2,8 @@
 import theano
 import numpy
 import os
-
+from Log import log
+import theano.tensor as T
 
 class Updater:
 
@@ -13,10 +14,12 @@ class Updater:
       "updateOnDevice": rnn.isUpdateOnDevice(config),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
+      "adadelta_decay": config.float('adadelta_decay', 0.95),
+      "adadelta_offset": config.float('adadelta_offset', 1e-6),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
-  def __init__(self, momentum, adagrad, adadelta, updateOnDevice):
+  def __init__(self, momentum, adagrad, adadelta, adadelta_decay, adadelta_offset, updateOnDevice):
     """
     :type momentum: float
     :type adagrad: bool
@@ -26,8 +29,13 @@ class Updater:
     self.momentum = momentum
     self.adagrad = adagrad
     self.adadelta = adadelta #TODO use string for training method instead of flags
+    self.adadelta_decay = adadelta_decay
+    self.adadelta_offset = adadelta_offset
     self.updateOnDevice = updateOnDevice
     self.pid = -1
+    assert not (self.adagrad and self.adadelta)
+    if self.adadelta:
+      print >> log.v3, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
 
   def initVars(self, network, net_param_deltas):
     """
@@ -92,6 +100,19 @@ class Updater:
       if self.adagrad:
         updates.append((self.sqrsum[param], self.sqrsum[param] + self.net_param_deltas[param] ** 2))
         upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + self.net_param_deltas[param] ** 2) ** 0.5)
+      if self.adadelta:
+        decay = self.adadelta_decay
+        offset = self.adadelta_offset
+        g = self.net_param_deltas[param]
+        g2 = g ** 2
+        eg2_new = decay * self.eg2[param] + (1 - decay) * g2
+        dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
+        edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
+        updates.append((self.eg2[param], eg2_new))
+        updates.append((self.edx2[param], edx2_new))
+        updates.append((self.dx[param], dx_new))
+        upd = dx_new
+        #updates.append((param, param + dx_new))
       updates.append((param, param + upd))
 
     return updates
