@@ -483,7 +483,7 @@ class SprintCacheForwardTaskThread(TaskThread):
       self.merge = merge
     def initialize(self):
       self.toffset = 0
-    def evaluate(self, batch, result):
+    def evaluate(self, batch, result, num_frames):
       features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
@@ -525,7 +525,7 @@ class HDFForwardTaskThread(TaskThread):
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
 
-    def evaluate(self, batch, result):
+    def evaluate(self, batch, result, num_frames):
       features = numpy.concatenate(result, axis = 1)
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')

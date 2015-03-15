@@ -9,7 +9,6 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 import numpy
-import random
 import h5py
 from Log import log
 import theano
