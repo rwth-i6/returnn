@@ -35,6 +35,7 @@ class Updater:
     self.pid = -1
     assert not (self.adagrad and self.adadelta)
     if self.adadelta:
+      self.momentum = 0.0
       print >> log.v3, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
 
   def initVars(self, network, net_param_deltas):
