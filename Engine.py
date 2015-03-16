@@ -68,6 +68,74 @@ class Batch:
     return self.start[0] + max(self.nseqs, self.shape[1])
 
 
+
+def assign_dev_data(device, dataset, batches, recurrent, pad_batches):
+  """
+  :type device: Device.Device
+  :type dataset: Dataset.Dataset
+  :type batches: list[Batch]
+  :type recurrent: bool
+  :type pad_batches: bool
+  :returns successful and how much batch idx to advance.
+  :rtype: (bool,int)
+  """
+  # The final device.data.shape is in format (time,batch,feature).
+  shape = [0, 0]
+  for batch in batches:
+    shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
+  if shape[1] == 0:
+    return False, len(batches)
+
+  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.max_ctc_length, pad=pad_batches)
+  offset = 0
+  for i, batch in enumerate(batches):
+    if not dataset.have_seqs(batch.start[0], batch.get_end_seq()):
+      # We could also just skip those seqs. However, we might want to keep all batches
+      # of similar sizes to have more stable training. Thus, we skip this batch.
+      return False, i + 1
+
+    dataset.load_seqs(batch.start[0], batch.get_end_seq())
+    idi = dataset.alloc_interval_index(batch.start[0])
+    if recurrent:
+      for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
+        ids = dataset.seq_index[s]  # the real seq idx after sorting
+        l = dataset.seq_lengths[ids]
+        o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+        q = s - batch.start[0] + offset
+        device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
+        device.targets[:l, q] = dataset.targets[dataset.seq_start[s] + batch.start[1]:dataset.seq_start[s] + batch.start[1] + l]
+        if pad_batches:
+          #pad with equivalent to 0
+          #these are the hardcoded values for IAM
+          #TODO load this from somewhere
+          pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
+                      -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
+                      0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
+                      0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
+          device.data[l:, q] = pad_data
+          #also pad targets
+          #hardcoded si for IAM
+          #TODO load this from somewhere
+          pad_target = 189
+          device.targets[l:, q] = pad_target
+        #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
+        chunking_active = dataset.chunk_size > 0
+        if dataset.ctc_targets is not None and not chunking_active:
+          device.ctc_targets[q] = dataset.ctc_targets[ids]
+        device.tags[q] = dataset.tags[ids] #TODO
+        device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
+      offset += batch.shape[1]
+    else:
+      o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+      l = batch.shape[0]
+      device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
+      device.targets[offset:offset + l, 0] = dataset.targets[dataset.seq_start[batch.start[0]] + batch.start[1]:dataset.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
+      device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
+      offset += l
+
+  return True, len(batches)
+
+
 class TaskThread(threading.Thread):
     def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False):
       """
@@ -101,69 +169,6 @@ class TaskThread(threading.Thread):
     def stop(self):
       self.stopped = True
 
-    def assign_dev_data(self, device, batches):
-      """
-      :type device: Device.Device
-      :type batches: list[Batch]
-      :returns successful and how much batch idx to advance.
-      :rtype: (bool,int)
-      """
-      # The final device.data.shape is in format (time,batch,feature).
-      shape = [0, 0]
-      for batch in batches:
-        shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
-      if shape[1] == 0:
-        return False, len(batches)
-
-      device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length, pad=self.pad_batches)
-      offset = 0
-      for i, batch in enumerate(batches):
-        if not self.data.have_seqs(batch.start[0], batch.get_end_seq()):
-          # We could also just skip those seqs. However, we might want to keep all batches
-          # of similar sizes to have more stable training. Thus, we skip this batch.
-          return False, i + 1
-
-        self.data.load_seqs(batch.start[0], batch.get_end_seq())
-        idi = self.data.alloc_interval_index(batch.start[0])
-        if self.network.recurrent:
-          for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
-            ids = self.data.seq_index[s]  # the real seq idx after sorting
-            l = self.data.seq_lengths[ids]
-            o = self.data.seq_start[s] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
-            q = s - batch.start[0] + offset
-            device.data[:l, q] = self.data.alloc_intervals[idi][2][o:o + l]
-            device.targets[:l, q] = self.data.targets[self.data.seq_start[s] + batch.start[1]:self.data.seq_start[s] + batch.start[1] + l]
-            if self.pad_batches:
-              #pad with equivalent to 0
-              #these are the hardcoded values for IAM
-              #TODO load this from somewhere
-              pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
-                          -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
-                          0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
-                          0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-              device.data[l:, q] = pad_data
-              #also pad targets
-              #hardcoded si for IAM
-              #TODO load this from somewhere
-              pad_target = 189
-              device.targets[l:, q] = pad_target
-            #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
-            chunking_active = self.data.chunk_size > 0
-            if self.data.ctc_targets is not None and not chunking_active:
-              device.ctc_targets[q] = self.data.ctc_targets[ids]
-            device.tags[q] = self.data.tags[ids] #TODO
-            device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
-          offset += batch.shape[1]
-        else:
-          o = self.data.seq_start[batch.start[0]] + batch.start[1] - self.data.seq_start[self.data.alloc_intervals[idi][0]]
-          l = batch.shape[0]
-          device.data[offset:offset + l, 0] = self.data.alloc_intervals[idi][2][o:o + l]
-          device.targets[offset:offset + l, 0] = self.data.targets[self.data.seq_start[batch.start[0]] + batch.start[1]:self.data.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
-          device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
-          offset += l
-
-      return True, len(batches)
-
     def allocate_devices(self, start_batch):
       """
       Sets the device data, i.e. the next batches, via self.batches.
@@ -183,7 +188,7 @@ class TaskThread(threading.Thread):
       batch_idx = start_batch
       for device in self.devices:
         batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        success, batch_adv_idx = self.assign_dev_data(device, batches)
+        success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
         if success:
           devices.append(device)
         else:
