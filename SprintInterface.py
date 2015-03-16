@@ -136,10 +136,10 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
   action = config["action"]
   if action == "train":
     pass
-  elif action == "recog":
+  elif action == "forward":
     epoch += 1  # We pass the last trained epoch.
-    targetMode = "evaluate"
-    Task = "evaluate"
+    targetMode = "forward"
+    Task = "forward"
   else:
     assert False, "unknown action: %r" % action
 
@@ -235,11 +235,12 @@ def setTargetMode(mode):
   task = "train"
   loss = config.value('loss', None)
   if TargetMode == "criterion-by-sprint":
-    assert loss == "sprint"
+    assert loss == "sprint", "TargetMode is %s but loss is %s" % (TargetMode, loss)
   elif TargetMode == "target-alignment":
-    # Crnn always expects an alignment, so this should be ok.
-    pass
-  elif TargetMode == "evaluate":
+    # CRNN always expects an alignment, so this is good just as-is.
+    # This means that we will not calculate the criterion in Sprint.
+    assert loss != "sprint", "invalid loss %s for target mode %s" % (loss, TargetMode)
+  elif TargetMode == "forward":
     # Will be handled below.
     task = "forward"
   else:
