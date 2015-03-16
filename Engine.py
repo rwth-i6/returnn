@@ -68,8 +68,7 @@ class Batch:
     return self.start[0] + max(self.nseqs, self.shape[1])
 
 
-
-def assign_dev_data(device, dataset, batches, recurrent, pad_batches):
+def assign_dev_data(device, dataset, batches, recurrent=True, pad_batches=False):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
@@ -134,6 +133,22 @@ def assign_dev_data(device, dataset, batches, recurrent, pad_batches):
       offset += l
 
   return True, len(batches)
+
+
+def assign_dev_data_single_seq(device, dataset, seq):
+  """
+  :type device: Device.Device
+  :type dataset: Dataset.Dataset
+  :param int seq: sorted seq idx
+  :return: whether we succeeded
+  :rtype: bool
+  """
+  if not dataset.have_seqs(seq, seq + 1):
+    return False
+  batch = Batch([seq, 0])
+  batch.shape = (dataset.get_seq_length(seq), 1)
+  success, _ = assign_dev_data(device, dataset, [batch])
+  return success
 
 
 class TaskThread(threading.Thread):
@@ -498,7 +513,7 @@ class EvalTaskThread(TaskThread):
       self.score = 0
       self.error = 0
       for device in self.devices:
-        device.testnet.set_params(self.network.get_params())
+        device.set_net_params(self.network)
     def evaluate(self, batch, results, num_frames):
       assert results
       score = sum([res[0] for res in results])
