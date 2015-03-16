@@ -68,7 +68,7 @@ class Batch:
     return self.start[0] + max(self.nseqs, self.shape[1])
 
 
-def assign_dev_data(device, dataset, batches, recurrent=True, pad_batches=False):
+def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset

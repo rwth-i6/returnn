@@ -205,6 +205,8 @@ class Device():
       for extract in extractions:
         if extract == "log-posteriors":
           source.append(T.log(self.testnet.output.p_y_given_x))
+        elif extract == "posteriors":
+          source.append(self.testnet.output.p_y_given_x)
         elif extract == "ctc-sil":
           feat = self.testnet.output.p_y_given_x
           feat = feat[:,:-1] #remove blank
@@ -234,7 +236,8 @@ class Device():
           else:
             hidden = self.testnet.reverse_hidden[-idx - 1]
           source.append(T.reshape(hidden.output, (hidden.output.shape[0] * hidden.output.shape[1], hidden.output.shape[2])))
-        else: assert False, "invalid extraction: " + extract
+        else:
+          assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
                                        outputs = source,
                                        givens = givens,

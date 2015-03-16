@@ -335,6 +335,14 @@ class Dataset(object):
       i += 1
     return deleted
 
+  def get_seq_length(self, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: int
+    """
+    real_seq_idx = self.seq_index[sorted_seq_idx]
+    return self.seq_lengths[real_seq_idx]
+
   def have_seqs(self, start, end):
     """
     :param int start: start sorted seq idx

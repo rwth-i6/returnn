@@ -24,6 +24,7 @@ class SprintDataset(Dataset):
     self.cond = Condition(lock=self.lock)
     self.finalized = False
     self.main_thread_id = thread.get_ident()
+    self.add_data_thread_id = -1
     self.epoch = 0
 
   def initFromSegmentOrder(self, segmentList, segmentsInfo):
@@ -94,11 +95,12 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
       if not self._haveSeqsAdded(start, end):
         print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
-      while not self._haveSeqsAdded(start, end):
-        assert not self.finalized
-        assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
-        assert end - 1 > self.seq_added_last
-        self.cond.wait()
+        assert self.add_data_thread_id != thread.get_ident()
+        while not self._haveSeqsAdded(start, end):
+          assert not self.finalized
+          assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
+          assert end - 1 > self.seq_added_last
+          self.cond.wait()
 
   def have_seqs(self, start, end):
     """
@@ -116,9 +118,10 @@ class SprintDataset(Dataset):
       self.requested_load_seq_end = end
       if self.seq_added_last < end - 1:
         print "SprintDataset have_seqs: wait for addNewData..."
-      while self.seq_added_last < end - 1:
-        assert not self.finalized
-        self.cond.wait()
+        assert self.add_data_thread_id != thread.get_ident()
+        while self.seq_added_last < end - 1:
+          assert not self.finalized
+          self.cond.wait()
       return self._haveSeqsAdded(start, end)
 
   def _haveSeqsAdded(self, start, end=None):
@@ -158,13 +161,27 @@ class SprintDataset(Dataset):
   def _realIdxForSegmentName(self, segmentName):
     return self.segmentsInfo[segmentName]["idx"]
 
-  def addNewData(self, segmentName, features, targets):
+  def addNewData(self, segmentName, features, targets=None):
     """
     :type segmentName: str
-    :param numpy.ndarray features: format (time,input-feature)
+    :param numpy.ndarray features: format (input-feature,time) (via Sprint)
     :param targets: format (time) (idx of output-feature)
+    :returns the sorted seq index
+    :rtype: int
     """
+
+    # is in format (feature,time)
+    assert self.num_inputs == features.shape[0]
+    T = features.shape[1]
+    # must be in format: (time,feature)
+    features = features.transpose()
+    assert features.shape == (T, self.num_inputs)
+
+    if targets is not None:
+      assert targets.shape == (T,)  # is in format (time,)
+
     with self.lock:
+      self.add_data_thread_id = thread.get_ident()
       assert not self.finalized
       idxReal = self._realIdxForSegmentName(segmentName)
       assert idxReal < self.num_seqs
@@ -173,7 +190,7 @@ class SprintDataset(Dataset):
       seqStart = self.seq_start[idxSorted]
       seqLen = self.seq_lengths[idxReal]
       assert (seqLen, self.num_inputs) == features.shape
-      assert (seqLen,) == targets.shape
+      assert seqLen == T
       assert self.alloc_intervals
 
       print >> log.v5, "SprintDataset addNewData: seq=%i, len=%i" % (idxSorted, seqLen)
@@ -194,7 +211,9 @@ class SprintDataset(Dataset):
       self.insert_alloc_interval(idxSorted)
       self._set_alloc_intervals_data(idxSorted, data=features)
 
-      self.targets[seqStart : seqStart + seqLen] = targets
+      if targets is not None:
+        self.targets[seqStart : seqStart + seqLen] = targets
 
       self.cond.notify_all()
 
+      return idxSorted

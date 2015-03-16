@@ -19,13 +19,13 @@ from SprintDataset import SprintDataset
 from Log import log
 from Device import get_gpu_names
 import rnn
-from Engine import Engine
+from Engine import Engine, assign_dev_data_single_seq
 
 DefaultSprintCrnnConfig = "config/crnn.config"
 
 startTime = None
 isInitialized = False
-isStarted = False
+isTrainThreadStarted = False
 InputDim = None
 OutputDim = None
 TargetMode = None
@@ -68,18 +68,18 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
   initBase()
   initDataset()
   with dataset.lock:
-    assert not isStarted
+    assert not isTrainThreadStarted
     dataset.initFromSegmentOrder(segmentList, segmentsInfo)
     dataset.finalized = False
 
   numEpochs = getNumEpochs()
-  startEpoch, startSegmentIdx = getStartEpochBatch()
+  startEpoch, startSegmentIdx = getTrainStartEpochBatch()
   print("Sprint: Starting with epoch %i, segment-idx %s." % (startEpoch, startSegmentIdx))
   print("Final epoch is: %i" % numEpochs)
 
   # Loop over multiple epochs. Epochs start at 1.
   for curEpoch in range(startEpoch, numEpochs + 1):
-    if isStarted:
+    if isTrainThreadStarted:
       waitUntilTrainerInEpoch(curEpoch)
 
     with dataset.lock:
@@ -134,35 +134,41 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
 
   global Task
   action = config["action"]
+  Task = action
   if action == "train":
     pass
   elif action == "forward":
-    epoch += 1  # We pass the last trained epoch.
+    assert targetMode == "criterion-by-sprint"  # Hack in Sprint to just pass us the features.
     targetMode = "forward"
-    Task = "forward"
   else:
     assert False, "unknown action: %r" % action
 
   initBase()
-  # Note: Atm, we must know all the segment info in advance.
-  # The CRNN Engine.train() depends on that.
-  assert dataset, "need to be inited already via segment_order mod"
-  assert dataset.num_seqs > 0, "need to have data seqs"
+  if Task == "train":
+    # Note: Atm, we must know all the segment info in advance.
+    # The CRNN Engine.train() depends on that.
+    assert dataset, "need to be inited already via segment_order mod"
+    assert dataset.num_seqs > 0, "need to have data seqs"
+  else:
+    if not dataset:
+      initDataset()
   dataset.setDimensions(inputDim, outputDim)
   dataset.initialize()
 
   setTargetMode(targetMode)
-  start(epoch)
+  if Task == "train":
+    startTrainThread(epoch)
+  elif Task == "forward":
+    prepareForwarding(epoch)
 
 
 def exit():
   print "Python train exit()"
   assert isInitialized
-  assert isStarted
+  assert isTrainThreadStarted
   trainThread.join()
   rnn.finalize()
   print >> log.v3, ("elapsed total time: %f" % (time.time() - startTime))
-
 
 
 def feedInput(features, weights=None, segmentName=None):
@@ -170,16 +176,18 @@ def feedInput(features, weights=None, segmentName=None):
   assert features.shape[0] == InputDim
   if Task == "train":
     posteriors = train(segmentName, features)
-  elif Task == "evaluate":
-    posteriors = evaluate(features)
+  elif Task == "forward":
+    posteriors = forward(segmentName, features)
   else:
     assert False, "invalid task: %r" % Task
-  assert posteriors.shape[0] == OutputDim
+  assert posteriors.shape == (OutputDim, features.shape[1])
   return posteriors
+
 
 def finishDiscard():
   print "finishDiscard()"
   raise NotImplementedError # TODO ...
+
 
 def finishError(error, errorSignal, naturalPairingType=None):
   assert naturalPairingType == "softmax"
@@ -213,7 +221,6 @@ def feedInputUnsupervised(features, weights=None, segmentName=None):
 # End Sprint PythonTrainer interface. }
 
 
-
 def dumpFlags():
   print "available GPUs:", get_gpu_names()
 
@@ -243,17 +250,15 @@ def setTargetMode(mode):
   elif TargetMode == "forward":
     # Will be handled below.
     task = "forward"
+    config.set("extract", ["posteriors"])
   else:
     assert False, "target-mode %s not supported yet..." % TargetMode
   config.set("task", task)
 
 
-
 def initBase(configfile=None):
   """
   :type configfile: str | None
-  :type inputDim: int
-  :type outputDim: int
   """
   global isInitialized
   if isInitialized: return
@@ -281,13 +286,14 @@ def initBase(configfile=None):
   assert isinstance(engine, Engine)
 
 
-def start(epoch=None):
-  global config, engine, isInitialized, isStarted
+def startTrainThread(epoch=None):
+  global config, engine, isInitialized, isTrainThreadStarted
   assert isInitialized, "need to call init() first"
-  assert not isStarted
+  assert not isTrainThreadStarted
   assert dataset, "need to call initDataset() first"
+  assert Task == "train"
 
-  start_epoch, start_batch = getStartEpochBatch()
+  start_epoch, start_batch = getTrainStartEpochBatch()
   # If some epoch is explicitly specified, it checks whether it matches.
   if epoch is not None:
     assert epoch == start_epoch
@@ -305,7 +311,7 @@ def start(epoch=None):
         raise Exception("target-mode not supported: %s" % TargetMode)
     except Exception:
       try:
-        print "crnn train failed"
+        print "CRNN train failed"
         sys.excepthook(*sys.exc_info())
       finally:
         # Exceptions are fatal. Stop now.
@@ -318,14 +324,27 @@ def start(epoch=None):
 
   global startTime
   startTime = time.time()
-  isStarted = True
+  isTrainThreadStarted = True
+
+
+def prepareForwarding(epoch):
+  assert engine
+  assert config
+  # Should already be set via setTargetMode().
+  assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
+                                                   "You have: %s" % config.list('extract')
+
+  lastEpoch, _, _ = getLastEpochBatch()
+  assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
+
+  # Copy over net params.
+  engine.devices[0].set_net_params(engine.network)
 
 
 def initDataset():
   global dataset
   if dataset: return
   dataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
-
 
 
 def getNumEpochs():
@@ -342,7 +361,7 @@ def getNumEpochs():
 def getLastEpochBatch():
   """
   :returns (epoch,batch,modelFilename)
-  :rtype: (int,int|None,str|None)
+  :rtype: (int, int|None, str|None)
   """
   global lastEpochBatchModel
   if lastEpochBatchModel: return lastEpochBatchModel
@@ -375,7 +394,7 @@ def getLastEpochBatch():
   return lastEpochBatchModel
 
 
-def getStartEpochBatch():
+def getTrainStartEpochBatch():
   """
   We will always automatically determine the best start (epoch,batch) tuple
   based on existing model files.
@@ -401,7 +420,7 @@ def getStartEpochBatch():
 
 
 def waitUntilTrainerInEpoch(epoch):
-  assert isStarted
+  assert isTrainThreadStarted
   assert engine
   while True:
     with engine.lock:
@@ -417,28 +436,13 @@ def train(segmentName, features, targets=None):
   :param str|None segmentName: full name
   :param numpy.ndarray features: 2d array
   :param numpy.ndarray|None targets: 2d or 1d array
-  :return:
   """
   assert engine is not None, "not initialized. call initBase()"
   assert dataset
 
-  # is in format (feature,time)
-  assert InputDim == features.shape[0]
-  assert InputDim == engine.network.n_in
-  T = features.shape[1]
-  # must be in format: (time,feature)
-  features = features.transpose()
-  assert features.shape[0] == T
-  assert features.shape[1] == InputDim
-  assert len(features.shape) == 2
-
-  if TargetMode.startswith("target-"):
-    assert targets is not None
-    assert targets.shape == (T,)  # is in format (time,)
-  else:
-    assert targets is None
-
   dataset.addNewData(segmentName, features, targets)
+
+  # The CRNN train thread started via start() will do the actual training.
 
   if TargetMode == "criterion-by-sprint":
 
@@ -453,7 +457,7 @@ def train(segmentName, features, targets=None):
     # posteriors is in format (time,batch,emission)
     assert posteriors.shape[0] == T
     assert posteriors.shape[1] == 1
-    OutputDim = posteriors.shape[2]
+    assert OutputDim == posteriors.shape[2]
     assert OutputDim == engine.network.n_out
     assert len(posteriors.shape) == 3
     # reformat to Sprint expected format (emission,time)
@@ -466,189 +470,40 @@ def train(segmentName, features, targets=None):
     return posteriors
 
 
-
-def evaluate(features):
+def forward(segmentName, features):
   assert engine is not None, "not initialized"
+  assert dataset
 
-  # is in format (feature,time)
-  assert InputDim == features.shape[0]
-  assert InputDim == engine.network.n_in
+  # Features are in Sprint format (feature,time).
   T = features.shape[1]
-  # must be in format: (time,batch,feature)
-  features = features.transpose()
-  features = features[:, numpy.newaxis, :]
-  assert features.shape[0] == T
-  assert features.shape[1] == 1
-  assert features.shape[2] == InputDim
-  assert len(features.shape) == 3
+  assert features.shape == (InputDim, T)
 
-  # TODO...
-  posteriors = engine.evaluate(features)
+  # Init dataset with one single entry: the current segment.
+  dataset.initFromSegmentOrder([segmentName], {segmentName: {"nframes": T}})
+  dataset.initialize()
+  dataset.epoch = -1  # Force reinit in init_seq_order().
+  dataset.init_seq_order(0)  # Epoch does not matter.
+  # Fill the data for the current segment.
+  seq = dataset.addNewData(segmentName, features)
 
-  assert posteriors is not None
+  # Prepare data for device.
+  device = engine.devices[0]
+  success = assign_dev_data_single_seq(device, dataset, seq)
+  assert success, "failed to allocate & assign data for seq %i, %s" % (seq, segmentName)
 
-  # posteriors is in format (time,emission)
-  assert posteriors.shape[0] == T
-  OutputDim = posteriors.shape[1]
-  assert OutputDim == engine.network.n_out
-  assert len(posteriors.shape) == 2
-  # reformat to Sprint expected format (emission,time)
+  # Do the actual forwarding and collect result.
+  device.run("extract")
+  result = device.result()
+  assert len(result) == 1
+  posteriors = result[0]
+
+  # Posteriors are in format (time,emission).
+  assert posteriors.shape == (T, OutputDim)
+  # Reformat to Sprint expected format (emission,time).
   posteriors = posteriors.transpose()
-  assert posteriors.shape[0] == OutputDim
-  assert posteriors.shape[1] == T
-  assert len(posteriors.shape) == 2
+  assert posteriors.shape == (OutputDim, T)
 
   return posteriors
-
-
-class CrnnEngine:
-  """
-  modelled as a mixture of crnn.Engine and crnn.TrainProcess
-  """
-
-  def __init__(self, device, network, epoch, targetMode, task):
-    self.device = device
-    self.epoch = epoch
-    self.targetMode = targetMode
-    self.task = task
-
-    # Copy over weights once.
-    # (The original crnn.Engine does this for every mini-batch.)
-    device.trainnet.set_params(network.get_params())
-    # Ignore the original network, just use trainnet directly.
-    self.network = device.trainnet
-
-    # This is where we store the gradients:
-    # self.network.gparams is a list of shared vars.
-    self.gparams = dict(
-      [(p, self.device.gradients[p])
-       for p in self.network.gparams])
-    self.rate = T.scalar('r')
-
-  def initConfig(self):
-    model = config.value('model', None)
-    learning_rate = config.float('learning_rate', 0.01)
-    momentum = config.float("momentum", 0.0)
-    interval = config.int('save_interval', 1)
-    adagrad = config.bool('adagrad', False)
-    self.init(learning_rate=learning_rate, model=model, momentum=momentum, interval=interval, adagrad=adagrad)
-
-  def init(self, learning_rate, model, momentum=0.0, interval=1, adagrad=False):
-    """ derived from crnn.Engine.train """
-    self.modelName = model
-    self.interval = interval
-    self.batch = 0
-    self.learning_rate = learning_rate
-
-    if self.task == "evaluate":
-      self.evaluater = theano.function(
-        inputs=[],
-        outputs=[self.network.output.p_y_given_x],
-        updates=[],
-        name="Sprint CrnnWrapper evaluation",
-        givens=self.device.make_input_givens(self.network),
-        no_default_updates=True)
-
-    elif self.task == "train":  # We do training.
-      if momentum > 0:
-        deltas = dict(
-          [(p, theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))) for p in
-           self.network.gparams])
-      if adagrad:
-        sqrsum = dict(
-          [(p, theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))) for p in
-           self.network.gparams])
-      updates = []
-      for param in self.network.gparams:
-        upd = - self.rate * self.gparams[param]
-        if momentum > 0:
-          upd += momentum * deltas[param]
-          updates.append((deltas[param], upd))
-        if adagrad:
-          updates.append((sqrsum[param], sqrsum[param] + self.gparams[param] ** 2))
-          upd = upd * 0.1 / (0.1 + (sqrsum[param] + self.gparams[param] ** 2) ** 0.5)
-        updates.append((param, param + upd))  # This will directly update the network weights.
-
-      # This is now a combination of crnn.Engine.updater and crnn.Device.trainer.
-      self.updater = theano.function(
-        inputs=[self.rate],
-        outputs=[self.network.cost],
-        updates=updates,
-        name="Sprint CrnnWrapper updater",
-        givens=self.device.make_givens(self.network),
-        no_default_updates=True)
-
-    else:
-      assert False, "unknown task: %r" % self.task
-
-  def train(self, input_data, target_data):
-    """ Derived from crnn.Engine.train() and crnn.Process.run(). """
-    assert self.task == "train"
-    assert self.updater is not None
-    device = self.device
-    self.batch += 1
-
-    # Set data. See crnn.Process.allocate_devices().
-    # Will be set in device.update_data() via device.run().
-    device.data = input_data
-    shape = input_data.shape[:-1]  # (T,#Batch)
-    if target_data is not None:
-      device.targets = target_data
-      assert device.targets.shape == shape
-      device.index = numpy.ones(shape=shape, dtype='int8')
-    else:
-      # Pass dummy data. Note that this is only valid if we use the Sprint criterion.
-      device.targets = numpy.zeros(shape=(1,1), dtype='int32')
-      device.index = numpy.zeros(shape=(1,1), dtype='int8')
-    assert device.blocking
-    device.update_data()
-
-    # Update params. self.updater uses device.gradients.
-    loss, = self.updater(self.learning_rate)
-    if target_data is not None:
-      # In case of the Sprint criterion, we will log there.
-      print >> log.v5, "avg frame loss for segments:", loss.sum() / device.index.sum()
-
-  def evaluate(self, input_data):
-    assert self.task == "evaluate"
-    assert self.evaluater is not None
-    device = self.device
-    self.batch += 1
-
-    # Set data. See crnn.Process.allocate_devices().
-    # Will be set in device.update_data() via device.run().
-    device.data = input_data
-    shape = input_data.shape[:-1]  # (T,#Batch)
-    device.index = numpy.ones(shape=shape, dtype='int8')
-    device.targets = numpy.zeros(shape=(1,1), dtype='int32')  # Dummy data
-    assert device.blocking
-    device.update_data()
-
-    posteriors, = self.evaluater()
-    return posteriors
-
-  def _verbForTask(self):
-    if self.task == "train": return "Trained"
-    elif self.task == "evaluate": return "Evaluated"
-    assert False, self.task
-
-  def finalize(self):
-    print >> log.v1, "%s epoch %s with %s mini-batches" % (self._verbForTask(), self.epoch, self.batch)
-
-    if self.modelName and self.task == "train":
-      self.save_model()
-    else:
-      print >> log.v3, "Not saving model (no model name)"
-
-  def save_model(self, filename=None):
-    if not filename:
-      assert self.modelName
-      filename = self.modelName + ".%03d" % self.epoch
-    print >> log.v3, "Save model under %s" % filename
-    model = h5py.File(filename, "w")
-    self.network.save(model, self.epoch)
-    model.close()
-
 
 
 class Criterion(theano.Op):
@@ -702,11 +557,11 @@ class Criterion(theano.Op):
 
 
 # HACK for now.
-import crnn.SprintErrorSignals
-import crnn.Network
+import SprintErrorSignals
+import Network
 
-crnn.SprintErrorSignals.SprintErrorSigOp = Criterion
-crnn.Network.SprintErrorSigOp = Criterion
+SprintErrorSignals.SprintErrorSigOp = Criterion
+Network.SprintErrorSigOp = Criterion
 
 
 def demo():
