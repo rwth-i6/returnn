@@ -405,10 +405,13 @@ class Device():
     else:
       return self.testnet
 
-  def alloc_data(self, shape, max_ctc_length, pad=False):
+  def alloc_data(self, shape, max_ctc_length=0, pad=False):
     """
     :param list[int] shape: format (time,batch,features)
+    :type max_ctc_length: int
     """
+    assert len(shape) == 3
+    assert all([s > 0 for s in shape])
     import theano
     self.data = numpy.zeros(shape, dtype=theano.config.floatX)
     self.targets = numpy.zeros(shape[0:2], dtype=theano.config.floatX)  # is actually the int idx of the target class
