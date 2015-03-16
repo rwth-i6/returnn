@@ -143,7 +143,7 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
   else:
     assert False, "unknown action: %r" % action
 
-  initBase()
+  initBase(targetMode=targetMode)
   if Task == "train":
     # Note: Atm, we must know all the segment info in advance.
     # The CRNN Engine.train() depends on that.
@@ -155,7 +155,6 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
   dataset.setDimensions(inputDim, outputDim)
   dataset.initialize()
 
-  setTargetMode(targetMode)
   if Task == "train":
     startTrainThread(epoch)
   elif Task == "forward":
@@ -253,37 +252,50 @@ def setTargetMode(mode):
     config.set("extract", ["posteriors"])
   else:
     assert False, "target-mode %s not supported yet..." % TargetMode
+
+  if engine:
+    # If we already initialized the engine, the value must not differ,
+    # because e.g. Devices will init accordingly.
+    orig_task = config.value("task", "train")
+    assert orig_task == task
+
   config.set("task", task)
 
 
-def initBase(configfile=None):
+def initBase(configfile=None, targetMode=None):
   """
   :type configfile: str | None
   """
+
   global isInitialized
-  if isInitialized: return
   isInitialized = True
+  # Run through in any case. Maybe just to set targetMode.
 
-  if configfile is None:
-    configfile = DefaultSprintCrnnConfig
-  assert os.path.exists(configfile)
-
-  rnn.initThreadJoinHack()
-  rnn.initConfig(configfile, [])
   global config
-  config = rnn.config
-  rnn.initLog()
-  rnn.initConfigJson()
+  if not config:
+    if configfile is None:
+      configfile = DefaultSprintCrnnConfig
+    assert os.path.exists(configfile)
 
-  modelFileName = getLastEpochBatch()[2]
-  devices = rnn.initDevices()
-  network = rnn.initNeuralNetwork(modelFileName)
+    rnn.initThreadJoinHack()
+    rnn.initConfig(configfile, [])
+    config = rnn.config
+    rnn.initLog()
+    rnn.initConfigJson()
 
-  rnn.printTaskProperties(devices, network)
-  rnn.initEngine(devices, network)
+  if targetMode:
+    setTargetMode(targetMode)
+
   global engine
-  engine = rnn.engine
-  assert isinstance(engine, Engine)
+  if not engine:
+    modelFileName = getLastEpochBatch()[2]
+    devices = rnn.initDevices()
+    network = rnn.initNeuralNetwork(modelFileName)
+
+    rnn.printTaskProperties(devices, network)
+    rnn.initEngine(devices, network)
+    engine = rnn.engine
+    assert isinstance(engine, Engine)
 
 
 def startTrainThread(epoch=None):
@@ -338,7 +350,7 @@ def prepareForwarding(epoch):
   assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
 
   # Copy over net params.
-  engine.devices[0].set_net_params(engine.network)
+  engine.devices[0].prepare(engine.network, None)
 
 
 def initDataset():
@@ -494,6 +506,7 @@ def forward(segmentName, features):
   # Do the actual forwarding and collect result.
   device.run("extract")
   result = device.result()
+  assert result is not None, "Device crashed."
   assert len(result) == 1
   posteriors = result[0]
 

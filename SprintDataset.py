@@ -80,7 +80,7 @@ class SprintDataset(Dataset):
     print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end, free, fill
     if start == end: return
     if thread.get_ident() == self.main_thread_id:
-      print >> log.v5, "SprintDataset load_seqs: ignore from this thread"
+      print >> log.v5, "SprintDataset load_seqs: ignore from main thread"
       return
     with self.lock:
       assert self.alloc_intervals  # Must be initialized.

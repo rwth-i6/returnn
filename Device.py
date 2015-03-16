@@ -6,6 +6,8 @@ from Network import LayerNetwork
 import numpy
 import sys
 import os
+import errno
+import time
 
 def get_num_devices():
   if os.name == 'nt':
@@ -537,14 +539,23 @@ class Device():
         return None
       timeout = 60 * 5  # 5 minutes execution timeout
       while timeout > 0:
-        if self.output_queue.poll(1):
-          try:
+        try:
+          if self.output_queue.poll(1):
             r = self.output_queue.recv()
             if r == "error": return None
             assert r == "task-result"
             self.output = self.output_queue.recv()
             return self.output
-          except (EOFError, IOError):
+        except EOFError:
+          # The process is dying or died.
+          return None
+        except IOError, e:
+          if e.errno == errno.EINTR:
+            # http://stackoverflow.com/questions/14136195
+            # We can just keep trying.
+            print >> log.v3, "Device proc %s gave us an EINTR." % self.name
+            time.sleep(1)
+          else:
             # The process is dying or died.
             return None
         timeout -= 1
