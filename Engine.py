@@ -28,7 +28,12 @@ class Batch:
     """
     self.shape = [0, 0]  # format (time,batch)
     self.start = list(start)  # format (start seq idx in data, start frame idx in seq)
-    self.nseqs = 1  # number of sequences which we cover (not data-batches self.shape[1])
+    self.nseqs = 1
+    """
+    nseqs is the number of sequences which we cover (not data-batches self.shape[1]).
+    For recurrent NN training, shape[1] == nseqs.
+    For FF NN training, we concatenate all seqs, so shape[1] == 1 but nseqs >= 1.
+    """
 
   def __repr__(self):
     return "<Batch %r %r>" % (self.shape, self.start)
@@ -58,6 +63,9 @@ class Batch:
 
   def size(self):
     return self.shape[0] * self.shape[1]
+
+  def get_end_seq(self):
+    return self.start[0] + max(self.nseqs, self.shape[1])
 
 
 class TaskThread(threading.Thread):
@@ -97,29 +105,25 @@ class TaskThread(threading.Thread):
       """
       :type device: Device.Device
       :type batches: list[Batch]
-      :returns how much batches we used. len(batches) implies that we were successful.
-      Anything else implies that we don't have the seqs.
-      :rtype: int
+      :returns successful and how much batch idx to advance.
+      :rtype: (bool,int)
       """
       # The final device.data.shape is in format (time,batch,feature).
       shape = [0, 0]
       for batch in batches:
         shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
       if shape[1] == 0:
-        return 0
+        return False, len(batches)
+
       device.alloc_data(shape + [self.data.num_inputs * self.data.window], self.data.max_ctc_length, pad=self.pad_batches)
       offset = 0
       for i, batch in enumerate(batches):
-        if self.network.recurrent:
-          batch_seq_end = batch.start[0] + batch.shape[1]
-        else:
-          batch_seq_end = batch.start[0] + batch.nseqs
-        if not self.data.have_seqs(batch.start[0], batch_seq_end):
+        if not self.data.have_seqs(batch.start[0], batch.get_end_seq()):
           # We could also just skip those seqs. However, we might want to keep all batches
           # of similar sizes to have more stable training. Thus, we skip this batch.
-          return i
+          return False, i + 1
 
-        self.data.load_seqs(batch.start[0], batch_seq_end)
+        self.data.load_seqs(batch.start[0], batch.get_end_seq())
         idi = self.data.alloc_interval_index(batch.start[0])
         if self.network.recurrent:
           for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
@@ -158,7 +162,7 @@ class TaskThread(threading.Thread):
           device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
           offset += l
 
-      return len(batches)
+      return True, len(batches)
 
     def allocate_devices(self, start_batch):
       """
@@ -179,16 +183,16 @@ class TaskThread(threading.Thread):
       batch_idx = start_batch
       for device in self.devices:
         batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        used_batches = self.assign_dev_data(device, batches)
-        if used_batches == len(batches):
+        success, batch_adv_idx = self.assign_dev_data(device, batches)
+        if success:
           devices.append(device)
-          batch_idx += len(batches)
         else:
-          # We expect that there was a problem with batch_idx + used_batches.
+          # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
+          assert batch_adv_idx > 0
           print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
-                           (range(batch_idx, batch_idx + used_batches + 1),
-                            batches[used_batches].start[0])
-          batch_idx += used_batches + 1
+                           (range(batch_idx, batch_idx + batch_adv_idx),
+                            batches[batch_adv_idx - 1].start[0])
+        batch_idx += batch_adv_idx
       batch_adv_idx = batch_idx - start_batch
       assert batch_adv_idx > 0
       return devices, batch_adv_idx
@@ -377,7 +381,6 @@ class TaskThread(threading.Thread):
         # That works because the device proc will push the results on the queue
         # and device.result() reads it from there without sending another command.
 
-        #if False: #for fast testing
         if batch_idx < len(self.batches):
           deviceRun = self.DeviceBatchRun(self, batch_idx)
           deviceRun.start()
