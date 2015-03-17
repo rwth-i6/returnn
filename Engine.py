@@ -14,6 +14,7 @@ import threading, thread
 import atexit
 import Device
 from LearningRateControl import loadLearningRateControlFromConfig
+from Pretrain import pretrainFromConfig
 
 
 class Batch:
@@ -433,7 +434,7 @@ class TaskThread(threading.Thread):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch = 0, pad_batches=False):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch, pad_batches):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -441,6 +442,7 @@ class TrainTaskThread(TaskThread):
     :type batches: list[Batch]
     :type learning_rate: float
     :type updater: Updater
+    :type train_param_args: dict | None
     :type start_batch: int
     :type pad_batches: bool
     """
@@ -470,6 +472,7 @@ class TrainTaskThread(TaskThread):
   def get_device_prepare_args(self):
     kwargs = super(TrainTaskThread, self).get_device_prepare_args()
     kwargs["updater"] = self.updater
+    kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
 
   def evaluate(self, batch, results, num_frames):
@@ -483,10 +486,10 @@ class TrainTaskThread(TaskThread):
     self.score += score
     if not self.updater.updateOnDevice:
       gparams = {}
-      for p in self.network.gparams:
+      for p in self.network.train_params:
         gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
       for res in results:
-        for p, q in zip(self.network.gparams, res[1:]):
+        for p, q in zip(self.network.train_params, res[1:]):
           gparams[p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
@@ -496,8 +499,8 @@ class TrainTaskThread(TaskThread):
     if self.updater.updateOnDevice:
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
-      params = self.devices[0].get_net_params()
-      our_params = self.network.params
+      params = self.devices[0].get_net_train_params()
+      our_params = self.network.train_params
       assert len(params) == len(our_params)
       for i in range(len(params)):
         our_params[i].set_value(params[i])
@@ -641,138 +644,162 @@ class Engine:
           batch.add_sequence(length)
       else:
         while length > 0:
-          nframes = min(length, batch_size - batch.shape[0])
-          if nframes == 0 or batch.nseqs > max_seqs:
+          num_frames = min(length, batch_size - batch.shape[0])
+          if num_frames == 0 or batch.nseqs > max_seqs:
             batches.append(batch)
             batch = Batch([s, data.seq_lengths[data.seq_index[s]] - length])
-            nframes = min(length, batch_size)
-          batch.add_frames(nframes)
-          length -= min(nframes, batch_step)
+            num_frames = min(length, batch_size)
+          batch.add_frames(num_frames)
+          length -= min(num_frames, batch_step)
         if s != data.num_seqs - 1: batch.nseqs += 1
       s += 1
     batches.append(batch)
     return batches
 
   @classmethod
-  def config_get_num_epochs(cls, config):
+  def config_get_final_epoch(cls, config):
     """ :type config: Config.Config """
     return config.int('num_epochs', 5)
 
-  def train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1, start_batch=0):
+  def init_train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1, start_batch=0):
     """
     :type config: Config.Config
     :type train_data: Dataset.Dataset
-    """
-    batch_size, batch_step = config.int_pair('batch_size', (1,1))
-    model = config.value('model', None)
-    interval = config.int('save_interval', 1)
-    learning_rate_control = loadLearningRateControlFromConfig(config)
-    num_epochs = self.config_get_num_epochs(config)
-    max_seqs = config.int('max_seqs', -1)
-    start_batch = start_batch or config.int('start_batch', 0)
-    updater = Updater.initFromConfig(config)
-    pad_batches = config.bool("pad", False)
-    self.train(num_epochs, learning_rate_control, batch_size, batch_step,
-               updater,
-               train_data, dev_data, eval_data,
-               model, interval,
-               start_epoch, start_batch, max_seqs, pad_batches=pad_batches)
-
-  def train(self, num_epochs, learning_rate_control, batch_size, batch_step,
-            updater,
-            train_data, dev_data=None, eval_data=None,
-            model_filename=None, savemodel_epoch_interval=1,
-            start_epoch=1, start_batch=0,
-            max_seqs=-1, pad_batches=False):
-    """
-    :type num_epochs: int
-    :type learning_rate_control: LearningRateControl.LearningRateControl
-    :type batch_size: int
-    :type batch_step: int
-    :type updater: Updater
-    :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
-    :param str model_filename: model filename (prefix)
-    :type savemodel_epoch_interval: int
-    :type start_epoch: int
-    :type start_batch: int
-    :type max_seqs: int
-    :type pad_batches: bool
     """
-    print >> log.v3, "starting at epoch %i and batch %i" % (start_epoch, start_batch)
-    print >> log.v3, "using batch size/step: %i, %i" % (batch_size, batch_step)
-    print >> log.v3, "learning rate control:", learning_rate_control
-    data = {}; """ :type: dict[str,Dataset.Dataset] """
-    if dev_data and dev_data.num_seqs > 0: data["dev"] = dev_data
-    if eval_data and eval_data.num_seqs > 0: data["eval"] = eval_data
-    self.data = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
-    for name in data.keys():
-      self.data[name] = (data[name], self.set_batch_size(data[name], batch_size, batch_step)) # max(max(self.data[name].seq_lengths), batch_size)))
+    self.train_data = train_data
+    self.dev_data = dev_data
+    self.eval_data = eval_data
+    self.start_epoch = start_epoch
+    self.start_batch = start_batch or config.int('start_batch', 0)
+    self.batch_size, self.batch_step = config.int_pair('batch_size', (1,1))
+    self.model_filename = config.value('model', None)
+    self.save_model_epoch_interval = config.int('save_interval', 1)
+    self.learning_rate_control = loadLearningRateControlFromConfig(config)
+    self.learning_rate = self.learning_rate_control.initialLearningRate
+    self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
+    self.max_seqs = config.int('max_seqs', -1)
+    self.updater = Updater.initFromConfig(config)
+    self.pretrain = pretrainFromConfig(config)
+    self.pad_batches = config.bool("pad", False)
+
+  def train(self):
+    print >> log.v3, "start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch)
+    print >> log.v3, "using batch size/step: %i, %i, max seqs: %i" % (self.batch_size, self.batch_step, self.max_seqs)
+    print >> log.v3, "learning rate control:", self.learning_rate_control
+    print >> log.v3, "pretrain:", self.pretrain
+    self.eval_datasets = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
+    for name, dataset in [("eval", self.dev_data), ("eval", self.eval_data)]:
+      if not dataset: continue
+      if dataset.num_seqs == 0: continue
+      self.eval_datasets[name] = (dataset, self.set_batch_size(dataset, self.batch_size, self.batch_step))
     if self.network.loss == 'priori':
-      prior = train_data.calculate_priori()
+      prior = self.train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
-    tester = None
-    #training_devices = self.devices[:-1] if len(self.devices) > 1 else self.devices
-    #testing_device = self.devices[-1]
-    training_devices = self.devices
-    testing_device = self.devices[-1]
+
     with self.lock:
-      self.num_epochs = num_epochs
       self.is_training = True
-      self.cur_epoch = 0
+      self.epoch = 0  # Not yet started. Will be >=1 later.
       self.training_finished = False
       self.cond.notify_all()
-    assert start_epoch > 0
-    assert start_epoch <= num_epochs, "No epochs to train, start_epoch: %i, num_epochs: %i" % (start_epoch, num_epochs)
-    for epoch in xrange(start_epoch, num_epochs + 1):  # Epochs start at 1.
-      learning_rate = learning_rate_control.getLearningRateForEpoch(epoch)
-      print >> log.v1, "start epoch", epoch, "with learning rate", learning_rate, "..."
+
+    assert self.start_epoch >= 1, "Epochs start at 1."
+    assert self.start_epoch <= self.final_epoch, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
+                                                (self.start_epoch, self.final_epoch)
+
+    for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
       # In case of random seq ordering, we want to reorder each epoch.
-      train_data.init_seq_order(epoch=epoch)
+      self.train_data.init_seq_order(epoch=epoch)
       with self.lock:
         # Notify about current epoch after we initialized the dataset seq order.
-        self.cur_epoch = epoch
+        self.epoch = epoch
         self.cond.notify_all()
-      train_batches = self.set_batch_size(train_data, batch_size, batch_step, max_seqs)
-      trainer = TrainTaskThread(self.network, training_devices, train_data, train_batches,
-                                learning_rate, updater, start_batch, pad_batches=pad_batches)
-      if tester:
-        if False and len(self.devices) > 1:
-          if tester.isAlive():
-            #print >> log.v3, "warning: waiting for test score of previous epoch"
-            tester.join()
-        print >> log.v1, name + ":", "score", tester.score, "error", tester.error
-      trainer.join()
-      start_batch = 0
-      if not trainer.finalized:
-        if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
-          self.save_model(model_filename + ".%03d.crash_%i" % (epoch, trainer.device_crash_batch), epoch - 1)
-        sys.exit(1)
-      if model_filename and (epoch % savemodel_epoch_interval == 0):
-        self.save_model(model_filename + ".%03d" % epoch, epoch)
-      learning_rate_control.setEpochError(epoch, trainer.score)
-      learning_rate_control.save()
-      if log.verbose[1]:
-        for name in self.data.keys():
-          data, num_batches = self.data[name]
-          tester = EvalTaskThread(self.network, [testing_device], data, num_batches, pad_batches=pad_batches)
-          if True or len(self.devices) == 1:
-            tester.join()
-            trainer.elapsed += tester.elapsed
-        print >> log.v1, "epoch", epoch, "elapsed:", trainer.elapsed, "score:", trainer.score
-    if model_filename:
-      self.save_model(model_filename + ".%03d" % (start_epoch + num_epochs - 1), start_epoch + num_epochs - 1)
-    if tester:
-      if len(self.devices) > 1: tester.join()
-      print >> log.v1, name + ":", "score", tester.score, "error", tester.error
+
+      self.train_epoch()
+
+    # Save final model.
+    if self.model_filename:
+      self.save_model(self.model_filename + ".%03d" % self.final_epoch, self.final_epoch)
+
     with self.lock:
       self.is_training = False
       self.training_finished = True
-      self.num_epochs = None
-      self.cur_epoch = None
+      self.final_epoch = None
+      self.epoch = None
       self.cond.notify_all()
+
+  @classmethod
+  def epoch_model_filename(cls, model_filename, epoch, is_pretrain):
+    """
+    :type model_filename: str
+    :type epoch: int
+    :type is_pretrain: bool
+    :rtype: str
+    """
+    return model_filename + (".pretrain" if is_pretrain else "") + ".%03d" % epoch
+
+  def get_epoch_model_filename(self):
+    return self.epoch_model_filename(self.model_filename, self.epoch, self.is_pretrain_epoch())
+
+  def get_epoch_str(self):
+    return ("pretrain " if self.is_pretrain_epoch() else "") + "epoch %s" % self.epoch
+
+  def is_pretrain_epoch(self):
+    return self.pretrain and self.epoch <= self.pretrain.get_train_num_epochs()
+
+  def init_train_epoch(self):
+    if self.is_pretrain_epoch():
+      new_network = self.pretrain.get_network_for_epoch(self.epoch)
+      old_network = self.network
+      if self.epoch >= 2:
+        # Otherwise it's initialized randomly which is fine.
+        # This copy will copy the old params over and leave the rest randomly initialized.
+        self.pretrain.copy_params_from_old_network(new_network, old_network)
+      self.network = new_network
+      self.network.set_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+      # Use constant learning rate.
+      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
+    else:
+      self.network.set_train_params()  # Whole network.
+      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+
+  def train_epoch(self):
+    self.init_train_epoch()
+    print >> log.v1, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
+
+    if self.is_pretrain_epoch():
+      print >> log.v2, "pretrain train params:", self.network.train_params
+
+    training_devices = self.devices
+    train_batches = self.set_batch_size(self.train_data, self.batch_size, self.batch_step, self.max_seqs)
+
+    start_batch = self.start_batch if self.epoch == self.start_epoch else 0
+    trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
+                              self.learning_rate, self.updater, start_batch, self.pad_batches)
+    trainer.join()
+    if not trainer.finalized:
+      if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
+        self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch, self.epoch - 1)
+      sys.exit(1)
+
+    if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
+      self.save_model(self.get_epoch_model_filename(), self.epoch)
+    self.learning_rate_control.setEpochError(self.epoch, trainer.score)
+    self.learning_rate_control.save()
+
+    if log.verbose[1]:
+      eval_dump_str = []
+      testing_device = self.devices[-1]
+      for name in self.eval_datasets.keys():
+        data, num_batches = self.eval_datasets[name]
+        tester = EvalTaskThread(self.network, [testing_device], data, num_batches, self.pad_batches)
+        tester.join()
+        trainer.elapsed += tester.elapsed
+        eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
+      print >> log.v1, self.get_epoch_str(), "elapsed:", trainer.elapsed, "score:", trainer.score
+      print >> log.v1, "\n".join(eval_dump_str)
 
   def save_model(self, filename, epoch):
     """

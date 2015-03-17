@@ -17,7 +17,7 @@ if __name__ == '__main__':
                     help = "[STRING] Output model.")
   parser.add_option("-d", "--dump", dest = "dump",
                     help = "[STRING] Dump json file of output model.")
-  
+
   (options, args) = parser.parse_args()
 
   assert options.json, "no combination file specified"
@@ -86,9 +86,9 @@ network = LayerNetwork.from_json(json_content, n_in, n_out)
 for k in network_layers.keys():
   layer = network_layers[k]
   if layer.name == network.output.name:
-    network.output.set_params(layer.get_params())
+    network.output.set_params_by_dict(layer.get_params_dict())
   else:
-    network.hidden[layer.name].set_params(layer.get_params())
+    network.hidden[layer.name].set_params_by_dict(layer.get_params_dict())
 
 model = h5py.File(options.output, "w")
 network.save(model, 1)

@@ -72,8 +72,25 @@ class LearningRateControl(object):
     assert epoch >= 1
     if epoch in self.epochData: return self.epochData[epoch].learningRate
     learningRate = self.calcLearningRateForEpoch(epoch)
-    self.epochData[epoch] = self.EpochData(learningRate)
+    self.setLearningRateForEpoch(epoch, learningRate)
     return learningRate
+
+  def setLearningRateForEpoch(self, epoch, learningRate):
+    """
+    :type epoch: int
+    :type learningRate: float
+    """
+    if epoch in self.epochData:
+      self.epochData[epoch].learningRate = learningRate
+    else:
+      self.epochData[epoch] = self.EpochData(learningRate)
+
+  def getLastEpoch(self, epoch):
+    epochs = sorted(self.epochData.keys())
+    idx = epochs.index(epoch)
+    if idx == 0:
+      return None
+    return epochs[idx - 1]
 
   def setEpochError(self, epoch, error):
     """
@@ -105,7 +122,7 @@ class ConstantLearningRate(LearningRateControl):
     :returns learning rate
     :rtype: float
     """
-    return self.epochData[1].learningRate
+    return self.initialLearningRate
 
 
 class Newbob(LearningRateControl):
@@ -140,11 +157,15 @@ class Newbob(LearningRateControl):
     :returns learning rate
     :rtype: float
     """
-    learningRate = self.epochData[epoch - 1].learningRate
-    if epoch == 2:
+    lastEpoch = self.getLastEpoch(epoch)
+    if lastEpoch is None:
+      return self.initialLearningRate
+    learningRate = self.epochData[lastEpoch].learningRate
+    last2Epoch = self.getLastEpoch(lastEpoch)
+    if last2Epoch is None:
       return learningRate
-    oldError = self.epochData[epoch - 2].error
-    newError = self.epochData[epoch - 1].error
+    oldError = self.epochData[last2Epoch].error
+    newError = self.epochData[lastEpoch].error
     relativeError = (newError - oldError) / abs(newError)
     if relativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor

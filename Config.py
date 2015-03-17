@@ -12,6 +12,7 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 class Config:
   def __init__(self):
     self.dict = {}; """ :type: dict[str, list[str]] """
+    self.network_topology_json = None; """ :type: str | None """
 
   def load_file(self, filename):
     for line in open(filename).readlines():

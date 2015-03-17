@@ -3,8 +3,9 @@
 import numpy
 import theano
 import json
+import inspect
 import theano.tensor as T
-from Util import hdf5_dimension, strtoact
+from Util import hdf5_dimension, strtoact, simpleObjRepr
 from math import sqrt
 from CTC import CTCOp
 from Log import log
@@ -62,10 +63,16 @@ class Container(object):
   def num_params(self):
     return sum([numpy.prod(v.get_value(borrow=True, return_internal_type=True).shape[0:]) for v in self.params.values()])
 
-  def get_params(self):
+  def get_params_dict(self):
+    """
+    :rtype: dict[str,numpy.ndarray|theano.sandbox.cuda.CudaNdArray]
+    """
     return {p: v.get_value(borrow=True, return_internal_type=True) for (p, v) in self.params.items()}
 
-  def set_params(self, params):
+  def set_params_by_dict(self, params):
+    """
+    :type params: dict[str,numpy.ndarray|theano.sandbox.cuda.CudaNdArray]
+    """
     for p, v in params.items():
       self.params[p].set_value(v, borrow=True)
 
@@ -183,7 +190,10 @@ class OutputLayer(Layer):
     """
     super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
     self.z = self.b
-    self.W_in = [ self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out, name = "W_in_%s_%s"%(source.name, self.name)), "W_in_%s_%s"%(source.name, self.name)) for source in sources ]
+    self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out,
+                                                            name="W_in_%s_%s" % (source.name, self.name)),
+                                "W_in_%s_%s" % (source.name, self.name))
+                 for source in sources]
     for source, W in zip(sources, self.W_in):
       if mask == "unity":
         self.z += T.dot(source.output, W)
@@ -315,7 +325,11 @@ class HiddenLayer(Layer):
     """
     super(HiddenLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name=name)
     self.activation = activation
-    self.W_in = [ self.add_param(self.create_forward_weights(s.attrs['n_out'], self.attrs['n_out'], name = self.name + "_" + s.name), "W_in_%s_%s"%(s.name, self.name)) for s in sources ]
+    self.W_in = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
+                                                            self.attrs['n_out'],
+                                                            name=self.name + "_" + s.name),
+                                "W_in_%s_%s" % (s.name, self.name))
+                 for s in sources]
     self.set_attr('from', ",".join([s.name for s in sources]))
 
 class ForwardLayer(HiddenLayer):
@@ -328,7 +342,7 @@ class ForwardLayer(HiddenLayer):
         z += T.dot(s.output, W_in)
       else:
         z += T.dot(s.output, self.mass * self.mask * W_in)
-    self.output = (z if self.activation is None else self.activation(z))
+    self.output = z if self.activation is None else self.activation(z)
 
 class ConvPoolLayer(ForwardLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "convpool", name = ""):
@@ -956,55 +970,68 @@ class LstmPeepholeLayer(LstmLayer):
                                            size=(n, )), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True)
 
+
 """
-        NETWORKS
+        Network Topology Description
 """
 
-class LayerNetwork(object):
-  def __init__(self, n_in, n_out, mask="unity"):
+class LayerNetworkDescription:
+
+  def __init__(self, num_inputs, num_outputs,
+               hidden_info,
+               loss, L1_reg, L2_reg, dropout=(),
+               bidirectional=True, sharpgates='none',
+               truncation=-1, entropy=0):
     """
-    :param int n_in: input dim of the network
-    :param int n_out: output dim of the network
-    :param str mask: e.g. "unity"
+    :type num_inputs: int
+    :type num_outputs: int
+    :param list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] hidden_info: list of
+      (layer_type, size, activation, name)
+    :param str loss: loss type, "ce", "ctc" etc
+    :type L1_reg: float
+    :type L2_reg: float
+    :type dropout: list[float]
+    :type bidirectional: bool
+    :param str sharpgates: see LSTM layers
+    :param int truncation: number of steps to use in truncated BPTT or -1. see theano.scan
+    :param float entropy: ...
     """
-    self.x = T.tensor3('x'); """ :type: theano.Variable """
-    self.y = T.ivector('y'); """ :type: theano.Variable """
-    self.c = T.imatrix('c'); """ :type: theano.Variable """
-    self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    Layer.initialize()
-    self.hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
-    """
-    That represents (layer_type, size, activation, name),
-    where activation is either a list of activation functions or a single one.
-    Such activation function is a tuple (str,theano.Op).
-    name is a custom name for the layer, such as "hidden_2".
-    """
-    self.n_in = n_in
-    self.n_out = n_out
-    self.mask = mask
+    assert len(dropout) == len(hidden_info) + 1
+    self.num_inputs = num_inputs
+    self.num_outputs = num_outputs
+    self.hidden_info = list(hidden_info)
+    self.loss = loss
+    self.L1_reg = L1_reg
+    self.L2_reg = L2_reg
+    self.dropout = list(dropout)
+    self.bidirectional = bidirectional
+    self.sharpgates = sharpgates
+    self.truncation = truncation
+    self.entropy = entropy
+
+  def __eq__(self, other):
+    return self.init_args() == getattr(other, "init_args", lambda: {})()
+
+  def __ne__(self, other):
+    return not self == other
+
+  def init_args(self):
+    return {arg: getattr(self, arg) for arg in inspect.getargspec(self.__init__).args[1:]}
+
+  __repr__ = simpleObjRepr
+
+  def copy(self):
+    args = self.init_args()
+    return self.__class__(**args)
 
   @classmethod
-  def from_config(cls, config, mask="unity"):
+  def from_config(cls, config):
     """
     :type config: Config.Config
-    :param str mask: e.g. "unity"
-    :rtype: LayerNetwork
+    :returns dict
     """
-    num_inputs = config.int('num_inputs', 0)
-    num_outputs = config.int('num_outputs', 0)
-    if config.list('train'):
-      _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
-      _num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
-      if num_inputs: assert num_inputs == _num_inputs
-      if num_outputs: assert num_outputs == _num_outputs
-      num_inputs = _num_inputs
-      num_outputs = _num_outputs
-    assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
-    loss = config.value('loss', 'ce')
-    if config.has('initialize_from_json'):
-      return LayerNetwork.from_json(config.json, num_inputs, num_outputs)
-    if loss in ('ctc', 'ce_ctc'):
-      num_outputs += 1 #add blank
+    num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
+    loss = cls.loss_from_config(config)
     hidden_size = config.int_list('hidden_size')
     assert len(hidden_size) > 0, "no hidden layers specified"
     hidden_type = config.list('hidden_type')
@@ -1023,7 +1050,6 @@ class LayerNetwork(object):
         hidden_name.append("_")
     for i, name in enumerate(hidden_name):
       if name == "_": hidden_name[i] = "hidden_%d" % i
-    task = config.value('task', 'train')
     L1_reg = config.float('L1_reg', 0.0)
     L2_reg = config.float('L2_reg', 0.0)
     bidirectional = config.bool('bidirectional', True)
@@ -1039,7 +1065,13 @@ class LayerNetwork(object):
       for i in xrange(len(hidden_size) + 1 - len(dropout)):
         dropout.append(0.0)
     dropout = [float(d) for d in dropout]
-    network = cls(num_inputs, num_outputs, mask)
+    hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
+    """
+    That represents (layer_type, size, activation, name),
+    where activation is either a list of activation functions or a single one.
+    Such activation function is a tuple (str,theano.Op).
+    name is a custom name for the layer, such as "hidden_2".
+    """
     for i in xrange(len(hidden_size)):
       if ':' in actfct[i]:
         acts = []; """ :type: list[(str,theano.Op)] """
@@ -1047,19 +1079,107 @@ class LayerNetwork(object):
           acts.append((a, strtoact(a)))
       else:
         acts = (actfct[i], strtoact(actfct[i]))
-      network.add_hidden(hidden_name[i], hidden_size[i], hidden_type[i], acts)
-    if task == 'pretrain':
-      loss = 'layer'
-      task = 'train'
-      network.add_hidden("pretrain_layer",
-                         config.int('pretrain_layer_size', hidden_size[-1]),
-                         config.value('pretrain_layer_type', hidden_type[-1]),
-                         config.value('pretrain_layer_activation', actfct[-1]))
-    network.initialize(loss, L1_reg, L2_reg, dropout, bidirectional, truncation, sharpgates, entropy)
+      """
+      hidden_name[i]: custom name of the hidden layer, such as "hidden_2"
+      hidden_type[i]: e.g. 'forward'
+      acts: activation function, e.g. ("tanh", T.tanh)
+      """
+      hidden_info.append((hidden_type[i], hidden_size[i], acts, hidden_name[i]))
+
+    return cls(num_inputs=num_inputs, num_outputs=num_outputs,
+               hidden_info=hidden_info,
+               loss=loss, L1_reg=L1_reg, L2_reg=L2_reg, dropout=dropout,
+               bidirectional=bidirectional, sharpgates=sharpgates,
+               truncation=truncation, entropy=entropy)
+
+  @classmethod
+  def loss_from_config(cls, config):
+    """
+    :type config: Config.Config
+    :rtype: str
+    """
+    return config.value('loss', 'ce')
+
+  @classmethod
+  def num_inputs_outputs_from_config(cls, config):
+    """
+    :type config: Config.Config
+    :rtype: (int,int)
+    """
+    num_inputs = config.int('num_inputs', 0)
+    num_outputs = config.int('num_outputs', 0)
+    if config.list('train'):
+      _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+      _num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
+      if num_inputs: assert num_inputs == _num_inputs
+      if num_outputs: assert num_outputs == _num_outputs
+      num_inputs = _num_inputs
+      num_outputs = _num_outputs
+    assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
+    loss = cls.loss_from_config(config)
+    if loss in ('ctc', 'ce_ctc'):
+      num_outputs += 1  # add blank
+    return num_inputs, num_outputs
+
+
+"""
+        NETWORKS
+"""
+
+class LayerNetwork(object):
+  def __init__(self, n_in, n_out, mask="unity"):
+    """
+    :param int n_in: input dim of the network
+    :param int n_out: output dim of the network
+    :param str mask: e.g. "unity"
+    """
+    self.x = T.tensor3('x'); """ :type: theano.Variable """
+    self.y = T.ivector('y'); """ :type: theano.Variable """
+    self.c = T.imatrix('c'); """ :type: theano.Variable """
+    self.i = T.bmatrix('i'); """ :type: theano.Variable """
+    Layer.initialize()
+    self.n_in = n_in
+    self.n_out = n_out
+    self.mask = mask
+    self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
+    self.train_params = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
+    self.description = None; """ :type: LayerNetworkDescription | None """
+    self.train_param_args = None; """ :type: dict[str] """
+
+  @classmethod
+  def from_config(cls, config, mask="unity"):
+    """
+    :type config: Config.Config
+    :param str mask: e.g. "unity" or "dropout"
+    :rtype: LayerNetwork
+    """
+    if config.network_topology_json is not None:
+      num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+      return cls.from_json(config.network_topology_json, num_inputs, num_outputs)
+
+    description = LayerNetworkDescription.from_config(config)
+    return cls.from_description(description, mask)
+
+  @classmethod
+  def from_description(cls, description, mask="unity"):
+    """
+    :type description: LayerNetworkDescription
+    :param str mask: e.g. "unity" or "dropout"
+    :rtype: LayerNetwork
+    """
+    network = cls(description.num_inputs, description.num_outputs, mask)
+    network.initialize(description)
     return network
 
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None):
+    """
+    :type json_content: str
+    :type n_in: int
+    :type n_out: int
+    :type mask: str
+    :rtype: LayerNetwork
+    """
     network = cls(n_in, n_out, mask)
     try:
       topology = json.loads(json_content)
@@ -1070,8 +1190,6 @@ class LayerNetwork(object):
       assert False, "invalid json content"
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    network.hidden = {}
-    network.params = []
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
@@ -1122,8 +1240,6 @@ class LayerNetwork(object):
     grp = model['training']
     if mask is None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
-    network.hidden = {}
-    network.params = []
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
@@ -1173,30 +1289,20 @@ class LayerNetwork(object):
     network.make_classifier(sources, loss, model[output].attrs['dropout'])
     return network
 
-  def add_hidden(self, name, size, layer_type='forward', activation=("tanh", T.tanh)):
-    """
-    :param str name: custom name of the hidden layer, such as "hidden_2"
-    :param int size: hidden size
-    :param str layer_type: 'forward'
-    :param (str,theano.Op) activation: activation function
-    """
-    self.hidden_info.append((layer_type, size, activation, name))
-
   def add_layer(self, name, layer, activation):
     """
     :type name: str
-    :type layer: Layer
+    :type layer: HiddenLayer
     :param str activation: activation function name
     """
     self.hidden[name] = layer
     self.hidden[name].set_attr('activation', activation)
     if isinstance(layer, RecurrentLayer):
-      if self.hidden[name].attrs['L1'] > 0.0: self.L1 += self.hidden[name].attrs['L1'] * abs(self.hidden[name].W_re.sum())
-      if self.hidden[name].attrs['L2'] > 0.0: self.L2 += self.hidden[name].attrs['L2'] * (self.hidden[name].W_re ** 2).sum()
-    for W in self.hidden[name].W_in:
-      if self.hidden[name].attrs['L1'] > 0.0: self.L1 += self.hidden[name].attrs['L1'] * abs(W.sum())
-      if self.hidden[name].attrs['L2'] > 0.0: self.L2 += self.hidden[name].attrs['L2'] * (W ** 2).sum()
-    self.params += self.hidden[name].params.values()
+      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(layer.W_re.sum())
+      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (layer.W_re ** 2).sum()
+    for W in layer.W_in:
+      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(W.sum())
+      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (W ** 2).sum()
 
   def make_classifier(self, sources, loss, dropout=0, mask="unity"):
     """
@@ -1205,7 +1311,6 @@ class LayerNetwork(object):
     :type dropout: float
     :param str mask: e.g. "unity"
     """
-    self.gparams = self.params[:]; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.loss = loss
     if loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
       self.output = SequenceOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
@@ -1214,8 +1319,7 @@ class LayerNetwork(object):
     for W in self.output.W_in:
       if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
       if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
-    self.params += self.output.params.values()
-    self.gparams += self.output.params.values()[:]
+    self.set_train_params()
     targets = self.c if self.loss == 'ctc' else self.y
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
     self.errors = self.output.errors(error_targets)
@@ -1225,23 +1329,70 @@ class LayerNetwork(object):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
 
-  def initialize(self, loss, L1_reg, L2_reg, dropout=(), bidirectional=True, truncation=-1, sharpgates='none', entropy=0):
-    self.hidden = {}; """ :type: dict[str,Layer] """
-    self.params = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
+  def get_params(self, hidden_layer_selection, with_output):
+    """
+    :type hidden_layer_selection: list[str]
+    :type with_output: bool
+    :rtype: list[theano.compile.sharedvalue.SharedVariable]
+    :returns list (with well-defined order) of shared variables
+    """
+    params = []
+    """ :type: list[theano.compile.sharedvalue.SharedVariable] """
+    for name in sorted(hidden_layer_selection):
+      params += self.hidden[name].params.values()
+    if with_output:
+      params += self.output.params.values()
+    return params
+
+  def get_all_params(self):
+    return self.get_params(**self.get_train_param_args_default())
+
+  def get_train_param_args_default(self):
+    """
+    :returns default kwargs for self.get_params(), which returns all params with this.
+    """
+    return {
+      "hidden_layer_selection": sorted(self.hidden.keys()),  # Use all.
+      "with_output": True
+    }
+
+  def set_train_params(self, **kwargs):
+    """
+    Kwargs as in self.get_params(), or default values.
+    """
+    # Set default values, also for None.
+    for key, value in self.get_train_param_args_default().items():
+      if kwargs.get(key, None) is None:
+        kwargs[key] = value
+    # Force a unique representation of kwargs.
+    kwargs["hidden_layer_selection"] = sorted(kwargs["hidden_layer_selection"])
+    self.train_param_args = kwargs
+    self.train_params = self.get_params(**kwargs)
+
+  def initialize(self, description):
+    """
+    :type description: LayerNetworkDescription
+    Initializes the network based the description.
+    """
+    assert description.num_inputs == self.n_in
+    assert description.num_outputs == self.n_out
+    assert len(description.hidden_info) > 0
+    self.description = description
     n_in = self.n_in
     x_in = self.x
     self.L1 = T.constant(0)
     self.L2 = T.constant(0)
-    self.L1_reg = L1_reg
-    self.L2_reg = L2_reg
+    self.L1_reg = description.L1_reg
+    self.L2_reg = description.L2_reg
     self.recurrent = False
-    self.bidirectional = bidirectional
+    self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
+    last_layer = None
     # create forward layers
-    for info, drop in zip(self.hidden_info, dropout[:-1]):
+    for info, drop in zip(description.hidden_info, description.dropout[:-1]):
       #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
-      srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
+      srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
       params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       name = params['name']; """ :type: str """
       if info[0] == 'forward':
@@ -1249,36 +1400,35 @@ class LayerNetwork(object):
       else:
         self.recurrent = True
         params['index'] = self.i
-        params['truncation'] = truncation
+        params['truncation'] = description.truncation
         if self.bidirectional:
           params['name'] = info[3] + "_fw"
         name = params['name']
         if info[0] == 'recurrent':
           self.add_layer(name, RecurrentLayer(**params), info[2][0])
         elif info[0] == 'lstm':
-          self.add_layer(name, LstmLayer(sharpgates = sharpgates, **params), info[2][0])
+          self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
         elif info[0] == 'norm_lstm':
-          self.add_layer(name, NormalizedLstmLayer(sharpgates = sharpgates, **params), info[2][0])
+          self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
         elif info[0] == 'gatelstm':
-          self.add_layer(name, GateLstmLayer(sharpgates = sharpgates, **params), info[2][0])
+          self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
         elif info[0] == 'peep_lstm':
           self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
-        else: assert False, "invalid layer type: " + info[0]
-      #TODO
-      #if self.hidden[name].source != self.x:
-      #  self.hidden[name].set_attr('from', pname)
-      pname = name
+        else:
+          assert False, "invalid layer type: " + info[0]
+      last_layer = self.hidden[name]
       n_in = info[1]
-      x_in = self.hidden[name].output
-    sources = [name]
+      x_in = last_layer.output
+    sources = [last_layer]
     # create backward layers
     assert self.recurrent or not self.bidirectional, "non-recurrent networks can not be bidirectional"
     if self.bidirectional:
+      last_layer = None
       n_in = self.n_in
       x_in = self.x
-      for info, drop in zip(self.hidden_info, dropout[:-1]):
+      for info, drop in zip(description.hidden_info, description.dropout[:-1]):
         #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
-        srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')] #TODO
+        srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
         params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         name = params['name']
         if info[0] == 'forward':
@@ -1291,38 +1441,40 @@ class LayerNetwork(object):
           if info[0] == 'recurrent':
             self.add_layer(name, RecurrentLayer(**params), info[2][0])
           elif info[0] == 'lstm':
-            self.add_layer(name, LstmLayer(sharpgates = sharpgates, **params), info[2][0])
+            self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
           elif info[0] == 'norm_lstm':
-            self.add_layer(name, NormalizedLstmLayer(sharpgates = sharpgates, **params), info[2][0])
+            self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
           elif info[0] == 'gatelstm':
-            self.add_layer(name, GateLstmLayer(sharpgates = sharpgates, **params), info[2][0])
+            self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
           elif info[0] == 'peep_lstm':
             self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
-          else: assert False, "invalid layer type: " + info[0]
-        #TODO
-        #if self.hidden[name].source != self.x:
-        #  self.hidden[name].set_attr('from', pname)
-        pname = name
+          else:
+            assert False, "invalid layer type: " + info[0]
+        last_layer = self.hidden[name]
         n_in = info[1]
-        x_in = self.hidden[name].output
-      sources.append(name)
-    #TODO
-    sources = [self.hidden[name] for name in sources]
-    self.make_classifier(sources, loss, dropout[-1])
+        x_in = last_layer.output
+      sources.append(last_layer)
+    self.make_classifier(sources, description.loss, description.dropout[-1])
 
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()
 
-  def get_params(self):
-    params = {self.output.name : self.output.get_params()}
+  def get_params_dict(self):
+    """
+    :rtype: dict[str,dict[str,numpy.ndarray|theano.sandbox.cuda.CudaNdArray]]
+    """
+    params = {self.output.name: self.output.get_params_dict()}
     for h in self.hidden:
-      params[h] = self.hidden[h].get_params()
+      params[h] = self.hidden[h].get_params_dict()
     return params
 
-  def set_params(self, params):
-    self.output.set_params(params[self.output.name])
+  def set_params_by_dict(self, params):
+    """
+    :type params: dict[str,dict[str,numpy.ndarray|theano.sandbox.cuda.CudaNdArray]]
+    """
+    self.output.set_params_by_dict(params[self.output.name])
     for h in self.hidden:
-      self.hidden[h].set_params(params[h])
+      self.hidden[h].set_params_by_dict(params[h])
 
   def save(self, model, epoch):
     """

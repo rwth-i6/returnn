@@ -1,8 +1,8 @@
 import subprocess
 import h5py
-from scipy.io.netcdf import NetCDFFile
 from collections import deque
 import inspect
+
 
 def cmd(cmd):
   """
@@ -14,16 +14,19 @@ def cmd(cmd):
   p.stdout.close()
   return result
 
+
 def hdf5_dimension(filename, dimension):
   fin = h5py.File(filename, "r")
   res = fin.attrs[dimension]
   fin.close()
   return res
 
+
 def hdf5_strings(handle, name, data):
   S=max([len(d) for d in data])
   dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
   dset[...] = data
+
 
 def strtoact(act):
   """
@@ -44,6 +47,7 @@ def strtoact(act):
                   'cos' : T.cos }
   assert activations.has_key(act), "invalid activation function: " + act
   return activations[act]
+
 
 def terminal_size(): # this will probably work on linux only
   import os, sys
@@ -69,10 +73,12 @@ def terminal_size(): # this will probably work on linux only
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
   return int(cr[1]), int(cr[0])
 
+
 def hms(s):
   m, s = divmod(s, 60)
   h, m = divmod(m, 60)
   return "%d:%02d:%02d" % (h, m, s)
+
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys
@@ -94,6 +100,7 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
   sys.stdout.flush()
 
+
 def betterRepr(o):
   """
   The main difference: this one is deterministic.
@@ -114,6 +121,7 @@ def betterRepr(o):
   # fallback
   return repr(o)
 
+
 def simpleObjRepr(obj):
   """
   All self.__init__ args.
@@ -121,6 +129,7 @@ def simpleObjRepr(obj):
   return obj.__class__.__name__ + "(%s)" % \
                                   ", ".join(["%s=%s" % (arg, betterRepr(getattr(obj, arg)))
                                              for arg in inspect.getargspec(obj.__init__).args[1:]])
+
 
 class ObjAsDict:
   def __init__(self, obj):
@@ -131,3 +140,29 @@ class ObjAsDict:
       return getattr(self.__obj, item)
     except AttributeError, e:
       raise KeyError(e)
+
+
+def obj_diff_str(self, other):
+  s = []
+  for attrib in sorted(set(other.__dict__).union(other.__dict__.keys())):
+    if attrib not in self.__dict__ or attrib not in other.__dict__:
+      s += ["attrib %r not on both" % attrib]
+      continue
+    value_self = getattr(self, attrib)
+    value_other = getattr(other, attrib)
+    if isinstance(value_self, list):
+      if not isinstance(value_other, list):
+        s += ["attrib %r self is list but other is %r" % (attrib, type(value_other))]
+      elif len(value_self) != len(value_other):
+        s += ["attrib %r list differ. len self: %i, len other: %i" % (attrib, len(value_self), len(value_other))]
+      else:
+        for i, (a, b) in enumerate(zip(value_self, value_other)):
+          if a != b:
+            s += ["attrib %r[%i] differ. self: %r, other: %r" % (attrib, i, a, b)]
+    else:
+      if value_self != value_other:
+        s += ["attrib %r differ. self: %r, other: %r" % (attrib, value_self, value_other)]
+  if s:
+    return "\n".join(s)
+  else:
+    return "No diff."

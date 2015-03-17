@@ -1,6 +1,6 @@
 from multiprocessing import Process, Pipe
 from Updater import Updater
-from Util import cmd, progress_bar
+from Util import cmd, progress_bar, obj_diff_str
 from Log import log
 from Network import LayerNetwork
 import numpy
@@ -69,7 +69,7 @@ class Device():
     self.main_pid = os.getpid()
     if blocking:
       self.initialize(config)
-      self.nparams = len(self.trainnet.gparams)
+      self.num_train_params = len(self.trainnet.train_params)
       if device[0:3] == 'gpu':
         import theano.sandbox.cuda as theano_cuda
         assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
@@ -106,7 +106,7 @@ class Device():
     self.input_queue = self.output_queue
     self.id = self.output_queue.recv(); """ :type: int """
     self.device_name = self.output_queue.recv(); """ :type: str """
-    self.nparams = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+    self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
 
   def restart(self):
     self.proc.terminate()
@@ -121,7 +121,16 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config):
+  def initialize(self, config, network_description=None, train_param_args=None):
+    """
+    :type config: Config.Config
+    :type network_description: Network.LayerNetworkDescription | None
+    :type train_param_args: dict | None
+    """
+    if self.blocking:
+      assert os.getpid() == self.main_pid
+    else:
+      assert os.getpid() != self.main_pid
     import theano
     import theano.tensor as T
     import h5py
@@ -129,7 +138,10 @@ class Device():
     mask = "unity"
     if sum(config.float_list('dropout', [0])) > 0.0:
       mask = "dropout"
-    if config.bool('initialize_from_model', False) and config.has('load'):
+    if network_description is not None:
+      self.trainnet = LayerNetwork.from_description(network_description, mask)
+      self.testnet = LayerNetwork.from_description(network_description, "unity")
+    elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_model(model, mask)
       self.testnet = LayerNetwork.from_model(model, "unity")
@@ -137,6 +149,8 @@ class Device():
     else:
       self.trainnet = LayerNetwork.from_config(config, mask)
       self.testnet = LayerNetwork.from_config(config, "unity")
+    if train_param_args is not None:
+      self.trainnet.set_train_params(**train_param_args)
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
@@ -146,8 +160,8 @@ class Device():
       self.c = T.cast(self.cp, 'int32')
     gparams = []
     self.gradients = {}
-    for pi, param in enumerate(self.trainnet.gparams):
-      if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.gparams), "calculating gradients ...")
+    for pi, param in enumerate(self.trainnet.train_params):
+      if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
       self.gradients[param] = gparam
       if False and param.name == 'lambda':
@@ -289,7 +303,7 @@ class Device():
     if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
                 for x in theano_func.maker.fgraph.toposort()]):
       print >> log.v1, device + ":", "It seems as if we don't use the GPU although we requested it."
-      import theano
+      import theano.printing
       theano.printing.debugprint(theano_func.maker.fgraph.outputs[0])
     else:
       print >> log.v3, device + ":", "Our Theano trainer functions looks like it will run on the GPU."
@@ -311,6 +325,7 @@ class Device():
     except KeyboardInterrupt:
       # Killed by parent.
       print >> log.v2, "Device proc %s got KeyboardInterrupt" % device
+      sys.excepthook(*sys.exc_info())
     except Exception:
       print >> log.v2, "Device proc %s exception:" % device
       sys.excepthook(*sys.exc_info())
@@ -349,13 +364,20 @@ class Device():
     output_queue.send(device_name)
     self.initialize(config)
     self._checkGpuFuncs(device, device_id)
-    output_queue.send(len(self.trainnet.gparams))
+    output_queue.send(len(self.trainnet.train_params))
     print >> log.v2, "Device proc %s is ready for commands." % device
     while True:
       cmd = input_queue.recv()
       if cmd == "stop":  # via self.terminate()
         output_queue.send("done")
         break
+      elif cmd == "reinit":  # via self.reinit()
+        network_description = input_queue.recv()
+        train_param_args = input_queue.recv()
+        if self.need_reinit(network_description, train_param_args):
+          self.initialize(config, network_description, train_param_args)
+        output_queue.send("reinit-ready")
+        output_queue.send(len(self.trainnet.train_params))
       elif cmd == "update-data":  # via self.update_data()
         x = input_queue.recv()
         t = input_queue.recv()
@@ -374,15 +396,15 @@ class Device():
       elif cmd == "set-net-params":  # via self.set_net_params()
         params = input_queue.recv()
         assert isinstance(params, list)
-        our_params = self.get_task_network().gparams
+        our_params = self.get_task_network().get_all_params()
         assert len(params) == len(our_params)
         for i in range(len(params)):
           our_params[i].set_value(params[i])
-      elif cmd == "get-net-params":  # via self.get_net_params()
-        output_queue.send("net-params")
+      elif cmd == "get-net-train-params":  # via self.get_net_params()
+        output_queue.send("net-train-params")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        output_queue.send([numpy.asarray(p.get_value()) for p in self.get_task_network().gparams])
+        output_queue.send([numpy.asarray(p.get_value()) for p in self.get_task_network().train_params])
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -458,27 +480,28 @@ class Device():
       self.input_queue.send("set-learning-rate")
       self.input_queue.send(learning_rate)
 
-  def get_net_params(self):
+  def get_net_train_params(self):
     if self.blocking:
-      return [v.get_value(borrow=True, return_internal_type=True) for v in self.get_task_network().params]
+      return [v.get_value(borrow=True, return_internal_type=True) for v in self.get_task_network().train_params]
     else:
       assert self.main_pid == os.getpid()
-      self.input_queue.send("get-net-params")
+      self.input_queue.send("get-net-train-params")
       r = self.output_queue.recv()
-      assert r == "net-params"
+      assert r == "net-train-params"
       r = self.output_queue.recv()
       return r
 
   def set_net_params(self, network):
     """
-    :type network: LayerNetwork
+    :type network: Network.LayerNetwork
+    This updates *all* params, not just the train params.
     """
     if self.blocking:
-      self.get_task_network().set_params(network.get_params())
+      self.get_task_network().set_params_by_dict(network.get_params_dict())
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-net-params")
-      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.gparams])
+      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.get_all_params()])
 
   def maybe_update_network(self, network):
     """
@@ -491,18 +514,58 @@ class Device():
       return
     self.set_net_params(network)
 
-  def prepare(self, network, updater):
+  def need_reinit(self, network_description=None, train_param_args=None):
+    assert self.trainnet
+    if self.trainnet.description != network_description:
+      print >> log.v3, "Device: reinit because network description differs. Diff:", \
+                       obj_diff_str(self.trainnet.description, network_description)
+      return True
+    if train_param_args is None:
+      train_param_args = self.trainnet.get_train_param_args_default()
+    if self.trainnet.train_param_args != train_param_args:
+      print >> log.v3, "Device: reinit because network train params differ"
+      return True
+    return False
+
+  def reinit(self, network_description=None, train_param_args=None):
+    """
+    :type network_description: Network.LayerNetworkDescription
+    :type train_param_args: dict
+    :returns len of train_params
+    :rtype: int
+    Reinits for a new network topology. This can take a while
+    because the gradients have to be recomputed.
+    """
+    assert self.main_pid == os.getpid(), "Call this from the main proc."
+    if self.blocking:
+      if self.need_reinit(network_description, train_param_args):
+        self.initialize(self.config, network_description, train_param_args)
+      return len(self.trainnet.train_params)
+    else:
+      self.input_queue.send("reinit")
+      self.input_queue.send(network_description)
+      self.input_queue.send(train_param_args)
+      r = self.output_queue.recv()
+      assert r == "reinit-ready"
+      r = self.output_queue.recv()
+      return r
+
+  def prepare(self, network, updater=None, train_param_args=None):
     """
     Call this from the main proc before we do anything else.
     This is called before we start any training, e.g. at the begin of an epoch.
     :type network: LayerNetwork
     :type updater: Updater | None
+    :type train_param_args: dict | None
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if not self.blocking:
       # In blocking, we would have initialized our own updater via self.initialize().
       self.updater = updater
+    # Reinit if needed.
+    self.reinit(network.description, train_param_args)
     if not self.updater or self.updater.updateOnDevice:
+      # If there is no updater, or we do the updates online, we must copy the net params now.
       # Otherwise we will always update the model via self.maybe_update_network().
       self.set_net_params(network)
 

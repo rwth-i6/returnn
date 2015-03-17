@@ -13,7 +13,6 @@ import thread
 import numpy
 import theano
 import theano.tensor as T
-import h5py
 
 from SprintDataset import SprintDataset
 from Log import log
@@ -72,13 +71,13 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
     dataset.initFromSegmentOrder(segmentList, segmentsInfo)
     dataset.finalized = False
 
-  numEpochs = getNumEpochs()
+  finalEpoch = getFinalEpoch()
   startEpoch, startSegmentIdx = getTrainStartEpochBatch()
   print("Sprint: Starting with epoch %i, segment-idx %s." % (startEpoch, startSegmentIdx))
-  print("Final epoch is: %i" % numEpochs)
+  print("Final epoch is: %i" % finalEpoch)
 
   # Loop over multiple epochs. Epochs start at 1.
-  for curEpoch in range(startEpoch, numEpochs + 1):
+  for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
       waitUntilTrainerInEpoch(curEpoch)
 
@@ -314,8 +313,9 @@ def startTrainThread(epoch=None):
     try:
       assert TargetMode
       if TargetMode == "target-alignment":
-        engine.train_config(config, train_data=dataset, dev_data=None, eval_data=None,
+        engine.init_train_config(config, train_data=dataset, dev_data=None, eval_data=None,
                             start_epoch=start_epoch, start_batch=start_batch)
+        engine.train()
       elif TargetMode == "criterion-by-sprint":
         # TODO ...
         raise NotImplementedError
@@ -350,7 +350,7 @@ def prepareForwarding(epoch):
   assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
 
   # Copy over net params.
-  engine.devices[0].prepare(engine.network, None)
+  engine.devices[0].prepare(engine.network)
 
 
 def initDataset():
@@ -359,14 +359,14 @@ def initDataset():
   dataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
 
 
-def getNumEpochs():
+def getFinalEpoch():
   global config, engine
   assert engine
   assert config
-  config_num_epochs = engine.config_get_num_epochs(config)
+  config_num_epochs = engine.config_get_final_epoch(config)
   with engine.lock:
     if engine.is_training:
-      assert engine.num_epochs == config_num_epochs
+      assert engine.final_epoch == config_num_epochs
   return config_num_epochs
 
 
@@ -383,21 +383,14 @@ def getLastEpochBatch():
   modelFileName = config.value('model', '')
   assert modelFileName, "need 'model' in config"
 
-  from glob import glob
-  files = glob(modelFileName + ".*")
-  file_list = []; """ :type: list[(int,int,str)] """
-  for fn in files:
-    m = re.match(".*\\.([0-9]+)\\.([0-9]+)$", fn)
-    if m:
-      epoch, batch = map(int, m.groups())
-    else:
-      m = re.match(".*\\.([0-9]+)$", fn)
-      if m:
-        epoch = int(m.groups()[0])
-        batch = None
-      else:
-        continue
-    file_list += [(epoch, batch, fn)]
+  file_list = []
+  for epoch in range(1, Engine.config_get_final_epoch(config) + 1):
+    for is_pretrain in [True, False]:
+      fn = Engine.epoch_model_filename(modelFileName, epoch, is_pretrain)
+      # TODO: batches, e.g. fn.* ...
+      if os.path.exists(fn):
+        file_list += [(epoch, None, fn)]
+        break
   if len(file_list) == 0:
     lastEpochBatchModel = (None, None, None)
   else:
@@ -438,8 +431,8 @@ def waitUntilTrainerInEpoch(epoch):
     with engine.lock:
       if engine.training_finished: return
       if engine.is_training:
-        if engine.cur_epoch == epoch: return
-        assert engine.cur_epoch < epoch  # would confuse the seq order otherwise...
+        if engine.epoch == epoch: return
+        assert engine.epoch < epoch  # would confuse the seq order otherwise...
       engine.cond.wait()
 
 

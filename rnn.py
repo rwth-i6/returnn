@@ -88,11 +88,13 @@ def initConfig(configFilename, commandLineOptions):
     if options[opt] != None:
       config.set(opt, options[opt])
 
+
 def initLog():
   logs = config.list('log', [])
   log_verbosity = config.int_list('log_verbosity', [])
   log_format = config.list('log_format', [])
   log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
+
 
 def initConfigJson():
   # initialize postprocess config file
@@ -100,12 +102,14 @@ def initConfigJson():
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
-    config.json = open(json_file).read()
+    config.network_topology_json = open(json_file).read()
+
 
 def maybeInitSprintCommunicator():
   # initialize SprintCommunicator (if required)
   if config.has('sh_mem_key'):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
+
 
 def getDevicesInitArgs(config):
   """
@@ -135,6 +139,8 @@ def getDevicesInitArgs(config):
           np = ncpus
         elif utype == 'gpu':
           np = ngpus
+        else:
+          np = 0
         match = False
         for p in xrange(np):
           if re.match(uid, str(p)):
@@ -153,6 +159,7 @@ def getDevicesInitArgs(config):
     devices.append({"device": "cpu127", "config": config})
   return devices
 
+
 def isUpdateOnDevice(config):
   """
   :type config: Config
@@ -166,6 +173,7 @@ def isUpdateOnDevice(config):
   if updateOnDevice:
     assert len(devArgs) == 1, "Devices: update_on_device works only with a single device."
   return updateOnDevice
+
 
 def initDevices():
   """
@@ -185,6 +193,7 @@ def initDevices():
   else:
     print >> log.v2, "Devices: Used in multiprocessing mode."
   return devices
+
 
 def getCacheSizes():
   """
@@ -212,9 +221,10 @@ def getCacheSizes():
     cache_sizes.append(cache_size)
   return cache_sizes
 
+
 def initData():
   """
-  Inits the globals train,dev,eval of type Dataset.
+  Initializes the globals train,dev,eval of type Dataset.
   """
   cache_sizes = getCacheSizes()
   chunking = "0"
@@ -225,6 +235,7 @@ def initData():
   eval,extra_eval = Dataset.load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
   train,extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
+
 
 def initNeuralNetwork(modelFileName=None):
   """
@@ -272,6 +283,7 @@ def initNeuralNetwork(modelFileName=None):
     fout.close()
   return network
 
+
 def printTaskProperties(devices, network):
   """
   :type devices: list[Device]
@@ -279,46 +291,71 @@ def printTaskProperties(devices, network):
   """
   print >> log.v2, "Network layer topology:"
   print >> log.v2, "  input #:", network.n_in
-  for i in xrange(len(network.hidden_info)):
-    print >> log.v2, "  " + network.hidden_info[i][0] + " #:", network.hidden_info[i][1]
+  if network.description:
+    for i in xrange(len(network.description.hidden_info)):
+      print >> log.v2, "  " + network.description.hidden_info[i][0] + " #:", network.description.hidden_info[i][1]
   print >> log.v2, "  output #:", network.n_out
-  print >> log.v2, "net weights #:", network.num_params()
-  print >> log.v2, "net params:", network.gparams
+  print >> log.v2, "net params #:", network.num_params()
+  print >> log.v2, "net trainable params:", network.train_params
   print >> log.v5, "net output:", network.output
 
   if train:
     print >> log.v2, "Train data:"
-    print >> log.v2, "input:", train.num_inputs, "x", train.window
-    print >> log.v2, "output:", train.num_outputs
-    print >> log.v2, "sequences:", train.num_seqs
-    print >> log.v2, "frames:", train.num_timesteps
+    print >> log.v2, "  input:", train.num_inputs, "x", train.window
+    print >> log.v2, "  output:", train.num_outputs
+    print >> log.v2, "  sequences:", train.num_seqs
+    print >> log.v2, "  frames:", train.num_timesteps
   if dev:
     print >> log.v2, "Dev data:"
-    print >> log.v2, "sequences:", dev.num_seqs
-    print >> log.v2, "frames:", dev.num_timesteps
+    print >> log.v2, "  sequences:", dev.num_seqs
+    print >> log.v2, "  frames:", dev.num_timesteps
   if eval:
     print >> log.v2, "Eval data:"
-    print >> log.v2, "sequences:", eval.num_seqs
-    print >> log.v2, "frames:", eval.num_timesteps
+    print >> log.v2, "  sequences:", eval.num_seqs
+    print >> log.v2, "  frames:", eval.num_timesteps
 
   print >> log.v3, "Devices:"
   for device in devices:
-    print >> log.v3, device.name + ":", device.device_name,
-    print >> log.v3, "(units:", device.get_device_shaders(), "clock: %.02f" % (device.get_device_clock() / 1024.0) + "Ghz memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
+    print >> log.v3, "  %s: %s" % (device.name, device.device_name),
+    print >> log.v3, "(units:", device.get_device_shaders(), \
+                     "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
+                     "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+
 
 def initEngine(devices, network):
   """
   :type devices: list[Device]
   :type network: Network.LayerNetwork
-  Inits global engine.
+  Initializes global engine.
   """
   global engine
   engine = Engine(devices, network)
 
+
 def initBetterExchook():
+  import thread
+  import threading
   import better_exchook
-  better_exchook.install()
+  main_thread_id = thread.get_ident()
+
+  def excepthook(exc_type, exc_obj, exc_tb):
+    print "Unhandled exception %s in %s." % (exc_type, threading.currentThread())
+    better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
+
+    if main_thread_id == thread.get_ident():
+      if not isinstance(exc_type, Exception):
+        # We are the main thread and we got an exit-exception. This is likely fatal.
+        # This usually means an exit. (We ignore non-daemon threads and procs here.)
+        # Print the stack of all other threads.
+        if hasattr(sys, "_current_frames"):
+          for tid, stack in sys._current_frames().items():
+            if tid != main_thread_id:
+              print "Thread %i:" % tid
+              better_exchook.print_traceback(stack)
+
+  sys.excepthook = excepthook
+
 
 def initThreadJoinHack():
   import threading, thread
@@ -357,6 +394,7 @@ def initThreadJoinHack():
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
 
+
 def init(configFilename, commandLineOptions):
   initBetterExchook()
   initThreadJoinHack()
@@ -371,18 +409,21 @@ def init(configFilename, commandLineOptions):
   printTaskProperties(devices, network)
   initEngine(devices, network)
 
+
 def finalize():
   for device in engine.devices:
     device.terminate()
   if SprintCommunicator.instance is not None:
     SprintCommunicator.instance.finalize()
 
+
 def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
     assert train.num_seqs > 0, "no train files specified, check train option: %s" % config.value('train', None)
-    engine.train_config(config, train, dev, eval, start_epoch=last_epoch+1)
+    engine.init_train_config(config, train, dev, eval, start_epoch=last_epoch+1)
+    engine.train()
   elif task == 'forward':
     assert eval is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
@@ -390,7 +431,7 @@ def executeMainTask():
     output_file = config.value('output_file', '')
     engine.forward(engine.devices[0], eval, output_file, combine_labels)
   elif task == 'theano_graph':
-    import theano
+    import theano.printing
     for task in config.list('theano_graph.task', ['train']):
       theano.printing.pydotprint(engine.devices[-1].compute(task), format = 'png', var_with_name_simple = True,
                                  outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
@@ -407,11 +448,13 @@ def executeMainTask():
 
   print >> log.v3, ("elapsed: %f" % (time.time() - st))
 
+
 def main(argv):
   assert len(argv) >= 2, "usage: %s <config>" % argv[0]
   init(configFilename=argv[1], commandLineOptions=argv[2:])
   executeMainTask()
   finalize()
+
 
 if __name__ == '__main__':
   main(sys.argv)

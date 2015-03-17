@@ -52,11 +52,12 @@ class Updater:
     self.network = network
     if self.updateOnDevice:
       assert net_param_deltas is not None
-      self.net_param_deltas = net_param_deltas
+      self.net_train_param_deltas = net_param_deltas
     else:
       assert net_param_deltas is None
-      self.net_param_deltas = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                               for p in network.gparams}
+      self.net_train_param_deltas = {p: theano.shared(value=numpy.zeros(p.get_value().shape,
+                                                                        dtype=theano.config.floatX))
+                                     for p in network.train_params}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0))
     " :type: theano.compile.sharedvalue.SharedVariable "
@@ -65,19 +66,19 @@ class Updater:
       self.deltas = {p: theano.shared(
                      value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
-                     for p in self.network.gparams}
+                     for p in self.network.train_params}
     if self.adagrad:
       self.sqrsum = {p: theano.shared(
                      value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX), borrow=True,
                      name="sqrsum_%s " % p)
-                     for p in self.network.gparams}
+                     for p in self.network.train_params}
     if self.adadelta:
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.gparams} #E[g^2]
+                  for p in self.network.train_params} #E[g^2]
       self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.gparams} #E[\delta x^2]
+                  for p in self.network.train_params} #E[\delta x^2]
       self.dx = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.gparams} #\delta x
+                  for p in self.network.train_params} #\delta x
 
   @property
   def isInitialized(self):
@@ -86,25 +87,25 @@ class Updater:
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
     assert not self.updateOnDevice
-    for p in self.network.gparams:
-      self.net_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
+    for p in self.network.train_params:
+      self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
-    for param in self.network.gparams:
-      upd = - self.learning_rate_var * self.net_param_deltas[param]
+    for param in self.network.train_params:
+      upd = - self.learning_rate_var * self.net_train_param_deltas[param]
       if self.momentum > 0:
         upd += self.momentum * self.deltas[param]
         updates.append((self.deltas[param], upd))
       if self.adagrad:
-        updates.append((self.sqrsum[param], self.sqrsum[param] + self.net_param_deltas[param] ** 2))
-        upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + self.net_param_deltas[param] ** 2) ** 0.5)
+        updates.append((self.sqrsum[param], self.sqrsum[param] + self.net_train_param_deltas[param] ** 2))
+        upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + self.net_train_param_deltas[param] ** 2) ** 0.5)
       if self.adadelta:
         decay = self.adadelta_decay
         offset = self.adadelta_offset
-        g = self.net_param_deltas[param]
+        g = self.net_train_param_deltas[param]
         g2 = g ** 2
         eg2_new = decay * self.eg2[param] + (1 - decay) * g2
         dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
