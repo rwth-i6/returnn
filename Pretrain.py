@@ -52,7 +52,7 @@ class Pretrain:
       old_hidden_names.add(name)
     remaining_hidden_layer_names = set(new_network.hidden.keys()).difference(old_hidden_names)
     # network.output is the remaining output layer.
-    new_network.output.set_params_by_dict(old_network.get_params_dict())
+    new_network.output.set_params_by_dict(old_network.output.get_params_dict())
     return remaining_hidden_layer_names
 
   def get_train_param_args_for_epoch(self, epoch):
