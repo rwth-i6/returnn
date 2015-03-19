@@ -1199,7 +1199,7 @@ class LayerNetworkDescription:
       num_outputs = _num_outputs
     assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     loss = cls.loss_from_config(config)
-    if loss in ('ctc', 'ce_ctc'):
+    if loss in ('ctc', 'ce_ctc') or config.bool('add_blank', False):
       num_outputs += 1  # add blank
     return num_inputs, num_outputs
 
