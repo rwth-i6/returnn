@@ -241,8 +241,8 @@ class TaskThread(threading.Thread):
       # Thread.__bootstrap_inner() ignores sys.excepthook.
       try:
         self.run_inner()
-      except IOError:  # Such as broken pipe.
-        print >> log.v2, "Some device proc crashed unexpectedly. Maybe just SIGINT."
+      except IOError, e:  # Such as broken pipe.
+        print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
       except Exception:
         # Catch all standard exceptions.
