@@ -14,7 +14,7 @@ class Updater:
       "updateOnDevice": rnn.isUpdateOnDevice(config),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
-      "adadelta_decay": config.float('adadelta_decay', 0.95),
+      "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
