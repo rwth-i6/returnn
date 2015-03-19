@@ -21,6 +21,8 @@ from Device import Device, get_num_devices
 from Config import Config
 from Engine import Engine
 from Dataset import Dataset
+from Debug import initIPythonKernel, initBetterExchook
+from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
 
 
@@ -333,74 +335,13 @@ def initEngine(devices, network):
   engine = Engine(devices, network)
 
 
-def initBetterExchook():
-  import thread
-  import threading
-  import better_exchook
-  main_thread_id = thread.get_ident()
-
-  def excepthook(exc_type, exc_obj, exc_tb):
-    print "Unhandled exception %s in %s." % (exc_type, threading.currentThread())
-    better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
-
-    if main_thread_id == thread.get_ident():
-      if not isinstance(exc_type, Exception):
-        # We are the main thread and we got an exit-exception. This is likely fatal.
-        # This usually means an exit. (We ignore non-daemon threads and procs here.)
-        # Print the stack of all other threads.
-        if hasattr(sys, "_current_frames"):
-          for tid, stack in sys._current_frames().items():
-            if tid != main_thread_id:
-              print "Thread %i:" % tid
-              better_exchook.print_traceback(stack)
-
-  sys.excepthook = excepthook
-
-
-def initThreadJoinHack():
-  import threading, thread
-  mainThread = threading.currentThread()
-  assert isinstance(mainThread, threading._MainThread)
-  mainThreadId = thread.get_ident()
-
-  # Patch Thread.join().
-  join_orig = threading.Thread.join
-  def join_hacked(threadObj, timeout=None):
-    """
-    :type threadObj: threading.Thread
-    :type timeout: float|None
-    """
-    if timeout is None and thread.get_ident() == mainThreadId:
-      # This is a HACK for Thread.join() if we are in the main thread.
-      # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
-      # because signals will get delivered to other threads and Python would forward
-      # them for delayed handling to the main thread which hangs.
-      # See CPython signalmodule.c.
-      # Currently the best solution I can think of:
-      while threadObj.isAlive():
-        join_orig(threadObj, timeout=0.1)
-    else:
-      # In all other cases, we can use the original.
-      join_orig(threadObj, timeout=timeout)
-  threading.Thread.join = join_hacked
-
-  # Mostly the same for Condition.wait().
-  cond_wait_orig = threading._Condition.wait
-  def cond_wait_hacked(cond, timeout=None):
-    if timeout is None and thread.get_ident() == mainThreadId:
-      # Use a timeout anyway. This should not matter for the underlying code.
-      cond_wait_orig(cond, timeout=0.1)
-    else:
-      cond_wait_orig(cond, timeout=timeout)
-  threading._Condition.wait = cond_wait_hacked
-
-
 def init(configFilename, commandLineOptions):
   initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
-  print >> log.v3, "crnn starting up"
+  print >> log.v3, "CRNN starting up"
+  initIPythonKernel()
   initConfigJson()
   maybeInitSprintCommunicator()
   devices = initDevices()

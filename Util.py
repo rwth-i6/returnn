@@ -166,3 +166,41 @@ def obj_diff_str(self, other):
     return "\n".join(s)
   else:
     return "No diff."
+
+
+def initThreadJoinHack():
+  import threading, thread
+  mainThread = threading.currentThread()
+  assert isinstance(mainThread, threading._MainThread)
+  mainThreadId = thread.get_ident()
+
+  # Patch Thread.join().
+  join_orig = threading.Thread.join
+  def join_hacked(threadObj, timeout=None):
+    """
+    :type threadObj: threading.Thread
+    :type timeout: float|None
+    """
+    if timeout is None and thread.get_ident() == mainThreadId:
+      # This is a HACK for Thread.join() if we are in the main thread.
+      # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
+      # because signals will get delivered to other threads and Python would forward
+      # them for delayed handling to the main thread which hangs.
+      # See CPython signalmodule.c.
+      # Currently the best solution I can think of:
+      while threadObj.isAlive():
+        join_orig(threadObj, timeout=0.1)
+    else:
+      # In all other cases, we can use the original.
+      join_orig(threadObj, timeout=timeout)
+  threading.Thread.join = join_hacked
+
+  # Mostly the same for Condition.wait().
+  cond_wait_orig = threading._Condition.wait
+  def cond_wait_hacked(cond, timeout=None):
+    if timeout is None and thread.get_ident() == mainThreadId:
+      # Use a timeout anyway. This should not matter for the underlying code.
+      cond_wait_orig(cond, timeout=0.1)
+    else:
+      cond_wait_orig(cond, timeout=timeout)
+  threading._Condition.wait = cond_wait_hacked

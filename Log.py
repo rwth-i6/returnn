@@ -14,7 +14,7 @@ class Stream():
       self.flush()
     else:
       self.buf.write(msg)
-    
+
   def flush(self):
     self.buf.flush()
     self.log.log(self.lvl, self.buf.getvalue())
@@ -65,7 +65,16 @@ class Log:
     self.v4 = Stream(self.v[4], logging.DEBUG)
     self.v5 = Stream(self.v[5], logging.DEBUG)
 
-  def write(self, msg): 
+  def write(self, msg):
     self.info(msg)
 
 log = Log()
+
+# Some external code (e.g. pyzmq) will initialize the logging system
+# via logging.basicConfig(). That will set a handler to the root logger,
+# if there is none. This default handler usually prints to stderr.
+# Because all our custom loggers are childs of the root logger,
+# this will have the effect that everything gets logged twice.
+# By adding a dummy handler to the root logger, we will avoid that
+# it adds any other default handlers.
+logging.getLogger().addHandler(logging.NullHandler())

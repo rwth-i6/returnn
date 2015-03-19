@@ -19,6 +19,7 @@ from Log import log
 from Device import get_gpu_names
 import rnn
 from Engine import Engine, assign_dev_data_single_seq
+import Debug
 
 DefaultSprintCrnnConfig = "config/crnn.config"
 
@@ -38,6 +39,8 @@ lastEpochBatchModel = None; """ :type: (int,int,str|None) """  # see getLastEpoc
 
 
 rnn.initBetterExchook()
+rnn.initThreadJoinHack()
+Debug.initIPythonKernel()
 
 
 # Start Sprint PythonSegmentOrder interface. {
