@@ -22,6 +22,7 @@ def get_gpu_names():
     return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
 
 def get_device_attributes():
+  # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = { "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
