@@ -33,7 +33,8 @@ class TaskThread(threading.Thread):
       self.elapsed = 0
       self.finalized = False
       self.score = None
-      self.device_crash_batch = None
+      self.batch_idx = None; " :type: int | None "
+      self.device_crash_batch = None; " :type: int | None "
       # There is no generic way to see whether Python is exiting.
       # This is our workaround. We check for it in self.run_inner().
       self.stopped = False
@@ -260,6 +261,7 @@ class TaskThread(threading.Thread):
         # That works because the device proc will push the results on the queue
         # and device.result() reads it from there without sending another command.
 
+        self.batch_idx = batch_idx
         if batch_idx < len(self.batches):
           deviceRun = self.DeviceBatchRun(self, batch_idx)
           deviceRun.start()
