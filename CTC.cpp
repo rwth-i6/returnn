@@ -84,17 +84,6 @@ private:
         }
     }
 
-    void accPriors(CSArrayF& activs, CSArrayF& errSigs, SArrayF& priors)
-    {
-        for(size_t c = 0; c < nLabelsInclBlank_; ++c)
-        {
-            for(size_t t = 0; t < T_; ++t)
-            {
-                priors[c] = activs(t,c) - errSigs(t,c);
-            }
-        }
-    }
-
     void errorSignal(CSArrayF& activs, CSArrayI& labellings, float& err, SArrayF& errSigs, SArrayF& priors)
     {
         forwardAlgo(activs, labellings);
@@ -115,11 +104,10 @@ private:
             for(int c = 0; c < nLabelsInclBlank_; ++c)
             {
                 errSigs(t, c) = activs(t, c) - (labelSum[c] / totalSum).expVal();
+                priors(t, c) = activs(t, c) - errSigs(t,c);
             }
         }
         err = -totalSum.logVal();
-
-        accPriors(activs, errSigs, priors);
     }
 
     int calcLen(CSArrayI& labellings)
