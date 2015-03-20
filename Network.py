@@ -143,12 +143,18 @@ class Layer(Container):
     self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
     self.mass = T.constant(1., name = "mass_%s" % self.name)
     if mask == "unity":
-      self.mask = None
-      if dropout > 0:
-        self.mass = T.constant(dropout)
-    elif mask == "dropout":
+      self.masks = [None] * len(self.sources)
+    elif mask == "dropout" and dropout > 0:
+      # if we apply this mass during training then we don't need any mask or mass for testing
+      # the expected weight should be 1
+      # E[x] = mass * (1-dropout)
+      # so mass has to be 1 / (1 - dropout)
+      self.mass = T.constant(1.0 / (1.0 - dropout))
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
+      self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
+
+      #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
+      #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -192,11 +198,11 @@ class OutputLayer(Layer):
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
                  for source in sources]
-    for source, W in zip(sources, self.W_in):
+    for source, m, W in zip(sources, self.masks, self.W_in):
       if mask == "unity":
         self.z += T.dot(source.output, W)
       else:
-        self.z += T.dot(source.output, self.mass * self.mask * W)
+        self.z += T.dot(self.mass * m * source.output, W)
     self.set_attr('from', ",".join([s.name for s in sources]))
     self.index = index
     self.i = (index.flatten() > 0).nonzero()
@@ -334,12 +340,12 @@ class ForwardLayer(HiddenLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
     super(ForwardLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     z = self.b
-    for s,W_in in zip(sources, self.W_in):
+    for s, m, W_in in zip(sources, self.masks, self.W_in):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out, "W_in_%s_%s"%(s.name, self.name)).get_value())
       if mask == "unity":
         z += T.dot(s.output, W_in)
       else:
-        z += T.dot(s.output, self.mass * self.mask * W_in)
+        z += T.dot(self.mass * m * s.output, W_in)
     self.output = z if self.activation is None else self.activation(z)
 
 class ConvPoolLayer(ForwardLayer):
@@ -374,7 +380,7 @@ class RecurrentLayer(HiddenLayer):
       i = T.outer(i_t, self.o)
       z = T.dot(h_pp, self.W_re) + self.b
       for i in range(len(self.sources)):
-        z += T.dot(x_t[i], self.mass * self.mask[i] * self.W_in[i])
+        z += T.dot(self.mass * self.mask[i] * x_t[i], self.W_in[i])
       #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
       return h_t * i
@@ -435,18 +441,18 @@ class LstmLayer(RecurrentLayer):
       i_t = args[self.num_sources]
       s_p = args[self.num_sources + 1]
       h_p = args[self.num_sources + 2]
-      if self.mask:
-        mask = args[self.num_sources + 3]
+      if self.masks:
+        masks = args[self.num_sources + 3:]
 
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
 
       z = T.dot(h_p, self.W_re) + self.b
-      for x_t, W in zip(x_ts, self.W_in):
+      for x_t, m, W in zip(x_ts, masks, self.W_in):
         if self.attrs['mask'] == "unity":
           z += T.dot(x_t, W)
         else:
-          z += T.dot(x_t, self.mass * mask * W)
+          z += T.dot(self.mass * m * x_t, W)
 
       if sharpgates != 'none':
         ingate = GI(self.sharpness[0] * z[:, n_out: 2 * n_out])
@@ -462,12 +468,13 @@ class LstmLayer(RecurrentLayer):
       h_t = CO(s_t) * outgate
       return s_i * i, h_t * j
 
+
     [state, act], _ = theano.scan(step,
                                   name = "scan_%s"%self.name,
                                   truncate_gradient = self.attrs['truncation'],
                                   go_backwards = self.attrs['reverse'],
                                   sequences = [ s.output for s in self.sources ] + [self.index],
-                                  non_sequences = [self.mask] if self.mask else [],
+                                  non_sequences = self.masks if any(self.masks) else [],
                                   outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                                                    T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re), ])
 
@@ -515,11 +522,11 @@ class OptimizedLstmLayer(RecurrentLayer):
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
 
     z = self.b
-    for x_t, W in zip(self.sources, self.W_in):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if self.attrs['mask'] == "unity":
         z += T.dot(x_t.output, W)
       else:
-        z += T.dot(x_t.output, self.mass * mask * W)
+        z += T.dot(self.mass * m * x_t.output, W)
 
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
@@ -591,11 +598,11 @@ class NormalizedLstmLayer(RecurrentLayer):
 
     z = self.b
     #TODO normalization
-    for x_t, W in zip(self.sources, self.W_in):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if self.attrs['mask'] == "unity":
         z += T.dot(x_t.output, W)
       else:
-        z += T.dot(x_t.output, self.mass * mask * W)
+        z += T.dot(self.mass * m * x_t.output, W)
 
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
@@ -679,32 +686,32 @@ class WLstmLayer(RecurrentLayer):
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
 
     z_in = self.b
-    for x_t, W in zip(self.sources, self.W_in):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if self.attrs['mask'] == "unity":
         z_in += T.dot(x_t.output, W)
       else:
-        z_in += T.dot(x_t.output, self.mass * mask * W)
+        z_in += T.dot(self.mass * m * x_t.output, W)
 
     z_input = self.b_input
-    for x_t, W in zip(self.sources, self.W_input):
+    for x_t, m, W in zip(self.sources, self,masks, self.W_input):
       if self.attrs['mask'] == "unity":
         z_input += T.dot(x_t.output, W)
       else:
-        z_input += T.dot(x_t.output, self.mass * mask * W)
+        z_input += T.dot(self.mass * m * x_t.output, W)
 
     z_forget = self.b_forget
-    for x_t, W in zip(self.sources, self.W_forget):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_forget):
       if self.attrs['mask'] == "unity":
         z_forget += T.dot(x_t.output, W)
       else:
-        z_forget += T.dot(x_t.output, self.mass * mask * W)
+        z_forget += T.dot(self.mass * m * x_t.output, W)
 
     z_output = self.b_output
-    for x_t, W in zip(self.sources, self.W_output):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_output):
       if self.attrs['mask'] == "unity":
         z_output += T.dot(x_t.output, W)
       else:
-        z_output += T.dot(x_t.output, self.mass * mask * W)
+        z_output += T.dot(self.mass * m * x_t.output, W)
 
     def sstep(z, i_t, s_p, h_p):
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
@@ -904,8 +911,9 @@ class MaxLstmLayer(RecurrentLayer):
       i = T.outer(i_t, self.o)
       h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
       z = T.dot(h_pp, self.W_re) + self.b
-      for x_t, W in zip(x_ts, self.W_in):
-        z += T.dot(x_t, self.mass * mask * W)
+      for x_t, m, W in zip(x_ts, self.masks, self.W_in):
+        #TODO why here is no check of the mask as in the other layers?
+        z += T.dot(self.mass * m * x_t, W)
       partition = z.shape[1] / (2 + self.attrs['n_cores'] * 2)
       #input = CI(z[:,:partition])
       input = CI(T.tile(z[:,:partition], (1, self.attrs['n_cores'])))
@@ -924,7 +932,7 @@ class MaxLstmLayer(RecurrentLayer):
                                           go_backwards = self.reverse,
                                           #sequences = [T.stack(*[ s.output for s in self.sources]), self.index],
                                           sequences = [ s.output for s in self.sources ] + [self.index],
-                                          non_sequences = [self.mask],
+                                          non_sequences = self.masks,
                                           outputs_info = [ T.alloc(self.state, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']),
                                                            T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'], self.attrs['n_cores']), ])
     self.output = T.max(self.output, axis = 2)
@@ -974,9 +982,10 @@ class GateLstmLayer(RecurrentLayer):
     self.forgetgate = self.create_bias(n_out)
     self.outgate = self.create_bias(n_out)
 
+    #TODO the use of mask from the parameter seems broken (it is a string?!)
     def step(x_t, i_t, s_p, h_p, ig_p, fg_p, og_p, mask):
       i = T.outer(i_t, self.o)
-      z = T.dot(x_t, self.mass * mask * self.W_in) + T.dot(h_p, self.W_re) + self.b
+      z = T.dot(self.mass * mask * x_t, self.W_in) + T.dot(h_p, self.W_re) + self.b
       partition = z.shape[1] / 4
       input = CI(z[:,:partition])
       ingate = GI(self.sharpness[0] * z[:,partition: 2 * partition])
@@ -1544,7 +1553,7 @@ class LayerNetwork(object):
         n_in = info[1]
         x_in = last_layer.output
       sources.append(last_layer)
-    self.make_classifier(sources, description.loss, description.dropout[-1])
+    self.make_classifier(sources, description.loss, description.dropout[-1], self.mask)
 
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()
