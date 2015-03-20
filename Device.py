@@ -398,15 +398,17 @@ class Device():
       elif cmd == "set-net-params":  # via self.set_net_params()
         params = input_queue.recv()
         assert isinstance(params, list)
-        our_params = self.get_task_network().get_all_params()
-        assert len(params) == len(our_params)
+        our_params_trainnet = self.trainnet.get_all_params()
+        our_params_testnet = self.testnet.get_all_params()
+        assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
         for i in range(len(params)):
-          our_params[i].set_value(params[i])
-      elif cmd == "get-net-train-params":  # via self.get_net_params()
+          our_params_trainnet[i].set_value(params[i])
+          our_params_testnet[i].set_value(params[i])
+      elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        output_queue.send([numpy.asarray(p.get_value()) for p in self.get_task_network().train_params])
+        output_queue.send([numpy.asarray(p.get_value()) for p in self.trainnet.train_params])
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -484,7 +486,7 @@ class Device():
 
   def get_net_train_params(self):
     if self.blocking:
-      return [v.get_value(borrow=True, return_internal_type=True) for v in self.get_task_network().train_params]
+      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.train_params]
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("get-net-train-params")
@@ -499,7 +501,8 @@ class Device():
     This updates *all* params, not just the train params.
     """
     if self.blocking:
-      self.get_task_network().set_params_by_dict(network.get_params_dict())
+      self.trainnet.set_params_by_dict(network.get_params_dict())
+      self.testnet.set_params_by_dict(network.get_params_dict())
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-net-params")
