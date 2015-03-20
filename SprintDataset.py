@@ -116,6 +116,7 @@ class SprintDataset(Dataset):
       # e.g. the buffer in BufferFeatureExtractor is too small for a segment.
       assert end >= self.requested_load_seq_end
       self.requested_load_seq_end = end
+      self.cond.notify_all()
       if self.seq_added_last < end - 1:
         print "SprintDataset have_seqs: wait for addNewData..."
         assert self.add_data_thread_id != thread.get_ident()
