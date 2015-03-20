@@ -6,7 +6,6 @@ print "CRNN Python SprintInterface module load"
 import os
 import sys
 import time
-import re
 from threading import Event, Thread
 import thread
 
@@ -358,7 +357,6 @@ def initDataset():
     return
   assert config
   sprintDataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
-  rnn.train = sprintDataset
 
 
 def getFinalEpoch():
