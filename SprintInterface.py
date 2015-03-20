@@ -37,6 +37,7 @@ engine = None; """ :type: Engine """
 
 
 rnn.initBetterExchook()
+Debug.initFaulthandler()
 rnn.initThreadJoinHack()
 Debug.initIPythonKernel()
 

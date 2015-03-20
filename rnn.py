@@ -18,7 +18,7 @@ from Device import Device, get_num_devices
 from Config import Config
 from Engine import Engine
 from Dataset import Dataset
-from Debug import initIPythonKernel, initBetterExchook
+from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
 
@@ -264,6 +264,7 @@ def initEngine(devices):
 
 def init(configFilename, commandLineOptions):
   initBetterExchook()
+  initFaulthandler()
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()

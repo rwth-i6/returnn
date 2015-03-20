@@ -27,6 +27,18 @@ def initBetterExchook():
   sys.excepthook = excepthook
 
 
+def initFaulthandler():
+  try:
+    import faulthandler
+  except ImportError, e:
+    print "faulthandler import error. %s" % e
+    return
+  faulthandler.enable()
+  import signal
+  faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
+  print "faulthandler enabled and registered for SIGUSR1."
+
+
 def initIPythonKernel():
   # You can remotely connect to this kernel. See the output on stdout.
   try:
