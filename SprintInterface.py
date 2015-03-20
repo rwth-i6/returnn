@@ -18,7 +18,8 @@ from SprintDataset import SprintDataset
 from Log import log
 from Device import get_gpu_names
 import rnn
-from Engine import Engine, assign_dev_data_single_seq
+from Engine import Engine
+from EngineUtil import assign_dev_data_single_seq
 import Debug
 
 DefaultSprintCrnnConfig = "config/crnn.config"
@@ -32,10 +33,8 @@ TargetMode = None
 Task = "train"
 
 config = None; """ :type: rnn.Config """
-dataset = None; """ :type: SprintDataset """
+sprintDataset = None; """ :type: SprintDataset """
 engine = None; """ :type: Engine """
-
-lastEpochBatchModel = None; """ :type: (int,int,str|None) """  # see getLastEpochBatch()
 
 
 rnn.initBetterExchook()
@@ -68,14 +67,13 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
 
   # Init what we need. These can be called multiple times.
   initBase()
-  initDataset()
-  with dataset.lock:
+  with sprintDataset.lock:
     assert not isTrainThreadStarted
-    dataset.initFromSegmentOrder(segmentList, segmentsInfo)
-    dataset.finalized = False
+    sprintDataset.initFromSegmentOrder(segmentList, segmentsInfo)
+    sprintDataset.finalized = False
 
   finalEpoch = getFinalEpoch()
-  startEpoch, startSegmentIdx = getTrainStartEpochBatch()
+  startEpoch, startSegmentIdx = Engine.get_train_start_epoch_batch(config)
   print("Sprint: Starting with epoch %i, segment-idx %s." % (startEpoch, startSegmentIdx))
   print("Final epoch is: %i" % finalEpoch)
 
@@ -84,9 +82,9 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
     if isTrainThreadStarted:
       waitUntilTrainerInEpoch(curEpoch)
 
-    with dataset.lock:
-      dataset.init_seq_order(epoch=curEpoch)
-      segmentList = dataset.getSegmentList()
+    with sprintDataset.lock:
+      sprintDataset.init_seq_order(epoch=curEpoch)
+      segmentList = sprintDataset.getSegmentList()
 
     print("Sprint epoch: %i" % curEpoch)
     startSegmentIdx = 0
@@ -94,7 +92,7 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
     for curSegmentIdx in range(startSegmentIdx, len(segmentList)):
       yield segmentList[curSegmentIdx]
 
-  dataset.finalize()
+  sprintDataset.finalize()
 
 # End Sprint PythonSegmentOrder interface. }
 
@@ -149,13 +147,9 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
   if Task == "train":
     # Note: Atm, we must know all the segment info in advance.
     # The CRNN Engine.train() depends on that.
-    assert dataset, "need to be inited already via segment_order mod"
-    assert dataset.num_seqs > 0, "need to have data seqs"
-  else:
-    if not dataset:
-      initDataset()
-  dataset.setDimensions(inputDim, outputDim)
-  dataset.initialize()
+    assert sprintDataset.num_seqs > 0, "need to have data seqs, via segment_order mod"
+  sprintDataset.setDimensions(inputDim, outputDim)
+  sprintDataset.initialize()
 
   if Task == "train":
     startTrainThread(epoch)
@@ -288,14 +282,13 @@ def initBase(configfile=None, targetMode=None):
   if targetMode:
     setTargetMode(targetMode)
 
+  initDataset()
+
   global engine
   if not engine:
-    modelFileName = getLastEpochBatch()[2]
     devices = rnn.initDevices()
-    network = rnn.initNeuralNetwork(modelFileName)
-
-    rnn.printTaskProperties(devices, network)
-    rnn.initEngine(devices, network)
+    rnn.printTaskProperties(devices)
+    rnn.initEngine(devices)
     engine = rnn.engine
     assert isinstance(engine, Engine)
 
@@ -304,26 +297,29 @@ def startTrainThread(epoch=None):
   global config, engine, isInitialized, isTrainThreadStarted
   assert isInitialized, "need to call init() first"
   assert not isTrainThreadStarted
-  assert dataset, "need to call initDataset() first"
+  assert sprintDataset, "need to call initDataset() first"
   assert Task == "train"
-
-  start_epoch, start_batch = getTrainStartEpochBatch()
-  # If some epoch is explicitly specified, it checks whether it matches.
-  if epoch is not None:
-    assert epoch == start_epoch
 
   def trainThreadFunc():
     try:
       assert TargetMode
       if TargetMode == "target-alignment":
-        engine.init_train_config(config, train_data=dataset, dev_data=None, eval_data=None,
-                            start_epoch=start_epoch, start_batch=start_batch)
-        engine.train()
+        pass  # Ok.
       elif TargetMode == "criterion-by-sprint":
         # TODO ...
         raise NotImplementedError
       else:
         raise Exception("target-mode not supported: %s" % TargetMode)
+
+      engine.init_train_from_config(config, train_data=sprintDataset)
+
+      # If some epoch is explicitly specified, it checks whether it matches.
+      if epoch is not None:
+        assert epoch == engine.start_epoch
+
+      # Do the actual training.
+      engine.train()
+
     except Exception:
       try:
         print "CRNN train failed"
@@ -349,7 +345,7 @@ def prepareForwarding(epoch):
   assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
                                                    "You have: %s" % config.list('extract')
 
-  lastEpoch, _, _ = getLastEpochBatch()
+  lastEpoch, _, _ = Engine.get_last_epoch_batch_model(config)
   assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
 
   # Copy over net params.
@@ -357,9 +353,12 @@ def prepareForwarding(epoch):
 
 
 def initDataset():
-  global dataset
-  if dataset: return
-  dataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
+  global sprintDataset
+  if sprintDataset:
+    return
+  assert config
+  sprintDataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
+  rnn.train = sprintDataset
 
 
 def getFinalEpoch():
@@ -371,60 +370,6 @@ def getFinalEpoch():
     if engine.is_training:
       assert engine.final_epoch == config_num_epochs
   return config_num_epochs
-
-
-def getLastEpochBatch():
-  """
-  :returns (epoch,batch,modelFilename)
-  :rtype: (int, int|None, str|None)
-  """
-  global lastEpochBatchModel
-  if lastEpochBatchModel: return lastEpochBatchModel
-
-  global config
-  assert config
-  modelFileName = config.value('model', '')
-  assert modelFileName, "need 'model' in config"
-
-  file_list = []
-  for epoch in range(1, Engine.config_get_final_epoch(config) + 1):
-    for is_pretrain in [True, False]:
-      fn = Engine.epoch_model_filename(modelFileName, epoch, is_pretrain)
-      # TODO: batches, e.g. fn.* ...
-      if os.path.exists(fn):
-        file_list += [(epoch, None, fn)]
-        break
-  if len(file_list) == 0:
-    lastEpochBatchModel = (None, None, None)
-  else:
-    file_list.sort()
-    lastEpochBatchModel = file_list[-1]
-  return lastEpochBatchModel
-
-
-def getTrainStartEpochBatch():
-  """
-  We will always automatically determine the best start (epoch,batch) tuple
-  based on existing model files.
-  This ensures that the files are present and enforces that there are
-  no old outdated files which should be ignored.
-  Note that epochs start at idx 1 and batches at idx 0.
-  :returns (epoch,batch)
-  :rtype (int,int)
-  """
-  last_epoch, last_batch, _ = getLastEpochBatch()
-  if last_epoch is None:
-    start_epoch = 1
-    start_batch = 0
-  elif last_batch is None:
-    # No batch -> start with next epoch.
-    start_epoch = last_epoch + 1
-    start_batch = 0
-  else:
-    # Stay in last epoch, start with next batch.
-    start_epoch = last_epoch
-    start_batch = last_batch + 1
-  return start_epoch, start_batch
 
 
 def waitUntilTrainerInEpoch(epoch):
@@ -446,9 +391,9 @@ def train(segmentName, features, targets=None):
   :param numpy.ndarray|None targets: 2d or 1d array
   """
   assert engine is not None, "not initialized. call initBase()"
-  assert dataset
+  assert sprintDataset
 
-  dataset.addNewData(segmentName, features, targets)
+  sprintDataset.addNewData(segmentName, features, targets)
 
   # The CRNN train thread started via start() will do the actual training.
 
@@ -480,23 +425,23 @@ def train(segmentName, features, targets=None):
 
 def forward(segmentName, features):
   assert engine is not None, "not initialized"
-  assert dataset
+  assert sprintDataset
 
   # Features are in Sprint format (feature,time).
   T = features.shape[1]
   assert features.shape == (InputDim, T)
 
-  # Init dataset with one single entry: the current segment.
-  dataset.initFromSegmentOrder([segmentName], {segmentName: {"nframes": T}})
-  dataset.initialize()
-  dataset.epoch = -1  # Force reinit in init_seq_order().
-  dataset.init_seq_order(0)  # Epoch does not matter.
+  # Init sprintDataset with one single entry: the current segment.
+  sprintDataset.initFromSegmentOrder([segmentName], {segmentName: {"nframes": T}})
+  sprintDataset.initialize()
+  sprintDataset.epoch = -1  # Force reinit in init_seq_order().
+  sprintDataset.init_seq_order(0)  # Epoch does not matter.
   # Fill the data for the current segment.
-  seq = dataset.addNewData(segmentName, features)
+  seq = sprintDataset.addNewData(segmentName, features)
 
   # Prepare data for device.
   device = engine.devices[0]
-  success = assign_dev_data_single_seq(device, dataset, seq)
+  success = assign_dev_data_single_seq(device, sprintDataset, seq)
   assert success, "failed to allocate & assign data for seq %i, %s" % (seq, segmentName)
 
   # Do the actual forwarding and collect result.

@@ -5,6 +5,7 @@ import theano
 import json
 import inspect
 import theano.tensor as T
+import h5py
 from Util import hdf5_dimension, strtoact, simpleObjRepr
 from math import sqrt
 from CTC import CTCOp
@@ -254,7 +255,7 @@ class FramewiseOutputLayer(OutputLayer):
       y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
     else:
-      assert False
+      assert False, "unknown loss: %s" % self.loss
 
 class SequenceOutputLayer(OutputLayer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name="", prior_scale=0.0, log_prior=None, ce_smoothing=0.0):
@@ -1239,7 +1240,7 @@ class LayerNetwork(object):
     self.train_param_args = None; """ :type: dict[str] """
 
   @classmethod
-  def from_config(cls, config, mask="unity"):
+  def from_config_topology(cls, config, mask="unity"):
     """
     :type config: Config.Config
     :param str mask: e.g. "unity" or "dropout"
@@ -1325,7 +1326,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_model(cls, model, mask="unity"):
+  def from_hdf_model_topology(cls, model, mask="unity"):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -1415,7 +1416,7 @@ class LayerNetwork(object):
     for W in self.output.W_in:
       if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
       if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
-    self.set_train_params()
+    self.declare_train_params()
     targets = self.c if self.loss == 'ctc' else self.y
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
     self.errors = self.output.errors(error_targets)
@@ -1452,7 +1453,7 @@ class LayerNetwork(object):
       "with_output": True
     }
 
-  def set_train_params(self, **kwargs):
+  def declare_train_params(self, **kwargs):
     """
     Kwargs as in self.get_params(), or default values.
     """
@@ -1576,7 +1577,7 @@ class LayerNetwork(object):
     for h in self.hidden:
       self.hidden[h].set_params_by_dict(params[h])
 
-  def save(self, model, epoch):
+  def save_hdf(self, model, epoch):
     """
     :type model: h5py.File
     :type epoch: int
@@ -1598,17 +1599,39 @@ class LayerNetwork(object):
       out[h] = self.hidden[h].to_json()
     return str(out)
 
-  def load(self, model):
+  def load_hdf(self, model):
     """
     :type model: h5py.File
     :returns last epoch this was trained on
     :rtype: int
     """
-    epoch = model.attrs['epoch']
     for name in self.hidden:
       if not name in model:
         print >> log.v2, "unable to load layer ", name
       else:
         self.hidden[name].load(model)
     self.output.load(model)
+    return self.epoch_from_hdf_model(model)
+
+  @classmethod
+  def epoch_from_hdf_model(cls, model):
+    """
+    :type model: h5py.File
+    :returns last epoch the model was trained on
+    :rtype: int
+    """
+    epoch = model.attrs['epoch']
     return epoch
+
+  @classmethod
+  def epoch_from_hdf_model_filename(cls, model_filename):
+    """
+    :type model_filename: str
+    :returns last epoch the model was trained on
+    :rtype: int
+    """
+    model = h5py.File(model_filename, "r")
+    epoch = cls.epoch_from_hdf_model(model)
+    model.close()
+    return epoch
+

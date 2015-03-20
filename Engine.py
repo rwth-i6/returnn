@@ -1,613 +1,32 @@
 #! /usr/bin/python2.7
-
-import SprintCache
 import numpy
-import theano
-import h5py
-import time
 import sys
+import os
+from collections import OrderedDict
+import threading
+
+import h5py
+import json
+
+from Network import LayerNetwork
+from EngineBatch import Batch
+from EngineTask import TrainTaskThread, EvalTaskThread, SprintCacheForwardTaskThread, HDFForwardTaskThread
+import SprintCache
 from Log import log
 from Updater import Updater
-from Util import hdf5_strings, terminal_size, progress_bar, hms
-from collections import OrderedDict
-import threading, thread
-import atexit
 import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 
 
-class Batch:
-  """
-  A batch can consists of several sequences (= segments).
-  Note that self.shape[1] is a different kind of batch - related to the data-batch-idx (= seq-idx).
-  """
-
-  def __init__(self, start = (0, 0)):
-    """
-    :type start: list[int]
-    """
-    self.shape = [0, 0]  # format (time,batch)
-    self.start = list(start)  # format (start seq idx in data, start frame idx in seq)
-    self.nseqs = 1
-    """
-    nseqs is the number of sequences which we cover (not data-batches self.shape[1]).
-    For recurrent NN training, shape[1] == nseqs.
-    For FF NN training, we concatenate all seqs, so shape[1] == 1 but nseqs >= 1.
-    """
-
-  def __repr__(self):
-    return "<Batch %r %r>" % (self.shape, self.start)
-
-  def try_sequence(self, length):
-    """
-    :param int length: number of (time) frames
-    :return: new shape which covers the old shape and one more data-batch
-    :rtype: list[int]
-    """
-    return [max(self.shape[0], length), self.shape[1] + 1]
-
-  def add_sequence(self, length):
-    """
-    Adds one data-batch.
-    :param int length: number of (time) frames
-    """
-    self.shape = self.try_sequence(length)
-
-  def add_frames(self, length):
-    """
-    Adds frames to all data-batches.
-    Will add one data-batch if we don't have one yet.
-    :param int length: number of (time) frames
-    """
-    self.shape = [self.shape[0] + length, max(self.shape[1], 1)]
-
-  def size(self):
-    return self.shape[0] * self.shape[1]
-
-  def get_end_seq(self):
-    return self.start[0] + max(self.nseqs, self.shape[1])
-
-
-def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False):
-  """
-  :type device: Device.Device
-  :type dataset: Dataset.Dataset
-  :type batches: list[Batch]
-  :type recurrent: bool
-  :type pad_batches: bool
-  :returns successful and how much batch idx to advance.
-  :rtype: (bool,int)
-  """
-  # The final device.data.shape is in format (time,batch,feature).
-  shape = [0, 0]
-  for batch in batches:
-    shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
-  if shape[1] == 0:
-    return False, len(batches)
-
-  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.max_ctc_length, pad=pad_batches)
-  offset = 0
-  for i, batch in enumerate(batches):
-    if not dataset.have_seqs(batch.start[0], batch.get_end_seq()):
-      # We could also just skip those seqs. However, we might want to keep all batches
-      # of similar sizes to have more stable training. Thus, we skip this batch.
-      return False, i + 1
-
-    dataset.load_seqs(batch.start[0], batch.get_end_seq())
-    idi = dataset.alloc_interval_index(batch.start[0])
-    if recurrent:
-      for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
-        ids = dataset.seq_index[s]  # the real seq idx after sorting
-        l = dataset.seq_lengths[ids]
-        o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
-        q = s - batch.start[0] + offset
-        device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
-        device.targets[:l, q] = dataset.targets[dataset.seq_start[s] + batch.start[1]:dataset.seq_start[s] + batch.start[1] + l]
-        if pad_batches:
-          #pad with equivalent to 0
-          #these are the hardcoded values for IAM
-          #TODO load this from somewhere
-          pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
-                      -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
-                      0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
-                      0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-          device.data[l:, q] = pad_data
-          #also pad targets
-          #hardcoded si for IAM
-          #TODO load this from somewhere
-          pad_target = 189
-          device.targets[l:, q] = pad_target
-        #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
-        chunking_active = dataset.chunk_size > 0
-        if dataset.ctc_targets is not None and not chunking_active:
-          device.ctc_targets[q] = dataset.ctc_targets[ids]
-        device.tags[q] = dataset.tags[ids] #TODO
-        device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
-      offset += batch.shape[1]
-    else:
-      o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
-      l = batch.shape[0]
-      device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
-      device.targets[offset:offset + l, 0] = dataset.targets[dataset.seq_start[batch.start[0]] + batch.start[1]:dataset.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
-      device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
-      offset += l
-
-  return True, len(batches)
-
-
-def assign_dev_data_single_seq(device, dataset, seq):
-  """
-  :type device: Device.Device
-  :type dataset: Dataset.Dataset
-  :param int seq: sorted seq idx
-  :return: whether we succeeded
-  :rtype: bool
-  """
-  if not dataset.have_seqs(seq, seq + 1):
-    return False
-  batch = Batch([seq, 0])
-  batch.shape = (dataset.get_seq_length(seq), 1)
-  success, _ = assign_dev_data(device, dataset, [batch])
-  return success
-
-
-class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False):
-      """
-      :type task: str
-      :type network: Network.LayerNetwork
-      :type devices: list[Device.Device]
-      :type data: Dataset.Dataset
-      :type batches: list[Batch]
-      :type start_batch: int
-      :type pad_batches: bool
-      """
-      threading.Thread.__init__(self, name="TaskThread %s" % task)
-      self.start_batch = start_batch
-      self.pad_batches = pad_batches
-      self.devices = devices
-      self.network = network
-      self.batches = batches
-      self.task = task
-      self.data = data
-      self.daemon = True
-      self.elapsed = 0
-      self.finalized = False
-      self.score = None
-      self.device_crash_batch = None
-      # There is no generic way to see whether Python is exiting.
-      # This is our workaround. We check for it in self.run_inner().
-      self.stopped = False
-      atexit.register(self.stop)
-      self.start()
-
-    def stop(self):
-      self.stopped = True
-
-    def allocate_devices(self, start_batch):
-      """
-      Sets the device data, i.e. the next batches, via self.batches.
-      This calls Dataset.load_seqs() to get the data.
-      This sets:
-        device.data
-        device.targets
-        device.ctc_targets
-        device.tags
-        device.index
-      :param int start_batch: start batch index, index of self.batches
-      :rtype: (list[Device.Device], int)
-      :return list of used devices, and number of batches which were handled
-      Number of batches will always be positive, but devices could be empty on skipped seqs.
-      """
-      devices = []; """ :type: list[Device.Device] """
-      batch_idx = start_batch
-      for device in self.devices:
-        batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
-        if success:
-          devices.append(device)
-        else:
-          # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
-          assert batch_adv_idx > 0
-          print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
-                           (range(batch_idx, batch_idx + batch_adv_idx),
-                            batches[batch_adv_idx - 1].start[0])
-        batch_idx += batch_adv_idx
-      batch_adv_idx = batch_idx - start_batch
-      assert batch_adv_idx > 0
-      return devices, batch_adv_idx
-
-    def prepare_device_for_batch(self, device):
-      """ :type device: Device.Device """
-      pass
-    def get_device_prepare_args(self):
-      return {"network": self.network, "updater": None}
-    def evaluate(self, batch, results, num_frames):
-      """
-      :param int batch: start batch
-      :param list[list[numpy.ndarray]] result: results from devices
-      :type num_frames: int
-      :returns some score or None
-      """
-      pass
-    def initialize(self):
-      pass
-    def finalize(self):
-      self.finalized = True
-
-    def run(self):
-      # Wrap run_inner() for better exception printing.
-      # Thread.__bootstrap_inner() ignores sys.excepthook.
-      try:
-        self.run_inner()
-      except IOError, e:  # Such as broken pipe.
-        print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
-        # Just pass on. We have self.finalized == False which indicates the problem.
-      except Exception:
-        # Catch all standard exceptions.
-        # These are not device errors. We should have caught them in the code
-        # and we would leave self.finalized == False.
-        # Don't catch KeyboardInterrupt here because that will get send by the main thread
-        # when it is exiting. It's never by the user because SIGINT will always
-        # trigger KeyboardInterrupt in the main thread only.
-        try:
-          print("%s failed" % self)
-          sys.excepthook(*sys.exc_info())
-        finally:
-          # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-          thread.interrupt_main()
-
-    class DeviceBatchRun:
-      def __init__(self, parent, batch_idx):
-        """
-        :type parent: TaskThread
-        """
-        self.parent = parent
-        self.batch_idx = batch_idx
-        self.score = None
-        self.num_frames = 0
-
-      def finish(self):
-        """
-        :returns whether everything is fine.
-        """
-        if not self.alloc_devices:
-          # We skipped segments. That's fine.
-          return True
-
-        device_results = self.device_collect_results(self.alloc_devices)
-        if device_results is None:
-          print >> log.v2, "device crashed on batch", self.batch_idx
-          self.parent.device_crash_batch = self.batch_idx
-          return False
-        assert len(device_results) == len(self.alloc_devices)
-
-        self.score = self.parent.evaluate(self.batch_idx, device_results, self.num_frames)
-
-        self.print_process()
-        return True
-
-      def start(self):
-        self.batch_start_time = time.time()
-        self.alloc_devices, self.num_alloc_batches = self.parent.allocate_devices(start_batch=self.batch_idx)
-        assert self.num_alloc_batches > 0
-        # Note that alloc_devices could be empty if we skipped seqs.
-        if not self.alloc_devices:
-          return
-        self.device_run()
-
-      def device_run(self):
-        batch = self.batch_idx
-        for device in self.alloc_devices:
-          if self.parent.network.recurrent:
-            print >> log.v5, "running", device.data.shape[1], \
-                             "sequences (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
-          else:
-            print >> log.v5, "running", device.data.shape[0], "frames",
-          if device.num_batches == 1:
-            print >> log.v5, "of batch %i" % batch,
-          else:
-            print >> log.v5, "of batches %i-%i" % (batch, batch + device.num_batches - 1),
-          print >> log.v5, "/", len(self.parent.batches), "on device", device.name
-          #if SprintCommunicator.instance is not None:
-          #  SprintCommunicator.instance.segments = device.tags #TODO
-          self.num_frames += device.data.shape[0] * device.data.shape[1]
-          self.parent.prepare_device_for_batch(device)
-          device.run(self.parent.task)
-          batch += device.num_batches
-
-      def device_collect_results(self, alloc_devices):
-        device_results = []
-        for device in alloc_devices:
-          try:
-            result = device.result()
-          except RuntimeError:
-            result = None
-          if result is None:
-            return None
-          assert isinstance(result, list)
-          assert len(result) >= 1  # The first entry is expected to be the score as a scalar.
-          device_results.append(result)
-        return device_results
-
-      def device_mem_usage_str(self, devices):
-        """
-        :type devices: list[Device.Device]
-        :rtype: str | None
-        """
-        if not devices:
-          return None
-        mem_info = [device.get_memory_info() for device in devices]
-        if len(mem_info) == 1 and mem_info[0] is None:
-          return None
-        mem_usage = [info.used if info else None for info in mem_info]
-        s = ["%s MB" % (mem / (1024*1024)) if mem is not None else "unknown" for mem in mem_usage]
-        return "/".join(s)
-
-      def print_process(self):
-        if not self.parent.interactive and not log.v[5]:
-          return
-        start_elapsed = time.time() - self.parent.start_time
-        run_elapsed = time.time() - self.batch_start_time
-        self.parent.run_times.append(run_elapsed)
-        if len(self.parent.run_times) * run_elapsed > 60: self.parent.run_times = self.parent.run_times[1:]
-        time_domain = len(self.parent.run_times) * sum([d.num_batches for d in self.alloc_devices])
-        time_factor = 0.0 if time_domain == 0.0 else float(sum(self.parent.run_times)) / time_domain
-        complete = float(self.batch_idx + self.num_alloc_batches) / len(self.parent.batches)
-        remaining = hms(int(time_factor * (len(self.parent.batches) - self.batch_idx - self.num_alloc_batches)))
-        if log.verbose[5]:
-          mem_usage = self.device_mem_usage_str(self.alloc_devices)
-          info = [
-            "batch %i" % self.batch_idx,
-            "score %f" % self.score if self.score is not None else None,
-            "elapsed %s" % hms(start_elapsed),
-            "exp. remaining %s" % remaining,
-            "complete %.02f%%" % (complete * 100),
-            "memory %s" % mem_usage if mem_usage else None
-          ]
-          print >> log.v5, ", ".join(filter(None, info))
-        if self.parent.interactive:
-          progress_bar(complete, remaining)
-
-    def device_can_run_async(self):
-      if len(self.devices) != 1:
-        return False
-      if self.devices[0].blocking:
-        # If we are in the same proc (= blocking), nothing can be async.
-        return False
-      if self.devices[0].updater is None:
-        # If nothing needs to be updated, we can run async.
-        return True
-      # We can run async iff we do the updates online.
-      return self.devices[0].updater.updateOnDevice
-
-    def run_inner(self):
-      self.start_time = time.time()
-      for device in self.devices:
-        device.prepare(**self.get_device_prepare_args())
-      self.initialize()
-      terminal_width, _ = terminal_size()
-      self.interactive = (log.v[3] and terminal_width >= 0)
-      print >> log.v5, "starting task", self.task
-      self.run_times = []
-
-      batch_idx = self.start_batch
-      canRunAsync = self.device_can_run_async()
-      remainingDeviceRun = None; " :type: DeviceBatchRun "
-
-      while True:
-        # Note about the async logic:
-        # We start device.run() twice before we do the first device.result() call.
-        # That works because the device proc will push the results on the queue
-        # and device.result() reads it from there without sending another command.
-
-        if batch_idx < len(self.batches):
-          deviceRun = self.DeviceBatchRun(self, batch_idx)
-          deviceRun.start()
-          batch_idx += deviceRun.num_alloc_batches
-        else:
-          deviceRun = None
-
-        if remainingDeviceRun:  # Set when canRunAsync.
-          if not remainingDeviceRun.finish():
-            return
-
-        if not deviceRun:  # Finished loop.
-          break
-
-        if canRunAsync:
-          remainingDeviceRun = deviceRun
-        else:
-          if not deviceRun.finish():
-            # We leave self.finalized == False. That way, the engine can see that the device crashed.
-            return
-
-        if self.stopped:
-          # This happens when we exit Python.
-          # Without this check, this thread would keep running until all exit handlers of Python are done.
-          print >> log.v5, "%s stopped" % self
-          return
-
-      self.finalize()
-      self.elapsed = (time.time() - self.start_time)
-
-
-class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch, pad_batches):
-    """
-    :type network: Network.LayerNetwork
-    :type devices: list[Device.Device]
-    :type data: Dataset.Dataset
-    :type batches: list[Batch]
-    :type learning_rate: float
-    :type updater: Updater
-    :type train_param_args: dict | None
-    :type start_batch: int
-    :type pad_batches: bool
-    """
-    self.updater = updater
-    self.learning_rate = learning_rate
-    # The task is passed to Device.run().
-    if self.updater.updateOnDevice:
-      task = "train_and_update"
-    else:
-      task = "train_distributed"
-    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch, pad_batches)
-
-  def initialize(self):
-    self.score = 0
-    if self.updater.updateOnDevice:
-      assert len(self.devices) == 1
-      self.devices[0].set_learning_rate(self.learning_rate)
-    else:
-      self.updater.initVars(self.network, None)
-      self.updater.setLearningRate(self.learning_rate)
-      self.updater_func = self.updater.getUpdateFunction()
-
-  def prepare_device_for_batch(self, device):
-    """ :type device: Device.Device """
-    device.maybe_update_network(self.network)
-
-  def get_device_prepare_args(self):
-    kwargs = super(TrainTaskThread, self).get_device_prepare_args()
-    kwargs["updater"] = self.updater
-    kwargs["train_param_args"] = self.network.train_param_args
-    return kwargs
-
-  def evaluate(self, batch, results, num_frames):
-    """
-    :param int batch: starting batch idx
-    :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
-    :type num_frames: int
-    """
-    assert results
-    score = sum([res[0] for res in results])
-    self.score += score
-    if not self.updater.updateOnDevice:
-      gparams = {}
-      for p in self.network.train_params:
-        gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-      for res in results:
-        for p, q in zip(self.network.train_params, res[1:]):
-          gparams[p] += q
-      self.updater.setNetParamDeltas(gparams)
-      self.updater_func()
-    return score / num_frames
-
-  def finalize(self):
-    if self.updater.updateOnDevice:
-      # Copy over params at the very end. Also only if we did training.
-      assert len(self.devices) == 1
-      params = self.devices[0].get_net_train_params()
-      our_params = self.network.train_params
-      assert len(params) == len(our_params)
-      for i in range(len(params)):
-        our_params[i].set_value(params[i])
-    if self.data.num_timesteps > 0:
-      self.score /= float(self.data.num_timesteps)
-    super(TrainTaskThread, self).finalize()
-
-
-class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, start_batch = 0, pad_batches=False):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, start_batch, pad_batches)
-    def initialize(self):
-      self.score = 0
-      self.error = 0
-      for device in self.devices:
-        device.set_net_params(self.network)
-    def evaluate(self, batch, results, num_frames):
-      assert results
-      score = sum([res[0] for res in results])
-      self.score += score
-      self.error += sum([res[1] for res in results])
-      return score / num_frames
-    def finalize(self):
-      self.score /= float(self.data.num_timesteps)
-      if self.network.loss in ('ctc','ce_ctc'):
-        self.error /= float(self.data.num_running_chars)
-      else:
-        self.error /= float(self.data.num_timesteps)
-
-
-class SprintCacheForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
-      super(SprintCacheForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
-      self.cache = cache
-      self.merge = merge
-    def initialize(self):
-      self.toffset = 0
-    def evaluate(self, batch, result, num_frames):
-      features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
-      if self.merge.keys():
-        merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
-        for i in xrange(len(features)):
-          for j, label in enumerate(self.merge.keys()):
-            for k in self.merge[label]:
-              merged[i, j] += numpy.exp(features[i, k])
-          z = max(numpy.sum(merged[i]), 0.000001)
-          merged[i] = numpy.log(merged[i] / z)
-        features = merged
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
-      times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
-      #times = zip(range(0, len(features)), range(1, len(features) + 1))
-      self.toffset += len(features)
-      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
-
-
-class HDFForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
-      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
-      self.tags = []
-      self.merge = merge
-      self.cache = cache
-      cache.attrs['numSeqs'] = data.num_seqs
-      cache.attrs['numTimesteps'] = data.num_timesteps
-      cache.attrs['inputPattSize'] = data.num_inputs
-      cache.attrs['numDims'] = 1
-      cache.attrs['numLabels'] = data.num_outputs
-      hdf5_strings(cache, 'labels', data.labels)
-      self.targets = cache.create_dataset("targetClasses", (data.num_timesteps,), dtype='i')
-      self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
-      self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
-      if data.timestamps:
-        times = cache.create_dataset("times", data.timestamps.shape, dtype='i')
-        times[...] = data.timestamps
-
-    def initialize(self):
-      self.toffset = 0
-    def finalize(self):
-      hdf5_strings(self.cache, 'seqTags', self.tags)
-
-    def evaluate(self, batch, result, num_frames):
-      features = numpy.concatenate(result, axis = 1)
-      if not "inputs" in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
-      if self.merge.keys():
-        merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
-        for i in xrange(len(features)):
-          for j, label in enumerate(self.merge.keys()):
-            for k in self.merge[label]:
-              merged[i, j] += numpy.exp(features[i, k])
-          z = max(numpy.sum(merged[i]), 0.000001)
-          merged[i] = numpy.log(merged[i] / z)
-        features = merged
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
-      self.seq_dims[batch] = [features.shape[1]]
-      self.seq_lengths[batch] = features.shape[1]
-      self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
-      self.toffset += features.shape[1]
-      self.tags.append(self.data.tags[self.data.seq_index[batch]])
-
-
 class Engine:
-  def __init__(self, devices, network):
+
+  _last_epoch_batch_model = None; """ :type: (int,int|None,str|None) """  # See get_last_epoch_batch().
+
+  def __init__(self, devices):
     """
     :type devices: list[Device.Device]
-    :type network: Network.LayerNetwork
     """
-    self.network = network
     self.devices = devices
     self.is_training = False
     self.training_finished = False
@@ -620,7 +39,7 @@ class Engine:
     :type batch_size: int
     :type batch_step: int
     :type max_seqs: int
-    :rtype: list[Batch]
+    :rtype: list[EngineBatch.Batch]
     """
     batches = []
     batch = Batch([0,0])
@@ -661,18 +80,117 @@ class Engine:
     """ :type config: Config.Config """
     return config.int('num_epochs', 5)
 
-  def init_train_config(self, config, train_data, dev_data=None, eval_data=None, start_epoch=1, start_batch=0):
+  @classmethod
+  def get_last_epoch_batch_model(cls, config):
+    """
+    :type config: Config.Config
+    :returns (epoch,batch,modelFilename)
+    :rtype: (int, int|None, str|None)
+    """
+    # XXX: We cache it, although this is wrong if we have changed the config.
+    if cls._last_epoch_batch_model:
+      return cls._last_epoch_batch_model
+
+    model_filename = config.value('model', '')
+    assert model_filename, "need 'model' in config"
+    load_model_epoch_filename = config.value('load', '')
+    start_epoch_mode = config.value('start_epoch', 'auto')
+    if start_epoch_mode == 'auto':
+      start_epoch = None
+    else:
+      start_epoch = int(start_epoch_mode)
+      assert start_epoch >= 1
+
+    if start_epoch == 1:
+      # That is an explicit request to start with the first epoch.
+      # Thus, there is no previous epoch.
+      # XXX: last batch?
+      lastEpochBatchModel = (None, None, None)
+
+    elif start_epoch > 1:
+      # If we start with a higher epoch, we must have a previous existing model.
+      # Check for it.
+      last_epoch = start_epoch - 1
+      fns = [cls.epoch_model_filename(model_filename, last_epoch, is_pretrain) for is_pretrain in [False, True]]
+      fns_existing = [fn for fn in fns if os.path.exists(fn)]
+      assert fns_existing, "start_epoch = %i but model of last epoch not found: %s" % \
+                           (start_epoch, cls.epoch_model_filename(model_filename, last_epoch, False))
+      # XXX: last batch?
+      lastEpochBatchModel = (last_epoch, None, fns_existing[0])
+
+    elif load_model_epoch_filename:
+      assert os.path.exists(load_model_epoch_filename)
+      last_epoch = LayerNetwork.epoch_from_hdf_model_filename(load_model_epoch_filename)
+      # XXX: last batch?
+      lastEpochBatchModel = (last_epoch, None, load_model_epoch_filename)
+
+    else:
+      # Automatically search the filesystem for existing models.
+      file_list = []
+      for epoch in range(1, cls.config_get_final_epoch(config) + 1):
+        for is_pretrain in [False, True]:
+          fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
+          # XXX: batches, e.g. fn.* ...
+          if os.path.exists(fn):
+            file_list += [(epoch, None, fn)]
+            break
+      if len(file_list) == 0:
+        lastEpochBatchModel = (None, None, None)
+      else:
+        file_list.sort()
+        lastEpochBatchModel = file_list[-1]
+
+    cls._last_epoch_batch_model = lastEpochBatchModel
+    return lastEpochBatchModel
+
+  @classmethod
+  def get_train_start_epoch_batch(cls, config):
+    """
+    We will always automatically determine the best start (epoch,batch) tuple
+    based on existing model files.
+    This ensures that the files are present and enforces that there are
+    no old outdated files which should be ignored.
+    Note that epochs start at idx 1 and batches at idx 0.
+    :type config: Config.Config
+    :returns (epoch,batch)
+    :rtype (int,int)
+    """
+    start_batch_mode = config.value('start_batch', 'auto')
+    if start_batch_mode == 'auto':
+      start_batch_config = None
+    else:
+      start_batch_config = int(start_batch_mode)
+    last_epoch, last_batch, _ = cls.get_last_epoch_batch_model(config)
+    if last_epoch is None:
+      start_epoch = 1
+      start_batch = start_batch_config or 0
+    elif last_batch is None:
+      # No batch -> start with next epoch.
+      start_epoch = last_epoch + 1
+      start_batch = start_batch_config or 0
+    else:
+      # Stay in last epoch.
+      start_epoch = last_epoch
+      if start_batch_config is not None:
+        # Use the specific batch from config.
+        start_batch = start_batch_config
+      else:
+        # Start with next batch.
+        start_batch = last_batch + 1
+    return start_epoch, start_batch
+
+  def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
     """
     :type config: Config.Config
     :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
+    :type start_epoch: int | None
     """
     self.train_data = train_data
     self.dev_data = dev_data
     self.eval_data = eval_data
-    self.start_epoch = start_epoch
-    self.start_batch = start_batch or config.int('start_batch', 0)
+    self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size, self.batch_step = config.int_pair('batch_size', (1,1))
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
@@ -683,6 +201,72 @@ class Engine:
     self.updater = Updater.initFromConfig(config)
     self.pretrain = pretrainFromConfig(config)
     self.pad_batches = config.bool("pad", False)
+    self.init_network_from_config(config)
+
+  def init_network_from_config(self, config):
+    last_epoch, _, last_model_epoch_filename = self.get_last_epoch_batch_model(config)
+
+    if last_model_epoch_filename:
+      print >> log.v1, "loading weights from", last_model_epoch_filename
+      model = h5py.File(last_model_epoch_filename, "r")
+    else:
+      model = None
+
+    if config.bool('initialize_from_model', False):
+      # That's only about the topology, not the params.
+      print >> log.v5, "initializing network topology from model"
+      assert model, "last model not specified. use 'load' in config. or don't use 'initialize_from_model'"
+      network = LayerNetwork.from_hdf_model_topology(model)
+    else:
+      if self.pretrain:  # set via self.init_train_from_config()
+        # This would be obsolete if we don't want to load an existing model.
+        # In self.init_train_epoch(), we initialize a new model.
+        network = self.pretrain.get_network_for_epoch(last_epoch or self.start_epoch)
+      else:
+        network = LayerNetwork.from_config_topology(config)
+
+    # We have the parameters randomly initialized at this point.
+    # Maybe load existing model parameters.
+    if model:
+      last_epoch_model = network.load_hdf(model)
+      assert last_epoch == last_epoch_model
+      model.close()
+
+    self.network = network
+
+    if config.has('dump_json'):
+      self.network_dump_json(config.value('dump_json', ''))
+
+    self.print_network_info()
+
+  def network_dump_json(self, json_filename):
+    fout = open(json_filename, 'w')
+    try:
+      json_content = self.network.to_json()
+      print json_content
+      print "---------------"
+      json_data = json.loads(json_content)
+      print json_data
+      print "---------------"
+      print json.dumps(json_data, indent = 2)
+      print "---------------"
+      print >> fout, json.dumps(json_data, indent = 2)
+    except ValueError:
+      print >> log.v5, self.network.to_json()
+      assert False, "JSON parsing failed"
+    fout.close()
+
+  def print_network_info(self):
+    network = self.network
+    print >> log.v2, "Network layer topology:"
+    print >> log.v2, "  input #:", network.n_in
+    if network.description:
+      for i in xrange(len(network.description.hidden_info)):
+        print >> log.v2, "  " + network.description.hidden_info[i][0] + " #:", network.description.hidden_info[i][1]
+    print >> log.v2, "  output #:", network.n_out
+    print >> log.v2, "net params #:", network.num_params()
+    print >> log.v2, "net trainable params:", network.train_params
+    print >> log.v5, "net output:", network.output
 
   def train(self):
     print >> log.v3, "start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch)
@@ -707,7 +291,7 @@ class Engine:
 
     assert self.start_epoch >= 1, "Epochs start at 1."
     assert self.start_epoch <= self.final_epoch, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
-                                                (self.start_epoch, self.final_epoch)
+                                                 (self.start_epoch, self.final_epoch)
 
     for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
       # In case of random seq ordering, we want to reorder each epoch.
@@ -717,6 +301,7 @@ class Engine:
         self.epoch = epoch
         self.cond.notify_all()
 
+      self.init_train_epoch()
       self.train_epoch()
 
     # Save final model.
@@ -753,24 +338,25 @@ class Engine:
     if self.is_pretrain_epoch():
       new_network = self.pretrain.get_network_for_epoch(self.epoch)
       old_network = self.network
-      if self.epoch >= 2:
+      if old_network:
         # Otherwise it's initialized randomly which is fine.
         # This copy will copy the old params over and leave the rest randomly initialized.
+        # This also works if the old network has just the same topology,
+        # e.g. if it is the initial model from self.init_network_from_config().
         self.pretrain.copy_params_from_old_network(new_network, old_network)
       self.network = new_network
-      self.network.set_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+      self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
       self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
     else:
-      self.network.set_train_params()  # Whole network.
+      self.network.declare_train_params()  # Whole network.
       self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
 
   def train_epoch(self):
-    self.init_train_epoch()
     print >> log.v1, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
 
     if self.is_pretrain_epoch():
-      print >> log.v2, "pretrain train params:", self.network.train_params
+      self.print_network_info()
 
     training_devices = self.devices
     train_batches = self.set_batch_size(self.train_data, self.batch_size, self.batch_step, self.max_seqs)
@@ -807,10 +393,15 @@ class Engine:
     :param int epoch: save epoch idx
     """
     model = h5py.File(filename, "w")
-    self.network.save(model, epoch)
+    self.network.save_hdf(model, epoch)
     model.close()
 
-  def forward_to_sprint(self, device, data, cache_file, combine_labels = ''):
+  def forward_to_sprint(self, data, cache_file, combine_labels=''):
+    """
+    :type data: Dataset.Dataset
+    :type cache_file: str
+    :type combine_labels: str
+    """
     cache = SprintCache.FileArchive(cache_file)
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
@@ -830,8 +421,13 @@ class Engine:
     forwarder.join()
     cache.finalize()
 
-  def forward(self, device, data, output_file, combine_labels = ''):
-    cache =  h5py.File(output_file, "w")
+  def forward_to_hdf(self, data, output_file, combine_labels=''):
+    """
+    :type data: Dataset.Dataset
+    :type output_file: str
+    :type combine_labels: str
+    """
+    cache = h5py.File(output_file, "w")
     batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
     if combine_labels != '':

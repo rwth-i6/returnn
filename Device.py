@@ -145,14 +145,14 @@ class Device():
       self.testnet = LayerNetwork.from_description(network_description, "unity")
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = LayerNetwork.from_model(model, mask)
-      self.testnet = LayerNetwork.from_model(model, "unity")
+      self.trainnet = LayerNetwork.from_hdf_model_topology(model, mask)
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, "unity")
       model.close()
     else:
-      self.trainnet = LayerNetwork.from_config(config, mask)
-      self.testnet = LayerNetwork.from_config(config, "unity")
+      self.trainnet = LayerNetwork.from_config_topology(config, mask)
+      self.testnet = LayerNetwork.from_config_topology(config, "unity")
     if train_param_args is not None:
-      self.trainnet.set_train_params(**train_param_args)
+      self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
     self.y = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
