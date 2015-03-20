@@ -145,7 +145,9 @@ class Layer(Container):
     self.mass = T.constant(1., name = "mass_%s" % self.name)
     if mask == "unity":
       self.masks = [None] * len(self.sources)
-    elif mask == "dropout" and dropout > 0:
+    elif mask == "dropout":
+      #TODO we can do some optimization if dropout == 0 for this layer
+
       # if we apply this mass during training then we don't need any mask or mass for testing
       # the expected weight should be 1
       # E[x] = mass * (1-dropout)
@@ -296,7 +298,8 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
     elif self.loss == 'ctc':
-      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis=0))
+      err, grad, priors = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis=0))
+      #TODO handle priors
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'ce_ctc':
