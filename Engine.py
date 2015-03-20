@@ -164,19 +164,18 @@ class Engine:
     if last_epoch is None:
       start_epoch = 1
       start_batch = start_batch_config or 0
+    elif start_batch_config is not None:
+      # We specified a start batch. Stay in the same epoch, use that start batch.
+      start_epoch = last_epoch
+      start_batch = start_batch_config
     elif last_batch is None:
       # No batch -> start with next epoch.
       start_epoch = last_epoch + 1
-      start_batch = start_batch_config or 0
+      start_batch = 0
     else:
-      # Stay in last epoch.
+      # Stay in last epoch and start with next batch.
       start_epoch = last_epoch
-      if start_batch_config is not None:
-        # Use the specific batch from config.
-        start_batch = start_batch_config
-      else:
-        # Start with next batch.
-        start_batch = last_batch + 1
+      start_batch = last_batch + 1
     return start_epoch, start_batch
 
   def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
