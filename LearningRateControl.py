@@ -86,11 +86,10 @@ class LearningRateControl(object):
       self.epochData[epoch] = self.EpochData(learningRate)
 
   def getLastEpoch(self, epoch):
-    epochs = sorted(self.epochData.keys())
-    idx = epochs.index(epoch)
-    if idx == 0:
+    epochs = sorted([e for e in self.epochData.keys() if e < epoch])
+    if not epochs:
       return None
-    return epochs[idx - 1]
+    return epochs[-1]
 
   def setEpochError(self, epoch, error):
     """

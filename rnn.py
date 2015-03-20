@@ -13,9 +13,6 @@ import os
 import sys
 import time
 from optparse import OptionParser
-import h5py
-import json
-import numpy
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
@@ -30,21 +27,9 @@ TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.envir
 
 config = None; """ :type: Config """
 engine = None; """ :type: Engine """
-last_epoch = 0  # For training. Loaded from NN model. This is the last epoch we trained on.
 train = None; """ :type: Dataset """
-dev   = None; """ :type: Dataset """
-eval  = None; """ :type: Dataset """
-
-
-def subtract_priors(network, train, config):
-  if config.bool('subtract_priors', False):
-    prior_scale = config.float('prior_scale', 0.0)
-    priors = train.calculate_priori()
-    priors[priors == 0] = 1e-10 #avoid priors of zero which would yield a bias of inf
-    l = [p for p in network.params if p.name == 'b_softmax']
-    assert len(l) == 1, len(l)
-    b_softmax = l[0]
-    b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
+dev = None; """ :type: Dataset """
+eval = None; """ :type: Dataset """
 
 
 def initConfig(configFilename, commandLineOptions):
@@ -239,67 +224,10 @@ def initData():
   train,extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
 
 
-def initNeuralNetwork(modelFileName=None):
-  """
-  Load neural network.
-  :type modelFileName: str | None
-  :param modelFileName: if set, will load the specific epoch model
-  :rtype: Network.LayerNetwork
-  """
-  global last_epoch
-  from Network import LayerNetwork
-
-  if not modelFileName and config.has('load'):
-    modelFileName = config.value('load', '')
-
-  if modelFileName:
-    print >> log.v1, "loading weights from", modelFileName
-    model = h5py.File(modelFileName, "r")
-    if config.bool('initialize_from_model', False):
-      print >> log.v5, "initializing network topology from model"
-      network = LayerNetwork.from_model(model)
-      subtract_priors(network, train, config)
-    else:
-      network = LayerNetwork.from_config(config)
-    last_epoch = network.load(model)
-    model.close()
-  else:
-    network = LayerNetwork.from_config(config)
-    last_epoch = 0
-
-  if config.has('dump_json'):
-    fout = open(config.value('dump_json', ''), 'w')
-    try:
-      json_content = network.to_json()
-      print json_content
-      print "---------------"
-      json_data = json.loads(json_content)
-      print json_data
-      print "---------------"
-      print json.dumps(json_data, indent = 2)
-      print "---------------"
-      print >> fout, json.dumps(json_data, indent = 2)
-    except ValueError:
-      print >> log.v5, network.to_json()
-      assert False, "JSON parsing failed"
-    fout.close()
-  return network
-
-
-def printTaskProperties(devices, network):
+def printTaskProperties(devices):
   """
   :type devices: list[Device]
-  :type network: Network.LayerNetwork
   """
-  print >> log.v2, "Network layer topology:"
-  print >> log.v2, "  input #:", network.n_in
-  if network.description:
-    for i in xrange(len(network.description.hidden_info)):
-      print >> log.v2, "  " + network.description.hidden_info[i][0] + " #:", network.description.hidden_info[i][1]
-  print >> log.v2, "  output #:", network.n_out
-  print >> log.v2, "net params #:", network.num_params()
-  print >> log.v2, "net trainable params:", network.train_params
-  print >> log.v5, "net output:", network.output
 
   if train:
     print >> log.v2, "Train data:"
@@ -325,14 +253,13 @@ def printTaskProperties(devices, network):
     print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
 
 
-def initEngine(devices, network):
+def initEngine(devices):
   """
   :type devices: list[Device]
-  :type network: Network.LayerNetwork
   Initializes global engine.
   """
   global engine
-  engine = Engine(devices, network)
+  engine = Engine(devices)
 
 
 def init(configFilename, commandLineOptions):
@@ -346,9 +273,8 @@ def init(configFilename, commandLineOptions):
   maybeInitSprintCommunicator()
   devices = initDevices()
   initData()
-  network = initNeuralNetwork()
-  printTaskProperties(devices, network)
-  initEngine(devices, network)
+  printTaskProperties(devices)
+  initEngine(devices)
 
 
 def finalize():
@@ -363,26 +289,30 @@ def executeMainTask():
   task = config.value('task', 'train')
   if task == 'train':
     assert train.num_seqs > 0, "no train files specified, check train option: %s" % config.value('train', None)
-    engine.init_train_config(config, train, dev, eval, start_epoch=last_epoch+1)
+    engine.init_train_from_config(config, train, dev, eval)
     engine.train()
   elif task == 'forward':
     assert eval is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
-    engine.forward(engine.devices[0], eval, output_file, combine_labels)
+    engine.init_network_from_config(config)
+    engine.forward_to_hdf(eval, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano.printing
+    engine.init_network_from_config(config)
     for task in config.list('theano_graph.task', ['train']):
       theano.printing.pydotprint(engine.devices[-1].compute(task), format = 'png', var_with_name_simple = True,
                                  outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
+    engine.init_network_from_config(config)
     engine.analyze(engine.devices[0], eval, statistics)
   elif task == "classify":
     assert eval is not None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
+    engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval, label_file)
   else:
     assert False, "unknown task: %s" % task

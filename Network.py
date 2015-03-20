@@ -5,6 +5,7 @@ import theano
 import json
 import inspect
 import theano.tensor as T
+import h5py
 from Util import hdf5_dimension, strtoact, simpleObjRepr
 from math import sqrt
 from CTC import CTCOp
@@ -123,7 +124,7 @@ class Container(object):
 class Layer(Container):
   def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
@@ -155,6 +156,8 @@ class Layer(Container):
 
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
+    else:
+      assert False, "invalid mask: %s" % mask
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -181,7 +184,7 @@ class SourceLayer(Container):
 class OutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :param theano.Variable index: index for batches
     :param int n_out: output dim
     :param float L1: l1-param-norm regularization
@@ -198,6 +201,7 @@ class OutputLayer(Layer):
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
                  for source in sources]
+    assert len(sources) == len(self.masks) == len(self.W_in)
     for source, m, W in zip(sources, self.masks, self.W_in):
       if mask == "unity":
         self.z += T.dot(source.output, W)
@@ -254,7 +258,7 @@ class FramewiseOutputLayer(OutputLayer):
       y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
     else:
-      assert False
+      assert False, "unknown loss: %s" % self.loss
 
 class SequenceOutputLayer(OutputLayer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name="", prior_scale=0.0, log_prior=None, ce_smoothing=0.0):
@@ -316,7 +320,7 @@ class SequenceOutputLayer(OutputLayer):
 class HiddenLayer(Layer):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, activation=T.tanh, dropout=0.0, mask="unity", connection="full", layer_class="hidden", name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :type n_out: int
     :type L1: float
     :type L2: float
@@ -340,6 +344,7 @@ class ForwardLayer(HiddenLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
     super(ForwardLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     z = self.b
+    assert len(sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(sources, self.masks, self.W_in):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out, "W_in_%s_%s"%(s.name, self.name)).get_value())
       if mask == "unity":
@@ -695,7 +700,7 @@ class WLstmLayer(RecurrentLayer):
         z_in += T.dot(self.mass * m * x_t.output, W)
 
     z_input = self.b_input
-    for x_t, m, W in zip(self.sources, self,masks, self.W_input):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_input):
       if self.attrs['mask'] == "unity":
         z_input += T.dot(x_t.output, W)
       else:
@@ -1239,7 +1244,7 @@ class LayerNetwork(object):
     self.train_param_args = None; """ :type: dict[str] """
 
   @classmethod
-  def from_config(cls, config, mask="unity"):
+  def from_config_topology(cls, config, mask="unity"):
     """
     :type config: Config.Config
     :param str mask: e.g. "unity" or "dropout"
@@ -1325,7 +1330,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_model(cls, model, mask="unity"):
+  def from_hdf_model_topology(cls, model, mask="unity"):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -1405,7 +1410,7 @@ class LayerNetwork(object):
     :param list[Layer] sources: source layers
     :param str loss: loss type, "ce", "ctc" etc
     :type dropout: float
-    :param str mask: e.g. "unity"
+    :param str mask: "unity" or "dropout"
     """
     self.loss = loss
     if loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
@@ -1415,7 +1420,7 @@ class LayerNetwork(object):
     for W in self.output.W_in:
       if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
       if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
-    self.set_train_params()
+    self.declare_train_params()
     targets = self.c if self.loss == 'ctc' else self.y
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
     self.errors = self.output.errors(error_targets)
@@ -1452,7 +1457,7 @@ class LayerNetwork(object):
       "with_output": True
     }
 
-  def set_train_params(self, **kwargs):
+  def declare_train_params(self, **kwargs):
     """
     Kwargs as in self.get_params(), or default values.
     """
@@ -1576,7 +1581,7 @@ class LayerNetwork(object):
     for h in self.hidden:
       self.hidden[h].set_params_by_dict(params[h])
 
-  def save(self, model, epoch):
+  def save_hdf(self, model, epoch):
     """
     :type model: h5py.File
     :type epoch: int
@@ -1598,17 +1603,39 @@ class LayerNetwork(object):
       out[h] = self.hidden[h].to_json()
     return str(out)
 
-  def load(self, model):
+  def load_hdf(self, model):
     """
     :type model: h5py.File
     :returns last epoch this was trained on
     :rtype: int
     """
-    epoch = model.attrs['epoch']
     for name in self.hidden:
       if not name in model:
         print >> log.v2, "unable to load layer ", name
       else:
         self.hidden[name].load(model)
     self.output.load(model)
+    return self.epoch_from_hdf_model(model)
+
+  @classmethod
+  def epoch_from_hdf_model(cls, model):
+    """
+    :type model: h5py.File
+    :returns last epoch the model was trained on
+    :rtype: int
+    """
+    epoch = model.attrs['epoch']
     return epoch
+
+  @classmethod
+  def epoch_from_hdf_model_filename(cls, model_filename):
+    """
+    :type model_filename: str
+    :returns last epoch the model was trained on
+    :rtype: int
+    """
+    model = h5py.File(model_filename, "r")
+    epoch = cls.epoch_from_hdf_model(model)
+    model.close()
+    return epoch
+

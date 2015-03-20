@@ -38,7 +38,7 @@ if __name__ == '__main__':
     assert "units" in layer, "no unit source specified for layer %s"  % layer
     for source in layer["units"]:
       n, h = source
-      net = LayerNetwork.from_model(models[n], 'unity')
+      net = LayerNetwork.from_hdf_model_topology(models[n], 'unity')
       if h == net.output.name:
         sources.append(net.output)
       else:
@@ -91,5 +91,5 @@ for k in network_layers.keys():
     network.hidden[layer.name].set_params_by_dict(layer.get_params_dict())
 
 model = h5py.File(options.output, "w")
-network.save(model, 1)
+network.save_hdf(model, 1)
 model.close()
