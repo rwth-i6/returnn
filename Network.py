@@ -388,17 +388,17 @@ class RecurrentLayer(HiddenLayer):
       i = T.outer(i_t, self.o)
       z = T.dot(h_pp, self.W_re) + self.b
       for i in range(len(self.sources)):
-        z += T.dot(self.mass * self.mask[i] * x_t[i], self.W_in[i])
+        z += T.dot(self.mass * self.masks[i] * x_t[i], self.W_in[i])
       #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
       h_t = (z if self.activation is None else self.activation(z))
       return h_t * i
     self.output, _ = theano.scan(step,
-                                 name = "scan_%s"%self.name,
-                                 go_backwards = self.reverse,
-                                 truncate_gradient = self.truncation,
+                                 name="scan_%s" % self.name,
+                                 go_backwards=self.attrs['reverse'],
+                                 truncate_gradient=self.attrs['truncation'],
                                  sequences = [T.stack(self.sources), self.index],
-                                 outputs_info = [T.alloc(self.act, self.sources[0].shape[1], self.attrs['n_out'])])
-    self.output = self.output[::-(2 * self.reverse - 1)]
+                                 outputs_info = [T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'])])
+    self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
 
   def create_recurrent_weights(self, n, m):
     nin = n + m + m + m
