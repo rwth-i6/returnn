@@ -333,6 +333,9 @@ class Engine:
   def is_pretrain_epoch(self):
     return self.pretrain and self.epoch <= self.pretrain.get_train_num_epochs()
 
+  def is_first_epoch_after_pretrain(self):
+    return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
+
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
       new_network = self.pretrain.get_network_for_epoch(self.epoch)
@@ -347,9 +350,15 @@ class Engine:
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
       self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
+    elif self.is_first_epoch_after_pretrain():
+      # Use constant learning rate.
+      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
     else:
-      self.network.declare_train_params()  # Whole network.
       self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+
+    if not self.is_pretrain_epoch():
+      # Train the whole network.
+      self.network.declare_train_params()
 
   def train_epoch(self):
     print >> log.v1, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
