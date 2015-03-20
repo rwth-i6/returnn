@@ -292,7 +292,7 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
     elif self.loss == 'ctc':
-      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis = 0))
+      err, grad = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'ce_ctc':
@@ -441,8 +441,10 @@ class LstmLayer(RecurrentLayer):
       i_t = args[self.num_sources]
       s_p = args[self.num_sources + 1]
       h_p = args[self.num_sources + 2]
-      if self.masks:
+      if any(self.masks):
         masks = args[self.num_sources + 3:]
+      else:
+        masks = [None] * len(self.W_in)
 
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
@@ -982,7 +984,6 @@ class GateLstmLayer(RecurrentLayer):
     self.forgetgate = self.create_bias(n_out)
     self.outgate = self.create_bias(n_out)
 
-    #TODO the use of mask from the parameter seems broken (it is a string?!)
     def step(x_t, i_t, s_p, h_p, ig_p, fg_p, og_p, mask):
       i = T.outer(i_t, self.o)
       z = T.dot(self.mass * mask * x_t, self.W_in) + T.dot(h_p, self.W_re) + self.b
