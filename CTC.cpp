@@ -3,7 +3,7 @@ class CTC
 {
 public:
     void forwardBackward(CSArrayF& activs, CSArrayI& labellings,
-        int seqLen, float& err, SArrayF& errSigs)
+        int seqLen, float& err, SArrayF& errSigs, SArrayF& priors)
     {                
         nLabelsInclBlank_ = activs.dim(1);
         blankIdx_ = nLabelsInclBlank_ - 1;
@@ -11,7 +11,7 @@ public:
         N_ = calcLen(labellings);
         M_ = 2 * N_ + 1;
         canonical_ = calcCanonical(labellings, N_);            
-        errorSignal(activs, labellings, err, errSigs);
+        errorSignal(activs, labellings, err, errSigs, priors);
     }
 private:
     void forwardAlgo(CSArrayF& activs, CSArrayI& labellings)
@@ -84,7 +84,18 @@ private:
         }
     }
 
-    void errorSignal(CSArrayF& activs, CSArrayI& labellings, float& err, SArrayF& errSigs)
+    void accPriors(CSArrayF& activs, CSArrayF& errSigs, SArrayF& priors)
+    {
+        for(size_t c = 0; c < nLabelsInclBlank_; ++c)
+        {
+            for(size_t t = 0; t < T_; ++t)
+            {
+                priors[c] = activs(t,c) - errSigs(t,c);
+            }
+        }
+    }
+
+    void errorSignal(CSArrayF& activs, CSArrayI& labellings, float& err, SArrayF& errSigs, SArrayF& priors)
     {
         forwardAlgo(activs, labellings);
         backwardAlgo(activs, labellings);
@@ -107,6 +118,8 @@ private:
             }
         }
         err = -totalSum.logVal();
+
+        accPriors(activs, errSigs, priors);
     }
 
     int calcLen(CSArrayI& labellings)
