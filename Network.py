@@ -156,6 +156,8 @@ class Layer(Container):
 
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
+    else:
+      assert False, "invalid mask: %s" % mask
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -182,7 +184,7 @@ class SourceLayer(Container):
 class OutputLayer(Layer):
   def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :param theano.Variable index: index for batches
     :param int n_out: output dim
     :param float L1: l1-param-norm regularization
@@ -199,6 +201,7 @@ class OutputLayer(Layer):
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
                  for source in sources]
+    assert len(sources) == len(self.masks) == len(self.W_in)
     for source, m, W in zip(sources, self.masks, self.W_in):
       if mask == "unity":
         self.z += T.dot(source.output, W)
@@ -317,7 +320,7 @@ class SequenceOutputLayer(OutputLayer):
 class HiddenLayer(Layer):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, activation=T.tanh, dropout=0.0, mask="unity", connection="full", layer_class="hidden", name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :type n_out: int
     :type L1: float
     :type L2: float
@@ -341,6 +344,7 @@ class ForwardLayer(HiddenLayer):
   def __init__(self, sources, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, dropout = 0, mask = "unity", layer_class = "hidden", name = ""):
     super(ForwardLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     z = self.b
+    assert len(sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(sources, self.masks, self.W_in):
       W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out, "W_in_%s_%s"%(s.name, self.name)).get_value())
       if mask == "unity":
@@ -696,7 +700,7 @@ class WLstmLayer(RecurrentLayer):
         z_in += T.dot(self.mass * m * x_t.output, W)
 
     z_input = self.b_input
-    for x_t, m, W in zip(self.sources, self,masks, self.W_input):
+    for x_t, m, W in zip(self.sources, self.masks, self.W_input):
       if self.attrs['mask'] == "unity":
         z_input += T.dot(x_t.output, W)
       else:
@@ -1406,7 +1410,7 @@ class LayerNetwork(object):
     :param list[Layer] sources: source layers
     :param str loss: loss type, "ce", "ctc" etc
     :type dropout: float
-    :param str mask: e.g. "unity"
+    :param str mask: "unity" or "dropout"
     """
     self.loss = loss
     if loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
