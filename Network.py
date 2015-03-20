@@ -124,7 +124,7 @@ class Container(object):
 class Layer(Container):
   def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
     """
-    :param list[Layer] sources: list of source layers
+    :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
