@@ -203,6 +203,7 @@ class SprintDataset(Dataset):
         print >> log.v5, "SprintDataset addNewData: left out seqs: %s" % seqLeftOut
         self.seq_added_excluded.update(seqLeftOut)
       self.seq_added_last = idxSorted
+      self.cond.notify_all()
 
       if idxSorted > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
         print >> log.v5, "SprintDataset addNewData: Cache filled, waiting to get loaded..."
