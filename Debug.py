@@ -28,6 +28,8 @@ def initBetterExchook():
 
 
 def initFaulthandler():
+  if os.name == 'nt':
+    return
   try:
     import faulthandler
   except ImportError, e:
