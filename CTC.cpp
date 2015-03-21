@@ -104,7 +104,7 @@ private:
             for(int c = 0; c < nLabelsInclBlank_; ++c)
             {
                 errSigs(t, c) = activs(t, c) - (labelSum[c] / totalSum).expVal();
-                priors(t, c) = activs(t, c) - errSigs(t,c);
+                priors(c) += activs(t, c) - errSigs(t,c);
             }
         }
         err = -totalSum.logVal();

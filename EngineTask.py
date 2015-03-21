@@ -307,6 +307,8 @@ class TrainTaskThread(TaskThread):
     """
     self.updater = updater
     self.learning_rate = learning_rate
+    self.do_ctc_priors = len(network.results) > 1
+    self.ctc_priors = None
     # The task is passed to Device.run().
     if self.updater.updateOnDevice:
       task = "train_and_update"
@@ -316,6 +318,8 @@ class TrainTaskThread(TaskThread):
 
   def initialize(self):
     self.score = 0
+    if self.do_ctc_priors:
+      self.ctc_priors = numpy.zeros(shape=(self.network.n_out,), dtype=theano.config.floatX)
     if self.updater.updateOnDevice:
       assert len(self.devices) == 1
       self.devices[0].set_learning_rate(self.learning_rate)
@@ -342,13 +346,18 @@ class TrainTaskThread(TaskThread):
     """
     assert results
     score = sum([res[0] for res in results])
+    param_start = 1
+    if self.do_ctc_priors:
+      for res in results:
+        self.ctc_priors += res[1]
+      param_start = 2
     self.score += score
     if not self.updater.updateOnDevice:
       gparams = {}
       for p in self.network.train_params:
         gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
       for res in results:
-        for p, q in zip(self.network.train_params, res[1:]):
+        for p, q in zip(self.network.train_params, res[param_start:]):
           gparams[p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
@@ -365,6 +374,8 @@ class TrainTaskThread(TaskThread):
         our_params[i].set_value(params[i])
     if self.data.num_timesteps > 0:
       self.score /= float(self.data.num_timesteps)
+      if self.do_ctc_priors:
+        self.ctc_priors /= float(self.data.num_timesteps)
     super(TrainTaskThread, self).finalize()
 
 

@@ -299,9 +299,8 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'ctc':
       err, grad, priors = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis=0))
-      #TODO handle priors
       known_grads = {self.z: grad}
-      return err.sum(), known_grads
+      return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'ce_ctc':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x = T.nnet.softmax(y_m)
@@ -1427,7 +1426,12 @@ class LayerNetwork(object):
     targets = self.c if self.loss == 'ctc' else self.y
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
     self.errors = self.output.errors(error_targets)
-    self.cost, self.known_grads = self.output.cost(targets)
+    cost = self.output.cost(targets)
+    self.cost, self.known_grads = cost[:2]
+    self.results = [self.cost]
+    if len(cost) > 2:
+      self.ctc_priors = cost[2]
+      self.results.append(self.ctc_priors)
     self.objective = self.cost + self.L1 + self.L2 #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()

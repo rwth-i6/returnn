@@ -197,7 +197,7 @@ class Device():
       if self.updater.updateOnDevice:
         self.updater.initVars(self.trainnet, self.gradients)
         self.train_and_updater = theano.function(inputs=[],
-                                                 outputs=[self.trainnet.cost],
+                                                 outputs=self.trainnet.results,
                                                  givens=train_givens,
                                                  updates=self.updater.getUpdateList(),
                                                  no_default_updates=False,
@@ -205,7 +205,7 @@ class Device():
 
       else:
         self.trainer = theano.function(inputs = [],
-                                       outputs = [self.trainnet.cost] + gparams,
+                                       outputs = [self.trainnet.cost] + gparams, #TODO handle ctc_priors
                                        givens = train_givens,
                                        no_default_updates=False,
                                        name = "trainer")#,

@@ -21,7 +21,7 @@ class CTCOp(theano.Op):
         seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
         assert seq_lengths.ndim == 1  # vector of seqs lengths
         
-        return theano.Apply(self, [x, y, seq_lengths], [T.fvector(), T.ftensor3(), T.ftensor3()])
+        return theano.Apply(self, [x, y, seq_lengths], [T.fvector(), T.ftensor3(), T.fmatrix()])
         # first output: CTC error per sequence
         # second output: Derivative w.r.t. Softmax net input
         
@@ -52,7 +52,7 @@ class CTCOp(theano.Op):
             %(err_sigs)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(x)s), PyArray_DIMS(%(x)s), PyArray_DescrFromType(NPY_FLOAT32), 0);
             if (!%(err_sigs)s)
                 %(fail)s;
-            %(priors)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(x)s), PyArray_DIMS(%(x)s), PyArray_DescrFromType(NPY_FLOAT32), 0);
+            %(priors)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(x)s) - 1, PyArray_DIMS(%(x)s) + 1, PyArray_DescrFromType(NPY_FLOAT32), 0);
             if (!%(priors)s)
                 %(fail)s;
             {
@@ -75,7 +75,7 @@ class CTCOp(theano.Op):
                 {
                     CTC ctc;
                     SArrayF errSigsSWr(errSigsWr, 1, i);
-                    SArrayF priorsSWr(priorsWr, 1, i);
+                    SArrayF priorsSWr(priorsWr, 0, i);
                     ctc.forwardBackward(CSArrayF(xWr, 1, i), CSArrayI(yWr, 0, i), seqLensWr(i), errsWr(i), errSigsSWr, priorsSWr);
                 }
             }            
@@ -83,4 +83,4 @@ class CTCOp(theano.Op):
     
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
-        return (1.95,)
+        return (1.97,)
