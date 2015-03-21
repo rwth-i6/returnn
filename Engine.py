@@ -32,6 +32,7 @@ class Engine:
     self.training_finished = False
     self.lock = threading.RLock()
     self.cond = threading.Condition(lock=self.lock)
+    self.pretrain = ""
 
   def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
     """
