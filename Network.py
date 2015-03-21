@@ -567,7 +567,7 @@ class OptimizedLstmLayer(RecurrentLayer):
 
 class NormalizedLstmLayer(RecurrentLayer):
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(LstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
+    super(NormalizedLstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
     if not isinstance(activation, (list, tuple)):
       activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
@@ -1322,7 +1322,7 @@ class LayerNetwork(object):
             network.add_layer(layer, LstmLayer(**params), act)
           elif cl == 'lstm_opt':
             network.add_layer(layer, OptimizedLstmLayer(**params), act)
-          elif cl == 'norm_lstm':
+          elif cl == 'lstm_norm':
             network.add_layer(layer, NormalizedLstmLayer(**params), act)
           elif cl == 'maxlstm':
             network.add_layer(layer, MaxLstmLayer(**params), act)
@@ -1379,7 +1379,7 @@ class LayerNetwork(object):
             network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
           elif cl == 'lstm_opt':
             network.add_layer(layer, OptimizedLstmLayer(**params), act)
-          elif cl == 'norm_lstm':
+          elif cl == 'lstm_norm':
             network.add_layer(layer, NormalizedLstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
           elif cl == 'maxlstm':
             network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
@@ -1518,7 +1518,7 @@ class LayerNetwork(object):
           self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
         elif info[0] == 'lstm_opt':
           self.add_layer(name, OptimizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-        elif info[0] == 'norm_lstm':
+        elif info[0] == 'lstm_norm':
           self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
         elif info[0] == 'gatelstm':
           self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
@@ -1554,7 +1554,7 @@ class LayerNetwork(object):
             self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
           elif info[0] == 'lstm_opt':
             self.add_layer(name, OptimizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-          elif info[0] == 'norm_lstm':
+          elif info[0] == 'lstm_norm':
             self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
           elif info[0] == 'gatelstm':
             self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
