@@ -202,6 +202,7 @@ class Engine:
     self.pretrain = pretrainFromConfig(config)
     self.pad_batches = config.bool("pad", False)
     self.init_network_from_config(config)
+    self.ctc_prior_file = config.value('ctc_prior_file', None)
 
   def init_network_from_config(self, config):
     last_epoch, _, last_model_epoch_filename = self.get_last_epoch_batch_model(config)
@@ -395,6 +396,8 @@ class Engine:
         eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
       print >> log.v1, self.get_epoch_str(), "elapsed:", trainer.elapsed, "score:", trainer.score
       print >> log.v1, "\n".join(eval_dump_str)
+      if self.ctc_prior_file is not None:
+        trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
   def save_model(self, filename, epoch):
     """

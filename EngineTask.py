@@ -338,6 +338,13 @@ class TrainTaskThread(TaskThread):
     kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
 
+  def save_ctc_priors(self, filename, epoch_str):
+    assert self.ctc_priors is not None
+    with open(filename, 'a') as f:
+      print >> f, epoch_str
+      numpy.savetxt(f, self.ctc_priors, newline=" ")
+      print >> f
+
   def evaluate(self, batch, results, num_frames):
     """
     :param int batch: starting batch idx
