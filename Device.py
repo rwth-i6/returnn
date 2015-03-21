@@ -200,14 +200,14 @@ class Device():
                                                  outputs=[self.trainnet.cost],
                                                  givens=train_givens,
                                                  updates=self.updater.getUpdateList(),
-                                                 no_default_updates=True,
+                                                 no_default_updates=False,
                                                  name="train_and_updater")
 
       else:
         self.trainer = theano.function(inputs = [],
                                        outputs = [self.trainnet.cost] + gparams,
                                        givens = train_givens,
-                                       no_default_updates = True,
+                                       no_default_updates=False,
                                        name = "trainer")#,
                                        #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
 
