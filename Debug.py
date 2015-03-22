@@ -19,10 +19,13 @@ def initBetterExchook():
         # This usually means an exit. (We ignore non-daemon threads and procs here.)
         # Print the stack of all other threads.
         if hasattr(sys, "_current_frames"):
+          print ""
+          threads = {t.ident: t for t in threading.enumerate()}
           for tid, stack in sys._current_frames().items():
             if tid != main_thread_id:
-              print "Thread %i:" % tid
+              print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
               better_exchook.print_traceback(stack)
+              print ""
 
   sys.excepthook = excepthook
 

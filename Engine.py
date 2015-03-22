@@ -381,7 +381,7 @@ class Engine:
       sys.exit(1)
 
     assert not (numpy.isinf(trainer.score) or numpy.isnan(trainer.score)), \
-      "Model is broken, got inf or nan: %s" % trainer.score
+      "Model is broken, got inf or nan final score: %s" % trainer.score
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
