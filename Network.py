@@ -605,16 +605,36 @@ class NormalizedLstmLayer(RecurrentLayer):
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
 
-    z = self.b
-    #TODO normalization
-    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
-      if self.attrs['mask'] == "unity":
-        z += T.dot(x_t.output, W)
-      else:
-        z += T.dot(self.mass * m * x_t.output, W)
+    #for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+    #  if self.attrs['mask'] == "unity":
+    #    z += T.dot(x_t.output, W)
+    #  else:
+    #    z += T.dot(self.mass * m * x_t.output, W)
+    assert len(self.sources) == 1
+    assert self.attrs['mask'] == "unity"
 
-    def step(z, i_t, s_p, h_p):
-      z += T.dot(h_p, self.W_re)
+    n_cells = n_out
+    gamma_val = theano.shared(value=numpy.ones((4 * n_cells,), dtype=theano.config.floatX), borrow=True, name='gamma_%s' % self.name)
+    self.gamma = self.add_param(gamma_val, 'gamma_%s' % self.name)
+    delta_val = theano.shared(value=numpy.ones((4 * n_cells,), dtype=theano.config.floatX), borrow=True, name='delta_%s' % self.name)
+    self.delta = self.add_param(delta_val, 'delta_%s' % self.name)
+    x = self.sources[0].output
+    W = self.W_in[0]
+    zx = T.dot(x, W)
+    epsilon = 1e-5
+    mean = T.concatenate([T.mean(zx[:,:,0*n_cells:1*n_cells], axis=[0,1]), T.mean(zx[:,:,1*n_cells:2*n_cells], axis=[0,1]), T.mean(zx[:,:,2*n_cells:3*n_cells], axis=[0,1]), T.mean(zx[:,:,3*n_cells:4*n_cells], axis=[0,1])], axis=0)
+    std = T.sqrt(T.concatenate([T.var(zx[:,:,0*n_cells:1*n_cells], axis=[0,1]), T.var(zx[:,:,1*n_cells:2*n_cells], axis=[0,1]), T.var(zx[:,:,2*n_cells:3*n_cells], axis=[0,1]), T.var(zx[:,:,3*n_cells:4*n_cells], axis=[0,1])], axis=0) + epsilon)
+    zx_norm = (zx - mean) / std
+    zxs = self.gamma * zx_norm
+
+    def step(zx_t, i_t, s_p, h_p):
+      zv_t = T.dot(h_p, self.W_re)
+      mean = T.concatenate([T.mean(zv_t[:,0*n_cells:1*n_cells], axis=0), T.mean(zv_t[:,1*n_cells:2*n_cells], axis=0), T.mean(zv_t[:,2*n_cells:3*n_cells], axis=0), T.mean(zv_t[:,3*n_cells:4*n_cells], axis=0)], axis=0)
+      std = T.sqrt(T.concatenate([T.var(zv_t[:,0*n_cells:1*n_cells], axis=0), T.var(zv_t[:,1*n_cells:2*n_cells], axis=0), T.var(zv_t[:,2*n_cells:3*n_cells], axis=0), T.var(zv_t[:,3*n_cells:4*n_cells], axis=0)], axis=0) + epsilon)
+      zv_t_norm = (zv_t - mean) / std
+      zvs_t = self.delta * zv_t_norm
+      z = zx_t + zvs_t + self.b
+
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       if sharpgates != 'none':
@@ -635,7 +655,7 @@ class NormalizedLstmLayer(RecurrentLayer):
                                   name = "scan_%s"%self.name,
                                   truncate_gradient = self.attrs['truncation'],
                                   go_backwards = self.attrs['reverse'],
-                                  sequences = [ z, self.index ],
+                                  sequences = [ zxs, self.index ],
                                   outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                                                    T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re), ])
 
