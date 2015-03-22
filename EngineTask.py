@@ -353,6 +353,8 @@ class TrainTaskThread(TaskThread):
     """
     assert results
     score = sum([res[0] for res in results])
+    assert not (numpy.isinf(score) or numpy.isnan(score)), \
+      "Model is broken, got inf or nan: %s" % score
     param_start = 1
     if self.do_ctc_priors:
       for res in results:
