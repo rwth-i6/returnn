@@ -345,10 +345,11 @@ def prepareForwarding(epoch):
   assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
                                                    "You have: %s" % config.list('extract')
 
-  lastEpoch, _, _ = Engine.get_last_epoch_batch_model(config)
+  lastEpoch, _, _ = engine.get_last_epoch_batch_model(config)
   assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
 
-  # Copy over net params.
+  # Load network and copy over net params.
+  engine.init_network_from_config(config)
   engine.devices[0].prepare(engine.network)
 
 
