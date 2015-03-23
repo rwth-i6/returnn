@@ -34,47 +34,8 @@ class Engine:
     self.cond = threading.Condition(lock=self.lock)
     self.pretrain = None; " :type: Pretrain.Pretrain "
 
-  def set_batch_size(self, data, batch_size, batch_step, max_seqs = -1):
-    """
-    :type data: Dataset.Dataset
-    :type batch_size: int
-    :type batch_step: int
-    :type max_seqs: int
-    :rtype: list[EngineBatch.Batch]
-    """
-    batches = []
-    batch = Batch([0,0])
-    if max_seqs == -1: max_seqs = data.num_seqs
-    if batch_step == -1: batch_step = batch_size
-    s = 0
-    while s < data.num_seqs:
-      length = data.seq_lengths[data.seq_index[s]]
-      if self.network.recurrent:
-        if length > batch_size:
-          print >> log.v4, "warning: sequence length (" + str(length) + ") larger than limit (" + str(batch_size) + ")"
-        dt, ds = batch.try_sequence(length)
-        if ds == 1:
-          batch.add_sequence(length)
-        else:
-          if dt * ds > batch_size or ds > max_seqs:
-            batches.append(batch)
-            s = s - ds + min(batch_step, ds)
-            batch = Batch([s, 0])
-            length = data.seq_lengths[data.seq_index[s]]
-          batch.add_sequence(length)
-      else:
-        while length > 0:
-          num_frames = min(length, batch_size - batch.shape[0])
-          if num_frames == 0 or batch.nseqs > max_seqs:
-            batches.append(batch)
-            batch = Batch([s, data.seq_lengths[data.seq_index[s]] - length])
-            num_frames = min(length, batch_size)
-          batch.add_frames(num_frames)
-          length -= min(num_frames, batch_step)
-        if s != data.num_seqs - 1: batch.nseqs += 1
-      s += 1
-    batches.append(batch)
-    return batches
+  def set_batch_size(self, data, batch_size, batch_step, max_seqs=-1):
+    return data.generate_batches(self.network.recurrent, batch_size, batch_step, max_seqs)
 
   @classmethod
   def config_get_final_epoch(cls, config):

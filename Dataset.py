@@ -15,6 +15,7 @@ import theano
 import theano.tensor as T
 import gc
 from random import Random
+from EngineBatch import Batch
 
 
 class Dataset(object):
@@ -519,3 +520,46 @@ class Dataset(object):
       for t in self.targets[self.seq_start[i] : self.seq_start[i] + self.seq_lengths[self.seq_index[i]]]:
         priori[t] += 1
     return numpy.array(priori / self.num_timesteps, dtype = theano.config.floatX)
+
+  def generate_batches(self, recurrent_net, batch_size, batch_step, max_seqs=-1):
+    """
+    :type recurrent_net: bool
+    :type batch_size: int
+    :type batch_step: int
+    :type max_seqs: int
+    :rtype: list[EngineBatch.Batch]
+    """
+    batches = []
+    batch = Batch([0,0])
+    if max_seqs == -1: max_seqs = self.num_seqs
+    if batch_step == -1: batch_step = batch_size
+    s = 0
+    while s < self.num_seqs:
+      length = self.seq_lengths[self.seq_index[s]]
+      if recurrent_net:
+        if length > batch_size:
+          print >> log.v4, "warning: sequence length (" + str(length) + ") larger than limit (" + str(batch_size) + ")"
+        dt, ds = batch.try_sequence(length)
+        if ds == 1:
+          batch.add_sequence(length)
+        else:
+          if dt * ds > batch_size or ds > max_seqs:
+            batches.append(batch)
+            s = s - ds + min(batch_step, ds)
+            batch = Batch([s, 0])
+            length = self.seq_lengths[self.seq_index[s]]
+          batch.add_sequence(length)
+      else:
+        while length > 0:
+          num_frames = min(length, batch_size - batch.shape[0])
+          if num_frames == 0 or batch.nseqs > max_seqs:
+            batches.append(batch)
+            batch = Batch([s, self.seq_lengths[self.seq_index[s]] - length])
+            num_frames = min(length, batch_size)
+          batch.add_frames(num_frames)
+          length -= min(num_frames, batch_step)
+        if s != self.num_seqs - 1: batch.nseqs += 1
+      s += 1
+    batches.append(batch)
+    return batches
+
