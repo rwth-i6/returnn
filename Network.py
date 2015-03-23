@@ -55,7 +55,9 @@ class Container(object):
     assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
       assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape for parameter " + p + " of layer " + self.name + " (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
-      self.params[p].set_value(grp[p][...])
+      array = grp[p][...]
+      assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
+      self.params[p].set_value(array)
     for p in self.attrs.keys():
       self.attrs[p] = grp.attrs.get(p, None)
 
