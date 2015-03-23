@@ -12,6 +12,7 @@ class Updater:
     import rnn
     kwargs = {
       "updateOnDevice": rnn.isUpdateOnDevice(config),
+      "gradient_clip": config.float('gradient_clip', -1),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
@@ -19,16 +20,18 @@ class Updater:
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
-  def __init__(self, momentum, adagrad, adadelta, adadelta_decay, adadelta_offset, updateOnDevice):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, updateOnDevice):
     """
     :type momentum: float
+    :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
     :type updateOnDevice: bool
     """
     self.momentum = momentum
+    self.gradient_clip = gradient_clip
     self.adagrad = adagrad
-    self.adadelta = adadelta #TODO use string for training method instead of flags
+    self.adadelta = adadelta
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.updateOnDevice = updateOnDevice
@@ -37,6 +40,12 @@ class Updater:
     if self.adadelta:
       self.momentum = 0.0
       print >> log.v3, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
+    if self.adagrad:
+      print >> log.v3, "using adagrad"
+    if self.momentum:
+      print >> log.v3, "using momentum %f" % self.momentum
+    if self.gradient_clip > 0:
+      print >> log.v3, "using gradient clipping %f" % self.gradient_clip
 
   def initVars(self, network, net_param_deltas):
     """
@@ -73,6 +82,7 @@ class Updater:
                      name="sqrsum_%s " % p)
                      for p in self.network.train_params}
     if self.adadelta:
+      # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
                   for p in self.network.train_params} #E[g^2]
       self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
@@ -95,17 +105,21 @@ class Updater:
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
     for param in self.network.train_params:
-      upd = - self.learning_rate_var * self.net_train_param_deltas[param]
+      deltas = self.net_train_param_deltas[param]  # usually the gradients
+      if self.gradient_clip > 0:
+        deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
+      upd = - self.learning_rate_var * deltas
       if self.momentum > 0:
         upd += self.momentum * self.deltas[param]
         updates.append((self.deltas[param], upd))
       if self.adagrad:
-        updates.append((self.sqrsum[param], self.sqrsum[param] + self.net_train_param_deltas[param] ** 2))
-        upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + self.net_train_param_deltas[param] ** 2) ** 0.5)
+        updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
+        upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
       if self.adadelta:
+        # http://arxiv.org/pdf/1212.5701v1.pdf
         decay = self.adadelta_decay
         offset = self.adadelta_offset
-        g = self.net_train_param_deltas[param]
+        g = deltas
         g2 = g ** 2
         eg2_new = decay * self.eg2[param] + (1 - decay) * g2
         dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
@@ -114,7 +128,6 @@ class Updater:
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd = dx_new
-        #updates.append((param, param + dx_new))
       updates.append((param, param + upd))
 
     return updates
