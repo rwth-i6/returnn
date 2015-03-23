@@ -68,7 +68,8 @@ def initIPythonKernel():
   # https://github.com/ipython/ipython/issues/680
   assert isinstance(threading.currentThread(), threading._MainThread)
   try:
-    connection_file = "kernel-%s.json" % os.getpid()
+    ip = socket.gethostbyname(socket.gethostname())
+    connection_file = "ipython-kernel-%s-%s.json" % (ip, os.getpid())
     def cleanup_connection_file():
       try:
         os.remove(connection_file)
@@ -81,7 +82,6 @@ def initIPythonKernel():
     session = Session(username=u'kernel')
 
     context = zmq.Context.instance()
-    ip = socket.gethostbyname(socket.gethostname())
     transport = "tcp"
     addr = "%s://%s" % (transport, ip)
     shell_socket = context.socket(zmq.ROUTER)
