@@ -201,8 +201,9 @@ class Engine:
     self.updater = Updater.initFromConfig(config)
     self.pretrain = pretrainFromConfig(config)
     self.pad_batches = config.bool("pad", False)
-    self.init_network_from_config(config)
     self.ctc_prior_file = config.value('ctc_prior_file', None)
+    # And also initialize the network. That depends on some vars here such as pretrain.
+    self.init_network_from_config(config)
 
   def init_network_from_config(self, config):
     last_epoch, _, last_model_epoch_filename = self.get_last_epoch_batch_model(config)
