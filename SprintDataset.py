@@ -125,7 +125,7 @@ class SprintDataset(Dataset):
       self.requested_load_seq_end = end
       self.cond.notify_all()
       if self.seq_added_last < end - 1:
-        print >> log.v5, "SprintDataset have_seqs: wait for addNewData..."
+        print >> log.v5, "SprintDataset have_seqs (%i,%i): wait for addNewData..." % (start, end)
         assert self.add_data_thread_id != thread.get_ident()
         while self.seq_added_last < end - 1:
           assert not self.finalized
@@ -205,17 +205,17 @@ class SprintDataset(Dataset):
 
       # We expect a monotonic increasing sorted seq order.
       assert self.seq_added_last < idxSorted, "Order messed up, last added idx: %i" % self.seq_added_last
-      if self.seq_added_last < idxSorted - 1:
-        seqLeftOut = range(self.seq_added_last + 1, idxSorted)
-        print >> log.v5, "SprintDataset addNewData: left out seqs: %s" % seqLeftOut
-        self.seq_added_excluded.update(seqLeftOut)
-      self.seq_added_last = idxSorted
-      self.cond.notify_all()
 
       if idxSorted > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
         print >> log.v5, "SprintDataset addNewData: Cache filled, waiting to get loaded..."
         while idxSorted > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMin:
           self.cond.wait()
+
+      if self.seq_added_last < idxSorted - 1:
+        seqLeftOut = range(self.seq_added_last + 1, idxSorted)
+        print >> log.v5, "SprintDataset addNewData: left out seqs: %s" % seqLeftOut
+        self.seq_added_excluded.update(seqLeftOut)
+      self.seq_added_last = idxSorted
 
       self.insert_alloc_interval(idxSorted)
       self._set_alloc_intervals_data(idxSorted, data=features)
