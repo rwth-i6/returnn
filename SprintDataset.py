@@ -14,8 +14,8 @@ class SprintDataset(Dataset):
   #   seq_lengths
   #   alloc_intervals
 
-  SprintCachedSeqsMax = 100
-  SprintCachedSeqsMin = 50
+  SprintCachedSeqsMax = 10
+  SprintCachedSeqsMin = 5
 
   def __init__(self, window=1, *args, **kwargs):
     assert window == 1

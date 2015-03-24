@@ -63,8 +63,7 @@ class TaskThread(threading.Thread):
       batch_idx = start_batch
       for device in self.devices:
         batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        with self.data.lock:
-          success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
+        success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
         if success:
           devices.append(device)
         else:

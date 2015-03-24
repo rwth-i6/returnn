@@ -34,9 +34,10 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
         ids = dataset.seq_index[s]  # the real seq idx after sorting
         l = dataset.seq_lengths[ids]
-        o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
-        q = s - batch.start[0] + offset
-        device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
+        with dataset.lock:
+          o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+          q = s - batch.start[0] + offset
+          device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
         device.targets[:l, q] = dataset.targets[dataset.seq_start[s] + batch.start[1]:dataset.seq_start[s] + batch.start[1] + l]
         if pad_batches:
           #pad with equivalent to 0
