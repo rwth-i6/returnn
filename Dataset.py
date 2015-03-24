@@ -14,13 +14,14 @@ from Log import log
 import theano
 import theano.tensor as T
 import gc
+from threading import RLock
 from random import Random
 from EngineBatch import Batch
 
 
 class Dataset(object):
   @classmethod
-  def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching"):
+  def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching", shuffle_frames_of_nseqs=None):
     """
     :type config: Config.Config
     :type cache_size: int
@@ -31,7 +32,9 @@ class Dataset(object):
     window = config.int('window', 1)
     if chunking == "chunking": chunking = config.value("chunking", "0")
     if batching == "batching": batching = config.value("batching", 'default')
-    data = cls(window, cache_size, chunking, batching)
+    if shuffle_frames_of_nseqs is None:
+      shuffle_frames_of_nseqs = config.int('shuffle_frames_of_nseqs', 0)
+    data = cls(window, cache_size, chunking, batching, shuffle_frames_of_nseqs)
     extra = 0
     if files_config_key:
       if config.has(files_config_key):
@@ -42,7 +45,9 @@ class Dataset(object):
         return None, 0
     return data, extra
 
-  def __init__(self, window=1, cache_size=0, chunking="0", batching='default'):
+  def __init__(self, window=1, cache_size=0, chunking="0", batching='default',
+               shuffle_frames_of_nseqs=0):
+    self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.files = []; """ :type: list[str] """
     self.num_inputs = 0
     self.num_outputs = 0
@@ -57,7 +62,6 @@ class Dataset(object):
     self.cached_bytes = 0
     self.seq_start = [0]  # uses sorted seq idx, see set_batching()
     self.seq_shift = [0]
-    self.rnd = Random(0)  # Use fixed seed. Call rnd.seed() later for a different one. Make this deterministic!
     self.rnd_seed = 0  # See init_seq_order().
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
@@ -75,6 +79,7 @@ class Dataset(object):
     else:
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
+    self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
     self.num_running_chars = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
@@ -360,13 +365,19 @@ class Dataset(object):
     As a side effect, will modify / fill-up:
       self.alloc_intervals
       self.targets
+    This does some extra logic for the cache and calls self._load_seqs()
+    for the real loading.
 
     :param int start: start sorted seq idx
     :param int end: end sorted seq idx
-    :param bool free: free
-    :param bool fill: fill
+    :param bool free: free cache
+    :param bool fill: after freeing, fill up
     """
     if self.is_cached(start, end): return
+    assert start >= 0
+    assert start <= end
+    assert start < self.num_seqs
+    assert end <= self.num_seqs
     if self.cache_size > 0 and free:
       weight = self.seq_start[end] - self.seq_start[start]
       if self.temp_cache_size < weight:
@@ -376,6 +387,7 @@ class Dataset(object):
       if fill:
         self.temp_cache_size += self.delete(self.num_timesteps)
         gc.collect()
+        # Maybe load more than requested if the cache allows it.
         while end < self.num_seqs:
           ids = self.seq_index[end]
           weight = self.seq_lengths[ids]
@@ -395,6 +407,65 @@ class Dataset(object):
           if end != self.num_cached:
             self.load_seqs(self.num_cached, end, free=False)
         return
+
+    if self.shuffle_frames_of_nseqs > 0:
+      # We always load N seqs at once and shuffle all their frames.
+      start, end = self._load_seqs_superset(start, end)
+      self._load_seqs(start, end)
+      while start < end:
+        self.shuffle_seqs(start, min(self.num_seqs, start + self.shuffle_frames_of_nseqs))
+        start += self.shuffle_frames_of_nseqs
+    else:
+      self._load_seqs(start, end)
+
+  def _load_seqs_superset(self, start, end):
+    """
+    :type start: int
+    :type end: int
+    :returns the superset (start,end) of seqs to be loaded.
+    For shuffle_frames_of_nseqs > 0, we always load N seqs at once
+    and shuffle all their frames,
+    thus start/end will be aligned to self.shuffle_frames_of_nseqs,
+    except of the very end.
+    """
+    assert start <= end
+    assert start < self.num_seqs
+    if self.shuffle_frames_of_nseqs > 0:
+      m = self.shuffle_frames_of_nseqs
+      start -= start % m
+      end = min(self.num_seqs, end + (m - (end % m)) % m)
+    return start, end
+
+  def shuffle_seqs(self, start, end):
+    assert start < end
+    assert self.is_cached(start, end)
+    alloc_idx = self.alloc_interval_index(start)
+    alloc_start, alloc_end, alloc_data = self.alloc_intervals[alloc_idx]
+    assert start >= alloc_start
+    assert end <= alloc_end
+    rnd = numpy.random.RandomState(start)  # Some deterministic way to shuffle!
+    num_frames = self.seq_start[end] - self.seq_start[start]
+    assert num_frames > 0
+    perm = rnd.permutation(num_frames)
+    alloc_offset = self.seq_start[start] - self.seq_start[alloc_start]
+    assert alloc_offset + num_frames <= alloc_data.shape[0]
+    # Permute alloc_data.
+    data = alloc_data[alloc_offset:alloc_offset + num_frames]
+    alloc_data[alloc_offset:alloc_offset + num_frames] = data[perm]
+    # Permute targets.
+    targets = self.targets[self.seq_start[start]:self.seq_start[start] + num_frames]
+    self.targets[self.seq_start[start]:self.seq_start[start] + num_frames] = targets[perm]
+
+  def _load_seqs(self, start, end):
+    """
+    Load data sequences.
+    As a side effect, will modify / fill-up:
+      self.alloc_intervals
+      self.targets
+
+    :param int start: start sorted seq idx
+    :param int end: end sorted seq idx
+    """
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
     file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[(int,int)] """
@@ -452,9 +523,9 @@ class Dataset(object):
       zipped.sort(key = lambda x: x[1])  # sort by length
       self.seq_index = [y[0] for y in zipped]
     elif self.batching == 'random':
-      # Keep this deterministic!
-      self.rnd.seed(self.rnd_seed)
-      self.rnd.shuffle(self.seq_index)
+      # Keep this deterministic! Use fixed seed.
+      rnd = Random(self.rnd_seed)
+      rnd.shuffle(self.seq_index)
     else:
       assert False, "invalid batching specified: " + self.batching
     self.init_seqs()

@@ -246,6 +246,9 @@ class Engine:
       self.network.output.priori.set_value(prior)
       self.network.output.initialize()
 
+    if self.network.recurrent:
+      assert not self.train_data.shuffle_frames_of_nseqs, "Frames must not be shuffled in recurrent net."
+
     with self.lock:
       self.is_training = True
       self.epoch = 0  # Not yet started. Will be >=1 later.

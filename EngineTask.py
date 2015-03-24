@@ -63,7 +63,8 @@ class TaskThread(threading.Thread):
       batch_idx = start_batch
       for device in self.devices:
         batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
+        with self.data.lock:
+          success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
         if success:
           devices.append(device)
         else:
@@ -126,6 +127,7 @@ class TaskThread(threading.Thread):
         self.batch_idx = batch_idx
         self.score = None
         self.num_frames = 0
+        self.start()
 
       def finish(self):
         """
@@ -264,7 +266,6 @@ class TaskThread(threading.Thread):
         self.batch_idx = batch_idx
         if batch_idx < len(self.batches):
           deviceRun = self.DeviceBatchRun(self, batch_idx)
-          deviceRun.start()
           batch_idx += deviceRun.num_alloc_batches
         else:
           deviceRun = None

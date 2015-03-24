@@ -14,13 +14,12 @@ class SprintDataset(Dataset):
   #   seq_lengths
   #   alloc_intervals
 
-  SprintCachedSeqsMax = 10
-  SprintCachedSeqsMin = 5
+  SprintCachedSeqsMax = 100
+  SprintCachedSeqsMin = 50
 
-  def __init__(self, window=1, cache_size=0, chunking="0", batching='default'):
+  def __init__(self, window=1, *args, **kwargs):
     assert window == 1
-    super(SprintDataset, self).__init__(window, cache_size, chunking, batching)
-    self.lock = RLock()
+    super(SprintDataset, self).__init__(window, *args, **kwargs)
     self.cond = Condition(lock=self.lock)
     self.finalized = False
     self.main_thread_id = thread.get_ident()
@@ -84,23 +83,30 @@ class SprintDataset(Dataset):
       return
     with self.lock:
       assert self.alloc_intervals  # Must be initialized.
-      # We expect that start/end increase monotonic on each call.
-      assert start >= self.expected_load_seq_start
-      if start > self.expected_load_seq_start:
-        # Cleanup old data.
-        self.remove_alloc_interval(0, start)
-        self.expected_load_seq_start = start
-      assert end >= self.requested_load_seq_end
-      self.requested_load_seq_end = end
-      self.cond.notify_all()
-      if not self._haveSeqsAdded(start, end):
-        print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
-        assert self.add_data_thread_id != thread.get_ident()
-        while not self._haveSeqsAdded(start, end):
-          assert not self.finalized
-          assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
-          assert end - 1 > self.seq_added_last
-          self.cond.wait()
+      if self._haveSeqsAdded(start, end): return
+      # Call the super method. Don't let it do any freeing. We cover that logic here.
+      super(SprintDataset, self).load_seqs(start, end, free=False, fill=fill)
+
+  def _load_seqs(self, start, end):
+    # We expect that start/end increase monotonic on each call
+    # for not-yet-loaded data.
+    # This will already be called with _load_seqs_superset indices.
+    assert start >= self.expected_load_seq_start
+    if start > self.expected_load_seq_start:
+      # Cleanup old data.
+      self.remove_alloc_interval(0, start)
+      self.expected_load_seq_start = start
+    assert end >= self.requested_load_seq_end
+    self.requested_load_seq_end = end
+    self.cond.notify_all()
+    if not self._haveSeqsAdded(start, end):
+      print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
+      assert self.add_data_thread_id != thread.get_ident()
+      while not self._haveSeqsAdded(start, end):
+        assert not self.finalized
+        assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
+        assert end - 1 > self.seq_added_last
+        self.cond.wait()
 
   def have_seqs(self, start, end):
     """
@@ -110,6 +116,7 @@ class SprintDataset(Dataset):
     A call to self.load_seqs() must succeed if we return True.
     """
     with self.lock:
+      start, end = self._load_seqs_superset(start, end)
       if not super(SprintDataset, self).have_seqs(start, end):
         return False
       # Otherwise we cannot tell. Sprint could skip segments for whatever reason,
@@ -118,7 +125,7 @@ class SprintDataset(Dataset):
       self.requested_load_seq_end = end
       self.cond.notify_all()
       if self.seq_added_last < end - 1:
-        print "SprintDataset have_seqs: wait for addNewData..."
+        print >> log.v5, "SprintDataset have_seqs: wait for addNewData..."
         assert self.add_data_thread_id != thread.get_ident()
         while self.seq_added_last < end - 1:
           assert not self.finalized
