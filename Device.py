@@ -367,7 +367,7 @@ class Device():
     self.initialize(config)
     self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params))
-    print >> log.v2, "Device proc %s is ready for commands." % device
+    print >> log.v2, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
     while True:
       cmd = input_queue.recv()
       if cmd == "stop":  # via self.terminate()

@@ -7,13 +7,13 @@ def initBetterExchook():
   import thread
   import threading
   import better_exchook
-  main_thread_id = thread.get_ident()
 
   def excepthook(exc_type, exc_obj, exc_tb):
-    print "Unhandled exception %s in %s." % (exc_type, threading.currentThread())
+    print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
     better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
 
-    if main_thread_id == thread.get_ident():
+    if isinstance(threading.currentThread(), threading._MainThread):
+      main_thread_id = thread.get_ident()
       if not isinstance(exc_type, Exception):
         # We are the main thread and we got an exit-exception. This is likely fatal.
         # This usually means an exit. (We ignore non-daemon threads and procs here.)
@@ -22,10 +22,14 @@ def initBetterExchook():
           print ""
           threads = {t.ident: t for t in threading.enumerate()}
           for tid, stack in sys._current_frames().items():
-            if tid != main_thread_id:
-              print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
-              better_exchook.print_traceback(stack)
-              print ""
+            if tid == main_thread_id: continue
+            # This is a bug in earlier Python versions.
+            # http://bugs.python.org/issue17094
+            # Note that this leaves out all threads not created via the threading module.
+            if tid not in threads: continue
+            print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
+            better_exchook.print_traceback(stack)
+            print ""
 
   sys.excepthook = excepthook
 
