@@ -186,6 +186,26 @@ def obj_diff_str(self, other):
     return "No diff."
 
 
+def find_ranges(l):
+  """
+  :type l: list[int]
+  :returns list of ranges (start,end) where end is exclusive
+  such that the union of range(start,end) matches l.
+  :rtype; list[(int,int)]
+  We expect that the incoming list is sorted and strongly monotonic increasing.
+  """
+  if not l:
+    return []
+  ranges = [(l[0], l[0])]
+  for k in l:
+    assert k >= ranges[-1][1]  # strongly monotonic increasing
+    if k == ranges[-1][1]:
+      ranges[-1] = (ranges[-1][0], k + 1)
+    else:
+      ranges += [(k, k + 1)]
+  return ranges
+
+
 def initThreadJoinHack():
   import threading, thread
   mainThread = threading.currentThread()

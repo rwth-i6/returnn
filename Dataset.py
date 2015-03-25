@@ -250,9 +250,9 @@ class Dataset(object):
     selection = []; """ :type: list[int] """
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
     while i < len(self.alloc_intervals) - invert:
-      ni = self.alloc_intervals[i + invert][1 - invert]
+      ni = self.alloc_intervals[i + invert][1 - invert]  # insert mode: start idx of next alloc
       if ni >= self.num_cached:
-        ci = max(self.num_cached, self.alloc_intervals[i][invert])
+        ci = max(self.num_cached, self.alloc_intervals[i][invert])  # insert mode: end idx of cur alloc
         flag = ( (ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end) )
         if not flag[0] and not flag[1]:
           if not flag[2]:

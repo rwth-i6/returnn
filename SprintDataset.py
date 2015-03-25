@@ -6,6 +6,7 @@ from Dataset import Dataset
 from Log import log
 import sys
 import gc
+from Util import find_ranges
 
 
 class SprintDataset(Dataset):
@@ -27,6 +28,7 @@ class SprintDataset(Dataset):
     self.finalized = False
     self.main_thread_id = thread.get_ident()
     self.add_data_thread_id = -1
+    self.add_data_queue = []; " :type: list[(int,numpy.ndarray,numpy.ndarray)] "  # (seqSortedIdx, features, targets)
     self.epoch = 0
 
   def initFromSegmentOrder(self, segmentList, segmentsInfo):
@@ -102,14 +104,31 @@ class SprintDataset(Dataset):
     assert end >= self.requested_load_seq_end
     self.requested_load_seq_end = end
     self.cond.notify_all()
-    if not self._haveSeqsAdded(start, end):
-      print >> log.v5, "SprintDataset load_seqs: have not seqs. waiting for addNewData..."
+
+    if self.seq_added_last < end - 1:
+      # We should not get here if we have called have_seqs() before -- which is normally the case.
+      print >> log.v5, "SprintDataset load_seqs (%i,%i): have not seqs. wait for addNewData... (%s)" % \
+                       (start, end, self._add_data_thread_debug_info())
       assert self.add_data_thread_id != thread.get_ident()
-      while not self._haveSeqsAdded(start, end):
+      while self.seq_added_last < end - 1:
         assert not self.finalized
-        assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
-        assert end - 1 > self.seq_added_last
         self.cond.wait()
+      assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
+
+    # See addNewData(). Load the data from the queue.
+    ranges = find_ranges([idx for (idx, _, _) in self.add_data_queue])
+    for r in ranges:
+      self.insert_alloc_interval(*r)
+    for idxSorted, features, targets in self.add_data_queue:
+      seqStart = self.seq_start[idxSorted]
+      seqLen = features.shape[0]
+      self._set_alloc_intervals_data(idxSorted, data=features)
+      if targets is not None:
+        self.targets[seqStart:seqStart + seqLen] = targets
+    self.add_data_queue[:] = []
+
+    assert self._haveSeqsAdded(start, end)
+
     gc.collect()
 
   def have_seqs(self, start, end):
@@ -123,11 +142,13 @@ class SprintDataset(Dataset):
       start, end = self._load_seqs_superset(start, end)
       if not super(SprintDataset, self).have_seqs(start, end):
         return False
+
       # Otherwise we cannot tell. Sprint could skip segments for whatever reason,
       # e.g. the buffer in BufferFeatureExtractor is too small for a segment.
       assert end >= self.requested_load_seq_end
       self.requested_load_seq_end = end
       self.cond.notify_all()
+
       if self.seq_added_last < end - 1:
         print >> log.v5, "SprintDataset have_seqs (%i,%i): wait for addNewData... (%s)" % \
                          (start, end, self._add_data_thread_debug_info())
@@ -135,7 +156,9 @@ class SprintDataset(Dataset):
         while self.seq_added_last < end - 1:
           assert not self.finalized
           self.cond.wait()
-      return self._haveSeqsAdded(start, end)
+
+      # If there are no excluded seqs in this range, we have them.
+      return len(self.seq_added_excluded.intersection(range(start, end))) == 0
 
   def _haveSeqsAdded(self, start, end=None):
     if end is None: end = start + 1
@@ -163,8 +186,9 @@ class SprintDataset(Dataset):
         super(SprintDataset, self).init_seq_order(epoch=epoch)
         for i, j in enumerate(self.seq_index):
           self.seq_index_reversed[j] = i
-        self.seq_added_excluded = set()  # Via self.addNewData().
+        self.seq_added_excluded = set(); " :type: set[int] "  # Via self.addNewData().
         self.seq_added_last = -1
+        self.add_data_queue[:] = []
 
   def init_seqs(self):
     super(SprintDataset, self).init_seqs()
@@ -213,7 +237,6 @@ class SprintDataset(Dataset):
       assert idxReal < self.num_seqs
       idxSorted = self.seq_index_reversed[idxReal]
       assert not self._haveSeqsAdded(idxSorted)
-      seqStart = self.seq_start[idxSorted]
       seqLen = self.seq_lengths[idxReal]
       assert (seqLen, self.num_inputs) == features.shape
       assert seqLen == T
@@ -235,11 +258,10 @@ class SprintDataset(Dataset):
         self.seq_added_excluded.update(seqLeftOut)
       self.seq_added_last = idxSorted
 
-      self.insert_alloc_interval(idxSorted)
-      self._set_alloc_intervals_data(idxSorted, data=features)
-
-      if targets is not None:
-        self.targets[seqStart : seqStart + seqLen] = targets
+      # Don't directly modify the underlying alloc data here but just put it into a queue.
+      # It will get handled by _load_seqs().
+      # This is faster because it can join multiple allocates.
+      self.add_data_queue += [(idxSorted, features, targets)]
 
       self.cond.notify_all()
 
