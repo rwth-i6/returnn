@@ -182,17 +182,17 @@ def initDevices():
   return devices
 
 
-def getCacheSizes():
+def getCacheByteSizes():
   """
   :rtype: (int,int,int)
-  :returns cache size for (train,dev,eval)
+  :returns cache size in bytes for (train,dev,eval)
   """
   cache_sizes_user = config.list('cache_size', ["0"])
-  sets = 1 + config.has('dev') + config.has('eval')
+  num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
     cache_sizes_user *= 3
-    cache_factor /= float(sets)
+    cache_factor /= float(num_datasets)
   assert len(cache_sizes_user) == 3, "invalid amount of cache sizes specified"
   cache_sizes = []
   for cache_size_user in cache_sizes_user:
@@ -213,17 +213,20 @@ def initData():
   """
   Initializes the globals train,dev,eval of type Dataset.
   """
-  cache_sizes = getCacheSizes()
+  cache_byte_sizes = getCacheByteSizes()
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
   global train, dev, eval
-  dev, extra_dev = Dataset.load_data(config, cache_sizes[1], 'dev', chunking=chunking, batching="sorted",
-                                     shuffle_frames_of_nseqs=0)
-  eval, extra_eval = Dataset.load_data(config, cache_sizes[2], 'eval', chunking=chunking, batching="sorted",
-                                       shuffle_frames_of_nseqs=0)
-  extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
-  train, extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
+  dev, extra_cache_bytes_dev = Dataset.load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
+                                                 batching="sorted", shuffle_frames_of_nseqs=0)
+  eval, extra_cache_bytes_eval = Dataset.load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
+                                                   batching="sorted", shuffle_frames_of_nseqs=0)
+  train_cache_bytes = cache_byte_sizes[0]
+  if train_cache_bytes >= 0:
+    # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
+    train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
+  train, extra_train = Dataset.load_data(config, train_cache_bytes, 'train')
 
 
 def printTaskProperties(devices):
@@ -266,11 +269,11 @@ def initEngine(devices):
 
 def init(configFilename, commandLineOptions):
   initBetterExchook()
-  initFaulthandler()
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
   print >> log.v3, "CRNN starting up"
+  initFaulthandler()
   initIPythonKernel()
   initConfigJson()
   maybeInitSprintCommunicator()

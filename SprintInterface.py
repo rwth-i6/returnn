@@ -358,7 +358,7 @@ def initDataset():
   if sprintDataset:
     return
   assert config
-  sprintDataset, _ = SprintDataset.load_data(config, rnn.getCacheSizes()[0])
+  sprintDataset, _ = SprintDataset.load_data(config, rnn.getCacheByteSizes()[0])
 
 
 def getFinalEpoch():

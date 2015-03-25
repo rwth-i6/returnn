@@ -21,32 +21,33 @@ from EngineBatch import Batch
 
 class Dataset(object):
   @classmethod
-  def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching",
-                shuffle_frames_of_nseqs=None):
+  def load_data(cls, config, cache_byte_size, files_config_key=None, chunking="chunking",
+                batching="batching", shuffle_frames_of_nseqs=None):
     """
     :type config: Config.Config
-    :type cache_size: int
+    :type cache_byte_size: int
     :type files_config_key: str
     :type chunking: str
     :type batching: str
+    :returns the cache byte size left over if we cache the whole dataset.
     """
     window = config.int('window', 1)
     if chunking == "chunking": chunking = config.value("chunking", "0")
     if batching == "batching": batching = config.value("batching", 'default')
     if shuffle_frames_of_nseqs is None:
       shuffle_frames_of_nseqs = config.int('shuffle_frames_of_nseqs', 0)
-    data = cls(window, cache_size, chunking, batching, shuffle_frames_of_nseqs)
-    extra = 0
+    data = cls(window, cache_byte_size, chunking, batching, shuffle_frames_of_nseqs)
+    extra_bytes = 0
     if files_config_key:
       if config.has(files_config_key):
         for f in config.list(files_config_key):
           data.add_file(f)
-        extra = data.initialize()
+        extra_bytes = data.initialize()
       else:
         return None, 0
-    return data, extra
+    return data, extra_bytes
 
-  def __init__(self, window=1, cache_size=0, chunking="0", batching='default',
+  def __init__(self, window=1, cache_byte_size=0, chunking="0", batching='default',
                shuffle_frames_of_nseqs=0):
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.files = []; """ :type: list[str] """
@@ -54,13 +55,14 @@ class Dataset(object):
     self.num_outputs = 0
     self.window = window
     self.batching = batching
-    temp_cache_amount = 0.5
-    self.temp_cache_size = 1
-    self.cache_size = int((1.0 - temp_cache_amount) * cache_size)
-    if self.cache_size < 0: self.cache_size = 1
-    else: self.temp_cache_size = cache_size - self.cache_size
-    self.num_cached = 0
-    self.cached_bytes = 0
+    self.cache_byte_size_total_limit = cache_byte_size
+    if cache_byte_size < 0:
+      self.cache_byte_size_limit_at_start = 1
+    else:
+      temp_cache_amount = 0.5
+      self.cache_byte_size_limit_at_start = int((1.0 - temp_cache_amount) * cache_byte_size)
+    self.num_seqs_cached_at_start = 0
+    self.cached_bytes_at_start = 0
     self.seq_start = [0]  # uses sorted seq idx, see set_batching()
     self.seq_shift = [0]
     self.rnd_seed = 0  # See init_seq_order().
@@ -68,6 +70,7 @@ class Dataset(object):
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.timestamps = []
     self.file_index = []; """ :type: list[int] """
+    self.seq_index = []; """ :type: list[int] """  # Via init_seq_order().
     self.seq_lengths = []; """ :type: list[int] """  # uses real seq idx
     self.labels = []; """ :type: list[str] """
     self.tags = []; """ :type: list[str] """
@@ -251,21 +254,20 @@ class Dataset(object):
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
     while i < len(self.alloc_intervals) - invert:
       ni = self.alloc_intervals[i + invert][1 - invert]  # insert mode: start idx of next alloc
-      if ni >= self.num_cached:
-        ci = max(self.num_cached, self.alloc_intervals[i][invert])  # insert mode: end idx of cur alloc
-        flag = ( (ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end) )
-        if not flag[0] and not flag[1]:
-          if not flag[2]:
-            selection.extend(range(ci, ni))
-            i += modify(i, (ci, ni))
-        elif flag[1]:
-          v = (start if flag[0] else ci, end)
-          selection.extend(range(v[0], v[1]))
-          i += modify(i, v)
-          break
-        elif flag[0]:
-          selection.extend(range(start, ni))
-          i += modify(i, (start, ni))
+      ci = self.alloc_intervals[i][invert]               # insert mode: end idx of cur alloc
+      flag = ((ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end))
+      if not flag[0] and not flag[1]:
+        if not flag[2]:
+          selection.extend(range(ci, ni))
+          i += modify(i, (ci, ni))
+      elif flag[1]:
+        v = (start if flag[0] else ci, end)
+        selection.extend(range(v[0], v[1]))
+        i += modify(i, v)
+        break
+      elif flag[0]:
+        selection.extend(range(start, ni))
+        i += modify(i, (start, ni))
       i += 1
     if self.alloc_intervals[0][0] != 0:
       self.alloc_intervals.insert(0, (0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
@@ -286,18 +288,24 @@ class Dataset(object):
     :returns whether we have the full range (start,end) of sorted seq idx
       cached in self.alloc_intervals (end is exclusive).
     """
+    if start == end: return True  # Empty.
+    assert start < end
     s = 0
     e = len(self.alloc_intervals)
+    # Binary search.
     while s < e:
       i = (s + e) / 2
-      if self.alloc_intervals[i][0] <= start < self.alloc_intervals[i][1]:
-        return self.alloc_intervals[i][0] < end <= self.alloc_intervals[i][1]
-      elif self.alloc_intervals[i][0] <= start:
+      alloc_start, alloc_end, _ = self.alloc_intervals[i]
+      if alloc_start <= start < alloc_end:
+        return alloc_start < end <= alloc_end
+      elif alloc_start <= start and start >= alloc_end:
         if s == i: return False
         s = i
-      else:
+      elif alloc_start > start:
         if e == i: return False
         e = i
+      else:
+        assert False
     return False
 
   def alloc_interval_index(self, ids):
@@ -308,16 +316,20 @@ class Dataset(object):
     """
     s = 0
     e = len(self.alloc_intervals)
+    # Binary search.
     while s < e:
       i = (s + e) / 2
-      if self.alloc_intervals[i][0] <= ids < self.alloc_intervals[i][1]:
+      alloc_start, alloc_end, _ = self.alloc_intervals[i]
+      if alloc_start <= ids < alloc_end:
         return i
-      elif self.alloc_intervals[i][0] <= ids:
+      elif alloc_start <= ids and ids >= alloc_end:
         if s == i: return -1
         s = i
-      else:
+      elif alloc_start > ids:
         if e == i: return -1
         e = i
+      else:
+        assert False
     return -1
 
   def delete(self, nframes):
@@ -328,17 +340,15 @@ class Dataset(object):
     :return: number of frames deleted
     :rtype: int
     """
-    start = self.num_seqs
+    assert nframes >= 0
     deleted = 0
-    end = 0
     i = 0
     while deleted < nframes and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
-      if ai[1] > self.num_cached and ai[0] < ai[1]:
-        s = max(ai[0], self.num_cached)
-        start = min(start, s)
-        end = max(end, ai[1])
-        deleted += sum([self.seq_lengths[self.seq_index[i]] for i in self.remove_alloc_interval(s, ai[1])])
+      if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
+        s = max(ai[0], self.num_seqs_cached_at_start)
+        deleted += sum([self.seq_lengths[self.seq_index[i]]
+                        for i in self.remove_alloc_interval(s, ai[1])])
       i += 1
     return deleted
 
@@ -371,42 +381,48 @@ class Dataset(object):
 
     :param int start: start sorted seq idx
     :param int end: end sorted seq idx
-    :param bool free: free cache
-    :param bool fill: after freeing, fill up
+    :param bool free: check and maybe free cache
+    :param bool fill: after freeing, fill up cache
     """
-    if self.is_cached(start, end): return
     assert start >= 0
     assert start <= end
     assert start < self.num_seqs
     assert end <= self.num_seqs
-    if self.cache_size > 0 and free:
-      weight = self.seq_start[end] - self.seq_start[start]
-      if self.temp_cache_size < weight:
-        self.temp_cache_size += self.delete(weight - self.temp_cache_size)
+    if self.is_cached(start, end): return
+
+    if self.cache_byte_size_total_limit > 0 and free:  # If the cache is enabled.
+      num_needed_cache_frames = self.seq_start[end] - self.seq_start[start]
+      if self.cache_num_frames_free < num_needed_cache_frames:
+        self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
         gc.collect()
-      self.temp_cache_size -= weight
+
+      self.cache_num_frames_free -= num_needed_cache_frames
+
       if fill:
-        self.temp_cache_size += self.delete(self.num_timesteps)
+        # First, delete everything.
+        self.cache_num_frames_free += self.delete(self.num_timesteps)
         gc.collect()
-        # Maybe load more than requested if the cache allows it.
+        # Load as much as we can so that we fill up the cache.
         while end < self.num_seqs:
           ids = self.seq_index[end]
-          weight = self.seq_lengths[ids]
-          if self.temp_cache_size - weight < 0:
+          num_needed_cache_frames = self.seq_lengths[ids]
+          if self.cache_num_frames_free - num_needed_cache_frames < 0:
             break
-          self.temp_cache_size -= weight
+          self.cache_num_frames_free -= num_needed_cache_frames
           end += 1
         self.load_seqs(start, end, free=False)
         if end == self.num_seqs:
-          end = self.num_cached
+          # Preload from the start for the next epoch.
+          start = self.num_seqs_cached_at_start
+          end = start
           while end < start:
-            weight = self.seq_lengths[self.seq_index[end]]
-            if self.temp_cache_size - weight < 0:
+            num_needed_cache_frames = self.seq_lengths[self.seq_index[end]]
+            if self.cache_num_frames_free - num_needed_cache_frames < 0:
               break
-            self.temp_cache_size -= weight
+            self.cache_num_frames_free -= num_needed_cache_frames
             end += 1
-          if end != self.num_cached:
-            self.load_seqs(self.num_cached, end, free=False)
+          if end != start:
+            self.load_seqs(start, end, free=False)
         return
 
     if self.shuffle_frames_of_nseqs > 0:
@@ -493,6 +509,7 @@ class Dataset(object):
         self._set_alloc_intervals_data(idc, data=x)
       fin.close()
     gc.collect()
+    assert self.is_cached(start, end)
 
   def _set_alloc_intervals_data(self, idc, data):
     """
@@ -515,20 +532,34 @@ class Dataset(object):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    if epoch is not None: self.rnd_seed = epoch  # Use some deterministic random seed.
-    self.seq_index = list(range(self.num_seqs)); """ :type: list[int]. the real seq idx after sorting """
+    if epoch is not None:
+      # Use some deterministic random seed.
+      self.rnd_seed = epoch
+
+    seq_index = list(range(self.num_seqs)); """ :type: list[int]. the real seq idx after sorting """
     if self.batching == 'default':
       pass  # Keep order as-is.
     elif self.batching == 'sorted':
-      zipped = zip(self.seq_index, self.seq_lengths); """ :type: list[list[int]] """
-      zipped.sort(key = lambda x: x[1])  # sort by length
-      self.seq_index = [y[0] for y in zipped]
+      zipped = zip(seq_index, self.seq_lengths); """ :type: list[list[int]] """
+      zipped.sort(key=lambda x: x[1])  # sort by length
+      seq_index = [y[0] for y in zipped]
     elif self.batching == 'random':
       # Keep this deterministic! Use fixed seed.
       rnd = Random(self.rnd_seed)
-      rnd.shuffle(self.seq_index)
+      rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.batching
+
+    if self.seq_index == seq_index:
+      # Ignore if the order did not changed from the earlier order.
+      # This avoids reloading of the cache.
+      return
+
+    if epoch is not None:
+      # Give some hint to the user in case he is wondering why the cache is reloading.
+      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+    self.seq_index = seq_index
+
     self.init_seqs()
 
   def init_seqs(self):
@@ -538,52 +569,67 @@ class Dataset(object):
       self.alloc_intervals
     """
     self.seq_start = [0]  # idx like in seq_index, *not* real idx
-    self.transcription_start = [0]
-    self.cached_bytes = 0
-    num_cached = -1
+    num_cached = 0
+    cached_bytes = 0
     for i in xrange(self.num_seqs):
       ids = self.seq_index[i]
       self.seq_start.append(self.seq_start[-1] + self.seq_lengths[ids])
-      if self.isInitialized:
+      if self.isInitialized and i == num_cached:
         nbytes = self.seq_lengths[ids] * self.nbytes
-        if num_cached < 0:
-          if 0 < self.cache_size < self.cached_bytes + nbytes:
-            num_cached = i
-          else:
-            self.cached_bytes += nbytes
-    self.temp_cache_size += self.cached_bytes
+        if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
+          num_cached = i + 1
+          cached_bytes += nbytes
     self.alloc_intervals = \
       [(0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)),
        (self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX))]
     # self.alloc_intervals[i] is (idx start, idx end, data), where
     # idx start/end is the sorted seq idx start/end, end exclusive,
     # and data is a numpy.array.
-    self.temp_cache_size -= self.cached_bytes
-    if self.isInitialized and num_cached > 0:
+
+    self.num_seqs_cached_at_start = num_cached
+    self.cached_bytes_at_start = cached_bytes
+    if num_cached > 0:
+      assert self.isInitialized
       self.load_seqs(0, num_cached, free=False)
-      self.num_cached = num_cached
 
   def initialize(self):
-    self.isInitialized = True
+    """
+    Does the main initialization.
+    :returns the cache byte size left over if we cache the whole dataset.
+    """
+    assert self.num_inputs > 0
+    assert self.num_timesteps > 0
+    self.isInitialized = True  # About
+
     self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
+
     if self.window > 1:
       if int(self.window) % 2 == 0: self.window += 1
       self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype = theano.config.floatX)
     self.targets = numpy.zeros((self.num_timesteps, ), dtype = theano.config.floatX)
-    self.temp_cache_size += self.cache_size
+
     self.init_seq_order()
-    self.temp_cache_size += self.cache_size - self.cached_bytes
-    print >> log.v4, "cached", self.num_cached, "seqs", self.cached_bytes / float(1024 * 1024 * 1024), "GB (" + str(max(self.temp_cache_size / float(1024 * 1024 * 1024), 0)), "GB temp)"
-    extra = self.temp_cache_size if self.num_cached == self.num_seqs else 0
-    self.temp_cache_size /= self.nbytes
-    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
-    self.t = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+
+    # Create Theano shared vars.
+    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype=theano.config.floatX), borrow=True)
+    self.t = theano.shared(numpy.zeros((1, 1), dtype=theano.config.floatX), borrow=True)
     self.y = T.cast(self.t, 'int32')
-    self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+    self.cp = theano.shared(numpy.zeros((1, 1), dtype=theano.config.floatX), borrow=True)
     self.c = T.cast(self.cp, 'int32')
-    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
-    self.theano_init = True
-    return extra
+    self.i = theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True)
+
+    # Calculate cache sizes.
+    temp_cache_size_bytes = \
+      max(0, self.cache_byte_size_total_limit) - self.cached_bytes_at_start
+    extra_bytes = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
+    self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
+
+    print >> log.v4, "cached %i seqs" % self.num_seqs_cached_at_start, \
+                     "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
+                     ("(fully loaded, %s GB left over)" if extra_bytes else "(%s GB free)") % \
+                     max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0)
+
+    return extra_bytes
 
   def calculate_priori(self):
     priori = numpy.zeros((self.num_outputs,), dtype = theano.config.floatX)

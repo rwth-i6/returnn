@@ -30,12 +30,14 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
 
     dataset.load_seqs(batch.start[0], batch.get_end_seq())
     idi = dataset.alloc_interval_index(batch.start[0])
+    assert idi >= 0, "failed to load seqs (%i, %i)" % (batch.start[0], batch.get_end_seq())
     if recurrent:
       for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
         ids = dataset.seq_index[s]  # the real seq idx after sorting
         l = dataset.seq_lengths[ids]
         with dataset.lock:
           o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+          assert o >= 0
           q = s - batch.start[0] + offset
           device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
         device.targets[:l, q] = dataset.targets[dataset.seq_start[s] + batch.start[1]:dataset.seq_start[s] + batch.start[1] + l]
@@ -63,6 +65,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     else:
       with dataset.lock:
         o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+        assert o >= 0
         l = batch.shape[0]
         device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
       device.targets[offset:offset + l, 0] = dataset.targets[dataset.seq_start[batch.start[0]] + batch.start[1]:dataset.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]

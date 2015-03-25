@@ -6,7 +6,7 @@ class Batch:
   Note that self.shape[1] is a different kind of batch - related to the data-batch-idx (= seq-idx).
   """
 
-  def __init__(self, start = (0, 0)):
+  def __init__(self, start=(0, 0)):
     """
     :type start: list[int]
     """
@@ -20,7 +20,7 @@ class Batch:
     """
 
   def __repr__(self):
-    return "<Batch %r %r>" % (self.shape, self.start)
+    return "<Batch start:%r shape:%r nseqs:%i>" % (self.start, self.shape, self.nseqs)
 
   def try_sequence(self, length):
     """

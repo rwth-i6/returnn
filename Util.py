@@ -191,7 +191,7 @@ def find_ranges(l):
   :type l: list[int]
   :returns list of ranges (start,end) where end is exclusive
   such that the union of range(start,end) matches l.
-  :rtype; list[(int,int)]
+  :rtype: list[(int,int)]
   We expect that the incoming list is sorted and strongly monotonic increasing.
   """
   if not l:
