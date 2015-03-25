@@ -1,8 +1,11 @@
 
 import thread
-from threading import RLock, Condition, currentThread
+import threading
+from threading import Condition, currentThread
 from Dataset import Dataset
 from Log import log
+import sys
+import gc
 
 
 class SprintDataset(Dataset):
@@ -14,8 +17,8 @@ class SprintDataset(Dataset):
   #   seq_lengths
   #   alloc_intervals
 
-  SprintCachedSeqsMax = 10
-  SprintCachedSeqsMin = 5
+  SprintCachedSeqsMax = 20
+  SprintCachedSeqsMin = 10
 
   def __init__(self, window=1, *args, **kwargs):
     assert window == 1
@@ -107,6 +110,7 @@ class SprintDataset(Dataset):
         assert not self.seq_added_excluded.intersection(range(start, end)), "Excluded seqs are in this seq range."
         assert end - 1 > self.seq_added_last
         self.cond.wait()
+    gc.collect()
 
   def have_seqs(self, start, end):
     """
@@ -125,7 +129,8 @@ class SprintDataset(Dataset):
       self.requested_load_seq_end = end
       self.cond.notify_all()
       if self.seq_added_last < end - 1:
-        print >> log.v5, "SprintDataset have_seqs (%i,%i): wait for addNewData..." % (start, end)
+        print >> log.v5, "SprintDataset have_seqs (%i,%i): wait for addNewData... (%s)" % \
+                         (start, end, self._add_data_thread_debug_info())
         assert self.add_data_thread_id != thread.get_ident()
         while self.seq_added_last < end - 1:
           assert not self.finalized
@@ -168,6 +173,19 @@ class SprintDataset(Dataset):
 
   def _realIdxForSegmentName(self, segmentName):
     return self.segmentsInfo[segmentName]["idx"]
+
+  def _add_data_thread_debug_info(self):
+    if self.add_data_thread_id < 0:
+      return "Thread not yet started"
+    frame = sys._current_frames().get(self.add_data_thread_id, None)
+    if not frame:
+      return "Thread %i not running" % self.add_data_thread_id
+    threads = {t.ident: t.name for t in threading.enumerate()}
+    thread_name = threads.get(self.add_data_thread_id, "id %i" % self.add_data_thread_id)
+    lineno = frame.f_lineno
+    co_filename = frame.f_code.co_filename
+    co_name = frame.f_code.co_name
+    return "Thread %s in file %r, line %i, func %s" % (thread_name, co_filename, lineno, co_name)
 
   def addNewData(self, segmentName, features, targets=None):
     """

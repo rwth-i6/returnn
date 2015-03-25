@@ -21,7 +21,8 @@ from EngineBatch import Batch
 
 class Dataset(object):
   @classmethod
-  def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching", shuffle_frames_of_nseqs=None):
+  def load_data(cls, config, cache_size, files_config_key=None, chunking="chunking", batching="batching",
+                shuffle_frames_of_nseqs=None):
     """
     :type config: Config.Config
     :type cache_size: int

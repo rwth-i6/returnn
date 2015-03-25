@@ -61,9 +61,10 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
         device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
       offset += batch.shape[1]
     else:
-      o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
-      l = batch.shape[0]
-      device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
+      with dataset.lock:
+        o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+        l = batch.shape[0]
+        device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
       device.targets[offset:offset + l, 0] = dataset.targets[dataset.seq_start[batch.start[0]] + batch.start[1]:dataset.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
       device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
       offset += l

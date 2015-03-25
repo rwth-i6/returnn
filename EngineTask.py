@@ -256,6 +256,9 @@ class TaskThread(threading.Thread):
       canRunAsync = self.device_can_run_async()
       remainingDeviceRun = None; " :type: DeviceBatchRun "
 
+      if canRunAsync:
+        print >> log.v5, "Run %s in async mode." % self.name
+
       while True:
         # Note about the async logic:
         # We start device.run() twice before we do the first device.result() call.

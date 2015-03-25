@@ -218,10 +218,12 @@ def initData():
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
   global train, dev, eval
-  dev,extra_dev = Dataset.load_data(config, cache_sizes[1], 'dev', chunking = chunking, batching = "sorted")
-  eval,extra_eval = Dataset.load_data(config, cache_sizes[2], 'eval', chunking = chunking, batching = "sorted")
+  dev, extra_dev = Dataset.load_data(config, cache_sizes[1], 'dev', chunking=chunking, batching="sorted",
+                                     shuffle_frames_of_nseqs=0)
+  eval, extra_eval = Dataset.load_data(config, cache_sizes[2], 'eval', chunking=chunking, batching="sorted",
+                                       shuffle_frames_of_nseqs=0)
   extra_cache = cache_sizes[0] + (extra_dev + extra_eval - 0) * (cache_sizes[0] > 0)
-  train,extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
+  train, extra_train = Dataset.load_data(config, cache_sizes[0] + extra_cache, 'train')
 
 
 def printTaskProperties(devices):
