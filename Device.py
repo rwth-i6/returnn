@@ -1,4 +1,5 @@
 from multiprocessing import Process, Pipe
+from TaskSystem import AsyncTask
 from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str
 from Log import log
@@ -95,17 +96,13 @@ class Device():
 
   def startProc(self):
     assert not self.blocking
-    self.output_queue, self.input_queue = Pipe(duplex=True)
-    self.proc = Process(
-      target=self.process,
-      args=(self.name, self.config, self.input_queue, self.output_queue),
-      name="Device %s proc" % self.name)
-    self.proc.daemon = True
-    self.proc.start()
-    # We are the parent process. We send/recv over output_queue.
-    # Close input_queue so that the childs get an EOF when it reads and we have died.
-    self.input_queue.close()
-    self.input_queue = self.output_queue
+    self.proc = AsyncTask(
+      func=self.process,
+      name="Device %s proc" % self.name,
+      mustExec=True)
+    # The connection (duplex pipe) is managed by AsyncTask.
+    self.input_queue = self.output_queue = self.proc.conn
+
     self.id = self.output_queue.recv(); """ :type: int """
     self.device_name = self.output_queue.recv(); """ :type: str """
     self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
@@ -318,33 +315,40 @@ class Device():
     except Exception as exc:
       print >> log.v3, device + ":", "Exception while getting CUDA information. %s" % exc
 
-  def process(self, device, *args, **kwargs):
+  def process(self, asyncTask):
     """
-    :type device: str
+    :type asyncTask: AsyncTask
     """
+    device = self.name
+    config = self.config
     try:
-      self.process_inner(device, *args, **kwargs)
+      # We do some minimal initialization, modelled after rnn.init().
+      # This is needed because we are a new independent process.
+      import rnn
+      rnn.initBetterExchook()
+      rnn.config = config
+      rnn.initLog()
+      print >> log.v3, "Device %s proc starting up" % device
+      rnn.initFaulthandler()
+      rnn.initConfigJson()
+      self.process_inner(device, config, asyncTask)
     except KeyboardInterrupt:
       # Killed by parent.
-      print >> log.v2, "Device proc %s got KeyboardInterrupt" % device
+      print >> log.v2, "Device %s proc got KeyboardInterrupt" % device
       sys.excepthook(*sys.exc_info())
-    except Exception:
-      print >> log.v2, "Device proc %s exception:" % device
+    except Exception as e:
+      print >> log.v2, "Device %s proc exception: %s" % (device, e)
       sys.excepthook(*sys.exc_info())
       sys.exit(1)
 
-  def process_inner(self, device, config, input_queue, output_queue):
+  def process_inner(self, device, config, asyncTask):
     """
     :type device: str
     :type config: Config.Config
-    :type input_queue: _multiprocessing.Connection
-    :type output_queue: _multiprocessing.Connection
+    :type asyncTask: AsyncTask
     """
-    # We are the child. The queues are a duplex pipe.
-    # We send/recv over the input_queue.
-    # We close the output_queue so that the parent gets an EOF when we die.
-    output_queue.close()
-    output_queue = input_queue
+    # The connection (duplex pipe) is managed by AsyncTask.
+    output_queue = input_queue = asyncTask.conn
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
       import cuda_ndarray.cuda_ndarray as cuda
