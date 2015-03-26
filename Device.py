@@ -1,4 +1,3 @@
-from multiprocessing import Process, Pipe
 from TaskSystem import AsyncTask
 from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str

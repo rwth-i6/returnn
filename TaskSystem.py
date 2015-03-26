@@ -12,7 +12,7 @@ from contextlib import contextmanager
 import pickle
 import types
 import marshal
-
+import importlib
 
 
 def execInMainProc(func):
@@ -154,7 +154,13 @@ def makeFuncCell(value):
   return (lambda: value).func_closure[0]
 
 def getModuleDict(modname):
-  return __import__(modname).__dict__
+  mod = importlib.import_module(modname)
+  return mod.__dict__
+
+def getModNameForModDict(obj):
+  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod}
+  modname = mods.get(id(obj), None)
+  return modname
 
 class Pickler(pickle.Pickler):
   """
@@ -217,19 +223,15 @@ class Pickler(pickle.Pickler):
   dispatch[CellType] = save_cell
 
   # We also search for module dicts and reference them.
+  # This is for FunctionType.func_globals.
   def intellisave_dict(self, obj):
-    if len(obj) <= 5: # fastpath
-      self.save_dict(obj)
+    modname = getModNameForModDict(obj)
+    if modname:
+      self.save(getModuleDict)
+      self.save((modname,))
+      self.write(pickle.REDUCE)
+      self.memoize(obj)
       return
-    for modname, mod in sys.modules.iteritems():
-      if not mod: continue
-      moddict = mod.__dict__
-      if obj is moddict:
-        self.save(getModuleDict)
-        self.save((modname,))
-        self.write(pickle.REDUCE)
-        self.memoize(obj)
-        return
     self.save_dict(obj)
   dispatch[types.DictionaryType] = intellisave_dict
 
