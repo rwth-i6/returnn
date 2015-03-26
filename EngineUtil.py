@@ -64,12 +64,15 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       offset += batch.shape[1]
     else:
       with dataset.lock:
-        o = dataset.seq_start[batch.start[0]] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
+        seq_start = dataset.seq_start[batch.start[0]] + batch.start[1]
+        alloc_start_seq, _, alloc_data = dataset.alloc_intervals[idi]
+        o = seq_start - dataset.seq_start[alloc_start_seq]
         assert o >= 0
         l = batch.shape[0]
-        device.data[offset:offset + l, 0] = dataset.alloc_intervals[idi][2][o:o + l]
-      device.targets[offset:offset + l, 0] = dataset.targets[dataset.seq_start[batch.start[0]] + batch.start[1]:dataset.seq_start[batch.start[0]] + batch.start[1] + l] #data.targets[o:o + l]
-      device.index[offset:offset + l, 0] = numpy.ones((l,), dtype = 'int8')
+        assert alloc_data.shape[0] >= o + l
+        device.data[offset:offset + l, 0] = alloc_data[o:o + l]
+      device.targets[offset:offset + l, 0] = dataset.targets[seq_start:seq_start + l]
+      device.index[offset:offset + l, 0] = numpy.ones((l,), dtype='int8')
       offset += l
 
   return True, len(batches)

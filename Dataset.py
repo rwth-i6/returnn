@@ -605,8 +605,8 @@ class Dataset(object):
 
     if self.window > 1:
       if int(self.window) % 2 == 0: self.window += 1
-      self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype = theano.config.floatX)
-    self.targets = numpy.zeros((self.num_timesteps, ), dtype = theano.config.floatX)
+      self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype=theano.config.floatX)
+    self.targets = numpy.zeros((self.num_timesteps, ), dtype=theano.config.floatX) - 1  # Init with invalid values.
 
     self.init_seq_order()
 
