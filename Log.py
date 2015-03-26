@@ -1,24 +1,33 @@
 import logging
-import sys
 import os
-
 import StringIO
+from threading import RLock
+
+
 class Stream():
   def __init__(self, log, lvl):
+    """
+    :type log: logging.Logger
+    :type lvl: int
+    """
     self.buf = StringIO.StringIO()
     self.log = log
     self.lvl = lvl
+    self.lock = RLock()
 
   def write(self, msg):
-    if msg == '\n':
-      self.flush()
-    else:
-      self.buf.write(msg)
+    with self.lock:
+      if msg == '\n':
+        self.flush()
+      else:
+        self.buf.write(msg)
 
   def flush(self):
-    self.buf.flush()
-    self.log.log(self.lvl, self.buf.getvalue())
-    self.buf.truncate(0)
+    with self.lock:
+      self.buf.flush()
+      self.log.log(self.lvl, self.buf.getvalue())
+      self.buf.truncate(0)
+
 
 class Log:
   def initialize(self, logs = [], verbosity = [], formatter = []):
