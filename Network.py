@@ -1461,10 +1461,13 @@ class LayerNetwork(object):
     self.errors = self.output.errors(error_targets)
     cost = self.output.cost(targets)
     self.cost, self.known_grads = cost[:2]
-    self.results = [self.cost]
+    self.train_outputs = [self.cost]  # This will be the output of the Theano train function. See Device.initialize().
     if len(cost) > 2:
       self.ctc_priors = cost[2]
-      self.results.append(self.ctc_priors)
+      assert self.ctc_priors is not None
+      self.train_outputs.append(self.ctc_priors)
+    else:
+      self.ctc_priors = None
     self.objective = self.cost + self.L1 + self.L2 #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()

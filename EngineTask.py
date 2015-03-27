@@ -344,7 +344,7 @@ class TrainTaskThread(TaskThread):
     """
     self.updater = updater
     self.learning_rate = learning_rate
-    self.do_ctc_priors = len(network.results) > 1
+    self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
     # The task is passed to Device.run().
     if self.updater.updateOnDevice:
@@ -395,13 +395,13 @@ class TrainTaskThread(TaskThread):
         if numpy.isinf(res[0]) or numpy.isnan(res[0]):
           raise ModelBrokenError("Model is broken, got %s score." % score, batches[i])
       assert False  # Should not get here.
-    param_start = 1
     if self.do_ctc_priors:
       for res in results:
+        assert len(self.network.train_outputs) >= 2
         self.ctc_priors += res[1]
-      param_start = 2
     self.score += score
     if not self.updater.updateOnDevice:
+      param_start = len(self.network.train_outputs)
       gparams = {}
       for p in self.network.train_params_vars:
         gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)

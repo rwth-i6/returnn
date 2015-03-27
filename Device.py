@@ -198,10 +198,11 @@ class Device():
 
       self.updater = Updater.initFromConfig(config)
 
+      # The function output lists must be consistent with TrainTaskThread.evaluate().
       if self.updater.updateOnDevice:
         self.updater.initVars(self.trainnet, self.gradients)
         self.train_and_updater = theano.function(inputs=[],
-                                                 outputs=self.trainnet.results,
+                                                 outputs=self.trainnet.train_outputs,
                                                  givens=train_givens,
                                                  updates=self.updater.getUpdateList(),
                                                  no_default_updates=False,
@@ -209,7 +210,7 @@ class Device():
 
       else:
         self.trainer = theano.function(inputs = [],
-                                       outputs = [self.trainnet.cost] + gparams, #TODO handle ctc_priors
+                                       outputs = self.trainnet.train_outputs + gparams,
                                        givens = train_givens,
                                        no_default_updates=False,
                                        name = "trainer")#,
