@@ -333,6 +333,8 @@ class SequenceOutputLayer(OutputLayer):
 """
 
 class HiddenLayer(Layer):
+  recurrent = False
+
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, activation=T.tanh, dropout=0.0, mask="unity", connection="full", layer_class="hidden", name=""):
     """
     :param list[SourceLayer] sources: list of source layers
@@ -373,6 +375,8 @@ class ConvPoolLayer(ForwardLayer):
     super(ConvPoolLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
 
 class RecurrentLayer(HiddenLayer):
+  recurrent = True
+
   def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", projection = None, layer_class = "recurrent", name = ""):
     super(RecurrentLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
     self.act = self.create_bias(n_out)
@@ -1254,6 +1258,25 @@ class LayerNetworkDescription:
     return num_inputs, num_outputs
 
 
+LayerClasses = {
+  'forward': ForwardLayer,  # used in crnn.config format
+  'hidden': ForwardLayer,  # used in JSON format
+  'recurrent': RecurrentLayer,
+  'lstm': LstmLayer,
+  'lstm_opt': OptimizedLstmLayer,
+  'lstm_norm': NormalizedLstmLayer,
+  'gatelstm': GateLstmLayer,
+  'peep_lstm': LstmPeepholeLayer,
+  'maxlstm': MaxLstmLayer
+}
+
+
+def get_layer_class(name):
+  if name in LayerClasses:
+    return LayerClasses[name]
+  assert False, "invalid layer type: " + name
+
+
 """
         NETWORKS
 """
@@ -1325,9 +1348,9 @@ class LayerNetwork(object):
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
-    def traverse(content, layer, network):
+    def traverse(content, layer_name, network):
       source = []
-      obj = content[layer].copy()
+      obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
       if not obj.has_key('from'):
@@ -1340,27 +1363,15 @@ class LayerNetwork(object):
       obj.pop('from', None)
       params = { 'sources': source }
       params.update(obj)
-      network.recurrent = network.recurrent or (cl != 'hidden')
       if cl == 'softmax':
         network.make_classifier(params['sources'], params['loss'])
       else:
-        params.update({'activation' : strtoact(act), 'name' : layer })
-        if cl == 'hidden':
-          network.add_layer(layer, ForwardLayer(**params), act)
-        else:
+        layer_class = get_layer_class(cl)
+        params.update({'activation': strtoact(act), 'name': layer_name})
+        if layer_class.recurrent:
+          network.recurrent = True
           params['index'] = network.i
-          if cl == 'recurrent':
-            network.add_layer(layer, RecurrentLayer(**params), act)
-          elif cl == 'lstm':
-            network.add_layer(layer, LstmLayer(**params), act)
-          elif cl == 'lstm_opt':
-            network.add_layer(layer, OptimizedLstmLayer(**params), act)
-          elif cl == 'lstm_norm':
-            network.add_layer(layer, NormalizedLstmLayer(**params), act)
-          elif cl == 'maxlstm':
-            network.add_layer(layer, MaxLstmLayer(**params), act)
-          else:
-            assert False, "invalid layer type: " + cl
+        network.add_layer(layer_name, layer_class(**params), act)
     traverse(topology, 'output', network)
     return network
 
@@ -1377,10 +1388,10 @@ class LayerNetwork(object):
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
-    def traverse(model, layer, network):
-      if 'from' in model[layer].attrs and model[layer].attrs['from'] != 'data':
+    def traverse(model, layer_name, network):
+      if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
         x_in = []
-        for s in model[layer].attrs['from'].split(','):
+        for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
           else:
@@ -1389,35 +1400,23 @@ class LayerNetwork(object):
             x_in.append(network.hidden[s])
       else:
         x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
-      if layer != model.attrs['output']:
-        cl = model[layer].attrs['class']
-        act = model[layer].attrs['activation']
+      if layer_name != model.attrs['output']:
+        cl = model[layer_name].attrs['class']
+        act = model[layer_name].attrs['activation']
         params = { 'sources': x_in,
-                   'n_out': model[layer].attrs['n_out'],
+                   'n_out': model[layer_name].attrs['n_out'],
                    'activation': strtoact(act),
-                   'dropout': model[layer].attrs['dropout'],
-                   'name': layer,
-                   'mask': model[layer].attrs['mask'] }
-        network.recurrent = network.recurrent or (cl != 'hidden')
-        if cl == 'hidden':
-          network.add_layer(layer, ForwardLayer(**params), act)
-        else:
+                   'dropout': model[layer_name].attrs['dropout'],
+                   'name': layer_name,
+                   'mask': model[layer_name].attrs['mask'] }
+        layer_class = get_layer_class(cl)
+        if layer_class.recurrent:
+          network.recurrent = True
           params['index'] = network.i
-          for p in [ 'truncation', 'projection', 'reverse' ]:
-            if p in model[layer].attrs:
-              params[p] = model[layer].attrs[p]
-          if cl == 'recurrent':
-            network.add_layer(layer, RecurrentLayer(**params), act)
-          elif cl == 'lstm':
-            network.add_layer(layer, LstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
-          elif cl == 'lstm_opt':
-            network.add_layer(layer, OptimizedLstmLayer(**params), act)
-          elif cl == 'lstm_norm':
-            network.add_layer(layer, NormalizedLstmLayer(sharpgates = model[layer].attrs['sharpgates'], **params), act)
-          elif cl == 'maxlstm':
-            network.add_layer(layer, MaxLstmLayer(sharpgates = model[layer].attrs['sharpgates'], n_cores = model[layer].attrs['n_cores'], **params), act)
-          else:
-              assert False, "invalid layer type: " + cl
+          for p in ['truncation', 'projection', 'reverse', 'sharpgates']:
+            if p in model[layer_name].attrs:
+              params[p] = model[layer_name].attrs[p]
+        network.add_layer(layer_name, layer_class(**params), act)
     output = model.attrs['output']
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
@@ -1538,30 +1537,19 @@ class LayerNetwork(object):
       #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
       params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
-      name = params['name']; """ :type: str """
-      if info[0] == 'forward':
-        self.add_layer(name, ForwardLayer(**params), info[2][0])
-      else:
+      act = info[2][0]
+      layer_class = get_layer_class(info[0])
+      if layer_class.recurrent:
         self.recurrent = True
         params['index'] = self.i
         params['truncation'] = description.truncation
         if self.bidirectional:
           params['name'] = info[3] + "_fw"
         name = params['name']
-        if info[0] == 'recurrent':
-          self.add_layer(name, RecurrentLayer(**params), info[2][0])
-        elif info[0] == 'lstm':
-          self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-        elif info[0] == 'lstm_opt':
-          self.add_layer(name, OptimizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-        elif info[0] == 'lstm_norm':
-          self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-        elif info[0] == 'gatelstm':
-          self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-        elif info[0] == 'peep_lstm':
-          self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
-        else:
-          assert False, "invalid layer type: " + info[0]
+        if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+          params['sharpgates'] = description.sharpgates
+      name = params['name']; """ :type: str """
+      self.add_layer(name, layer_class(**params), act)
       last_layer = self.hidden[name]
       n_in = info[1]
       x_in = last_layer.output
@@ -1576,28 +1564,16 @@ class LayerNetwork(object):
         #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
         params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
-        name = params['name']
-        if info[0] == 'forward':
-          self.add_layer(name, ForwardLayer(**params), info[2][0])
-        else:
+        act = info[2][0]
+        layer_class = get_layer_class(info[0])
+        if layer_class.recurrent:
           params['index'] = self.i
-          if self.bidirectional:
-            params['reverse'] = True
-          name = params['name']
-          if info[0] == 'recurrent':
-            self.add_layer(name, RecurrentLayer(**params), info[2][0])
-          elif info[0] == 'lstm':
-            self.add_layer(name, LstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-          elif info[0] == 'lstm_opt':
-            self.add_layer(name, OptimizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-          elif info[0] == 'lstm_norm':
-            self.add_layer(name, NormalizedLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-          elif info[0] == 'gatelstm':
-            self.add_layer(name, GateLstmLayer(sharpgates=description.sharpgates, **params), info[2][0])
-          elif info[0] == 'peep_lstm':
-            self.add_layer(name, LstmPeepholeLayer(**params), info[2][0])
-          else:
-            assert False, "invalid layer type: " + info[0]
+          params['truncation'] = description.truncation
+          if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+            params['sharpgates'] = description.sharpgates
+          params['reverse'] = True
+        name = params['name']; """ :type: str """
+        self.add_layer(name, layer_class(**params), act)
         last_layer = self.hidden[name]
         n_in = info[1]
         x_in = last_layer.output
