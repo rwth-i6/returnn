@@ -8,6 +8,8 @@ import sys
 import os
 import errno
 import time
+import pickle
+
 
 def get_num_devices():
   if os.name == 'nt':
@@ -15,11 +17,13 @@ def get_num_devices():
   else:
     return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
 
+
 def get_gpu_names():
   if os.name == 'nt':
     return "GeForce GTX 770" #TODO
   else:
     return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+
 
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
@@ -44,6 +48,7 @@ def get_device_attributes():
   if not cpu:
     attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
   return attributes
+
 
 class Device():
   def __init__(self, device, config, blocking=False, num_batches=1):
@@ -272,35 +277,75 @@ class Device():
                                               #+ [hidden.output for hidden in self.network.reverse_hidden],
                                       givens = self.make_input_givens(self.testnet),
                                       name = "analyzer")
-  def compute(self, task):
+
+  def get_compute_func(self, task):
+    if task == "train":
+      if self.updater.updateOnDevice:
+        task = "train_and_update"
+      else:
+        task = "train_distributed"
+
     if task == "train_distributed":
-      proc = self.trainer
+      return self.trainer
     elif task == "train_and_update":
-      proc = self.train_and_updater
+      return self.train_and_updater
     elif task == "eval":
-      proc = self.tester
+      return self.tester
     elif task == "extract":
-      proc = self.extractor
+      return self.extractor
     elif task == 'classify':
-      proc = self.classifier
+      return self.classifier
     elif task == "analyze":
-      proc = self.analyzer
+      return self.analyzer
     else:
       assert False, "invalid command: " + task
-    assert proc, "theano.function not initialized for task %s, check self.initialize()" % task
-    return proc
+
+  def compute_run(self, task):
+    result = self.get_compute_func(task)()
+    assert len(result) > 0  # In all cases, we have some output.
+    # In train, first output is the score.
+    # If this is inf/nan, our model is probably broken.
+    if not numpy.isfinite(numpy.asarray(result[0])).all():
+      self.handle_model_broken()
+      # Pass on, let the Engine decide what to do (or also just fail).
+    return result
+
+  def handle_model_broken(self):
+    try:
+      dump_file_name = "model_broken_dump.pickle.log"
+      if os.path.exists(dump_file_name):
+        i = 1
+        while os.path.exists("%s.%i" % (dump_file_name, i)):
+          i += 1
+        dump_file_name = "%s.%i" % (dump_file_name, i)
+      f = open(dump_file_name, "w")
+      print >> log.v1, "Model broken, dumping info to file %r." % dump_file_name
+    except Exception, e:
+      print >> log.v3, "Exception while opening model broken dump file. %s" % e
+      return
+    collected_info = {}
+    try:
+      collected_info["dev_data"] = numpy.asarray(self.x.get_value())
+      collected_info["dev_targets"] = numpy.asarray(self.y.get_value())
+      collected_info["dev_index"] = numpy.asarray(self.i.get_value())
+    except Exception, e:
+      print >> log.v3, "Exception when getting device data. %s" % e
+    try:
+      train_params = [numpy.asarray(v.get_value()) for v in self.trainnet.train_params_vars]
+      collected_info["train_params"] = train_params
+    except Exception, e:
+      print >> log.v3, "Exception when getting train params. %s" % e
+    try:
+      pickle.dump(collected_info, f)
+      f.close()
+    except Exception, e:
+      print >> log.v3, "Exception when writing model broken info dump. %s" % e
 
   def _checkGpuFuncs(self, device, device_id):
     if device[0:3] != 'gpu': return
     # Check if we use the GPU.
     # http://deeplearning.net/software/theano/tutorial/modes.html
-    if self.network_task == "train":
-      if self.updater.updateOnDevice:
-        theano_func = self.train_and_updater
-      else:
-        theano_func = self.trainer
-    else:
-      return  # Too annoying to cover all cases...
+    theano_func = self.get_compute_func(self.network_task)
     if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
                 for x in theano_func.maker.fgraph.toposort()]):
       print >> log.v1, device + ":", "It seems as if we don't use the GPU although we requested it."
@@ -421,7 +466,7 @@ class Device():
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
-          result = self.compute(task)()
+          result = self.compute_run(task)
         except RuntimeError:
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.send("error")
@@ -591,7 +636,7 @@ class Device():
     self.run_called_count += 1
     self.update_data()
     if self.blocking:
-      self.output = self.compute(task)()
+      self.output = self.compute_run(task)
     else:
       assert self.main_pid == os.getpid()
       self.output = None

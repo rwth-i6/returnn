@@ -227,48 +227,11 @@ class TaskThread(threading.Thread):
       # We can run async iff we do the updates online.
       return self.devices[0].updater.updateOnDevice
 
-    def handle_model_broken(self, broken_info):
-      """
-      :type broken_info: ModelBrokenError
-      """
-      collected_info = {"exception_str": str(broken_info), "batches_str": str(broken_info.batches)}
-      device = self.devices[0]  # Any device will do.
-      try:
-        # Assign device data again to dump what we have sent for these batches to the device.
-        success, _ = self.assign_dev_data(device, broken_info.batches)
-        assert success
-        collected_info["dev_data"] = device.data
-        collected_info["dev_targets"] = device.targets
-        collected_info["dev_index"] = device.index
-      except Exception, e:
-        print >> log.v3, "Exception when getting device data. %s" % e
-      try:
-        train_params = device.get_net_train_params()
-        collected_info["train_params"] = train_params
-      except Exception, e:
-        print >> log.v3, "Exception when getting train params. %s" % e
-      try:
-        dump_file_name = "model_broken_dump.pickle.log"
-        f = open(dump_file_name, "w")
-        pickle.dump(collected_info, f)
-        f.close()
-      except Exception, e:
-        print >> log.v3, "Exception when writing model broken info dump. %s" % e
-      else:
-        print >> log.v1, "Model broken debug info dumped into %r." % dump_file_name
-
     def run(self):
       # Wrap run_inner() for better exception printing.
       # Thread.__bootstrap_inner() ignores sys.excepthook.
       try:
-        try:
-          self.run_inner()
-        except ModelBrokenError, broken:
-          print >> log.v1, "%s failed. %s" % (self.name, broken)
-          self.handle_model_broken(broken)
-          print ""
-          # Currently the most sane thing is to abort.
-          thread.interrupt_main()
+        self.run_inner()
       except IOError, e:  # Such as broken pipe.
         print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
@@ -357,7 +320,12 @@ class ModelBrokenError(Exception):
   We got a nan/inf at the result somewhere. This means that something is broken.
   """
   def __init__(self, msg, batches):
+    """
+    :type msg: str
+    :type batches: list[EngineBatch.Batch]
+    """
     assert len(batches) > 0
+    msg = "%s Starting at seq %i." % (msg, batches[0].start_seq)
     super(ModelBrokenError, self).__init__(msg)
     self.batches = batches
 
@@ -425,7 +393,7 @@ class TrainTaskThread(TaskThread):
     if numpy.isinf(score) or numpy.isnan(score):
       for i, res in enumerate(results):
         if numpy.isinf(res[0]) or numpy.isnan(res[0]):
-          raise ModelBrokenError("Model is broken, got inf or nan score: %s" % score, batches[i])
+          raise ModelBrokenError("Model is broken, got %s score." % score, batches[i])
       assert False  # Should not get here.
     param_start = 1
     if self.do_ctc_priors:

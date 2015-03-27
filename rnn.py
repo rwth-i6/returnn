@@ -308,7 +308,7 @@ def executeMainTask():
     import theano.printing
     engine.init_network_from_config(config)
     for task in config.list('theano_graph.task', ['train']):
-      theano.printing.pydotprint(engine.devices[-1].compute(task), format = 'png', var_with_name_simple = True,
+      theano.printing.pydotprint(engine.devices[-1].get_compute_func(task), format = 'png', var_with_name_simple = True,
                                  outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
