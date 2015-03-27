@@ -338,7 +338,8 @@ class Engine:
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
-                              self.learning_rate, self.updater, start_batch, self.pad_batches)
+                              self.learning_rate, self.updater, start_batch, self.pad_batches,
+                              ("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
     trainer.join()
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
@@ -362,7 +363,7 @@ class Engine:
         tester.join()
         trainer.elapsed += tester.elapsed
         eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
-      print >> log.v1, self.get_epoch_str(), "elapsed:", trainer.elapsed, "score:", trainer.score
+      print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed
       print >> log.v1, "\n".join(eval_dump_str)
       if self.ctc_prior_file is not None:
         trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
@@ -435,7 +436,7 @@ class Engine:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
         device.run('classify', self.network)
-        labels = numpy.concatenate(device.result(), axis = 1)
+        labels = numpy.concatenate(device.result()[0], axis = 1)
         print >> log.v5, "labeling", len(labels), "time steps for sequence", data.tags[num_batches + batch]
         print >> out, data.tags[num_batches + batch],
         for label in labels: print >> out, data.labels[label],
@@ -459,7 +460,7 @@ class Engine:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):
         device.run('analyze', batch, self.network)
-        result = device.result()
+        result, _ = device.result()
         max_c = numpy.argmax(result[0], axis=1)
         if self.network.recurrent:
           real_c = device.targets[:,device.batch_start[batch] : device.batch_start[batch + 1]].flatten()

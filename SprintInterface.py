@@ -446,7 +446,7 @@ def forward(segmentName, features):
 
   # Do the actual forwarding and collect result.
   device.run("extract")
-  result = device.result()
+  result, _ = device.result()
   assert result is not None, "Device crashed."
   assert len(result) == 1
   posteriors = result[0]

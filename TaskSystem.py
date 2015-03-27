@@ -379,7 +379,13 @@ class ExecingProcess:
         print "Error: unpickle incomplete"
         raise SystemExit
       ret = target(*args)
-      Pickler(writeend).dump(ret)
+      # IOError is probably broken pipe. That probably means that the parent died.
+      try: Pickler(writeend).dump(ret)
+      except IOError: pass
+      try: readend.close()
+      except IOError: pass
+      try: writeend.close()
+      except IOError: pass
       if ExecingProcess.Verbose: print "ExecingProcess child %s (pid %i) finished" % (name, os.getpid())
       raise SystemExit
 

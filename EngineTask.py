@@ -5,14 +5,14 @@ import thread
 import threading
 import time
 import theano
-import pickle
 from EngineUtil import assign_dev_data
 from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings
+from Device import Device
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False):
+    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False, report_prefix=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -21,6 +21,7 @@ class TaskThread(threading.Thread):
       :type batches: list[EngineBatch.Batch]
       :type start_batch: int
       :type pad_batches: bool
+      :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       self.start_batch = start_batch
@@ -36,6 +37,7 @@ class TaskThread(threading.Thread):
       self.score = None
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
+      self.report_prefix = report_prefix or self.task
       # There is no generic way to see whether Python is exiting.
       # This is our workaround. We check for it in self.run_inner().
       self.stopped = False
@@ -88,10 +90,11 @@ class TaskThread(threading.Thread):
       pass
     def get_device_prepare_args(self):
       return {"network": self.network, "updater": None}
-    def evaluate(self, batches, results, num_frames):
+    def evaluate(self, batches, results, result_format, num_frames):
       """
       :param list[list[EngineBatch.Batch]] batches: batches per device
       :param list[list[numpy.ndarray]] results: results per device
+      :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
       :returns some score or None
       """
@@ -108,7 +111,7 @@ class TaskThread(threading.Thread):
         """
         self.parent = parent
         self.batch_idx = batch_idx
-        self.score = None
+        self.eval_info = None; " :type: dict[str] | None "
         self.num_frames = 0
         self.start()
 
@@ -120,14 +123,17 @@ class TaskThread(threading.Thread):
           # We skipped segments. That's fine.
           return True
 
-        device_results = self.device_collect_results()
+        device_results, outputs_format = self.device_collect_results()
         if device_results is None:
           print >> log.v2, "device crashed on batch", self.batch_idx
           self.parent.device_crash_batch = self.batch_idx
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
-        self.score = self.parent.evaluate(self.devices_batches, device_results, self.num_frames)
+        self.eval_info = self.parent.evaluate(batches=self.devices_batches,
+                                              results=device_results,
+                                              result_format=outputs_format,
+                                              num_frames=self.num_frames)
 
         self.print_process()
         return True
@@ -164,17 +170,21 @@ class TaskThread(threading.Thread):
 
       def device_collect_results(self):
         device_results = []
-        for device in self.alloc_devices:
+        outputs_format = None
+        for i, device in enumerate(self.alloc_devices):
           try:
-            result = device.result()
+            result, outputs_format_new = device.result()
           except RuntimeError:
-            result = None
+            return None
           if result is None:
             return None
           assert isinstance(result, list)
-          assert len(result) >= 1  # The first entry is expected to be the score as a scalar.
+          assert len(result) > 0  # we always expect to get some result
+          if i >= 1:
+            assert outputs_format == outputs_format_new, "We expect to always get the same output format."
+          outputs_format = outputs_format_new
           device_results.append(result)
-        return device_results
+        return device_results, outputs_format
 
       def device_mem_usage_str(self, devices):
         """
@@ -204,13 +214,16 @@ class TaskThread(threading.Thread):
         if log.verbose[5]:
           mem_usage = self.device_mem_usage_str(self.alloc_devices)
           info = [
-            "batch %i" % self.batch_idx,
-            "score %f" % self.score if self.score is not None else None,
+            self.parent.report_prefix,
+            "batch %i" % self.batch_idx]
+          if self.eval_info:
+            info += ["%s %s" % item for item in sorted(self.eval_info.items())]
+          info += [
             "elapsed %s" % hms(start_elapsed),
             "exp. remaining %s" % remaining,
-            "complete %.02f%%" % (complete * 100),
-            "memory %s" % mem_usage if mem_usage else None
-          ]
+            "complete %.02f%%" % (complete * 100)]
+          if mem_usage:
+            info += ["memory %s" % mem_usage]
           print >> log.v5, ", ".join(filter(None, info))
         if self.parent.interactive:
           progress_bar(complete, remaining)
@@ -331,7 +344,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch, pad_batches):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch, pad_batches, report_prefix):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -341,6 +354,7 @@ class TrainTaskThread(TaskThread):
     :type updater: Updater.Updater
     :type start_batch: int
     :type pad_batches: bool
+    :type report_prefix: str
     """
     self.updater = updater
     self.learning_rate = learning_rate
@@ -351,7 +365,8 @@ class TrainTaskThread(TaskThread):
       task = "train_and_update"
     else:
       task = "train_distributed"
-    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch, pad_batches)
+    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch, pad_batches,
+                                          report_prefix)
 
   def initialize(self):
     self.score = 0
@@ -382,14 +397,17 @@ class TrainTaskThread(TaskThread):
       numpy.savetxt(f, self.ctc_priors, newline=" ")
       print >> f
 
-  def evaluate(self, batches, results, num_frames):
+  def evaluate(self, batches, results, result_format, num_frames):
     """
     :param list[list[EngineBatch.Batch]] batches: batches per device
     :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
+    :param list[str]|None result_format: describes what we have in a result list
     :type num_frames: int
     """
     assert results
-    score = sum([res[0] for res in results])
+    assert result_format  # train should always have the format
+    results = [Device.make_result_dict(res, result_format) for res in results]
+    score = sum([res["cost"] for res in results])
     if numpy.isinf(score) or numpy.isnan(score):
       for i, res in enumerate(results):
         if numpy.isinf(res[0]) or numpy.isnan(res[0]):
@@ -397,20 +415,26 @@ class TrainTaskThread(TaskThread):
       assert False  # Should not get here.
     if self.do_ctc_priors:
       for res in results:
-        assert len(self.network.train_outputs) >= 2
-        self.ctc_priors += res[1]
+        self.ctc_priors += res["ctc_priors"]
     self.score += score
     if not self.updater.updateOnDevice:
-      param_start = len(self.network.train_outputs)
       gparams = {}
       for p in self.network.train_params_vars:
         gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+      # Add up all gparams.
       for res in results:
-        for p, q in zip(self.network.train_params_vars, res[param_start:]):
+        res_gparams = res["gparams"]
+        assert len(self.network.train_params_vars) == len(res_gparams)
+        for p, q in zip(self.network.train_params_vars, res_gparams):
           gparams[p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
-    return score / num_frames
+    eval_info = {"score": score / num_frames}
+    # Maybe we got some more info such as gradient_norm.
+    # See Device.initialize().
+    for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
+      eval_info[attrib] = sum([res[attrib] for res in results])
+    return eval_info
 
   def finalize(self):
     if self.updater.updateOnDevice:
@@ -438,7 +462,7 @@ class EvalTaskThread(TaskThread):
       for device in self.devices:
         device.set_net_params(self.network)
 
-    def evaluate(self, batches, results, num_frames):
+    def evaluate(self, batches, results, result_format, num_frames):
       """
       :param list[list[EngineBatch.Batch]] batches: batches per device
       :param list[list[numpy.ndarray]] results: results per device
@@ -448,7 +472,7 @@ class EvalTaskThread(TaskThread):
       score = sum([res[0] for res in results])
       self.score += score
       self.error += sum([res[1] for res in results])
-      return score / num_frames
+      return {"score": score / num_frames}
 
     def finalize(self):
       self.score /= float(self.data.num_timesteps)
@@ -476,8 +500,8 @@ class SprintCacheForwardTaskThread(TaskThread):
     def initialize(self):
       self.toffset = 0
 
-    def evaluate(self, batch, result, num_frames):
-      features = numpy.concatenate(result, axis = 1) #reduce(operator.add, device.result())
+    def evaluate(self, batches, results, result_format, num_frames):
+      features = numpy.concatenate(results, axis = 1) #reduce(operator.add, device.result())
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
         for i in xrange(len(features)):
@@ -487,11 +511,15 @@ class SprintCacheForwardTaskThread(TaskThread):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
+      assert len(batches) == 1
+      batch = batches[0]
+      assert batch.get_num_seqs() == 1
+      seq_idx = batch.start_seq
+      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[seq_idx]]
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
       #times = zip(range(0, len(features)), range(1, len(features) + 1))
       self.toffset += len(features)
-      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[batch]], numpy.asarray(features), numpy.asarray(times))
+      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[seq_idx]], numpy.asarray(features), numpy.asarray(times))
 
 
 class HDFForwardTaskThread(TaskThread):
@@ -519,7 +547,7 @@ class HDFForwardTaskThread(TaskThread):
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
 
-    def evaluate(self, batches, results, num_frames):
+    def evaluate(self, batches, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')

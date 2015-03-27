@@ -71,6 +71,8 @@ class Device():
     self.blocking = blocking
     self.config = config
     self.output = None; " :type: list[numpy.ndarray] "
+    self.outputs_format = None; " :type: list[str] "  # via self.result()
+    self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
     self.run_called_count = 0
     self.result_called_count = 0
     self.main_pid = os.getpid()
@@ -166,6 +168,12 @@ class Device():
       self.c = T.cast(self.cp, 'int32')
     gparams = []
     self.gradients = {}
+    if config.bool('debug_gradient_norm', False):
+      # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
+      # See self.fast_check_model_is_broken_from_result().
+      self.gradient_norm = 0
+    else:
+      self.gradient_norm = None
     for pi, param in enumerate(self.trainnet.train_params_vars):
       if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
@@ -179,9 +187,13 @@ class Device():
         print >> log.v3, "-------------------------------------------"
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
       gparams.append(theano.Out(gparam, borrow = True))
+      if self.gradient_norm is not None:
+        self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
+
     # initialize functions
     self.updater = None
+
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_ctc_givens(self.trainnet)
@@ -199,28 +211,40 @@ class Device():
       self.updater = Updater.initFromConfig(config)
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
+      self.train_outputs_format = ["cost"]
+      outputs = [self.trainnet.cost]
+      if self.trainnet.ctc_priors is not None:
+        self.train_outputs_format += ["ctc_priors"]
+        outputs += [self.trainnet.ctc_priors]
+      if self.gradient_norm is not None:
+        self.train_outputs_format += ["gradient_norm"]
+        outputs += [self.gradient_norm]
+
       if self.updater.updateOnDevice:
         self.updater.initVars(self.trainnet, self.gradients)
         self.train_and_updater = theano.function(inputs=[],
-                                                 outputs=self.trainnet.train_outputs,
+                                                 outputs=outputs,
                                                  givens=train_givens,
                                                  updates=self.updater.getUpdateList(),
                                                  no_default_updates=False,
                                                  name="train_and_updater")
 
       else:
-        self.trainer = theano.function(inputs = [],
-                                       outputs = self.trainnet.train_outputs + gparams,
-                                       givens = train_givens,
+        self.train_outputs_format += ["gparams..."]
+        outputs += gparams
+        self.trainer = theano.function(inputs=[],
+                                       outputs=outputs,
+                                       givens=train_givens,
                                        no_default_updates=False,
-                                       name = "trainer")#,
+                                       name="train_distributed")#,
                                        #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
 
-      self.tester = theano.function(inputs = [],
-                                    outputs = [self.testnet.cost, self.testnet.errors],
-                                    givens = test_givens,
-                                    no_default_updates = True,
-                                    name = "tester")
+      self.tester = theano.function(inputs=[],
+                                    outputs=[self.testnet.cost, self.testnet.errors],
+                                    givens=test_givens,
+                                    no_default_updates=True,
+                                    name="tester")
+
     elif self.network_task == 'forward':
       extractions = config.list('extract', ['log-posteriors'])
       source = []
@@ -265,11 +289,13 @@ class Device():
                                        outputs = source,
                                        givens = givens,
                                        name = "extractor")
+
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
                                         outputs = [T.argmax(self.testnet.output.p_y_given_x, axis = 1)],
                                         givens = self.make_input_givens(self.testnet),
                                         name = "classifier")
+
     elif self.network_task == 'analyze':
       self.analyzer = theano.function(inputs = [],
                                       outputs = [self.testnet.output.p_y_given_x],
@@ -302,16 +328,39 @@ class Device():
       assert False, "invalid command: " + task
 
   def compute_run(self, task):
-    result = self.get_compute_func(task)()
-    assert len(result) > 0  # In all cases, we have some output.
+    compute_func = self.get_compute_func(task)
+    output = compute_func()
+    # output is a list the outputs which we specified when creating the Theano function in self.initialize().
+    assert len(output) > 0  # In all cases, we have some output.
+    outputs_format = None
+    if task.startswith("train"):
+      outputs_format = self.train_outputs_format
+
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
-    if not numpy.isfinite(numpy.asarray(result[0])).all():
-      self.handle_model_broken()
+    model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
+    if model_broken_info:
+      self.handle_model_broken(model_broken_info)
       # Pass on, let the Engine decide what to do (or also just fail).
-    return result
 
-  def handle_model_broken(self):
+    return output, outputs_format
+
+  def fast_check_model_is_broken_from_result(self, output, outputs_format):
+    if not outputs_format:  # In train, we should always have this.
+      return
+    output_dict = self.make_result_dict(output, outputs_format)
+    # Check only params which are small, i.e. not the whole gparams.
+    RelevantAttribs = ["cost", "gradient_norm"]
+    values = {attrib: numpy.asarray(output_dict[attrib])
+              for attrib in RelevantAttribs
+              if attrib in output_dict}
+    for attrib, value in values.items():
+      if not numpy.isfinite(value).all():
+        return ", ".join(["%s = %s" % (k, v) for (k, v) in values.items()])
+    return
+
+  def handle_model_broken(self, info):
+    print >> log.v1, "Model broken: %s" % info
     try:
       dump_file_name = "model_broken_dump.pickle.log"
       if os.path.exists(dump_file_name):
@@ -320,11 +369,11 @@ class Device():
           i += 1
         dump_file_name = "%s.%i" % (dump_file_name, i)
       f = open(dump_file_name, "w")
-      print >> log.v1, "Model broken, dumping info to file %r." % dump_file_name
+      print >> log.v1, "Dumping model broken info to file %r." % dump_file_name
     except Exception, e:
       print >> log.v3, "Exception while opening model broken dump file. %s" % e
       return
-    collected_info = {}
+    collected_info = {"info_str": str(info)}
     try:
       collected_info["dev_data"] = numpy.asarray(self.x.get_value())
       collected_info["dev_targets"] = numpy.asarray(self.y.get_value())
@@ -421,7 +470,11 @@ class Device():
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v2, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
     while True:
-      cmd = input_queue.recv()
+      try:
+        cmd = input_queue.recv()
+      except EOFError:
+        print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
+        break  # Just exit.
       if cmd == "stop":  # via self.terminate()
         output_queue.send("done")
         break
@@ -467,7 +520,7 @@ class Device():
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
-          result = self.compute_run(task)
+          output, outputs_format = self.compute_run(task)
         except RuntimeError:
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.send("error")
@@ -478,7 +531,8 @@ class Device():
         output_queue.send("task-result")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        output_queue.send([numpy.asarray(output) for output in result])
+        output_queue.send([numpy.asarray(v) for v in output])
+        output_queue.send(outputs_format)
       else:
         raise Exception("cmd %s unknown" % cmd)
 
@@ -637,10 +691,11 @@ class Device():
     self.run_called_count += 1
     self.update_data()
     if self.blocking:
-      self.output = self.compute_run(task)
+      self.output, self.outputs_format = self.compute_run(task)
     else:
       assert self.main_pid == os.getpid()
       self.output = None
+      self.outputs_format = None
       self.input_queue.send("task")
       self.input_queue.send(task)
 
@@ -650,16 +705,41 @@ class Device():
     #self.index = numpy.zeros((1, 1), dtype = theano.config.floatX)
     self.update_data()
 
+  @staticmethod
+  def make_result_dict(output, outputs_format):
+    """
+    :type output: list[numpy.ndarray]
+    :type outputs_format: list[str]
+    """
+    d = {}; " :type: dict[str] "
+    for i, attrib in enumerate(outputs_format):
+      if attrib.endswith("..."):
+        attrib = attrib[:-3]
+        assert i < len(output)
+        assert i == len(outputs_format) - 1
+        d[attrib] = output
+        break
+      d[attrib] = output[0]
+      output = output[1:]
+    assert len(output) == 0
+    return d
+
   def result(self):
+    """
+    :rtype: (list[numpy.ndarray], list[str] | None)
+    :returns the outputs and maybe a format describing the output list
+    See self.make_result_dict() how to interpret this list.
+    See self.initialize() where the list is defined.
+    """
     self.result_called_count += 1
     if self.blocking:
       assert self.result_called_count == self.run_called_count
-      return self.output
+      return self.output, self.outputs_format
     else:
       assert self.main_pid == os.getpid()
       assert self.result_called_count <= self.run_called_count
       if not self.proc.is_alive():
-        return None
+        return None, None
       timeout = 60 * 5  # 5 minutes execution timeout
       while timeout > 0:
         try:
@@ -668,10 +748,11 @@ class Device():
             if r == "error": return None
             assert r == "task-result"
             self.output = self.output_queue.recv()
-            return self.output
+            self.outputs_format = self.output_queue.recv()
+            return self.output, self.outputs_format
         except EOFError:
           # The process is dying or died.
-          return None
+          return None, None
         except IOError, e:
           if e.errno == errno.EINTR:
             # http://stackoverflow.com/questions/14136195
@@ -680,10 +761,10 @@ class Device():
             time.sleep(1)
           else:
             # The process is dying or died.
-            return None
+            return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
-      return None
+      return None, None
 
   def terminate(self):
     if not self.blocking and self.proc.is_alive():
