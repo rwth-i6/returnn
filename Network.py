@@ -54,7 +54,10 @@ class Container(object):
     grp = head[self.name]
     assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
-      assert self.params[p].get_value().shape == grp[p].shape, "invalid layer parameter shape for parameter " + p + " of layer " + self.name + " (expected  " + str(self.params[p].get_value().shape) + " got " + str(grp[p].shape) + ")"
+      assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
+        "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
+        " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
+        " got " + str(grp[p].shape) + ")"
       array = grp[p][...]
       assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
       self.params[p].set_value(array)
@@ -75,7 +78,15 @@ class Container(object):
     :type params: dict[str,numpy.ndarray|theano.sandbox.cuda.CudaNdArray]
     """
     for p, v in params.items():
+      self_param_shape = self.params[p].get_value(borrow=True, return_internal_type=True).shape
+      assert self_param_shape == v.shape
       self.params[p].set_value(v, borrow=True)
+
+  def get_params_vars(self):
+    """
+    :returns list of shared vars in a well-defined order
+    """
+    return [v for (k, v) in sorted(self.params.items())]
 
   def add_param(self, param, name=""):
     """
@@ -1263,7 +1274,7 @@ class LayerNetwork(object):
     self.n_out = n_out
     self.mask = mask
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
-    self.train_params = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
+    self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
     self.train_param_args = None; """ :type: dict[str] """
 
@@ -1459,7 +1470,7 @@ class LayerNetwork(object):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
 
-  def get_params(self, hidden_layer_selection, with_output):
+  def get_params_vars(self, hidden_layer_selection, with_output):
     """
     :type hidden_layer_selection: list[str]
     :type with_output: bool
@@ -1469,13 +1480,13 @@ class LayerNetwork(object):
     params = []
     """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     for name in sorted(hidden_layer_selection):
-      params += self.hidden[name].params.values()
+      params += self.hidden[name].get_params_vars()
     if with_output:
-      params += self.output.params.values()
+      params += self.output.get_params_vars()
     return params
 
-  def get_all_params(self):
-    return self.get_params(**self.get_train_param_args_default())
+  def get_all_params_vars(self):
+    return self.get_params_vars(**self.get_train_param_args_default())
 
   def get_train_param_args_default(self):
     """
@@ -1497,7 +1508,7 @@ class LayerNetwork(object):
     # Force a unique representation of kwargs.
     kwargs["hidden_layer_selection"] = sorted(kwargs["hidden_layer_selection"])
     self.train_param_args = kwargs
-    self.train_params = self.get_params(**kwargs)
+    self.train_params_vars = self.get_params_vars(**kwargs)
 
   def initialize(self, description):
     """

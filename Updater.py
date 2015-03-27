@@ -64,31 +64,37 @@ class Updater:
       self.net_train_param_deltas = net_param_deltas
     else:
       assert net_param_deltas is None
-      self.net_train_param_deltas = {p: theano.shared(value=numpy.zeros(p.get_value().shape,
-                                                                        dtype=theano.config.floatX))
-                                     for p in network.train_params}
+      self.net_train_param_deltas = {p: theano.shared(numpy.zeros(p.get_value(borrow=True,
+                                                                              return_internal_type=True).shape,
+                                                                  dtype=theano.config.floatX))
+                                     for p in network.train_params_vars}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0))
     " :type: theano.compile.sharedvalue.SharedVariable "
 
     if self.momentum > 0:
       self.deltas = {p: theano.shared(
-                     value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX), borrow=True,
+                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
-                     for p in self.network.train_params}
+                     for p in self.network.train_params_vars}
     if self.adagrad:
       self.sqrsum = {p: theano.shared(
-                     value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX), borrow=True,
+                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), borrow=True,
                      name="sqrsum_%s " % p)
-                     for p in self.network.train_params}
+                     for p in self.network.train_params_vars}
     if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
-      self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.train_params} #E[g^2]
-      self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.train_params} #E[\delta x^2]
-      self.dx = {p: theano.shared(value=numpy.zeros(p.get_value().shape, dtype=theano.config.floatX))
-                  for p in self.network.train_params} #\delta x
+      self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                                     dtype=theano.config.floatX))
+                  for p in self.network.train_params_vars} #E[g^2]
+      self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                                      dtype=theano.config.floatX))
+                  for p in self.network.train_params_vars} #E[\delta x^2]
+      self.dx = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                                    dtype=theano.config.floatX))
+                  for p in self.network.train_params_vars} #\delta x
 
   @property
   def isInitialized(self):
@@ -97,14 +103,14 @@ class Updater:
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
     assert not self.updateOnDevice
-    for p in self.network.train_params:
+    for p in self.network.train_params_vars:
       self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
-    for param in self.network.train_params:
+    for param in self.network.train_params_vars:
       deltas = self.net_train_param_deltas[param]  # usually the gradients
       if self.gradient_clip > 0:
         deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)

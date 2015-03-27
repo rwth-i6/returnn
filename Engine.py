@@ -228,7 +228,7 @@ class Engine:
         print >> log.v2, "  " + network.description.hidden_info[i][0] + " #:", network.description.hidden_info[i][1]
     print >> log.v2, "  output #:", network.n_out
     print >> log.v2, "net params #:", network.num_params()
-    print >> log.v2, "net trainable params:", network.train_params
+    print >> log.v2, "net trainable params:", network.train_params_vars
     print >> log.v5, "net output:", network.output
 
   def train(self):

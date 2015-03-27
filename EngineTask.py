@@ -435,10 +435,10 @@ class TrainTaskThread(TaskThread):
     self.score += score
     if not self.updater.updateOnDevice:
       gparams = {}
-      for p in self.network.train_params:
+      for p in self.network.train_params_vars:
         gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
       for res in results:
-        for p, q in zip(self.network.train_params, res[param_start:]):
+        for p, q in zip(self.network.train_params_vars, res[param_start:]):
           gparams[p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
@@ -449,7 +449,7 @@ class TrainTaskThread(TaskThread):
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
       params = self.devices[0].get_net_train_params()
-      our_params = self.network.train_params
+      our_params = self.network.train_params_vars
       assert len(params) == len(our_params)
       for i in range(len(params)):
         our_params[i].set_value(params[i])

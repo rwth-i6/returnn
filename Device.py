@@ -71,7 +71,7 @@ class Device():
     self.main_pid = os.getpid()
     if blocking:
       self.initialize(config)
-      self.num_train_params = len(self.trainnet.train_params)
+      self.num_train_params = len(self.trainnet.train_params_vars)
       if device[0:3] == 'gpu':
         import theano.sandbox.cuda as theano_cuda
         assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
@@ -161,8 +161,8 @@ class Device():
       self.c = T.cast(self.cp, 'int32')
     gparams = []
     self.gradients = {}
-    for pi, param in enumerate(self.trainnet.train_params):
-      if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params), "calculating gradients ...")
+    for pi, param in enumerate(self.trainnet.train_params_vars):
+      if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
       gparam = T.grad(self.trainnet.objective, param, known_grads = self.trainnet.known_grads)
       self.gradients[param] = gparam
       if False and param.name == 'lambda':
@@ -372,7 +372,7 @@ class Device():
     output_queue.send(device_name)
     self.initialize(config)
     self._checkGpuFuncs(device, device_id)
-    output_queue.send(len(self.trainnet.train_params))
+    output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v2, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
     while True:
       cmd = input_queue.recv()
@@ -385,7 +385,7 @@ class Device():
         if self.need_reinit(network_description, train_param_args):
           self.initialize(config, network_description, train_param_args)
         output_queue.send("reinit-ready")
-        output_queue.send(len(self.trainnet.train_params))
+        output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
         x = input_queue.recv()
         t = input_queue.recv()
@@ -404,17 +404,20 @@ class Device():
       elif cmd == "set-net-params":  # via self.set_net_params()
         params = input_queue.recv()
         assert isinstance(params, list)
-        our_params_trainnet = self.trainnet.get_all_params()
-        our_params_testnet = self.testnet.get_all_params()
+        our_params_trainnet = self.trainnet.get_all_params_vars()
+        our_params_testnet = self.testnet.get_all_params_vars()
         assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
-        for i in range(len(params)):
-          our_params_trainnet[i].set_value(params[i])
-          our_params_testnet[i].set_value(params[i])
+        for param, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+          our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
+          assert our_param_shape == param.shape
+          assert numpy.isfinite(param).all()
+          our_p_train.set_value(param)
+          our_p_test.set_value(param)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        output_queue.send([numpy.asarray(p.get_value()) for p in self.trainnet.train_params])
+        output_queue.send([numpy.asarray(p.get_value()) for p in self.trainnet.train_params_vars])
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -492,7 +495,7 @@ class Device():
 
   def get_net_train_params(self):
     if self.blocking:
-      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.train_params]
+      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.train_params_vars]
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("get-net-train-params")
@@ -512,7 +515,7 @@ class Device():
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-net-params")
-      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.get_all_params()])
+      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
 
   def maybe_update_network(self, network):
     """
@@ -551,7 +554,7 @@ class Device():
     if self.blocking:
       if self.need_reinit(network_description, train_param_args):
         self.initialize(self.config, network_description, train_param_args)
-      return len(self.trainnet.train_params)
+      return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
       self.input_queue.send(network_description)
