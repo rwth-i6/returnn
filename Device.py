@@ -95,6 +95,9 @@ class Device():
 
   def startProc(self):
     assert not self.blocking
+    # Note that we want a really new separate process, i.e. fork+exec, not just a fork.
+    # This is to avoid many potential bugs, e.g. in Numpy or Theano.
+    # See also the comment in TaskSystem.ExecingProcess.
     self.proc = AsyncTask(
       func=self.process,
       name="Device %s proc" % self.name,
@@ -322,7 +325,7 @@ class Device():
     config = self.config
     try:
       # We do some minimal initialization, modelled after rnn.init().
-      # This is needed because we are a new independent process.
+      # This is needed because we are a new independent process. See startProc().
       import rnn
       rnn.initBetterExchook()
       rnn.config = config

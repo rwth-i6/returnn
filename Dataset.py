@@ -669,7 +669,7 @@ class Dataset(object):
           batch.add_sequence(length)
       else:
         while length > 0:
-          num_frames = min(length, batch_size - batch.shape[0])
+          num_frames = min(length, batch_size - batch.data_shape[0])
           if num_frames == 0 or batch.nseqs > max_seqs:
             batches.append(batch)
             batch = Batch([s, self.seq_lengths[self.seq_index[s]] - length])

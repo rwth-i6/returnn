@@ -5,6 +5,7 @@ import thread
 import threading
 import time
 import theano
+import pickle
 from EngineUtil import assign_dev_data
 from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings
@@ -44,6 +45,9 @@ class TaskThread(threading.Thread):
     def stop(self):
       self.stopped = True
 
+    def assign_dev_data(self, device, batches):
+      return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
+
     def allocate_devices(self, start_batch):
       """
       Sets the device data, i.e. the next batches, via self.batches.
@@ -55,17 +59,19 @@ class TaskThread(threading.Thread):
         device.tags
         device.index
       :param int start_batch: start batch index, index of self.batches
-      :rtype: (list[Device.Device], int)
-      :return list of used devices, and number of batches which were handled
+      :rtype: (list[Device.Device], list[list[EngineBatch.Batch]], int)
+      :returns list of used devices, list of batches per device, and number of batches which were handled.
       Number of batches will always be positive, but devices could be empty on skipped seqs.
       """
-      devices = []; """ :type: list[Device.Device] """
+      devices = []; " :type: list[Device.Device] "
+      devices_batches = []; " :type: list[list[EngineBatch.Batch]] "
       batch_idx = start_batch
       for device in self.devices:
         batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        success, batch_adv_idx = assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
+        success, batch_adv_idx = self.assign_dev_data(device,batches)
         if success:
           devices.append(device)
+          devices_batches.append(batches)
         else:
           # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
           assert batch_adv_idx > 0
@@ -75,17 +81,17 @@ class TaskThread(threading.Thread):
         batch_idx += batch_adv_idx
       batch_adv_idx = batch_idx - start_batch
       assert batch_adv_idx > 0
-      return devices, batch_adv_idx
+      return devices, devices_batches, batch_adv_idx
 
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
       pass
     def get_device_prepare_args(self):
       return {"network": self.network, "updater": None}
-    def evaluate(self, batch, results, num_frames):
+    def evaluate(self, batches, results, num_frames):
       """
-      :param int batch: start batch
-      :param list[list[numpy.ndarray]] result: results from devices
+      :param list[list[EngineBatch.Batch]] batches: batches per device
+      :param list[list[numpy.ndarray]] results: results per device
       :type num_frames: int
       :returns some score or None
       """
@@ -94,28 +100,6 @@ class TaskThread(threading.Thread):
       pass
     def finalize(self):
       self.finalized = True
-
-    def run(self):
-      # Wrap run_inner() for better exception printing.
-      # Thread.__bootstrap_inner() ignores sys.excepthook.
-      try:
-        self.run_inner()
-      except IOError, e:  # Such as broken pipe.
-        print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
-        # Just pass on. We have self.finalized == False which indicates the problem.
-      except Exception:
-        # Catch all standard exceptions.
-        # These are not device errors. We should have caught them in the code
-        # and we would leave self.finalized == False.
-        # Don't catch KeyboardInterrupt here because that will get send by the main thread
-        # when it is exiting. It's never by the user because SIGINT will always
-        # trigger KeyboardInterrupt in the main thread only.
-        try:
-          print("%s failed" % self)
-          sys.excepthook(*sys.exc_info())
-        finally:
-          # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-          thread.interrupt_main()
 
     class DeviceBatchRun:
       def __init__(self, parent, batch_idx):
@@ -136,22 +120,23 @@ class TaskThread(threading.Thread):
           # We skipped segments. That's fine.
           return True
 
-        device_results = self.device_collect_results(self.alloc_devices)
+        device_results = self.device_collect_results()
         if device_results is None:
           print >> log.v2, "device crashed on batch", self.batch_idx
           self.parent.device_crash_batch = self.batch_idx
           return False
-        assert len(device_results) == len(self.alloc_devices)
+        assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
-        self.score = self.parent.evaluate(self.batch_idx, device_results, self.num_frames)
+        self.score = self.parent.evaluate(self.devices_batches, device_results, self.num_frames)
 
         self.print_process()
         return True
 
       def start(self):
         self.batch_start_time = time.time()
-        self.alloc_devices, self.num_alloc_batches = self.parent.allocate_devices(start_batch=self.batch_idx)
-        assert self.num_alloc_batches > 0
+        self.alloc_devices, self.devices_batches, self.batch_adv_idx = \
+          self.parent.allocate_devices(start_batch=self.batch_idx)
+        assert self.batch_adv_idx > 0
         # Note that alloc_devices could be empty if we skipped seqs.
         if not self.alloc_devices:
           return
@@ -177,9 +162,9 @@ class TaskThread(threading.Thread):
           device.run(self.parent.task)
           batch += device.num_batches
 
-      def device_collect_results(self, alloc_devices):
+      def device_collect_results(self):
         device_results = []
-        for device in alloc_devices:
+        for device in self.alloc_devices:
           try:
             result = device.result()
           except RuntimeError:
@@ -214,8 +199,8 @@ class TaskThread(threading.Thread):
         if len(self.parent.run_times) * run_elapsed > 60: self.parent.run_times = self.parent.run_times[1:]
         time_domain = len(self.parent.run_times) * sum([d.num_batches for d in self.alloc_devices])
         time_factor = 0.0 if time_domain == 0.0 else float(sum(self.parent.run_times)) / time_domain
-        complete = float(self.batch_idx + self.num_alloc_batches) / len(self.parent.batches)
-        remaining = hms(int(time_factor * (len(self.parent.batches) - self.batch_idx - self.num_alloc_batches)))
+        complete = float(self.batch_idx + self.batch_adv_idx) / len(self.parent.batches)
+        remaining = hms(int(time_factor * (len(self.parent.batches) - self.batch_idx - self.batch_adv_idx)))
         if log.verbose[5]:
           mem_usage = self.device_mem_usage_str(self.alloc_devices)
           info = [
@@ -241,6 +226,66 @@ class TaskThread(threading.Thread):
         return True
       # We can run async iff we do the updates online.
       return self.devices[0].updater.updateOnDevice
+
+    def handle_model_broken(self, broken_info):
+      """
+      :type broken_info: ModelBrokenError
+      """
+      collected_info = {"exception_str": str(broken_info), "batches_str": str(broken_info.batches)}
+      device = self.devices[0]  # Any device will do.
+      try:
+        # Assign device data again to dump what we have sent for these batches to the device.
+        success, _ = self.assign_dev_data(device, broken_info.batches)
+        assert success
+        collected_info["dev_data"] = device.data
+        collected_info["dev_targets"] = device.targets
+        collected_info["dev_index"] = device.index
+      except Exception, e:
+        print >> log.v3, "Exception when getting device data. %s" % e
+      try:
+        train_params = device.get_net_train_params()
+        collected_info["train_params"] = train_params
+      except Exception, e:
+        print >> log.v3, "Exception when getting train params. %s" % e
+      try:
+        dump_file_name = "model_broken_dump.pickle.log"
+        f = open(dump_file_name, "w")
+        pickle.dump(collected_info, f)
+        f.close()
+      except Exception, e:
+        print >> log.v3, "Exception when writing model broken info dump. %s" % e
+      else:
+        print >> log.v1, "Model broken debug info dumped into %r." % dump_file_name
+
+    def run(self):
+      # Wrap run_inner() for better exception printing.
+      # Thread.__bootstrap_inner() ignores sys.excepthook.
+      try:
+        try:
+          self.run_inner()
+        except ModelBrokenError, broken:
+          print >> log.v1, "%s failed. %s" % (self.name, broken)
+          self.handle_model_broken(broken)
+          print ""
+          # Currently the most sane thing is to abort.
+          thread.interrupt_main()
+      except IOError, e:  # Such as broken pipe.
+        print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
+        # Just pass on. We have self.finalized == False which indicates the problem.
+      except Exception:
+        # Catch all standard exceptions.
+        # These are not device errors. We should have caught them in the code
+        # and we would leave self.finalized == False.
+        # Don't catch KeyboardInterrupt here because that will get send by the main thread
+        # when it is exiting. It's never by the user because SIGINT will always
+        # trigger KeyboardInterrupt in the main thread only.
+        try:
+          print >> log.v1, "%s failed" % self.name
+          sys.excepthook(*sys.exc_info())
+          print ""
+        finally:
+          # Exceptions are fatal. If we can recover, we should handle it in run_inner().
+          thread.interrupt_main()
 
     def run_inner(self):
       self.start_time = time.time()
@@ -268,13 +313,24 @@ class TaskThread(threading.Thread):
         self.batch_idx = batch_idx
         if batch_idx < len(self.batches):
           deviceRun = self.DeviceBatchRun(self, batch_idx)
-          batch_idx += deviceRun.num_alloc_batches
+          batch_idx += deviceRun.batch_adv_idx
         else:
           deviceRun = None
 
         if remainingDeviceRun:  # Set when canRunAsync.
-          if not remainingDeviceRun.finish():
-            return
+          try:
+            if not remainingDeviceRun.finish():
+              return
+          except Exception:
+            if deviceRun:
+              # Finish up so that the dev proc protocol is in a sane state.
+              # This is only needed in async mode.
+              try:
+                deviceRun.device_collect_results()
+              except Exception, e:
+                print >> log.v3, "In exception cleanup, got another exception:", e
+                print >> log.v3, "We ignore this and keep handling the original exception."
+            raise
 
         if not deviceRun:  # Finished loop.
           break
@@ -294,6 +350,16 @@ class TaskThread(threading.Thread):
 
       self.finalize()
       self.elapsed = (time.time() - self.start_time)
+
+
+class ModelBrokenError(Exception):
+  """
+  We got a nan/inf at the result somewhere. This means that something is broken.
+  """
+  def __init__(self, msg, batches):
+    assert len(batches) > 0
+    super(ModelBrokenError, self).__init__(msg)
+    self.batches = batches
 
 
 class TrainTaskThread(TaskThread):
@@ -348,16 +414,19 @@ class TrainTaskThread(TaskThread):
       numpy.savetxt(f, self.ctc_priors, newline=" ")
       print >> f
 
-  def evaluate(self, batch, results, num_frames):
+  def evaluate(self, batches, results, num_frames):
     """
-    :param int batch: starting batch idx
+    :param list[list[EngineBatch.Batch]] batches: batches per device
     :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
     :type num_frames: int
     """
     assert results
     score = sum([res[0] for res in results])
-    assert not (numpy.isinf(score) or numpy.isnan(score)), \
-      "Model is broken, got inf or nan score: %s" % score
+    if numpy.isinf(score) or numpy.isnan(score):
+      for i, res in enumerate(results):
+        if numpy.isinf(res[0]) or numpy.isnan(res[0]):
+          raise ModelBrokenError("Model is broken, got inf or nan score: %s" % score, batches[i])
+      assert False  # Should not get here.
     param_start = 1
     if self.do_ctc_priors:
       for res in results:
@@ -401,7 +470,12 @@ class EvalTaskThread(TaskThread):
       for device in self.devices:
         device.set_net_params(self.network)
 
-    def evaluate(self, batch, results, num_frames):
+    def evaluate(self, batches, results, num_frames):
+      """
+      :param list[list[EngineBatch.Batch]] batches: batches per device
+      :param list[list[numpy.ndarray]] results: results per device
+      :type num_frames: int
+      """
       assert results
       score = sum([res[0] for res in results])
       self.score += score
@@ -477,8 +551,8 @@ class HDFForwardTaskThread(TaskThread):
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
 
-    def evaluate(self, batch, result, num_frames):
-      features = numpy.concatenate(result, axis = 1)
+    def evaluate(self, batches, results, num_frames):
+      features = numpy.concatenate(results, axis=1)
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
       if self.merge.keys():
@@ -490,9 +564,13 @@ class HDFForwardTaskThread(TaskThread):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batch]]
-      self.seq_dims[batch] = [features.shape[1]]
-      self.seq_lengths[batch] = features.shape[1]
+      assert len(batches) == 1
+      batch = batches[0]
+      assert batch.get_num_seqs() == 1
+      seq_idx = batch.start_seq
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batches]]
+      self.seq_dims[seq_idx] = [features.shape[1]]
+      self.seq_lengths[seq_idx] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
-      self.tags.append(self.data.tags[self.data.seq_index[batch]])
+      self.tags.append(self.data.tags[self.data.seq_index[seq_idx]])

@@ -490,9 +490,13 @@ class AsyncTask:
       self.func(self)
     except KeyboardInterrupt:
       print "Exception in AsyncTask", self.name, ": KeyboardInterrupt"
+      sys.exit(1)
+    except SystemExit:
+      raise
     except BaseException:
       print "Exception in AsyncTask", self.name
       sys.excepthook(*sys.exc_info())
+      sys.exit(1)
     finally:
       self.conn.close()
 

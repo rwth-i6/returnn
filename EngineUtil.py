@@ -16,7 +16,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   # The final device.data.shape is in format (time,batch,feature).
   shape = [0, 0]
   for batch in batches:
-    shape = [max(shape[0], batch.shape[0]), shape[1] + batch.shape[1]]
+    shape = [max(shape[0], batch.data_shape[0]), shape[1] + batch.data_shape[1]]
   if shape[1] == 0:
     return False, len(batches)
 
@@ -32,7 +32,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     idi = dataset.alloc_interval_index(batch.start[0])
     assert idi >= 0, "failed to load seqs (%i, %i)" % (batch.start[0], batch.get_end_seq())
     if recurrent:
-      for s in xrange(batch.start[0], batch.start[0] + batch.shape[1]):
+      for s in xrange(batch.start[0], batch.start[0] + batch.data_shape[1]):
         ids = dataset.seq_index[s]  # the real seq idx after sorting
         l = dataset.seq_lengths[ids]
         with dataset.lock:
@@ -61,14 +61,14 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
           device.ctc_targets[q] = dataset.ctc_targets[ids]
         device.tags[q] = dataset.tags[ids] #TODO
         device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
-      offset += batch.shape[1]
+      offset += batch.data_shape[1]
     else:
       with dataset.lock:
         seq_start = dataset.seq_start[batch.start[0]] + batch.start[1]
         alloc_start_seq, _, alloc_data = dataset.alloc_intervals[idi]
         o = seq_start - dataset.seq_start[alloc_start_seq]
         assert o >= 0
-        l = batch.shape[0]
+        l = batch.data_shape[0]
         assert alloc_data.shape[0] >= o + l
         device.data[offset:offset + l, 0] = alloc_data[o:o + l]
       device.targets[offset:offset + l, 0] = dataset.targets[seq_start:seq_start + l]
@@ -89,7 +89,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   if not dataset.have_seqs(seq, seq + 1):
     return False
   batch = Batch([seq, 0])
-  batch.shape = (dataset.get_seq_length(seq), 1)
+  batch.data_shape = (dataset.get_seq_length(seq), 1)
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 
