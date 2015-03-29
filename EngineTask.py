@@ -205,13 +205,13 @@ class TaskThread(threading.Thread):
         if not self.parent.interactive and not log.v[5]:
           return
         start_elapsed = time.time() - self.parent.start_time
-        run_elapsed = time.time() - self.batch_start_time
-        self.parent.run_times.append(run_elapsed)
-        if len(self.parent.run_times) * run_elapsed > 60: self.parent.run_times = self.parent.run_times[1:]
-        time_domain = len(self.parent.run_times) * sum([d.num_batches for d in self.alloc_devices])
-        time_factor = 0.0 if time_domain == 0.0 else float(sum(self.parent.run_times)) / time_domain
-        complete = float(self.batch_idx + self.batch_adv_idx) / len(self.parent.batches)
-        remaining = hms(int(time_factor * (len(self.parent.batches) - self.batch_idx - self.batch_adv_idx)))
+        num_batches = len(self.parent.batches) - self.parent.start_batch
+        assert num_batches > 0
+        cur_batch = self.batch_idx + self.batch_adv_idx
+        complete = float(cur_batch) / num_batches
+        assert complete > 0
+        total_time_estimated = start_elapsed / complete
+        remaining_estimated = total_time_estimated - start_elapsed
         if log.verbose[5]:
           mem_usage = self.device_mem_usage_str(self.alloc_devices)
           info = [
@@ -221,13 +221,13 @@ class TaskThread(threading.Thread):
             info += ["%s %s" % item for item in sorted(self.eval_info.items())]
           info += [
             "elapsed %s" % hms(start_elapsed),
-            "exp. remaining %s" % remaining,
+            "exp. remaining %s" % hms(remaining_estimated),
             "complete %.02f%%" % (complete * 100)]
           if mem_usage:
             info += ["memory %s" % mem_usage]
           print >> log.v5, ", ".join(filter(None, info))
         if self.parent.interactive:
-          progress_bar(complete, remaining)
+          progress_bar(complete, hms(remaining_estimated))
 
     def device_can_run_async(self):
       if len(self.devices) != 1:
@@ -272,7 +272,6 @@ class TaskThread(threading.Thread):
       terminal_width, _ = terminal_size()
       self.interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting task", self.task
-      self.run_times = []
 
       batch_idx = self.start_batch
       canRunAsync = self.device_can_run_async()
