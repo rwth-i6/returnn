@@ -91,9 +91,9 @@ class TaskThread(threading.Thread):
       pass
     def get_device_prepare_args(self):
       return {"network": self.network, "updater": None}
-    def evaluate(self, batches, results, result_format, num_frames):
+    def evaluate(self, batchess, results, result_format, num_frames):
       """
-      :param list[list[EngineBatch.Batch]] batches: batches per device
+      :param list[list[EngineBatch.Batch]] batchess: batches per device
       :param list[list[numpy.ndarray]] results: results per device
       :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
@@ -131,7 +131,7 @@ class TaskThread(threading.Thread):
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
-        self.eval_info = self.parent.evaluate(batches=self.devices_batches,
+        self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
                                               results=device_results,
                                               result_format=outputs_format,
                                               num_frames=self.num_frames)
@@ -398,9 +398,9 @@ class TrainTaskThread(TaskThread):
       numpy.savetxt(f, self.ctc_priors, newline=" ")
       print >> f
 
-  def evaluate(self, batches, results, result_format, num_frames):
+  def evaluate(self, batchess, results, result_format, num_frames):
     """
-    :param list[list[EngineBatch.Batch]] batches: batches per device
+    :param list[list[EngineBatch.Batch]] batchess: batches per device
     :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
     :param list[str]|None result_format: describes what we have in a result list
     :type num_frames: int
@@ -412,7 +412,7 @@ class TrainTaskThread(TaskThread):
     if numpy.isinf(score) or numpy.isnan(score):
       for i, res in enumerate(results):
         if numpy.isinf(res[0]) or numpy.isnan(res[0]):
-          raise ModelBrokenError("Model is broken, got %s score." % score, batches[i])
+          raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
       assert False  # Should not get here.
     if self.do_ctc_priors:
       for res in results:
@@ -463,9 +463,9 @@ class EvalTaskThread(TaskThread):
       for device in self.devices:
         device.set_net_params(self.network)
 
-    def evaluate(self, batches, results, result_format, num_frames):
+    def evaluate(self, batchess, results, result_format, num_frames):
       """
-      :param list[list[EngineBatch.Batch]] batches: batches per device
+      :param list[list[EngineBatch.Batch]] batchess: batches per device
       :param list[list[numpy.ndarray]] results: results per device
       :type num_frames: int
       """
@@ -501,7 +501,7 @@ class SprintCacheForwardTaskThread(TaskThread):
     def initialize(self):
       self.toffset = 0
 
-    def evaluate(self, batches, results, result_format, num_frames):
+    def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis = 1) #reduce(operator.add, device.result())
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
@@ -512,8 +512,10 @@ class SprintCacheForwardTaskThread(TaskThread):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      assert len(batches) == 1
-      batch = batches[0]
+      # Currently we support just a single seq -> i.e. a single dev with a single batch.
+      assert len(batchess) == 1
+      assert len(batchess[0]) == 1
+      batch = batchess[0][0]
       assert batch.get_num_seqs() == 1
       seq_idx = batch.start_seq
       print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[seq_idx]]
@@ -548,7 +550,7 @@ class HDFForwardTaskThread(TaskThread):
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
 
-    def evaluate(self, batches, results, result_format, num_frames):
+    def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
@@ -561,11 +563,13 @@ class HDFForwardTaskThread(TaskThread):
           z = max(numpy.sum(merged[i]), 0.000001)
           merged[i] = numpy.log(merged[i] / z)
         features = merged
-      assert len(batches) == 1
-      batch = batches[0]
+      # Currently we support just a single seq -> i.e. a single dev with a single batch.
+      assert len(batchess) == 1
+      assert len(batchess[0]) == 1
+      batch = batchess[0][0]
       assert batch.get_num_seqs() == 1
       seq_idx = batch.start_seq
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batches]]
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batchess]]
       self.seq_dims[seq_idx] = [features.shape[1]]
       self.seq_lengths[seq_idx] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
