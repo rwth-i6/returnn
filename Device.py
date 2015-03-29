@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str
+from Util import cmd, progress_bar, obj_diff_str, hms
 from Log import log
 from Network import LayerNetwork
 import numpy
@@ -75,7 +75,10 @@ class Device():
     self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
     self.run_called_count = 0
     self.result_called_count = 0
+    self.compute_total_time = 0
+    self.update_total_time = 0
     self.main_pid = os.getpid()
+
     if blocking:
       self.initialize(config)
       self.num_train_params = len(self.trainnet.train_params_vars)
@@ -329,7 +332,10 @@ class Device():
 
   def compute_run(self, task):
     compute_func = self.get_compute_func(task)
+    compute_start_time = time.time()
     output = compute_func()
+    compute_end_time = time.time()
+    self.compute_total_time += compute_end_time - compute_start_time
     # output is a list the outputs which we specified when creating the Theano function in self.initialize().
     assert len(output) > 0  # In all cases, we have some output.
     outputs_format = None
@@ -478,6 +484,11 @@ class Device():
       if cmd == "stop":  # via self.terminate()
         output_queue.send("done")
         break
+      elif cmd == "generic-exec":
+        args = input_queue.recv()
+        res = self._generic_exec(*args)
+        output_queue.send("generic-exec-result")
+        output_queue.send(res)
       elif cmd == "reinit":  # via self.reinit()
         network_description = input_queue.recv()
         train_param_args = input_queue.recv()
@@ -489,12 +500,14 @@ class Device():
         x = input_queue.recv()
         t = input_queue.recv()
         i = input_queue.recv()
+        update_start_time = time.time()
         if self.trainnet.loss in ('ctc','ce_ctc'):
           c = input_queue.recv()
           self.cp.set_value(c)
         self.x.set_value(x.astype('float32'), borrow = True)
         self.y.set_value(t.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
+        self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
         assert self.updater, "Only set if in train mode. Task = %s" % self.network_task
@@ -536,6 +549,29 @@ class Device():
       else:
         raise Exception("cmd %s unknown" % cmd)
 
+  def is_device_proc(self):
+    if self.blocking:
+      return True
+    if self.main_pid == os.getpid():
+      return False  # We are on the host.
+    return True  # We are the child proc.
+
+  def _generic_exec(self, func_name, args, kwargs):
+    assert self.is_device_proc()
+    func = getattr(self, func_name)
+    ret = func(*args, **kwargs)
+    return ret
+
+  def _generic_exec_on_dev(self, func_name, *args, **kwargs):
+    if self.is_device_proc():
+      return self._generic_exec(self, func_name, args, kwargs)
+    self.input_queue.send("generic-exec")
+    self.input_queue.send((func_name, args, kwargs))
+    r = self.output_queue.recv()
+    assert r == "generic-exec-result"
+    r = self.output_queue.recv()
+    return r
+
   def get_task_network(self):
     """
     :rtype: LayerNetwork
@@ -565,12 +601,14 @@ class Device():
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
     if self.blocking:
+      update_start_time = time.time()
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
       self.y.set_value(self.targets.flatten().astype('int32'), borrow = True)
       self.i.set_value(self.index, borrow = True)
       if self.trainnet.loss in ('ctc','ce_ctc'):
         self.cp.set_value(self.ctc_targets)
+      self.update_total_time += time.time() - update_start_time
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("update-data")
@@ -627,6 +665,24 @@ class Device():
       # Thus, no need to update it externally.
       return
     self.set_net_params(network)
+
+  def start_epoch_stats(self):
+    if not self.is_device_proc():
+      return self._generic_exec_on_dev("start_epoch_stats")
+    self.epoch_start_time = time.time()
+    self.compute_total_time = 0
+    self.update_total_time = 0
+
+  def finish_epoch_stats(self):
+    if not self.is_device_proc():
+      return self._generic_exec_on_dev("finish_epoch_stats")
+    cur_time = time.time()
+    total_time = cur_time - self.epoch_start_time
+    total_time = max(total_time, 0.001)
+    compute_frac = self.compute_total_time / total_time
+    update_frac = self.update_total_time / total_time
+    print >> log.v1, "Device %s proc epoch time stats: total %s, %.02f%% computing, %.02f%% updating data" % \
+                     (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
   def need_reinit(self, network_description=None, train_param_args=None):
     assert self.trainnet

@@ -281,6 +281,9 @@ class TaskThread(threading.Thread):
       if canRunAsync:
         print >> log.v5, "Run %s in async mode." % self.name
 
+      for device in self.devices:
+        device.start_epoch_stats()
+
       while True:
         # Note about the async logic:
         # We start device.run() twice before we do the first device.result() call.
@@ -325,6 +328,8 @@ class TaskThread(threading.Thread):
           print >> log.v5, "%s stopped" % self
           return
 
+      for device in self.devices:
+        device.finish_epoch_stats()
       self.finalize()
       self.elapsed = (time.time() - self.start_time)
 
