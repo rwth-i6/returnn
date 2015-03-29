@@ -569,7 +569,7 @@ class HDFForwardTaskThread(TaskThread):
       batch = batchess[0][0]
       assert batch.get_num_seqs() == 1
       seq_idx = batch.start_seq
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[batchess]]
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[seq_idx]]
       self.seq_dims[seq_idx] = [features.shape[1]]
       self.seq_lengths[seq_idx] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
