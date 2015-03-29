@@ -113,6 +113,11 @@ class Updater:
     for param in self.network.train_params_vars:
       deltas = self.net_train_param_deltas[param]  # usually the gradients
       if self.gradient_clip > 0:
+        # Note that there is also theano.gradient.grad_clip, which would clip it already
+        # at the backprop step and which would affect also other dependent gradients.
+        # However, this is simpler for now.
+        # Also note that this is yet without the learning rate factor -
+        # this might be different to other gradient clipping implementations.
         deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
       upd = - self.learning_rate_var * deltas
       if self.momentum > 0:
