@@ -2,9 +2,9 @@
 
 import numpy
 import theano
+import theano.tensor as T
 import json
 import inspect
-import theano.tensor as T
 import h5py
 from Util import hdf5_dimension, strtoact, simpleObjRepr
 from math import sqrt
@@ -267,6 +267,7 @@ class FramewiseOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       pcx = self.p_y_given_x[self.i, y[self.i]]
+      pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
