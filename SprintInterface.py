@@ -320,7 +320,10 @@ def startTrainThread(epoch=None):
       # Do the actual training.
       engine.train()
 
-    except Exception:
+    except KeyboardInterrupt:  # This happens at forced exit.
+      pass
+
+    except BaseException:  # Catch all, even SystemExit. We must stop the main thread then.
       try:
         print "CRNN train failed"
         sys.excepthook(*sys.exc_info())
