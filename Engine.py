@@ -1,15 +1,13 @@
 #! /usr/bin/python2.7
+
 import numpy
 import sys
 import os
 from collections import OrderedDict
 import threading
-
 import h5py
 import json
-
 from Network import LayerNetwork
-from EngineBatch import Batch
 from EngineTask import TrainTaskThread, EvalTaskThread, SprintCacheForwardTaskThread, HDFForwardTaskThread
 import SprintCache
 from Log import log
@@ -28,16 +26,13 @@ class Engine:
     """
     :type devices: list[Device.Device]
     """
-    self.train_data = None
     self.devices = devices
+    self.train_data = None; " :type: Dataset.Dataset "
     self.is_training = False
     self.training_finished = False
     self.lock = threading.RLock()
     self.cond = threading.Condition(lock=self.lock)
     self.pretrain = None; " :type: Pretrain.Pretrain "
-
-  def set_batch_size(self, data, batch_size, batch_step, max_seqs=-1):
-    return data.generate_batches(self.network.recurrent, batch_size, batch_step, max_seqs)
 
   @classmethod
   def config_get_final_epoch(cls, config):
@@ -243,7 +238,8 @@ class Engine:
     for name, dataset in [("eval", self.dev_data), ("eval", self.eval_data)]:
       if not dataset: continue
       if dataset.num_seqs == 0: continue
-      self.eval_datasets[name] = (dataset, self.set_batch_size(dataset, self.batch_size, self.batch_step))
+      self.eval_datasets[name] = (dataset, dataset.generate_batches(self.network.recurrent,
+                                                                    self.batch_size, self.batch_step))
     if self.network.loss == 'priori':
       prior = self.train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
@@ -337,7 +333,8 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    train_batches = self.set_batch_size(self.train_data, self.batch_size, self.batch_step, self.max_seqs)
+    train_batches = self.train_data.generate_batches(self.network.recurrent,
+                                                     self.batch_size, self.batch_step, self.max_seqs)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
@@ -387,7 +384,7 @@ class Engine:
     :type combine_labels: str
     """
     cache = SprintCache.FileArchive(cache_file)
-    batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
@@ -412,7 +409,7 @@ class Engine:
     :type combine_labels: str
     """
     cache = h5py.File(output_file, "w")
-    batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
@@ -431,7 +428,7 @@ class Engine:
     cache.close()
 
   def classify(self, device, data, label_file):
-    batches = self.set_batch_size(data, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
     num_data_batches = len(batches)
     num_batches = 0
     out = open(label_file, 'w')
@@ -456,7 +453,7 @@ class Engine:
       confusion_matrix = numpy.zeros((num_mle_labels, num_mle_labels), dtype = 'int32')
     else:
       confusion_matrix = numpy.zeros((num_labels, num_labels), dtype = 'int32')
-    batches = self.set_batch_size(data, data.num_timesteps, 1)
+    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, 1)
     num_data_batches = len(batches)
     num_batches = 0
     while num_batches < num_data_batches:
