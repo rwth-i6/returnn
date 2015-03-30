@@ -28,6 +28,7 @@ class Engine:
     """
     :type devices: list[Device.Device]
     """
+    self.train_data = None
     self.devices = devices
     self.is_training = False
     self.training_finished = False
