@@ -3,7 +3,6 @@ from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str, hms
 from Log import log
 from Network import LayerNetwork
-import rnn
 import numpy
 import sys
 import os
@@ -100,7 +99,6 @@ class Device():
         self.device_name = 'cpu' + str(self.id)
     else:
       self.name = device
-      rnn.maybeInitSprintCommunicator() #TODO we should also finalize it somewhere later
       self.startProc()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device[0:3] + str(self.id)
@@ -436,7 +434,9 @@ class Device():
       print >> log.v3, "Device %s proc starting up" % device
       rnn.initFaulthandler()
       rnn.initConfigJson()
+      rnn.maybeInitSprintCommunicator()
       self.process_inner(device, config, asyncTask)
+      rnn.maybeFinalizeSprintCommunicator()
     except KeyboardInterrupt:
       # Killed by parent.
       print >> log.v2, "Device %s proc got KeyboardInterrupt" % device

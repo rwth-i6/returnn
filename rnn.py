@@ -98,6 +98,11 @@ def maybeInitSprintCommunicator():
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
 
 
+def maybeFinalizeSprintCommunicator():
+  if SprintCommunicator.instance is not None:
+    SprintCommunicator.instance.finalize()
+
+
 def getDevicesInitArgs(config):
   """
   :type config: Config
@@ -286,8 +291,7 @@ def init(configFilename, commandLineOptions):
 def finalize():
   for device in engine.devices:
     device.terminate()
-  if SprintCommunicator.instance is not None:
-    SprintCommunicator.instance.finalize()
+  maybeFinalizeSprintCommunicator()
 
 
 def executeMainTask():
