@@ -17,6 +17,7 @@ from Updater import Updater
 import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
+import EngineUtil
 
 
 class Engine:
@@ -194,6 +195,7 @@ class Engine:
       last_epoch_model = network.load_hdf(model)
       assert last_epoch == last_epoch_model
       model.close()
+      EngineUtil.subtract_priors(network, self.train_data, config)
 
     self.network = network
 
