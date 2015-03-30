@@ -100,7 +100,7 @@ def subtract_priors(network, train, config):
     prior_scale = config.float('prior_scale', 0.0)
     priors = train.calculate_priori()
     priors[priors == 0] = 1e-10 #avoid priors of zero which would yield a bias of inf
-    l = [p for p in network.train_params if p.name == 'b_output']
+    l = [p for p in network.train_params_vars if p.name == 'b_output']
     assert len(l) == 1, len(l)
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
