@@ -3,6 +3,7 @@ from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str, hms
 from Log import log
 from Network import LayerNetwork
+from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
@@ -502,10 +503,13 @@ class Device():
         x = input_queue.recv()
         t = input_queue.recv()
         i = input_queue.recv()
+	self.tags = input_queue.recv()
         update_start_time = time.time()
         if self.trainnet.loss in ('ctc','ce_ctc'):
           c = input_queue.recv()
           self.cp.set_value(c)
+        if SprintCommunicator.instance is not None:
+          SprintCommunicator.instance.segments = self.tags
         self.x.set_value(x.astype('float32'), borrow = True)
         self.y.set_value(t.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
@@ -608,6 +612,8 @@ class Device():
       #self.t.set_value(self.targets, borrow = True)
       self.y.set_value(self.targets.flatten().astype('int32'), borrow = True)
       self.i.set_value(self.index, borrow = True)
+      if SprintCommunicator.instance is not None:
+        SprintCommunicator.instance.segments = self.tags
       if self.trainnet.loss in ('ctc','ce_ctc'):
         self.cp.set_value(self.ctc_targets)
       self.update_total_time += time.time() - update_start_time
@@ -617,6 +623,7 @@ class Device():
       self.input_queue.send(self.data)
       self.input_queue.send(self.targets.flatten())
       self.input_queue.send(self.index)
+      self.input_queue.send(self.tags)
       if self.config.value('loss','') == 'ctc':
         self.input_queue.send(self.ctc_targets)
 

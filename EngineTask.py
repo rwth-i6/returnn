@@ -9,7 +9,6 @@ from EngineUtil import assign_dev_data
 from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings
 from Device import Device
-from SprintCommunicator import SprintCommunicator
 
 
 class TaskThread(threading.Thread):
@@ -162,8 +161,6 @@ class TaskThread(threading.Thread):
           else:
             print >> log.v5, "of batches %i-%i" % (batch, batch + device.num_batches - 1),
           print >> log.v5, "/", len(self.parent.batches), "on device", device.name
-          if SprintCommunicator.instance is not None:
-            SprintCommunicator.instance.segments = device.tags
           self.num_frames += device.data.shape[0] * device.data.shape[1]
           self.parent.prepare_device_for_batch(device)
           device.run(self.parent.task)
