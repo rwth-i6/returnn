@@ -295,22 +295,22 @@ class SprintCommunicator:
     errsig = numpy.zeros_like(posteriors)
     loss = []
     for (i,name) in enumerate(segment_names):
-      print >> log.v5, 'requesting error signal for segment', name
-      print >> log.v5, 'writing segment name'
+      #print >> log.v5, 'requesting error signal for segment', name
+      #print >> log.v5, 'writing segment name'
       self.__write_segment_name(name)
       seg_posteriors = posteriors[:seq_lengths[i],i,:].copy()
-      print >> log.v5, 'copying posteriors to shMem'
+      #print >> log.v5, 'copying posteriors to shMem'
       self.copy_to_sh_mem_fn(self.sh_mem, seg_posteriors)
-      print >> log.v5, 'writing status REQUEST_ERRORSIGNAL'
+      #print >> log.v5, 'writing status REQUEST_ERRORSIGNAL'
       self.write_status_fn(self.sh_mem, SprintCommunicator.REQUEST_ERRORSIGNAL)
-      print >> log.v5, 'waiting for status ERRORSIGNAL_WRITTEN'
+      #print >> log.v5, 'waiting for status ERRORSIGNAL_WRITTEN'
       self.wait_for_status_fn(self.sh_mem, SprintCommunicator.ERRORSIGNAL_WRITTEN)
-      print >> log.v5, 'copying errorsignal from shMem'
+      #print >> log.v5, 'copying errorsignal from shMem'
       seg_loss_arr, seg_errsig = self.copy_from_sh_mem_fn(self.sh_mem)
       assert len(seg_loss_arr) == 1
       loss.append(seg_loss_arr[0])
       errsig[:seq_lengths[i],i,:] = seg_errsig
-      print >> log.v5, 'success!'
+      #print >> log.v5, 'success!'
     return numpy.array(loss, dtype=Tfloat), errsig
 
   def finalize(self):
