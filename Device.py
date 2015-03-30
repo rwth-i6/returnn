@@ -434,7 +434,7 @@ class Device():
       print >> log.v3, "Device %s proc starting up" % device
       rnn.initFaulthandler()
       rnn.initConfigJson()
-      rnn.maybeInitSprintCommunicator()
+      rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, asyncTask)
       rnn.maybeFinalizeSprintCommunicator()
     except KeyboardInterrupt:

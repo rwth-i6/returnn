@@ -92,14 +92,16 @@ def initConfigJson():
     config.network_topology_json = open(json_file).read()
 
 
-def maybeInitSprintCommunicator():
+def maybeInitSprintCommunicator(device_proc):
   # initialize SprintCommunicator (if required)
-  if config.has('sh_mem_key'):
+  multiproc = config.bool('multiprocessing', True)
+  if config.has('sh_mem_key') and ((not device_proc and not multiproc) or (device_proc and multiproc)):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
 
 
 def maybeFinalizeSprintCommunicator():
-  if SprintCommunicator.instance is not None:
+  multiproc = config.bool('multiprocessing', True)
+  if SprintCommunicator.instance is not None and ((not device_proc and not multiproc) or (device_proc and multiproc)):
     SprintCommunicator.instance.finalize()
 
 
@@ -281,7 +283,7 @@ def init(configFilename, commandLineOptions):
   initFaulthandler()
   initIPythonKernel()
   initConfigJson()
-  maybeInitSprintCommunicator()
+  maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
   initData()
   printTaskProperties(devices)
