@@ -437,7 +437,7 @@ class Device():
       rnn.initConfigJson()
       rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, asyncTask)
-      rnn.maybeFinalizeSprintCommunicator()
+      rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
       print >> log.v2, "Device %s proc got KeyboardInterrupt" % device

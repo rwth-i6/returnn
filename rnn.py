@@ -99,7 +99,7 @@ def maybeInitSprintCommunicator(device_proc):
     SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
 
 
-def maybeFinalizeSprintCommunicator():
+def maybeFinalizeSprintCommunicator(device_proc):
   multiproc = config.bool('multiprocessing', True)
   if SprintCommunicator.instance is not None and ((not device_proc and not multiproc) or (device_proc and multiproc)):
     SprintCommunicator.instance.finalize()
@@ -293,7 +293,7 @@ def init(configFilename, commandLineOptions):
 def finalize():
   for device in engine.devices:
     device.terminate()
-  maybeFinalizeSprintCommunicator()
+  maybeFinalizeSprintCommunicator(device_proc=False)
 
 
 def executeMainTask():
