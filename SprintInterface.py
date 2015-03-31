@@ -435,6 +435,7 @@ def forward(segmentName, features):
   assert features.shape == (InputDim, T)
 
   # Init sprintDataset with one single entry: the current segment.
+  segmentName = segmentName or "dummy-segment-name"  # Works because we anyway have this single seq only.
   sprintDataset.initFromSegmentOrder([segmentName], {segmentName: {"nframes": T}})
   sprintDataset.initialize()
   sprintDataset.epoch = -1  # Force reinit in init_seq_order().
