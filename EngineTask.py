@@ -18,7 +18,7 @@ class TaskThread(threading.Thread):
       :type network: Network.LayerNetwork
       :type devices: list[Device.Device]
       :type data: Dataset.Dataset
-      :type batches: list[EngineBatch.Batch]
+      :type batches: EngineBatch.BatchSetGenerator
       :type start_batch: int
       :type pad_batches: bool
       :param str report_prefix: such as epoch or so. only for reporting
@@ -50,7 +50,7 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
 
-    def allocate_devices(self, start_batch):
+    def allocate_devices(self):
       """
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
@@ -60,30 +60,27 @@ class TaskThread(threading.Thread):
         device.ctc_targets
         device.tags
         device.index
-      :param int start_batch: start batch index, index of self.batches
-      :rtype: (list[Device.Device], list[list[EngineBatch.Batch]], int)
+      :rtype: (list[Device.Device], list[list[EngineBatch.Batch]])
       :returns list of used devices, list of batches per device, and number of batches which were handled.
       Number of batches will always be positive, but devices could be empty on skipped seqs.
       """
       devices = []; " :type: list[Device.Device] "
       devices_batches = []; " :type: list[list[EngineBatch.Batch]] "
-      batch_idx = start_batch
       for device in self.devices:
-        batches = self.batches[batch_idx:batch_idx + device.num_batches]
-        success, batch_adv_idx = self.assign_dev_data(device,batches)
+        batches = self.batches.peek_next_n(device.num_batches)
+        success, batch_adv_idx = self.assign_dev_data(device, batches)
         if success:
           devices.append(device)
           devices_batches.append(batches)
         else:
           # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
           assert batch_adv_idx > 0
+          batch_idx = self.batches.get_current_batch_idx()
           print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
                            (range(batch_idx, batch_idx + batch_adv_idx),
-                            batches[batch_adv_idx - 1].start[0])
-        batch_idx += batch_adv_idx
-      batch_adv_idx = batch_idx - start_batch
-      assert batch_adv_idx > 0
-      return devices, devices_batches, batch_adv_idx
+                            batches[batch_adv_idx - 1].start_seq)
+        self.batches.advance(batch_adv_idx)
+      return devices, devices_batches
 
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
@@ -105,12 +102,12 @@ class TaskThread(threading.Thread):
       self.finalized = True
 
     class DeviceBatchRun:
-      def __init__(self, parent, batch_idx):
+      def __init__(self, parent):
         """
         :type parent: TaskThread
         """
         self.parent = parent
-        self.batch_idx = batch_idx
+        self.run_start_batch_idx = parent.batches.get_current_batch_idx()
         self.eval_info = None; " :type: dict[str] | None "
         self.num_frames = 0
         self.start()
@@ -125,8 +122,8 @@ class TaskThread(threading.Thread):
 
         device_results, outputs_format = self.device_collect_results()
         if device_results is None:
-          print >> log.v2, "device crashed on batch", self.batch_idx
-          self.parent.device_crash_batch = self.batch_idx
+          print >> log.v2, "device crashed on batch", self.run_start_batch_idx
+          self.parent.device_crash_batch = self.run_start_batch_idx
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
@@ -139,17 +136,15 @@ class TaskThread(threading.Thread):
         return True
 
       def start(self):
-        self.batch_start_time = time.time()
-        self.alloc_devices, self.devices_batches, self.batch_adv_idx = \
-          self.parent.allocate_devices(start_batch=self.batch_idx)
-        assert self.batch_adv_idx > 0
+        self.alloc_devices, self.devices_batches = \
+          self.parent.allocate_devices()
         # Note that alloc_devices could be empty if we skipped seqs.
         if not self.alloc_devices:
           return
         self.device_run()
 
       def device_run(self):
-        batch = self.batch_idx
+        batch_idx = self.run_start_batch_idx
         for device in self.alloc_devices:
           if self.parent.network.recurrent:
             print >> log.v5, "running", device.data.shape[1], \
@@ -157,14 +152,14 @@ class TaskThread(threading.Thread):
           else:
             print >> log.v5, "running", device.data.shape[0], "frames",
           if device.num_batches == 1:
-            print >> log.v5, "of batch %i" % batch,
+            print >> log.v5, "of batch %i" % batch_idx,
           else:
-            print >> log.v5, "of batches %i-%i" % (batch, batch + device.num_batches - 1),
-          print >> log.v5, "/", len(self.parent.batches), "on device", device.name
+            print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
+          print >> log.v5, "on device", device.name
           self.num_frames += device.data.shape[0] * device.data.shape[1]
           self.parent.prepare_device_for_batch(device)
           device.run(self.parent.task)
-          batch += device.num_batches
+          batch_idx += device.num_batches
 
       def device_collect_results(self):
         device_results = []
@@ -202,10 +197,7 @@ class TaskThread(threading.Thread):
         if not self.parent.interactive and not log.v[5]:
           return
         start_elapsed = time.time() - self.parent.start_time
-        num_batches = len(self.parent.batches) - self.parent.start_batch
-        assert num_batches > 0
-        cur_batch = self.batch_idx + self.batch_adv_idx
-        complete = float(cur_batch) / num_batches
+        complete = self.parent.batches.completed_frac()
         assert complete > 0
         total_time_estimated = start_elapsed / complete
         remaining_estimated = total_time_estimated - start_elapsed
@@ -213,8 +205,8 @@ class TaskThread(threading.Thread):
           mem_usage = self.device_mem_usage_str(self.alloc_devices)
           info = [
             self.parent.report_prefix,
-            "batch %i" % self.batch_idx]
-          if self.eval_info:
+            "batch %i" % self.run_start_batch_idx]
+          if self.eval_info:  # Such as score.
             info += ["%s %s" % item for item in sorted(self.eval_info.items())]
           info += [
             "elapsed %s" % hms(start_elapsed),
@@ -286,10 +278,18 @@ class TaskThread(threading.Thread):
         # That works because the device proc will push the results on the queue
         # and device.result() reads it from there without sending another command.
 
-        self.batch_idx = batch_idx
-        if batch_idx < len(self.batches):
-          deviceRun = self.DeviceBatchRun(self, batch_idx)
-          batch_idx += deviceRun.batch_adv_idx
+        if self.stopped:
+          # This happens when we exit Python.
+          # Without this check, this thread would keep running until all exit handlers of Python are done.
+          print >> log.v5, "%s stopped" % self
+          return
+
+        self.batch_idx = self.batches.get_current_batch_idx()
+        if self.batches.has_more():
+          if self.batch_idx < self.start_batch:
+            self.batches.advance(1)
+            continue
+          deviceRun = self.DeviceBatchRun(self)
         else:
           deviceRun = None
 
@@ -317,12 +317,6 @@ class TaskThread(threading.Thread):
           if not deviceRun.finish():
             # We leave self.finalized == False. That way, the engine can see that the device crashed.
             return
-
-        if self.stopped:
-          # This happens when we exit Python.
-          # Without this check, this thread would keep running until all exit handlers of Python are done.
-          print >> log.v5, "%s stopped" % self
-          return
 
       for device in self.devices:
         device.finish_epoch_stats()
@@ -455,8 +449,8 @@ class TrainTaskThread(TaskThread):
 
 
 class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, start_batch = 0, pad_batches=False):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, start_batch, pad_batches)
+    def __init__(self, network, devices, data, batches, pad_batches=False):
+      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, pad_batches=pad_batches)
 
     def initialize(self):
       self.score = 0
@@ -485,17 +479,17 @@ class EvalTaskThread(TaskThread):
 
 
 class SprintCacheForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
+    def __init__(self, network, devices, data, batches, cache, merge={}):
       """
       :type network: Network.LayerNetwork
       :type devices: list[Device.Device]
       :type data: Dataset.Dataset
-      :type batches: list[EngineBatch.Batch]
+      :type batches: EngineBatch.BatchSetGenerator
       :type cache: SprintCache.FileArchive
       :type merge: dict
       :type start_batch: int
       """
-      super(SprintCacheForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
+      super(SprintCacheForwardTaskThread, self).__init__('extract', network, devices, data, batches)
       self.cache = cache
       self.merge = merge
 
@@ -527,8 +521,8 @@ class SprintCacheForwardTaskThread(TaskThread):
 
 
 class HDFForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge = {}, start_batch = 0):
-      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, start_batch)
+    def __init__(self, network, devices, data, batches, cache, merge={}):
+      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches)
       self.tags = []
       self.merge = merge
       self.cache = cache

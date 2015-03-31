@@ -358,8 +358,8 @@ class Engine:
       eval_dump_str = []
       testing_device = self.devices[-1]
       for name in self.eval_datasets.keys():
-        data, num_batches = self.eval_datasets[name]
-        tester = EvalTaskThread(self.network, [testing_device], data, num_batches, self.pad_batches)
+        data, batches = self.eval_datasets[name]
+        tester = EvalTaskThread(self.network, [testing_device], data, batches, pad_batches=self.pad_batches)
         tester.join()
         trainer.elapsed += tester.elapsed
         eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
@@ -431,6 +431,7 @@ class Engine:
     batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
     num_data_batches = len(batches)
     num_batches = 0
+    # TODO: This code is broken.
     out = open(label_file, 'w')
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
@@ -456,6 +457,7 @@ class Engine:
     batches = data.generate_batches(self.network.recurrent, data.num_timesteps, 1)
     num_data_batches = len(batches)
     num_batches = 0
+    # TODO: This code is broken.
     while num_batches < num_data_batches:
       alloc_devices = self.allocate_devices(data, batches, num_batches)
       for batch, device in enumerate(alloc_devices):

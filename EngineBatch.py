@@ -69,3 +69,81 @@ class Batch:
     return self.start_seq + self.get_num_seqs()
 
 
+class BatchSetGenerator:
+  def __init__(self, dataset, generator):
+    """
+    :type dataset: Dataset.Dataset
+    :type generator: iter[Batch]
+    """
+    self.dataset = dataset
+    self.generator = generator
+    self.buffer = []; " :type: list[Batch] "
+    self.reached_end = False
+    self.last_batch = None; " :type: Batch "
+    self.current_batch_idx = 0
+
+  def _read_next(self):
+    if self.reached_end:
+      return False
+    try:
+      batch = next(self.generator)
+    except StopIteration:
+      self.reached_end = True
+      return False
+    else:
+      self.buffer += [batch]
+      return True
+
+  def _read_next_up_to_n(self, n):
+    for i in range(n):
+      if len(self.buffer) >= n:
+        break
+      if not self._read_next():
+        break
+
+  def peek_next_n(self, n):
+    """
+    :type: list[Batch]
+    :returns it might return less. There is no way to know in advance.
+    If self.has_more() is True, it will at least return one.
+    """
+    self._read_next_up_to_n(n)
+    return self.buffer[:n]
+
+  def advance(self, n):
+    """
+    :type n: int
+    """
+    assert n > 0
+    self._read_next_up_to_n(n)
+    assert n <= len(self.buffer)
+    self.last_batch = self.buffer[n - 1]
+    self.buffer = self.buffer[n:]
+    self.current_batch_idx += n
+
+  def completed_frac(self):
+    """
+    :rtype: float
+    :returns 0-1
+    """
+    if not self.last_batch:
+      return 0.0
+    # We cannot use the batch idx because we don't know the number
+    # of batches in advance. Thus, we use the seq idx instead.
+    # It's good enough.
+    assert self.dataset.num_seqs > 0
+    return float(self.last_batch.start_seq) / self.dataset.num_seqs
+
+  def has_more(self):
+    """
+    :rtype: bool
+    """
+    if len(self.buffer) > 0:
+      return True
+    return self._read_next()
+
+  def get_current_batch_idx(self):
+    """
+    :rtype: int
+    """
+    return self.current_batch_idx
