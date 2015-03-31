@@ -83,9 +83,6 @@ class SprintDataset(Dataset):
   def load_seqs(self, start, end, free=True, fill=True):
     print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end, free, fill
     if start == end: return
-    if thread.get_ident() == self.main_thread_id:
-      print >> log.v5, "SprintDataset load_seqs: ignore from main thread"
-      return
     with self.lock:
       assert self.alloc_intervals  # Must be initialized.
       if self._haveSeqsAdded(start, end): return
@@ -106,6 +103,11 @@ class SprintDataset(Dataset):
     self.cond.notify_all()
 
     if self.seq_added_last < end - 1:
+      if thread.get_ident() == self.main_thread_id:
+        # This might get called for self.cache_byte_size_limit_at_start at self.init_seqs().
+        # We ignore it to avoid any possible deadlock.
+        print >> log.v5, "SprintDataset load_seqs: ignore from main thread"
+        return
       # We should not get here if we have called have_seqs() before -- which is normally the case.
       print >> log.v5, "SprintDataset load_seqs (%i,%i): have not seqs. wait for addNewData... (%s)" % \
                        (start, end, self._add_data_thread_debug_info())
@@ -150,6 +152,10 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
 
       if self.seq_added_last < end - 1:
+        if thread.get_ident() == self.main_thread_id:
+          # We ignore it to avoid any possible deadlock.
+          print >> log.v5, "SprintDataset have_seqs: ignore from main thread"
+          return False
         print >> log.v5, "SprintDataset have_seqs (%i,%i): wait for addNewData... (%s)" % \
                          (start, end, self._add_data_thread_debug_info())
         assert self.add_data_thread_id != thread.get_ident()
