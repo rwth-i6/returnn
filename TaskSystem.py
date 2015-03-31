@@ -538,7 +538,11 @@ class AsyncTask:
     self.conn.close()
     if self.isParent and self.child_pid:
       import signal
-      os.kill(self.child_pid, signal.SIGINT)
+      try:
+        os.kill(self.child_pid, signal.SIGINT)
+      except OSError:
+        # Could be that the process already died or so. Just ignore and assume it is dead.
+        pass
       self.child_pid = None
 
   terminate = setCancel  # alias
