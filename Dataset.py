@@ -639,6 +639,46 @@ class Dataset(object):
         priori[t] += 1
     return numpy.array(priori / self.num_timesteps, dtype = theano.config.floatX)
 
+  def _generate_batches(self, recurrent_net, batch_size, batch_step, max_seqs=-1):
+    """
+    :type recurrent_net: bool
+    :type batch_size: int
+    :type batch_step: int
+    :type max_seqs: int
+    """
+    if max_seqs == -1: max_seqs = self.num_seqs
+    if batch_step == -1: batch_step = batch_size
+
+    batch = Batch([0, 0])
+    s = 0
+    while s < self.num_seqs:
+      length = self.seq_lengths[self.seq_index[s]]
+      if recurrent_net:
+        if length > batch_size:
+          print >> log.v4, "warning: sequence length (" + str(length) + ") larger than limit (" + str(batch_size) + ")"
+        dt, ds = batch.try_sequence(length)
+        if ds == 1:
+          batch.add_sequence(length)
+        else:
+          if dt * ds > batch_size or ds > max_seqs:
+            yield batch
+            s = s - ds + min(batch_step, ds)
+            batch = Batch([s, 0])
+            length = self.seq_lengths[self.seq_index[s]]
+          batch.add_sequence(length)
+      else:
+        while length > 0:
+          num_frames = min(length, batch_size - batch.data_shape[0])
+          if num_frames == 0 or batch.nseqs > max_seqs:
+            yield batch
+            batch = Batch([s, self.seq_lengths[self.seq_index[s]] - length])
+            num_frames = min(length, batch_size)
+          batch.add_frames(num_frames)
+          length -= min(num_frames, batch_step)
+        if s != self.num_seqs - 1: batch.nseqs += 1
+      s += 1
+    yield batch
+
   def generate_batches(self, recurrent_net, batch_size, batch_step, max_seqs=-1):
     """
     :type recurrent_net: bool
@@ -647,38 +687,4 @@ class Dataset(object):
     :type max_seqs: int
     :rtype: BatchSetGenerator
     """
-    if max_seqs == -1: max_seqs = self.num_seqs
-    if batch_step == -1: batch_step = batch_size
-
-    def generator():
-      batch = Batch([0, 0])
-      s = 0
-      while s < self.num_seqs:
-        length = self.seq_lengths[self.seq_index[s]]
-        if recurrent_net:
-          if length > batch_size:
-            print >> log.v4, "warning: sequence length (" + str(length) + ") larger than limit (" + str(batch_size) + ")"
-          dt, ds = batch.try_sequence(length)
-          if ds == 1:
-            batch.add_sequence(length)
-          else:
-            if dt * ds > batch_size or ds > max_seqs:
-              yield batch
-              s = s - ds + min(batch_step, ds)
-              batch = Batch([s, 0])
-              length = self.seq_lengths[self.seq_index[s]]
-            batch.add_sequence(length)
-        else:
-          while length > 0:
-            num_frames = min(length, batch_size - batch.data_shape[0])
-            if num_frames == 0 or batch.nseqs > max_seqs:
-              yield batch
-              batch = Batch([s, self.seq_lengths[self.seq_index[s]] - length])
-              num_frames = min(length, batch_size)
-            batch.add_frames(num_frames)
-            length -= min(num_frames, batch_step)
-          if s != self.num_seqs - 1: batch.nseqs += 1
-        s += 1
-      yield batch
-
-    return BatchSetGenerator(self, generator())
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, batch_step, max_seqs))

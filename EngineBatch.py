@@ -70,6 +70,14 @@ class Batch:
 
 
 class BatchSetGenerator:
+  """
+  This will give you the next batches (list[Batch]) such that you can use them for assign_dev_data().
+  We get those batches from a generator, i.e. lazily on-the-fly. This is the whole point of BatchSetGenerator
+  - that we must not know the whole list of batches in advance.
+  As assign_dev_data() can fail for various reasons, we buffer the list of batches and
+  you call self.advance() explicitly to go forward to next batches.
+  """
+
   def __init__(self, dataset, generator):
     """
     :type dataset: Dataset.Dataset
