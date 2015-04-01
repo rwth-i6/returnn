@@ -3,6 +3,26 @@ import os
 import sys
 
 
+def dumpAllThreadTracebacks(exclude_thread_ids=set()):
+  import better_exchook
+  import threading
+
+  if hasattr(sys, "_current_frames"):
+    print ""
+    threads = {t.ident: t for t in threading.enumerate()}
+    for tid, stack in sys._current_frames().items():
+      if tid in exclude_thread_ids: continue
+      # This is a bug in earlier Python versions.
+      # http://bugs.python.org/issue17094
+      # Note that this leaves out all threads not created via the threading module.
+      if tid not in threads: continue
+      print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
+      better_exchook.print_traceback(stack)
+      print ""
+  else:
+    print "Does not have sys._current_frames, cannot get thread tracebacks."
+
+
 def initBetterExchook():
   import thread
   import threading
@@ -18,18 +38,7 @@ def initBetterExchook():
         # We are the main thread and we got an exit-exception. This is likely fatal.
         # This usually means an exit. (We ignore non-daemon threads and procs here.)
         # Print the stack of all other threads.
-        if hasattr(sys, "_current_frames"):
-          print ""
-          threads = {t.ident: t for t in threading.enumerate()}
-          for tid, stack in sys._current_frames().items():
-            if tid == main_thread_id: continue
-            # This is a bug in earlier Python versions.
-            # http://bugs.python.org/issue17094
-            # Note that this leaves out all threads not created via the threading module.
-            if tid not in threads: continue
-            print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
-            better_exchook.print_traceback(stack)
-            print ""
+        dumpAllThreadTracebacks({main_thread_id})
 
   sys.excepthook = excepthook
 

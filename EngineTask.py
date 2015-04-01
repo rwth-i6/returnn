@@ -35,6 +35,7 @@ class TaskThread(threading.Thread):
       self.elapsed = 0
       self.finalized = False
       self.score = None
+      self.num_frames = 0
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
@@ -131,7 +132,7 @@ class TaskThread(threading.Thread):
                                               results=device_results,
                                               result_format=outputs_format,
                                               num_frames=self.num_frames)
-
+        self.parent.num_frames += self.num_frames
         self.print_process()
         return True
 
@@ -145,18 +146,18 @@ class TaskThread(threading.Thread):
 
       def device_run(self):
         batch_idx = self.run_start_batch_idx
-        for device in self.alloc_devices:
+        for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
             print >> log.v5, "running", device.data.shape[1], \
-                             "sequences (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
+                             "sequence slices (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
           else:
-            print >> log.v5, "running", device.data.shape[0], "frames",
+            print >> log.v5, "running", device.data.shape[0] * device.data.shape[1], "frames",
           if device.num_batches == 1:
             print >> log.v5, "of batch %i" % batch_idx,
           else:
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
-          self.num_frames += device.data.shape[0] * device.data.shape[1]
+          self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
           self.parent.prepare_device_for_batch(device)
           device.run(self.parent.task)
           batch_idx += device.num_batches
@@ -262,7 +263,6 @@ class TaskThread(threading.Thread):
       self.interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting task", self.task
 
-      batch_idx = self.start_batch
       canRunAsync = self.device_can_run_async()
       remainingDeviceRun = None; " :type: DeviceBatchRun "
 
@@ -345,7 +345,7 @@ class TrainTaskThread(TaskThread):
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
     :type data: Dataset.Dataset
-    :type batches: list[EngineBatch.Batch]
+    :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
     :type start_batch: int
@@ -402,6 +402,7 @@ class TrainTaskThread(TaskThread):
     """
     assert results
     assert result_format  # train should always have the format
+    assert num_frames > 0
     results = [Device.make_result_dict(res, result_format) for res in results]
     score = sum([res["cost"] for res in results])
     if numpy.isinf(score) or numpy.isnan(score):
@@ -441,10 +442,11 @@ class TrainTaskThread(TaskThread):
       assert len(params) == len(our_params)
       for i in range(len(params)):
         our_params[i].set_value(params[i])
-    if self.data.num_timesteps > 0:
-      self.score /= float(self.data.num_timesteps)
-      if self.do_ctc_priors:
-        self.ctc_priors /= float(self.data.num_timesteps)
+    assert self.num_frames > 0
+    # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
+    self.score /= float(self.num_frames)
+    if self.do_ctc_priors:
+      self.ctc_priors /= float(self.num_frames)
     super(TrainTaskThread, self).finalize()
 
 
@@ -465,17 +467,20 @@ class EvalTaskThread(TaskThread):
       :type num_frames: int
       """
       assert results
+      assert num_frames > 0
       score = sum([res[0] for res in results])
       self.score += score
       self.error += sum([res[1] for res in results])
       return {"score": score / num_frames}
 
     def finalize(self):
-      self.score /= float(self.data.num_timesteps)
-      if self.network.loss in ('ctc','ce_ctc'):
+      assert self.num_frames > 0
+      self.score /= float(self.num_frames)
+      if self.network.loss in ('ctc', 'ce_ctc'):
+        assert self.num_frames == self.data.get_num_timesteps()  # Wrong otherwise. E.g. chunking.
         self.error /= float(self.data.num_running_chars)
       else:
-        self.error /= float(self.data.num_timesteps)
+        self.error /= float(self.num_frames)
 
 
 class SprintCacheForwardTaskThread(TaskThread):
@@ -513,11 +518,11 @@ class SprintCacheForwardTaskThread(TaskThread):
       batch = batchess[0][0]
       assert batch.get_num_seqs() == 1
       seq_idx = batch.start_seq
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.tags[self.data.seq_index[seq_idx]]
+      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.get_tag(seq_idx)
       times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
       #times = zip(range(0, len(features)), range(1, len(features) + 1))
       self.toffset += len(features)
-      self.cache.addFeatureCache(self.data.tags[self.data.seq_index[seq_idx]], numpy.asarray(features), numpy.asarray(times))
+      self.cache.addFeatureCache(self.data.get_tag(seq_idx), numpy.asarray(features), numpy.asarray(times))
 
 
 class HDFForwardTaskThread(TaskThread):
@@ -564,9 +569,9 @@ class HDFForwardTaskThread(TaskThread):
       batch = batchess[0][0]
       assert batch.get_num_seqs() == 1
       seq_idx = batch.start_seq
-      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.tags[self.data.seq_index[seq_idx]]
+      print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.get_tag(seq_idx)
       self.seq_dims[seq_idx] = [features.shape[1]]
       self.seq_lengths[seq_idx] = features.shape[1]
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
-      self.tags.append(self.data.tags[self.data.seq_index[seq_idx]])
+      self.tags.append(self.data.get_tag(seq_idx))

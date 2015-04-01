@@ -44,7 +44,7 @@ Debug.initIPythonKernel()
 
 # Start Sprint PythonSegmentOrder interface. {
 
-def getSegmentList(corpusName, segmentList, segmentsInfo):
+def getSegmentList(corpusName, segmentList, **kwargs):
   """
   Called by Sprint PythonSegmentOrder.
   Set python-segment-order = true in Sprint to use this.
@@ -54,6 +54,8 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
   it will get called way earlier before the init() below.
   It might also get called multiple times, e.g. if
   Sprint is in interactive mode to calc the seg count.
+  This is optional. You can use the SprintInterface
+  only for the PythonTrainer.
 
   :type corpusName: str
   :type segmentList: list[str]
@@ -66,11 +68,10 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
   print("(This can be further filtered in Sprint by a whitelist or so.)")
 
   # Init what we need. These can be called multiple times.
+  # If we use both the PythonSegmentOrder and the PythonTrainer, this will be called first.
+  # The PythonTrainer will be called lazily once it gets the first data.
   initBase()
-  with sprintDataset.lock:
-    assert not isTrainThreadStarted
-    sprintDataset.initFromSegmentOrder(segmentList, segmentsInfo)
-    sprintDataset.finalized = False
+  sprintDataset.useMultipleEpochs()
 
   finalEpoch = getFinalEpoch()
   startEpoch, startSegmentIdx = Engine.get_train_start_epoch_batch(config)
@@ -80,26 +81,38 @@ def getSegmentList(corpusName, segmentList, segmentsInfo):
   # Loop over multiple epochs. Epochs start at 1.
   for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
-      waitUntilTrainerInEpoch(curEpoch)
+      # So that the CRNN train thread always has the SprintDataset in a sane state before we reset it.
+      sprintDataset.waitForCrnnEpoch(curEpoch)
+    sprintDataset.initSprintEpoch(curEpoch)
 
-    with sprintDataset.lock:
-      sprintDataset.init_seq_order(epoch=curEpoch)
-      segmentList = sprintDataset.getSegmentList()
+    index_list = sprintDataset.get_seq_order_for_epoch(curEpoch, len(segmentList))
+    orderedSegmentList = [segmentList[i] for i in index_list]
+    assert len(orderedSegmentList) == len(segmentList)
 
     print("Sprint epoch: %i" % curEpoch)
     startSegmentIdx = 0
     if curEpoch == startEpoch: startSegmentIdx = startSegmentIdx
-    for curSegmentIdx in range(startSegmentIdx, len(segmentList)):
-      yield segmentList[curSegmentIdx]
+    for curSegmentIdx in range(startSegmentIdx, len(orderedSegmentList)):
+      sprintDataset.set_complete_frac(float(curSegmentIdx - startSegmentIdx) /
+                                      (len(orderedSegmentList) - startSegmentIdx))
+      yield orderedSegmentList[curSegmentIdx]
 
-  sprintDataset.finalize()
+    print("Sprint finished epoch %i" % curEpoch)
+    sprintDataset.finishSprintEpoch()
+
+    if isTrainThreadStarted:
+      assert sprintDataset.get_num_timesteps() > 0, \
+        "We did not received any seqs. You are probably using a buffered feature extractor and the buffer is " + \
+        "bigger than the total number of time frames in the corpus."
+
+  sprintDataset.finalizeSprint()
 
 # End Sprint PythonSegmentOrder interface. }
 
 
 # Start Sprint PythonTrainer interface. {
 
-def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
+def init(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
   Set trainer = python-trainer in Sprint to enable.
@@ -110,16 +123,13 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
   :type outputDim: int
   :param str config: config string, passed by Sprint. assumed to be ","-separated
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
-  :param bool cudaEnabled: whether Sprint has CUDA enabled
-  :param int cudaActiveGpu: the GPU idx used by Sprint
   """
   print "Python train init()"
   print "inputDim:", inputDim
   print "outputDim:", outputDim
   print "config:", config
   print "targetMode:", targetMode
-  print "Sprint cudaEnabled:", cudaEnabled
-  print "Sprint cudaActiveGpu:", cudaActiveGpu
+  print "other args:", kwargs
   global InputDim, OutputDim
   InputDim = inputDim
   OutputDim = outputDim
@@ -144,10 +154,6 @@ def init(inputDim, outputDim, config, targetMode, cudaEnabled, cudaActiveGpu):
     assert False, "unknown action: %r" % action
 
   initBase(targetMode=targetMode)
-  if Task == "train":
-    # Note: Atm, we must know all the segment info in advance.
-    # The CRNN Engine.train() depends on that.
-    assert sprintDataset.num_seqs > 0, "need to have data seqs, via segment_order mod"
   sprintDataset.setDimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
@@ -161,6 +167,7 @@ def exit():
   print "Python train exit()"
   assert isInitialized
   assert isTrainThreadStarted
+  sprintDataset.finishSprintEpoch()  # In case this was not called yet.
   trainThread.join()
   rnn.finalize()
   print >> log.v3, ("elapsed total time: %f" % (time.time() - startTime))
@@ -333,7 +340,7 @@ def startTrainThread(epoch=None):
 
   global trainThread
   trainThread = Thread(target=trainThreadFunc, name="Sprint CRNN train thread")
-  trainThread.daemon = True
+  trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
   global startTime
@@ -361,7 +368,7 @@ def initDataset():
   if sprintDataset:
     return
   assert config
-  sprintDataset, _ = SprintDataset.load_data(config, rnn.getCacheByteSizes()[0])
+  sprintDataset = SprintDataset.from_config(config)
 
 
 def getFinalEpoch():
@@ -375,18 +382,6 @@ def getFinalEpoch():
   return config_num_epochs
 
 
-def waitUntilTrainerInEpoch(epoch):
-  assert isTrainThreadStarted
-  assert engine
-  while True:
-    with engine.lock:
-      if engine.training_finished: return
-      if engine.is_training:
-        if engine.epoch == epoch: return
-        assert engine.epoch < epoch  # would confuse the seq order otherwise...
-      engine.cond.wait()
-
-
 def train(segmentName, features, targets=None):
   """
   :param str|None segmentName: full name
@@ -396,7 +391,7 @@ def train(segmentName, features, targets=None):
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset
 
-  sprintDataset.addNewData(segmentName, features, targets)
+  sprintDataset.addNewData(features, targets)
 
   # The CRNN train thread started via start() will do the actual training.
 
@@ -434,15 +429,10 @@ def forward(segmentName, features):
   T = features.shape[1]
   assert features.shape == (InputDim, T)
 
-  # Init sprintDataset with one single entry: the current segment.
-  segmentName = segmentName or "dummy-segment-name"  # Works because we anyway have this single seq only.
-  sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
-  sprintDataset.initFromSegmentOrder([segmentName], {segmentName: {"nframes": T}})
-  sprintDataset.initialize()
-  sprintDataset.epoch = -1  # Force reinit in init_seq_order().
-  sprintDataset.init_seq_order(0)  # Epoch does not matter.
   # Fill the data for the current segment.
-  seq = sprintDataset.addNewData(segmentName, features)
+  sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
+  sprintDataset.init_seq_order()
+  seq = sprintDataset.addNewData(features)
 
   # Prepare data for device.
   device = engine.devices[0]

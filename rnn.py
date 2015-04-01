@@ -18,6 +18,7 @@ from Device import Device, get_num_devices
 from Config import Config
 from Engine import Engine
 from Dataset import Dataset
+from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
@@ -225,15 +226,15 @@ def initData():
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
   global train, dev, eval
-  dev, extra_cache_bytes_dev = Dataset.load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
-                                                 batching="sorted", shuffle_frames_of_nseqs=0)
-  eval, extra_cache_bytes_eval = Dataset.load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
-                                                   batching="sorted", shuffle_frames_of_nseqs=0)
+  dev, extra_cache_bytes_dev = HDFDataset.load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
+                                                    seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  eval, extra_cache_bytes_eval = HDFDataset.load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
+                                                      seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
     train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
-  train, extra_train = Dataset.load_data(config, train_cache_bytes, 'train')
+  train, extra_train = HDFDataset.load_data(config, train_cache_bytes, 'train')
 
 
 def printTaskProperties(devices):
@@ -246,15 +247,15 @@ def printTaskProperties(devices):
     print >> log.v2, "  input:", train.num_inputs, "x", train.window
     print >> log.v2, "  output:", train.num_outputs
     print >> log.v2, "  sequences:", train.num_seqs
-    print >> log.v2, "  frames:", train.num_timesteps
+    print >> log.v2, "  frames:", train.get_num_timesteps()
   if dev:
     print >> log.v2, "Dev data:"
     print >> log.v2, "  sequences:", dev.num_seqs
-    print >> log.v2, "  frames:", dev.num_timesteps
+    print >> log.v2, "  frames:", dev.get_num_timesteps()
   if eval:
     print >> log.v2, "Eval data:"
     print >> log.v2, "  sequences:", eval.num_seqs
-    print >> log.v2, "  frames:", eval.num_timesteps
+    print >> log.v2, "  frames:", eval.get_num_timesteps()
 
   print >> log.v3, "Devices:"
   for device in devices:

@@ -149,7 +149,7 @@ class Engine:
     self.dev_data = dev_data
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
-    self.batch_size, self.batch_step = config.int_pair('batch_size', (1,1))
+    self.batch_size = config.int('batch_size', 1)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
@@ -231,15 +231,13 @@ class Engine:
 
   def train(self):
     print >> log.v3, "start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch)
-    print >> log.v3, "using batch size/step: %i, %i, max seqs: %i" % (self.batch_size, self.batch_step, self.max_seqs)
+    print >> log.v3, "using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs)
     print >> log.v3, "learning rate control:", self.learning_rate_control
     print >> log.v3, "pretrain:", self.pretrain
-    self.eval_datasets = {}; """ :type: dict[str,(Dataset.Dataset,list[Batch])] """
-    for name, dataset in [("eval", self.dev_data), ("eval", self.eval_data)]:
+    self.eval_datasets = {}; """ :type: dict[str,Dataset.Dataset] """
+    for name, dataset in [("dev", self.dev_data), ("eval", self.eval_data)]:
       if not dataset: continue
-      if dataset.num_seqs == 0: continue
-      self.eval_datasets[name] = (dataset, dataset.generate_batches(self.network.recurrent,
-                                                                    self.batch_size, self.batch_step))
+      self.eval_datasets[name] = dataset
     if self.network.loss == 'priori':
       prior = self.train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
@@ -333,8 +331,9 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    train_batches = self.train_data.generate_batches(self.network.recurrent,
-                                                     self.batch_size, self.batch_step, self.max_seqs)
+    train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
+                                                     batch_size=self.batch_size,
+                                                     max_seqs=self.max_seqs)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
@@ -358,8 +357,10 @@ class Engine:
       eval_dump_str = []
       testing_device = self.devices[-1]
       for name in self.eval_datasets.keys():
-        data, batches = self.eval_datasets[name]
-        tester = EvalTaskThread(self.network, [testing_device], data, batches, pad_batches=self.pad_batches)
+        dataset = self.eval_datasets[name]
+        batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
+        tester = EvalTaskThread(self.network, [testing_device], data=dataset, batches=batches,
+                                pad_batches=self.pad_batches)
         tester.join()
         trainer.elapsed += tester.elapsed
         eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
@@ -384,7 +385,7 @@ class Engine:
     :type combine_labels: str
     """
     cache = SprintCache.FileArchive(cache_file)
-    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(self.network.recurrent, data.get_num_timesteps(), data.get_num_timesteps(), 1)
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
@@ -409,7 +410,8 @@ class Engine:
     :type combine_labels: str
     """
     cache = h5py.File(output_file, "w")
-    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent,
+                                    batch_size=data.get_num_timesteps(), max_seqs=1)
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
@@ -428,7 +430,8 @@ class Engine:
     cache.close()
 
   def classify(self, device, data, label_file):
-    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, data.num_timesteps, 1)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent,
+                                    batch_size=data.num_timesteps, max_seqs=1)
     num_data_batches = len(batches)
     num_batches = 0
     # TODO: This code is broken.

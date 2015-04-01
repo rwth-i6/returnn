@@ -15,67 +15,63 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   :rtype: (bool,int)
   """
   # The final device.data.shape is in format (time,batch,feature).
-  shape = [0, 0]
+  shape = [0, 0]  # time,batch
   for batch in batches:
     shape = [max(shape[0], batch.data_shape[0]), shape[1] + batch.data_shape[1]]
   if shape[1] == 0:
     return False, len(batches)
+  assert shape[0] * shape[1] > 0
 
-  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.max_ctc_length, pad=pad_batches)
-  offset = 0
-  for i, batch in enumerate(batches):
-    if not dataset.have_seqs(batch.start_seq, batch.get_end_seq()):
-      # We could also just skip those seqs. However, we might want to keep all batches
-      # of similar sizes to have more stable training. Thus, we skip this batch.
-      return False, i + 1
+  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.get_max_ctc_length(), pad=pad_batches)
 
-    dataset.load_seqs(batch.start_seq, batch.get_end_seq())
-    idi = dataset.alloc_interval_index(batch.start_seq)
-    assert idi >= 0, "failed to load seqs (%i, %i)" % (batch.start_seq, batch.get_end_seq())
-    if recurrent:
-      for s in xrange(batch.start_seq, batch.start_seq + batch.data_shape[1]):
-        ids = dataset.seq_index[s]  # the real seq idx after sorting
-        l = dataset.seq_lengths[ids]
-        with dataset.lock:
-          o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
-          assert o >= 0
-          q = s - batch.start_seq + offset
-          device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
-        device.targets[:l, q] = dataset.targets[dataset.get_seq_start(s) + batch.start[1]:
-                                                dataset.get_seq_start(s) + batch.start[1] + l]
-        if pad_batches:
-          #pad with equivalent to 0
-          #these are the hardcoded values for IAM
-          #TODO load this from somewhere
+  offset_slice = 0
+  for batch in batches:
+    dataset.load_seqs(batch.start_seq, batch.end_seq)
+
+    for seq in batch.seqs:
+      o = seq.batch_frame_offset
+      q = seq.batch_slice + offset_slice
+      l = seq.frame_length
+      assert o + l <= shape[0]
+      assert q < shape[1]
+      device.index[o:o + l, q] = numpy.ones((l,), dtype='int8')
+
+      with dataset.lock:
+        data = dataset.get_data(seq.seq_idx)[seq.seq_start_frame:seq.seq_end_frame]
+        targets = dataset.get_targets(seq.seq_idx)[seq.seq_start_frame:seq.seq_end_frame]
+        device.data[o:o + l, q] = data
+        device.targets[o:o + l, q] = targets
+
+        if recurrent and pad_batches:
+          assert o == 0  # Doesn't make sense otherwise.
+          # pad with equivalent to 0
+          # these are the hardcoded values for IAM
+          # TODO load this from somewhere
           pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
                       -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
                       0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
                       0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-          device.data[l:, q] = pad_data
-          #also pad targets
-          #hardcoded si for IAM
-          #TODO load this from somewhere
+          device.data[o + l:, q] = pad_data
+          # also pad targets
+          # hardcoded si for IAM
+          # TODO load this from somewhere
           pad_target = 189
-          device.targets[l:, q] = pad_target
-        #only copy ctc targets if chunking is inactive to avoid out of range access (ctc is not comaptible with chunking anyway)
+          device.targets[o + l:, q] = pad_target
+
+        # Only copy ctc targets if chunking is inactive to avoid out of range access.
+        # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
-        if dataset.ctc_targets is not None and not chunking_active:
-          device.ctc_targets[q] = dataset.ctc_targets[ids]
-        device.tags[q] = dataset.tags[ids] #TODO
-        device.index[:l, q] = numpy.ones((l,), dtype = 'int8')
-      offset += batch.data_shape[1]
-    else:
-      with dataset.lock:
-        seq_start = dataset.get_seq_start(batch.start_seq) + batch.start[1]
-        alloc_start_seq, _, alloc_data = dataset.alloc_intervals[idi]
-        o = seq_start - dataset.get_seq_start(alloc_start_seq)
-        assert o >= 0
-        l = batch.data_shape[0]
-        assert alloc_data.shape[0] >= o + l
-        device.data[offset:offset + l, 0] = alloc_data[o:o + l]
-      device.targets[offset:offset + l, 0] = dataset.targets[seq_start:seq_start + l]
-      device.index[offset:offset + l, 0] = numpy.ones((l,), dtype='int8')
-      offset += l
+        if dataset.has_ctc_targets() and not chunking_active:
+          assert dataset.get_seq_length(seq.seq_idx) == l  # Full seq.
+          device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
+
+        device.tags[q] = dataset.get_tag(seq.seq_idx)
+
+    # Note on multiple batches for the non-recurrent case:
+    # We could either concatenate all into a single slice, or do multiple slices.
+    # We do multiple slices here.
+    # See also the `shape` calculation above.
+    offset_slice += batch.num_slices
 
   return True, len(batches)
 
@@ -88,10 +84,8 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :return: whether we succeeded
   :rtype: bool
   """
-  if not dataset.have_seqs(seq, seq + 1):
-    return False
-  batch = Batch([seq, 0])
-  batch.data_shape = (dataset.get_seq_length(seq), 1)
+  batch = Batch()
+  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 
