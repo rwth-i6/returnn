@@ -360,6 +360,13 @@ class Dataset(object):
     real_seq_idx = self.seq_index[sorted_seq_idx]
     return self.seq_lengths[real_seq_idx]
 
+  def get_seq_start(self, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: int
+    """
+    return self.seq_start[sorted_seq_idx]
+
   def have_seqs(self, start, end):
     """
     :param int start: start sorted seq idx
@@ -430,7 +437,7 @@ class Dataset(object):
       start, end = self._load_seqs_superset(start, end)
       self._load_seqs(start, end)
       while start < end:
-        self.shuffle_seqs(start, min(self.num_seqs, start + self.shuffle_frames_of_nseqs))
+        self._shuffle_seqs(start, min(self.num_seqs, start + self.shuffle_frames_of_nseqs))
         start += self.shuffle_frames_of_nseqs
     else:
       self._load_seqs(start, end)
@@ -453,7 +460,11 @@ class Dataset(object):
       end = min(self.num_seqs, end + (m - (end % m)) % m)
     return start, end
 
-  def shuffle_seqs(self, start, end):
+  def _shuffle_seqs(self, start, end):
+    """
+    :type start: int
+    :type end: int
+    """
     assert start < end
     assert self.is_cached(start, end)
     alloc_idx = self.alloc_interval_index(start)
@@ -504,7 +515,7 @@ class Dataset(object):
         l = self.seq_lengths[ids]
         if 'targetClasses' in fin:
           y = targs[p : p + l]; """ :type: list[int] """
-          self.targets[self.seq_start[idc] : self.seq_start[idc] + l] = y
+          self.targets[self.get_seq_start(idc):self.get_seq_start(idc) + l] = y
         x = inputs[p : p + l]
         self._set_alloc_intervals_data(idc, data=x)
       fin.close()
@@ -635,7 +646,7 @@ class Dataset(object):
     priori = numpy.zeros((self.num_outputs,), dtype = theano.config.floatX)
     for i in xrange(self.num_seqs):
       self.load_seqs(i, i + 1)
-      for t in self.targets[self.seq_start[i] : self.seq_start[i] + self.seq_lengths[self.seq_index[i]]]:
+      for t in self.targets[self.get_seq_start(i):self.get_seq_start(i) + self.get_seq_length(i)]:
         priori[t] += 1
     return numpy.array(priori / self.num_timesteps, dtype = theano.config.floatX)
 

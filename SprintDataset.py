@@ -122,7 +122,7 @@ class SprintDataset(Dataset):
     for r in ranges:
       self.insert_alloc_interval(*r)
     for idxSorted, features, targets in self.add_data_queue:
-      seqStart = self.seq_start[idxSorted]
+      seqStart = self.get_seq_start(idxSorted)
       seqLen = features.shape[0]
       self._set_alloc_intervals_data(idxSorted, data=features)
       if targets is not None:

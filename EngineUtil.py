@@ -24,24 +24,25 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.max_ctc_length, pad=pad_batches)
   offset = 0
   for i, batch in enumerate(batches):
-    if not dataset.have_seqs(batch.start[0], batch.get_end_seq()):
+    if not dataset.have_seqs(batch.start_seq, batch.get_end_seq()):
       # We could also just skip those seqs. However, we might want to keep all batches
       # of similar sizes to have more stable training. Thus, we skip this batch.
       return False, i + 1
 
-    dataset.load_seqs(batch.start[0], batch.get_end_seq())
-    idi = dataset.alloc_interval_index(batch.start[0])
-    assert idi >= 0, "failed to load seqs (%i, %i)" % (batch.start[0], batch.get_end_seq())
+    dataset.load_seqs(batch.start_seq, batch.get_end_seq())
+    idi = dataset.alloc_interval_index(batch.start_seq)
+    assert idi >= 0, "failed to load seqs (%i, %i)" % (batch.start_seq, batch.get_end_seq())
     if recurrent:
-      for s in xrange(batch.start[0], batch.start[0] + batch.data_shape[1]):
+      for s in xrange(batch.start_seq, batch.start_seq + batch.data_shape[1]):
         ids = dataset.seq_index[s]  # the real seq idx after sorting
         l = dataset.seq_lengths[ids]
         with dataset.lock:
           o = dataset.seq_start[s] + batch.start[1] - dataset.seq_start[dataset.alloc_intervals[idi][0]]
           assert o >= 0
-          q = s - batch.start[0] + offset
+          q = s - batch.start_seq + offset
           device.data[:l, q] = dataset.alloc_intervals[idi][2][o:o + l]
-        device.targets[:l, q] = dataset.targets[dataset.seq_start[s] + batch.start[1]:dataset.seq_start[s] + batch.start[1] + l]
+        device.targets[:l, q] = dataset.targets[dataset.get_seq_start(s) + batch.start[1]:
+                                                dataset.get_seq_start(s) + batch.start[1] + l]
         if pad_batches:
           #pad with equivalent to 0
           #these are the hardcoded values for IAM
@@ -65,9 +66,9 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       offset += batch.data_shape[1]
     else:
       with dataset.lock:
-        seq_start = dataset.seq_start[batch.start[0]] + batch.start[1]
+        seq_start = dataset.get_seq_start(batch.start_seq) + batch.start[1]
         alloc_start_seq, _, alloc_data = dataset.alloc_intervals[idi]
-        o = seq_start - dataset.seq_start[alloc_start_seq]
+        o = seq_start - dataset.get_seq_start(alloc_start_seq)
         assert o >= 0
         l = batch.data_shape[0]
         assert alloc_data.shape[0] >= o + l
