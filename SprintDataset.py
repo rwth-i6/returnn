@@ -285,11 +285,11 @@ class SprintDataset(Dataset):
           return self._complete_frac
         else:
           # We can do somewhat better. self._complete_frac is for self.next_seq_to_be_added.
-          return self._complete_frac * float(seq_idx) / self.next_seq_to_be_added
+          return self._complete_frac * float(seq_idx + 1) / self.next_seq_to_be_added
       else:
         # We don't know. So:
         # Some monotonic increasing function in [0,1] which never reaches 1.
-        return max(0.0, 1.0 - math.exp(-seq_idx * 1000))
+        return max(1.e-20, 1.0 - math.exp(-seq_idx * 1000))
 
   def get_seq_length(self, sorted_seq_idx):
     with self.lock:

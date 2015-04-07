@@ -223,12 +223,12 @@ class Dataset(object):
 
   def get_complete_frac(self, seq_idx):
     """
-    :return: Returns a fraction (float in [0,1]) of how far we have advanced
+    :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
       for this seq in the dataset.
       This does not have to be exact. This is only for the user.
     """
     assert self.num_seqs > 0
-    return float(seq_idx) / self.num_seqs
+    return float(seq_idx + 1) / self.num_seqs
 
   @property
   def num_seqs(self):

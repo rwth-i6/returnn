@@ -93,7 +93,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
     startSegmentIdx = 0
     if curEpoch == startEpoch: startSegmentIdx = startSegmentIdx
     for curSegmentIdx in range(startSegmentIdx, len(orderedSegmentList)):
-      sprintDataset.set_complete_frac(float(curSegmentIdx - startSegmentIdx) /
+      sprintDataset.set_complete_frac(float(curSegmentIdx - startSegmentIdx + 1) /
                                       (len(orderedSegmentList) - startSegmentIdx))
       yield orderedSegmentList[curSegmentIdx]
 
