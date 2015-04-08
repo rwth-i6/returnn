@@ -43,18 +43,24 @@ def initBetterExchook():
   sys.excepthook = excepthook
 
 
-def initFaulthandler():
-  if os.name == 'nt':
-    return
+def initFaulthandler(sigusr1_chain=False):
+  """
+  :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
+  """
   try:
     import faulthandler
   except ImportError, e:
     print "faulthandler import error. %s" % e
     return
-  faulthandler.enable()
-  import signal
-  faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
-  print "faulthandler enabled and registered for SIGUSR1."
+  # Only enable if not yet enabled -- otherwise, leave it in its current state.
+  if not faulthandler.is_enabled():
+    faulthandler.enable()
+    if os.name != 'nt':
+      import signal
+      faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+      print "faulthandler enabled and registered for SIGUSR1."
+    else:
+      print "faulthandler enabled."
 
 
 def initIPythonKernel():

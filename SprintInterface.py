@@ -37,7 +37,7 @@ engine = None; """ :type: Engine """
 
 
 rnn.initBetterExchook()
-Debug.initFaulthandler()
+Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
 rnn.initThreadJoinHack()
 Debug.initIPythonKernel()
 
