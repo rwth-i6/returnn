@@ -4,6 +4,7 @@ from threading import Condition, currentThread
 from Dataset import Dataset
 from Log import log
 import math
+import time
 
 
 class DataCache:
@@ -151,9 +152,15 @@ class SprintDataset(Dataset):
       return
     # We need to wait.
     assert thread.get_ident() != self.sprint_thread_id
-    print >> log.v5, "SprintDataset wait for seqs (%i,%i) ..." % (seqStart, seqEnd)
+    print >> log.v5, "SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
+                     (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S"))
     while not check():
       self.cond.wait()
+
+  def _latestAddedSeq(self):
+    if not self.added_data:
+      return None
+    return self.added_data[-1].seq_idx
 
   def _haveSeqsAdded(self, start, end=None):
     if end is None:
