@@ -37,10 +37,11 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       device.index[o:o + l, q] = numpy.ones((l,), dtype='int8')
 
       with dataset.lock:
-        data = dataset.get_data(seq.seq_idx)[seq.seq_start_frame:seq.seq_end_frame]
-        targets = dataset.get_targets(seq.seq_idx)[seq.seq_start_frame:seq.seq_end_frame]
-        device.data[o:o + l, q] = data
-        device.targets[o:o + l, q] = targets
+        data = dataset.get_data(seq.seq_idx)
+        targets = dataset.get_targets(seq.seq_idx)
+        device.data[o:o + l, q] = data[seq.seq_start_frame:seq.seq_end_frame]
+        if targets is not None:
+          device.targets[o:o + l, q] = targets[seq.seq_start_frame:seq.seq_end_frame]
 
         if recurrent and pad_batches:
           assert o == 0  # Doesn't make sense otherwise.

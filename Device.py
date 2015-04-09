@@ -503,7 +503,7 @@ class Device():
         x = input_queue.recv()
         t = input_queue.recv()
         i = input_queue.recv()
-	self.tags = input_queue.recv()
+        self.tags = input_queue.recv()
         update_start_time = time.time()
         if self.trainnet.loss in ('ctc','ce_ctc'):
           c = input_queue.recv()
