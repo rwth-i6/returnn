@@ -391,6 +391,8 @@ def train(segmentName, features, targets=None):
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset
 
+  if sprintDataset.sprintFinalized:
+    return
   sprintDataset.addNewData(features, targets)
 
   # The CRNN train thread started via start() will do the actual training.
