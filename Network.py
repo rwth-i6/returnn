@@ -130,7 +130,8 @@ class Container(object):
     """
     for p, v in params.items():
       self_param_shape = self.params[p].get_value(borrow=True, return_internal_type=True).shape
-      assert self_param_shape == v.shape
+      assert self_param_shape == v.shape, "In %s, param %s shape does not match. Expected %s, got %s." % \
+                                          (self, p, self_param_shape, v.shape)
       self.params[p].set_value(v, borrow=True)
 
   def get_params_vars(self):
