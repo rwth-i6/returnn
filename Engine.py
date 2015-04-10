@@ -157,13 +157,14 @@ class Engine:
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
     self.max_seqs = config.int('max_seqs', -1)
     self.updater = Updater.initFromConfig(config)
-    self.pretrain = pretrainFromConfig(config)
     self.pad_batches = config.bool("pad", False)
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
   def init_network_from_config(self, config):
+    self.pretrain = pretrainFromConfig(config)
+
     last_epoch, _, last_model_epoch_filename = self.get_last_epoch_batch_model(config)
 
     if last_model_epoch_filename:
@@ -178,7 +179,7 @@ class Engine:
       assert model, "last model not specified. use 'load' in config. or don't use 'initialize_from_model'"
       network = LayerNetwork.from_hdf_model_topology(model)
     else:
-      if self.pretrain:  # set via self.init_train_from_config()
+      if self.pretrain:
         # This would be obsolete if we don't want to load an existing model.
         # In self.init_train_epoch(), we initialize a new model.
         network = self.pretrain.get_network_for_epoch(last_epoch or self.start_epoch)
