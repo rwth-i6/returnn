@@ -27,10 +27,11 @@ def initBetterExchook():
   import thread
   import threading
   import better_exchook
+  import pdb
 
   def excepthook(exc_type, exc_obj, exc_tb):
     print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
-    better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
+    better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
 
     if isinstance(threading.currentThread(), threading._MainThread):
       main_thread_id = thread.get_ident()
@@ -39,6 +40,10 @@ def initBetterExchook():
         # This usually means an exit. (We ignore non-daemon threads and procs here.)
         # Print the stack of all other threads.
         dumpAllThreadTracebacks({main_thread_id})
+
+    # http://stackoverflow.com/a/1237407/133374
+    if sys.stdin.isatty() and sys.stderr.isatty():
+      pdb.post_mortem(exc_tb)
 
   sys.excepthook = excepthook
 

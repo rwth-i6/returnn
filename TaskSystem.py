@@ -301,6 +301,7 @@ class ExecingProcess:
     pid = os.fork()
     if pid == 0: # child
       try:
+        sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
         py_mod_file = os.path.splitext(__file__)[0] + ".py"
