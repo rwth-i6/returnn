@@ -160,11 +160,15 @@ class Newbob(LearningRateControl):
     if lastEpoch is None:
       return self.initialLearningRate
     learningRate = self.epochData[lastEpoch].learningRate
+    if learningRate is None:
+      return self.initialLearningRate
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
     oldError = self.epochData[last2Epoch].error
     newError = self.epochData[lastEpoch].error
+    if oldError is None or newError is None:
+      return learningRate
     relativeError = (newError - oldError) / abs(newError)
     if relativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor
