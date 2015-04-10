@@ -433,6 +433,7 @@ def forward(segmentName, features):
 
   # Fill the data for the current segment.
   sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
+  sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
   sprintDataset.init_seq_order()
   seq = sprintDataset.addNewData(features)
 
