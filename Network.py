@@ -298,7 +298,6 @@ class LayerNetwork(object):
         params['truncation'] = description.truncation
         if self.bidirectional:
           params['name'] = info[3] + "_fw"
-        name = params['name']
         if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
           params['sharpgates'] = description.sharpgates
       name = params['name']; """ :type: str """

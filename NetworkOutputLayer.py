@@ -84,7 +84,7 @@ class FramewiseOutputLayer(OutputLayer):
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
-      y_oh = T.eq(T.shape_padleft(T.arange(self.attr['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
+      y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
     else:
       assert False, "unknown loss: %s" % self.loss
