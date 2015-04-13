@@ -148,7 +148,7 @@ class Layer(Container):
     self.set_attr('L2', L2)
     self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
     self.mass = T.constant(1., name = "mass_%s" % self.name)
-    if mask == "unity":
+    if mask == "unity" or dropout == 0:
       self.masks = [None] * len(self.sources)
     elif mask == "dropout":
       assert 0.0 < dropout < 1.0
