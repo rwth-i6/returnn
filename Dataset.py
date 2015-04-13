@@ -311,7 +311,6 @@ class Dataset(object):
     """
     :type recurrent_net: bool
     :type batch_size: int
-    :type batch_step: int
     :type max_seqs: int
     :rtype: BatchSetGenerator
     """
