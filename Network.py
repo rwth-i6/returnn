@@ -211,12 +211,11 @@ class Layer(Container):
     if mask == "unity":
       self.masks = [None] * len(self.sources)
     elif mask == "dropout":
-      #TODO we can do some optimization if dropout == 0 for this layer
-
-      # if we apply this mass during training then we don't need any mask or mass for testing
-      # the expected weight should be 1
-      # E[x] = mass * (1-dropout)
-      # so mass has to be 1 / (1 - dropout)
+      assert 0.0 < dropout < 1.0
+      # If we apply this mass during training then we don't need any mask or mass for testing.
+      # The expected weight should be 1 in
+      #   E[x] = mass * (1-dropout)
+      # so mass has to be 1 / (1 - dropout).
       self.mass = T.constant(1.0 / (1.0 - dropout))
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
       self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
