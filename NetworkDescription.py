@@ -89,15 +89,17 @@ class LayerNetworkDescription:
     bidirectional = config.bool('bidirectional', True)
     truncation = config.int('truncation', -1)
     actfct = config.list('activation')
+    assert actfct, "need some activation function"
     dropout = config.list('dropout', [0.0])
     sharpgates = config.value('sharpgates', 'none')
     entropy = config.float('entropy', 0.0)
     if len(actfct) < len(hidden_size):
       for i in xrange(len(hidden_size) - len(actfct)):
-        actfct.append("logistic")
+        actfct.append(actfct[-1])
     if len(dropout) < len(hidden_size) + 1:
+      assert len(dropout) > 0
       for i in xrange(len(hidden_size) + 1 - len(dropout)):
-        dropout.append(0.0)
+        dropout.append(dropout[-1])
     dropout = [float(d) for d in dropout]
     hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
     """
