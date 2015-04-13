@@ -136,7 +136,7 @@ class Device():
   def initialize(self, config, network_description=None, train_param_args=None):
     """
     :type config: Config.Config
-    :type network_description: Network.LayerNetworkDescription | None
+    :type network_description: NetworkDescription.LayerNetworkDescription | None
     :type train_param_args: dict | None
     """
     if self.blocking:
@@ -708,7 +708,7 @@ class Device():
 
   def reinit(self, network_description=None, train_param_args=None):
     """
-    :type network_description: Network.LayerNetworkDescription
+    :type network_description: NetworkDescription.LayerNetworkDescription
     :type train_param_args: dict
     :returns len of train_params
     :rtype: int

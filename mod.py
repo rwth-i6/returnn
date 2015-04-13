@@ -6,7 +6,8 @@ import h5py
 import json
 
 from optparse import OptionParser
-from Network import LayerNetwork, OutputLayer
+from Network import LayerNetwork
+from NetworkOutputLayer import OutputLayer
 
 if __name__ == '__main__':
   # initialize config file

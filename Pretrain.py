@@ -1,5 +1,6 @@
 
-from Network import LayerNetworkDescription, LayerNetwork
+from Network import LayerNetwork
+from NetworkDescription import LayerNetworkDescription
 
 
 class Pretrain:
@@ -7,7 +8,7 @@ class Pretrain:
 
   def __init__(self, original_network_description):
     """
-    :type original_network_description: Network.LayerNetworkDescription
+    :type original_network_description: NetworkDescription.LayerNetworkDescription
     """
     self.original_network_description = original_network_description
 
