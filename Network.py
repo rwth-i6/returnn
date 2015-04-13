@@ -78,10 +78,6 @@ class Container(object):
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
 
-  @staticmethod
-  def initialize():
-    Layer.rng = numpy.random.RandomState(1234)
-
   def save(self, head):
     """
     :type head: h5py.File
@@ -187,6 +183,10 @@ class Container(object):
     return attrs
 
 class Layer(Container):
+  @classmethod
+  def initialize_rng(cls):
+    cls.rng = numpy.random.RandomState(1234)
+
   def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
     """
     :param list[SourceLayer] sources: list of source layers
@@ -1345,7 +1345,7 @@ class LayerNetwork(object):
     self.y = T.ivector('y'); """ :type: theano.Variable """
     self.c = T.imatrix('c'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    Layer.initialize()
+    Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
     self.mask = mask
