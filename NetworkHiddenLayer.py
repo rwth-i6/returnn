@@ -35,7 +35,6 @@ class ForwardLayer(HiddenLayer):
     z = self.b
     assert len(sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(sources, self.masks, self.W_in):
-      W_in.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out, "W_in_%s_%s"%(s.name, self.name)).get_value())
       if mask == "unity":
         z += T.dot(s.output, W_in)
       else:
