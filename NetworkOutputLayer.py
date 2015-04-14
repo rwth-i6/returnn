@@ -41,6 +41,13 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
 
+  def create_bias(self, n, prefix='b'):
+    name = "%s_%s" % (prefix, self.name)
+    assert n > 0
+    bias = numpy.log(1.0 / n)  # More numerical stable.
+    value = numpy.zeros((n,), dtype=theano.config.floatX) + bias
+    return theano.shared(value=value, borrow=True, name=name)
+
   def entropy(self):
     """
     :rtype: theano.Variable
