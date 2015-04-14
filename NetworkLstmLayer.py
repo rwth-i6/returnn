@@ -19,18 +19,18 @@ class LstmLayer(RecurrentLayer):
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
     if projection:
-      W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
+      W_proj = self.create_random_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
       self.W_proj.set_value(W_proj.get_value())
-    W_re = self.create_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
+    W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #TODO what is this good for?
     if projection:
       self.set_attr('n_out', projection)
     else:
       self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -107,18 +107,18 @@ class OptimizedLstmLayer(RecurrentLayer):
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
     if projection:
-      W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
+      W_proj = self.create_random_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
       self.W_proj.set_value(W_proj.get_value())
-    W_re = self.create_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
+    W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8'))
     if projection:
       self.set_attr('n_out', projection)
     else:
       self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -183,18 +183,18 @@ class NormalizedLstmLayer(RecurrentLayer):
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
     if projection:
-      W_proj = self.create_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
+      W_proj = self.create_random_uniform_weights(n_out, n_re, n_in + n_out + n_re, "W_proj_%s"%self.name)
       self.W_proj.set_value(W_proj.get_value())
-    W_re = self.create_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
+    W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re, s.attrs['n_out'] + n_out  + n_out * 3 + n_re, "W_in_%s_%s"%(s.name,self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8'))
     if projection:
       self.set_attr('n_out', projection)
     else:
       self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -280,9 +280,9 @@ class WLstmLayer(RecurrentLayer):
 
     #W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4, "W_re_%s"%self.name)
     #self.W_re.set_value(W_re.get_value())
-    self.W_re_input = self.add_param(self.create_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_input_%s"%self.name), "W_re_input_%s"%self.name)
-    self.W_re_forget = self.add_param(self.create_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_forget_%s"%self.name), "W_re_forget_%s"%self.name)
-    self.W_re_output = self.add_param(self.create_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_output_%s"%self.name), "W_re_output_%s"%self.name)
+    self.W_re_input = self.add_param(self.create_random_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_input_%s"%self.name), "W_re_input_%s"%self.name)
+    self.W_re_forget = self.add_param(self.create_random_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_forget_%s"%self.name), "W_re_forget_%s"%self.name)
+    self.W_re_output = self.add_param(self.create_random_uniform_weights(n_out, n_out, n_in + n_out  + n_out, "W_re_output_%s"%self.name), "W_re_output_%s"%self.name)
 
     self.b_input = self.add_param(self.create_bias(n_out, 'b_input'), 'b_input')
     self.b_forget = self.add_param(self.create_bias(n_out, 'b_forget'), 'b_forget')
@@ -292,19 +292,19 @@ class WLstmLayer(RecurrentLayer):
     self.W_forget = []
     self.W_output = []
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_in_%s_%s"%(s.name,self.name)).get_value())
-      self.W_input.append(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_input_%s_%s"%(s.name,self.name)))
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_in_%s_%s"%(s.name,self.name)).get_value())
+      self.W_input.append(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_input_%s_%s"%(s.name,self.name)))
       self.add_param(self.W_input[-1], "W_input_%s_%s"%(s.name,self.name))
-      self.W_forget.append(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_forget_%s_%s"%(s.name,self.name)))
+      self.W_forget.append(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_forget_%s_%s"%(s.name,self.name)))
       self.add_param(self.W_forget[-1], "W_forget_%s_%s"%(s.name,self.name))
-      self.W_output.append(self.create_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_output_%s_%s"%(s.name,self.name)))
+      self.W_output.append(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out  + n_out, "W_output_%s_%s"%(s.name,self.name)))
       self.add_param(self.W_output[-1], "W_output_%s_%s"%(s.name,self.name))
 
     #for s, W in zip(sources, self.W_in):
     #  W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4, "W_in_%s_%s"%(s.name,self.name)).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #theano.config.floatX))
     #self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -402,7 +402,7 @@ class XLstmLayer(RecurrentLayer):
     self.state = self.create_bias(n_out, 'state')
     self.act = self.create_bias(n_out, 'act')
     n_in = sum([s.attrs['n_out'] for s in sources]) / 2
-    W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4, "W_re_%s"%self.name)
+    W_re = self.create_random_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4, "W_re_%s"%self.name)
     self.W_re.set_value(W_re.get_value())
     del self.params['b_%s' % self.name]
     for s, W in zip(sources, self.W_in):
@@ -410,7 +410,7 @@ class XLstmLayer(RecurrentLayer):
       #W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #theano.config.floatX))
     self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -477,7 +477,7 @@ class XLstmLayer(RecurrentLayer):
     #scale = numpy.sqrt(12. / (n_in))
     #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
     #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
-    return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
+    return self.create_random_uniform_weights(n, m * 4, n + m + m * 4), self.create_random_uniform_weights(m, m * 4, n + m + m * 4)
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -513,16 +513,16 @@ class MaxLstmLayer(RecurrentLayer):
     self.set_attr('sharpgates', sharpgates)
     self.set_attr('n_cores', n_cores)
     CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    self.act = self.create_uniform_weights(n_out, n_cores)
-    self.state = self.create_uniform_weights(n_out, n_cores)
+    self.act = self.create_random_uniform_weights(n_out, n_cores)
+    self.state = self.create_random_uniform_weights(n_out, n_cores)
     n_in = sum([s.attrs['n_out'] for s in sources])
-    W_re = self.create_uniform_weights(n_out, n_out * (2 + n_cores * 2), n_in + n_out  + n_out * (2 + n_cores * 2))
+    W_re = self.create_random_uniform_weights(n_out, n_out * (2 + n_cores * 2), n_in + n_out  + n_out * (2 + n_cores * 2))
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out + n_out * (2 + n_cores * 2)).get_value())
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out + n_out * (2 + n_cores * 2)).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))
     self.set_attr('n_out', self.attrs['n_out'] / (2 + n_cores * 2))
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -579,7 +579,7 @@ class MaxLstmLayer(RecurrentLayer):
     #scale = numpy.sqrt(12. / (n_in))
     #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
     #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
-    return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
+    return self.create_random_uniform_weights(n, m * 4, n + m + m * 4), self.create_random_uniform_weights(m, m * 4, n + m + m * 4)
 
 
 class GateLstmLayer(RecurrentLayer):
@@ -600,7 +600,7 @@ class GateLstmLayer(RecurrentLayer):
       self.W_re.set_value(W_re.get_value())
     self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))
     self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_uniform_weights(3, n_out)
+    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -651,7 +651,7 @@ class GateLstmLayer(RecurrentLayer):
     #scale = numpy.sqrt(12. / (n_in))
     #return self.create_random_weights(n, m * 4, scale), self.create_random_weights(m, m * 4, scale)
     #return self.create_uniform_weights(n, m * 4, n + m), self.create_uniform_weights(m, m * 4, n + m)
-    return self.create_uniform_weights(n, m * 4, n + m + m * 4), self.create_uniform_weights(m, m * 4, n + m + m * 4)
+    return self.create_random_uniform_weights(n, m * 4, n + m + m * 4), self.create_random_uniform_weights(m, m * 4, n + m + m * 4)
 
 
 class LstmPeepholeLayer(LstmLayer):
