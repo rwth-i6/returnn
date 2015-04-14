@@ -3,7 +3,10 @@ import theano.tensor as T
 
 
 def relu(z):
-  return (T.sgn(z) + 1) * z * 0.5
+  # Use fastest implementation.
+  # https://github.com/Theano/Theano/issues/2698
+  # https://github.com/Lasagne/Lasagne/pull/163#issuecomment-81806482
+  return (z + abs(z)) / 2.0
 
 def identity(z):
   return z
