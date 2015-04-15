@@ -103,7 +103,7 @@ class Container(object):
 
   def create_random_uniform_weights(self, n, m, p=0, l=0, name=None):
     if name is None: name = 'W_' + self.name
-    assert not p and l
+    assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6) / sqrt(p)  # 1 / sqrt(p)
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
