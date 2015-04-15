@@ -51,21 +51,22 @@ class Pretrain:
       new_network.hidden[layer_name].set_params_by_dict(layer.get_params_dict())
 
     # network.output is the remaining output layer.
-    # This is a bit more complicated because the parameter names contain the source layer names,
-    # e.g. "hidden_N". Thus we need to translate the parameter names for the new network.
-    # For the translation, we expect that a sorted list of the old output source layer names
-    # matches the related list of new output source layer names.
-    assert len(old_network.output.params.keys()) == len(new_network.output.params.keys())
-    old_output_param_names = sorted(old_network.output.params.keys())
-    new_output_param_names = sorted(new_network.output.params.keys())
-    assert len(old_output_param_names) == len(new_output_param_names)
-    new_output_param_name_map = {old_param_name: new_param_name
-                                 for old_param_name, new_param_name in zip(old_output_param_names,
-                                                                           new_output_param_names)}
-    old_output_params = old_network.output.get_params_dict()
-    new_output_params = {new_output_param_name_map[old_param_name]: param
-                         for old_param_name, param in old_output_params.items()}
-    new_network.output.set_params_by_dict(new_output_params)
+    if False:
+        # This is a bit more complicated because the parameter names contain the source layer names,
+        # e.g. "hidden_N". Thus we need to translate the parameter names for the new network.
+        # For the translation, we expect that a sorted list of the old output source layer names
+        # matches the related list of new output source layer names.
+        assert len(old_network.output.params.keys()) == len(new_network.output.params.keys())
+        old_output_param_names = sorted(old_network.output.params.keys())
+        new_output_param_names = sorted(new_network.output.params.keys())
+        assert len(old_output_param_names) == len(new_output_param_names)
+        new_output_param_name_map = {old_param_name: new_param_name
+                                     for old_param_name, new_param_name in zip(old_output_param_names,
+                                                                               new_output_param_names)}
+        old_output_params = old_network.output.get_params_dict()
+        new_output_params = {new_output_param_name_map[old_param_name]: param
+                             for old_param_name, param in old_output_params.items()}
+        new_network.output.set_params_by_dict(new_output_params)
 
   def get_train_param_args_for_epoch(self, epoch):
     """
