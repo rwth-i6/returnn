@@ -110,10 +110,11 @@ class Container(object):
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_forward_weights(self, n, m, name = None):
-    #n_in = n + m
-    #scale = numpy.sqrt(12. / (n_in))
-    #return self.create_random_normal_weights(n, m, scale, name)
-    return self.create_random_uniform_weights(n, m, name=name)
+    n_in = n + m
+    scale = numpy.sqrt(12. / (n_in))
+    return self.create_random_normal_weights(n, m, scale, name)
+    #return self.create_random_uniform_weights(n, m, name=name)
+    #return self.create_random_uniform_weights(n, m, l=0.01, name=name)
 
   def to_json(self):
     attrs = self.attrs.copy()
