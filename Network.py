@@ -278,8 +278,6 @@ class LayerNetwork(object):
     x_in = self.x
     self.L1 = T.constant(0)
     self.L2 = T.constant(0)
-    self.L1_reg = description.L1_reg
-    self.L2_reg = description.L2_reg
     self.recurrent = False
     self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
@@ -287,9 +285,14 @@ class LayerNetwork(object):
     last_layer = None
     # create forward layers
     for info, drop in zip(description.hidden_info, description.dropout[:-1]):
-      #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
       srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
-      params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3], 'mask': self.mask }
+      params = {
+        'sources': srcs, 'n_out': info[1], 'activation': info[2][1],
+        'L1': description.L1_reg,
+        'L2': description.L2_reg,
+        'dropout': drop,
+        'mask': self.mask,
+        'name': info[3]}
       act = info[2][0]
       layer_class = get_layer_class(info[0])
       if layer_class.recurrent:
@@ -303,7 +306,7 @@ class LayerNetwork(object):
       name = params['name']; """ :type: str """
       self.add_layer(name, layer_class(**params), act)
       last_layer = self.hidden[name]
-      n_in = info[1]
+      n_in = params['n_out']
       x_in = last_layer.output
     sources = [last_layer]
     # create backward layers
@@ -313,9 +316,14 @@ class LayerNetwork(object):
       n_in = self.n_in
       x_in = self.x
       for info, drop in zip(description.hidden_info, description.dropout[:-1]):
-        #params = { 'source': x_in, 'n_in': n_in, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
         srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
-        params = { 'sources': srcs, 'n_out': info[1], 'activation': info[2][1], 'dropout': drop, 'name': info[3] + "_bw", 'mask': self.mask }
+        params = {
+          'sources': srcs, 'n_out': info[1], 'activation': info[2][1],
+          'L1': description.L1_reg,
+          'L2': description.L2_reg,
+          'dropout': drop,
+          'mask': self.mask,
+          'name': info[3] + "_bw"}
         act = info[2][0]
         layer_class = get_layer_class(info[0])
         if layer_class.recurrent:
@@ -327,7 +335,7 @@ class LayerNetwork(object):
         name = params['name']; """ :type: str """
         self.add_layer(name, layer_class(**params), act)
         last_layer = self.hidden[name]
-        n_in = info[1]
+        n_in = params['n_out']
         x_in = last_layer.output
       sources.append(last_layer)
     self.make_classifier(sources, description.loss, description.dropout[-1], self.mask)
