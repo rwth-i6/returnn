@@ -96,12 +96,13 @@ class Container(object):
     name = "%s_%s" % (prefix, self.name)
     return theano.shared(value=numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name=name)
 
-  def create_random_normal_weights(self, n, m, s, name=None):
+  def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=s, size=(n, m)), dtype=theano.config.floatX)
+    if not scale: scale = numpy.sqrt(12. / (n + m))
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
-  def create_random_uniform_weights(self, n, m, p=0, l=0, name=None):
+  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
@@ -109,12 +110,8 @@ class Container(object):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
-  def create_forward_weights(self, n, m, name = None):
-    n_in = n + m
-    scale = numpy.sqrt(12. / (n_in))
-    return self.create_random_normal_weights(n, m, scale, name)
-    #return self.create_random_uniform_weights(n, m, name=name)
-    #return self.create_random_uniform_weights(n, m, l=0.01, name=name)
+  def create_forward_weights(self, n, m, name=None):
+    return self.create_random_normal_weights(n, m, name=name)
 
   def to_json(self):
     attrs = self.attrs.copy()
