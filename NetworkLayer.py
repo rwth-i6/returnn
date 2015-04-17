@@ -11,15 +11,17 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name=""):
+  def __init__(self, layer_class, name="", forward_weights_init="random_normal()"):
     """
     :param str layer_class: name of layer type, e.g. "hidden"
     :param str name: custom layer name, e.g. "hidden_2"
+    :param str forward_weights_init: see self.create_forward_weights
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
+    self.forward_weights_init = forward_weights_init
 
   def save(self, head):
     """
@@ -111,7 +113,13 @@ class Container(object):
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_forward_weights(self, n, m, name=None):
-    return self.create_random_normal_weights(n, m, name=name)
+    eval_locals = {
+      "n": n,
+      "m": m,
+      "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
+      "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
+    }
+    return eval(self.forward_weights_init, eval_locals)
 
   def to_json(self):
     attrs = self.attrs.copy()
