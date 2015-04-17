@@ -13,7 +13,7 @@ class Container(object):
 
   def __init__(self, layer_class, name="", forward_weights_init="random_normal()"):
     """
-    :param str layer_class: name of layer type, e.g. "hidden"
+    :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
     :param str forward_weights_init: see self.create_forward_weights
     """
@@ -135,18 +135,16 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, layer_class, L1=0.0, L2=0.0, mask="unity", dropout=0.0, name=""):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, **kwargs):
     """
     :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
-    :param str layer_class: name of layer type, e.g. "hidden"
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
     :param str mask: "unity" or "dropout"
     :type dropout: float
-    :param str name: custom layer name, e.g. "hidden_2"
     """
-    super(Layer, self).__init__(layer_class=layer_class, name=name)
+    super(Layer, self).__init__(**kwargs)
     self.sources = sources; ":type: list[SourceLayer]"
     self.num_sources = len(sources)
     self.set_attr('mask', mask)
