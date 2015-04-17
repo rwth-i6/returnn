@@ -6,15 +6,22 @@ from NetworkRecurrentLayer import RecurrentLayer
 
 
 class LstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(LstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "lstm")
+    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs.setdefault("compile", False)
+    kwargs["n_out"] = n_out * 4
+    super(LstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    projection = kwargs.get("projection", None)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    n_in = sum([s.attrs['n_out'] for s in sources])
-    n_re = projection if projection != None else n_out
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    n_re = projection if projection is not None else n_out
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
@@ -24,15 +31,12 @@ class LstmLayer(RecurrentLayer):
     W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
-    for s, W in zip(sources, self.W_in):
+    assert len(self.sources) == len(self.W_in)
+    for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re,
                                                      s.attrs['n_out'] + n_out + n_out * 3 + n_re,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #TODO what is this good for?
-    if projection:
-      self.set_attr('n_out', projection)
-    else:
-      self.set_attr('n_out', self.attrs['n_out'] / 4)
     if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
@@ -62,8 +66,9 @@ class LstmLayer(RecurrentLayer):
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
 
       z = T.dot(h_p, self.W_re) + self.b
+      assert len(x_ts) == len(masks) == len(self.W_in)
       for x_t, m, W in zip(x_ts, masks, self.W_in):
-        if self.attrs['mask'] == "unity":
+        if m is None:
           z += T.dot(x_t, W)
         else:
           z += T.dot(self.mass * m * x_t, W)
@@ -97,15 +102,22 @@ class LstmLayer(RecurrentLayer):
 
 #faster but needs much more memory
 class OptimizedLstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(LstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "lstm_opt")
+    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_out * 4
+    super(OptimizedLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    projection = kwargs.get("projection", None)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    n_in = sum([s.attrs['n_out'] for s in sources])
-    n_re = projection if projection != None else n_out
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    n_re = projection if projection is not None else n_out
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
@@ -115,16 +127,13 @@ class OptimizedLstmLayer(RecurrentLayer):
     W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
-    for s, W in zip(sources, self.W_in):
+    for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re,
                                                      s.attrs['n_out'] + n_out + n_out * 3 + n_re,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8'))
-    if projection:
-      self.set_attr('n_out', projection)
-    else:
-      self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
+    if sharpgates == 'global':
+      self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -135,13 +144,15 @@ class OptimizedLstmLayer(RecurrentLayer):
         LstmLayer.sharpgates = self.create_bias(1)
         self.add_param(LstmLayer.sharpgates, 'gate_scaling')
       self.sharpness = LstmLayer.sharpgates
-    else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda')
+    else:
+      self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name='lambda')
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
+      self.add_param(self.sharpness, 'gate_scaling')
 
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
-      if self.attrs['mask'] == "unity":
+      if m is None:
         z += T.dot(x_t.output, W)
       else:
         z += T.dot(self.mass * m * x_t.output, W)
@@ -176,14 +187,21 @@ class OptimizedLstmLayer(RecurrentLayer):
 
 
 class NormalizedLstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(NormalizedLstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "lstm_norm")
+    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs["n_out"] = n_out * 4
+    kwargs["compile"] = False
+    super(NormalizedLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    projection = kwargs.get("projection", None)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
-    n_in = sum([s.attrs['n_out'] for s in sources])
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
     n_re = projection if projection != None else n_out
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
@@ -194,16 +212,13 @@ class NormalizedLstmLayer(RecurrentLayer):
     W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
-    for s, W in zip(sources, self.W_in):
+    for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re,
                                                      s.attrs['n_out'] + n_out + n_out * 3 + n_re,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8'))
-    if projection:
-      self.set_attr('n_out', projection)
-    else:
-      self.set_attr('n_out', self.attrs['n_out'] / 4)
-    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
+    if sharpgates == 'global':
+      self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -276,16 +291,21 @@ class NormalizedLstmLayer(RecurrentLayer):
 
 
 class WLstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(WLstmLayer, self).__init__(sources, index, n_out, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "wlstm")
+    kwargs["n_out"] = n_out
+    kwargs["compile"] = False
+    super(WLstmLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.state = self.create_bias(n_out, 'state')
     self.act = self.create_bias(n_out, 'act')
-    n_in = sum([s.attrs['n_out'] for s in sources])
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
 
     #W_re = self.create_uniform_weights(n_out, n_out * 4, n_in + n_out  + n_out * 4, "W_re_%s"%self.name)
     #self.W_re.set_value(W_re.get_value())
@@ -303,7 +323,7 @@ class WLstmLayer(RecurrentLayer):
     self.W_input = []
     self.W_forget = []
     self.W_output = []
-    for s, W in zip(sources, self.W_in):
+    for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out + n_out,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value())
       self.W_input.append(self.create_random_uniform_weights(s.attrs['n_out'], n_out, s.attrs['n_out'] + n_out + n_out,
@@ -408,20 +428,25 @@ class WLstmLayer(RecurrentLayer):
 
 
 class XLstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, layer_class = "lstm", name = ""):
-    super(LstmLayer, self).__init__(sources, index, n_out * 4, L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "xlstm")
+    kwargs["n_out"] = n_out * 4
+    kwargs["compile"] = False
+    super(XLstmLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.state = self.create_bias(n_out, 'state')
     self.act = self.create_bias(n_out, 'act')
-    n_in = sum([s.attrs['n_out'] for s in sources]) / 2
+    n_in = sum([s.attrs['n_out'] for s in self.sources]) / 2
     W_re = self.create_random_uniform_weights(n_out, n_out * 4, n_in + n_out + n_out * 4, name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
     del self.params['b_%s' % self.name]
-    for s, W in zip(sources, self.W_in):
+    for s, W in zip(self.sources, self.W_in):
       del self.params["W_in_%s_%s"%(s.name, self.name)]
       #W.set_value(self.create_uniform_weights(s.attrs['n_out'], n_out * 4, s.attrs['n_out'] + n_out  + n_out * 4).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #theano.config.floatX))
@@ -448,7 +473,8 @@ class XLstmLayer(RecurrentLayer):
     #   else:
     #     z += T.dot(x_t.output, self.mass * mask * W)
 
-    x_t = sources[0].output
+    assert len(self.sources) == 1
+    x_t = self.sources[0].output
     partition = x_t.shape[2] / 2
     if self.attrs['reverse']:
       z = x_t[:,:,partition : 2 * partition]
@@ -522,21 +548,26 @@ class XLstmLayer(RecurrentLayer):
 
 
 class MaxLstmLayer(RecurrentLayer):
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", projection = None, n_cores = 2, layer_class = "maxlstm", name = ""):
-    super(MaxLstmLayer, self).__init__(sources, index, n_out * (2 + n_cores * 2), L1, L2, activation, reverse, truncation, False, dropout, mask, projection, layer_class = layer_class, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+  def __init__(self, n_out, sharpgates='none', n_cores=2, **kwargs):
+    kwargs.setdefault("layer_class", "maxlstm")
+    kwargs["n_out"] = n_out * (2 + n_cores * 2)
+    kwargs["compile"] = False
+    super(MaxLstmLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
     self.set_attr('n_cores', n_cores)
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.act = self.create_random_uniform_weights(n_out, n_cores)
     self.state = self.create_random_uniform_weights(n_out, n_cores)
-    n_in = sum([s.attrs['n_out'] for s in sources])
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
     W_re = self.create_random_uniform_weights(n_out, n_out * (2 + n_cores * 2),
                                               n_in + n_out + n_out * (2 + n_cores * 2))
     self.W_re.set_value(W_re.get_value())
-    for s, W in zip(sources, self.W_in):
+    for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4,
                                                      s.attrs['n_out'] + n_out + n_out * (2 + n_cores * 2)).get_value())
     self.o.set_value(numpy.ones((n_out,), dtype=theano.config.floatX))
@@ -603,14 +634,22 @@ class MaxLstmLayer(RecurrentLayer):
 
 
 class GateLstmLayer(RecurrentLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, sharpgates = 'none' , dropout = 0, mask = "unity", name = "lstm"):
-    super(GateLstmLayer, self).__init__(source, index, n_in, n_out * 4, activation, reverse, truncation, False, dropout, mask, name = name)
-    if not isinstance(activation, (list, tuple)):
-      activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
-    else: assert len(activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
-    CI, GI, GF, GO, CO = activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+  def __init__(self, n_out, sharpgates='none', **kwargs):
+    kwargs.setdefault("layer_class", "gatelstm")
+    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs["n_out"] = n_out * 4
+    kwargs["compile"] = False
+    super(GateLstmLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     self.act = self.create_bias(n_out)
     self.state = self.create_bias(n_out)
+    assert len(self.sources) == 1
+    n_in = self.sources[0].attrs['n_out']
     W_in, W_re = self.create_lstm_weights(n_in, n_out)
     if CI == T.nnet.sigmoid or CO == T.nnet.sigmoid:
       self.W_in.set_value(W_in.get_value()) # * 0.5) # * 0.000001)
@@ -676,8 +715,10 @@ class GateLstmLayer(RecurrentLayer):
 
 
 class LstmPeepholeLayer(LstmLayer):
-  def __init__(self, source, index, n_in, n_out, activation = T.nnet.sigmoid, reverse = False, truncation = -1, dropout = 0, mask = "unity", name = "lstm"):
-    super(LstmPeepholeLayer, self).__init__(source, index, n_in, n_out, activation, reverse, truncation, dropout, mask, name = name)
+  def __init__(self, **kwargs):
+    kwargs.setdefault("layer_class", "peep_lstm")
+    super(LstmPeepholeLayer, self).__init__(**kwargs)
+    n_out = self.attrs['n_out']
     self.peeps_in = self.create_peeps(n_out)
     self.peeps_forget = self.create_peeps(n_out)
     self.peeps_out = self.create_peeps(n_out)

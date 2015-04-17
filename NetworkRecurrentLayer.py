@@ -8,10 +8,16 @@ from NetworkHiddenLayer import HiddenLayer
 class RecurrentLayer(HiddenLayer):
   recurrent = True
 
-  def __init__(self, sources, index, n_out, L1 = 0.0, L2 = 0.0, activation = T.tanh, reverse = False, truncation = -1, compile = True, dropout = 0, mask = "unity", projection = None, layer_class = "recurrent", name = ""):
-    super(RecurrentLayer, self).__init__(sources, n_out, L1, L2, activation, dropout, mask, layer_class = layer_class, name = name)
+  def __init__(self, index, reverse=False, truncation=-1, compile=True, projection=None, **kwargs):
+    kwargs.setdefault("layer_class", "recurrent")
+    kwargs.setdefault("activation", T.tanh)
+    super(RecurrentLayer, self).__init__(**kwargs)
+    self.set_attr('reverse', reverse)
+    self.set_attr('truncation', truncation)
+    if projection: self.set_attr('projection', projection)
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    n_out = self.attrs['n_out']
     self.act = self.create_bias(n_out)
-    n_in = sum([s.attrs['n_out'] for s in sources])
     if projection:
       self.W_re = self.create_random_normal_weights(projection, n_out, n_in,
                                                     "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
@@ -21,15 +27,12 @@ class RecurrentLayer(HiddenLayer):
       self.W_re = self.create_random_normal_weights(n_out, n_out, n_in,
                                                     "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
       self.W_proj = None
-    for s, W in zip(sources, self.W_in):
-      W.set_value(self.create_random_normal_weights(s.attrs['n_out'], self.attrs['n_out'], n_in,
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_normal_weights(s.attrs['n_out'], n_out, n_in,
                                                     "W_in_%s_%s" % (s.name, self.name)).get_value())
-    self.add_param(self.W_re, 'W_re_%s'%self.name)
+    self.add_param(self.W_re, 'W_re_%s' % self.name)
     self.index = index
     self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
-    self.set_attr('reverse', reverse)
-    self.set_attr('truncation', truncation)
-    if projection: self.set_attr('projection', projection)
     if compile: self.compile()
 
   def compile(self):

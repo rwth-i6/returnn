@@ -203,9 +203,11 @@ class LayerNetwork(object):
     """
     self.loss = loss
     if loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
-      self.output = SequenceOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
+      layer_class = SequenceOutputLayer
     else:
-      self.output = FramewiseOutputLayer(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask, name="output")
+      layer_class = FramewiseOutputLayer
+    self.output = layer_class(sources=sources, index=self.i, n_out=self.n_out, loss=loss, dropout=dropout, mask=mask,
+                              name="output")
     for W in self.output.W_in:
       if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W.sum())
       if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()

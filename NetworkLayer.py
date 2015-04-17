@@ -127,19 +127,19 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1, L2, layer_class, mask="unity", dropout=0.0, name=""):
+  def __init__(self, sources, n_out, layer_class, L1=0.0, L2=0.0, mask="unity", dropout=0.0, name=""):
     """
     :param list[SourceLayer] sources: list of source layers
-    :param int n_out: output dim
+    :param int n_out: output dim of W_in and dim of bias
+    :param str layer_class: name of layer type, e.g. "hidden"
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
-    :param str layer_class: name of layer type, e.g. "hidden"
     :param str mask: "unity" or "dropout"
     :type dropout: float
     :param str name: custom layer name, e.g. "hidden_2"
     """
-    super(Layer, self).__init__(layer_class, name=name)
-    self.sources = sources
+    super(Layer, self).__init__(layer_class=layer_class, name=name)
+    self.sources = sources; ":type: list[SourceLayer]"
     self.num_sources = len(sources)
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
@@ -179,7 +179,7 @@ class Layer(Container):
 
 
 class SourceLayer(Container):
-  def __init__(self, n_out, x_out, name = ""):
-    super(SourceLayer, self).__init__('source',  name = name)
+  def __init__(self, n_out, x_out, name=""):
+    super(SourceLayer, self).__init__(layer_class='source', name=name)
     self.output = x_out
     self.set_attr('n_out', n_out)

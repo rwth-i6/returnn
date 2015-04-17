@@ -9,37 +9,31 @@ from SprintErrorSignals import SprintErrorSigOp
 
 
 class OutputLayer(Layer):
-  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
+  def __init__(self, index, loss='ce', **kwargs):
     """
-    :param list[NetworkLayer.SourceLayer] sources: list of source layers
     :param theano.Variable index: index for batches
-    :param int n_out: output dim
-    :param float L1: l1-param-norm regularization
-    :param float L2: l2-param-norm regularization
     :param str loss: e.g. 'ce'
-    :type dropout: float
-    :param str mask: "unity" or "dropout"
-    :param str layer_class: name of layer type, e.g. "hidden"
-    :param str name: custom layer name, e.g. "hidden_2"
     """
-    super(OutputLayer, self).__init__(sources, n_out, L1, L2, layer_class, mask, dropout, name = name)
+    kwargs.setdefault("layer_class", "softmax")
+    super(OutputLayer, self).__init__(**kwargs)
     self.z = self.b
-    self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], n_out,
+    self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
-                 for source in sources]
-    assert len(sources) == len(self.masks) == len(self.W_in)
-    for source, m, W in zip(sources, self.masks, self.W_in):
-      if mask == "unity":
+                 for source in self.sources]
+    assert len(self.sources) == len(self.masks) == len(self.W_in)
+    for source, m, W in zip(self.sources, self.masks, self.W_in):
+      if m is None:
         self.z += T.dot(source.output, W)
       else:
         self.z += T.dot(self.mass * m * source.output, W)
-    self.set_attr('from', ",".join([s.name for s in sources]))
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.index = index
     self.i = (index.flatten() > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
-    if self.loss == 'priori': self.priori = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), borrow=True)
+    if self.loss == 'priori':
+      self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
   def create_bias(self, n, prefix='b'):
     name = "%s_%s" % (prefix, self.name)
@@ -65,8 +59,8 @@ class OutputLayer(Layer):
 
 
 class FramewiseOutputLayer(OutputLayer):
-  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name=""):
-    super(FramewiseOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name=name)
+  def __init__(self, **kwargs):
+    super(FramewiseOutputLayer, self).__init__(**kwargs)
     self.initialize()
 
   def initialize(self):
@@ -98,8 +92,8 @@ class FramewiseOutputLayer(OutputLayer):
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, sources, index, n_out, L1=0.0, L2=0.0, loss='ce', dropout=0.0, mask="unity", layer_class="softmax", name="", prior_scale=0.0, log_prior=None, ce_smoothing=0.0):
-    super(SequenceOutputLayer, self).__init__(sources, index, n_out, L1, L2, loss, dropout, mask, layer_class, name = name)
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, **kwargs):
+    super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
