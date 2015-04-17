@@ -11,7 +11,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", forward_weights_init="random_normal()"):
+  def __init__(self, layer_class, name="", forward_weights_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -21,7 +21,7 @@ class Container(object):
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
-    self.forward_weights_init = forward_weights_init
+    self.forward_weights_init = forward_weights_init or "random_normal()"
 
   def save(self, head):
     """

@@ -106,7 +106,10 @@ class LayerNetworkDescription:
         "dropout": dropout[i]
       })
     output_info = {"loss": loss, "dropout": dropout[-1]}
-    default_layer_info = {"L1": L1_reg, "L2": L2_reg}
+    default_layer_info = {
+      "L1": L1_reg, "L2": L2_reg,
+      "forward_weights_init": config.value("forward_weights_init", None)
+    }
 
     return cls(num_inputs=num_inputs, num_outputs=num_outputs,
                hidden_info=hidden_info,
