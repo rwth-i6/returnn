@@ -31,6 +31,10 @@ LayerClasses = {
 
 
 def get_layer_class(name):
+  """
+  :type name: str
+  :rtype: HiddenLayer
+  """
   if name in LayerClasses:
     return LayerClasses[name]
   assert False, "invalid layer type: " + name
@@ -122,11 +126,11 @@ class LayerNetwork(object):
         network.make_classifier(params['sources'], params['loss'])
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': strtoact(act), 'name': layer_name})
+        params.update({'activation': act, 'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
-        network.add_layer(layer_name, layer_class(**params), act)
+        network.add_layer(layer_name, layer_class(**params))
     traverse(topology, 'output', network)
     return network
 
@@ -160,7 +164,7 @@ class LayerNetwork(object):
         act = model[layer_name].attrs['activation']
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],
-                   'activation': strtoact(act),
+                   'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
                    'mask': model[layer_name].attrs['mask'] }
@@ -171,7 +175,7 @@ class LayerNetwork(object):
           for p in ['truncation', 'projection', 'reverse', 'sharpgates']:
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
-        network.add_layer(layer_name, layer_class(**params), act)
+        network.add_layer(layer_name, layer_class(**params))
     output = model.attrs['output']
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
@@ -179,14 +183,13 @@ class LayerNetwork(object):
     network.make_classifier(sources, loss, model[output].attrs['dropout'])
     return network
 
-  def add_layer(self, name, layer, activation):
+  def add_layer(self, name, layer):
     """
     :type name: str
     :type layer: NetworkHiddenLayer.HiddenLayer
     :param str activation: activation function name
     """
     self.hidden[name] = layer
-    self.hidden[name].set_attr('activation', activation)
     if isinstance(layer, RecurrentLayer):
       if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(layer.W_re.sum())
       if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (layer.W_re ** 2).sum()
@@ -289,13 +292,12 @@ class LayerNetwork(object):
     for info, drop in zip(description.hidden_info, description.dropout[:-1]):
       srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
       params = {
-        'sources': srcs, 'n_out': info[1], 'activation': info[2][1],
+        'sources': srcs, 'n_out': info[1], 'activation': info[2],
         'L1': description.L1_reg,
         'L2': description.L2_reg,
         'dropout': drop,
         'mask': self.mask,
         'name': info[3]}
-      act = info[2][0]
       layer_class = get_layer_class(info[0])
       if layer_class.recurrent:
         self.recurrent = True
@@ -306,7 +308,7 @@ class LayerNetwork(object):
         if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
           params['sharpgates'] = description.sharpgates
       name = params['name']; """ :type: str """
-      self.add_layer(name, layer_class(**params), act)
+      self.add_layer(name, layer_class(**params))
       last_layer = self.hidden[name]
       n_in = params['n_out']
       x_in = last_layer.output
@@ -320,13 +322,12 @@ class LayerNetwork(object):
       for info, drop in zip(description.hidden_info, description.dropout[:-1]):
         srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
         params = {
-          'sources': srcs, 'n_out': info[1], 'activation': info[2][1],
+          'sources': srcs, 'n_out': info[1], 'activation': info[2],
           'L1': description.L1_reg,
           'L2': description.L2_reg,
           'dropout': drop,
           'mask': self.mask,
           'name': info[3] + "_bw"}
-        act = info[2][0]
         layer_class = get_layer_class(info[0])
         if layer_class.recurrent:
           params['index'] = self.i
@@ -335,7 +336,7 @@ class LayerNetwork(object):
             params['sharpgates'] = description.sharpgates
           params['reverse'] = True
         name = params['name']; """ :type: str """
-        self.add_layer(name, layer_class(**params), act)
+        self.add_layer(name, layer_class(**params))
         last_layer = self.hidden[name]
         n_in = params['n_out']
         x_in = last_layer.output

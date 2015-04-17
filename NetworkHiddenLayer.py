@@ -1,18 +1,20 @@
 
 from theano import tensor as T
 from NetworkLayer import Layer
+from ActivationFunctions import strtoact
 
 
 class HiddenLayer(Layer):
   recurrent = False
 
-  def __init__(self, activation=T.tanh, **kwargs):
+  def __init__(self, activation="tanh", **kwargs):
     """
-    :type activation: theano.Op
+    :type activation: str | list[str]
     """
     kwargs.setdefault("layer_class", "hidden")
     super(HiddenLayer, self).__init__(**kwargs)
-    self.activation = activation
+    self.set_attr('activation', activation)
+    self.activation = strtoact(activation)
     self.W_in = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
                                                             self.attrs['n_out'],
                                                             name=self.name + "_" + s.name),

@@ -19,7 +19,7 @@ class LayerNetworkDescription:
     """
     :type num_inputs: int
     :type num_outputs: int
-    :param list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] hidden_info: list of
+    :param list[(str,int,str,str)] hidden_info: list of
       (layer_type, size, activation, name)
     :param str loss: loss type, "ce", "ctc" etc
     :type L1_reg: float
@@ -101,26 +101,18 @@ class LayerNetworkDescription:
       for i in xrange(len(hidden_size) + 1 - len(dropout)):
         dropout.append(dropout[-1])
     dropout = [float(d) for d in dropout]
-    hidden_info = []; """ :type: list[(str,int,(str,theano.Op)|list[(str,theano.Op)],str)] """
+    hidden_info = []; """ :type: list[(str,int,str,str)] """
     """
-    That represents (layer_type, size, activation, name),
-    where activation is either a list of activation functions or a single one.
-    Such activation function is a tuple (str,theano.Op).
+    That represents (layer_type, size, activation_function, name).
     name is a custom name for the layer, such as "hidden_2".
     """
     for i in xrange(len(hidden_size)):
-      if ':' in actfct[i]:
-        acts = []; """ :type: list[(str,theano.Op)] """
-        for a in actfct[i].split(':'):
-          acts.append((a, strtoact(a)))
-      else:
-        acts = (actfct[i], strtoact(actfct[i]))
       """
       hidden_name[i]: custom name of the hidden layer, such as "hidden_2"
       hidden_type[i]: e.g. 'forward'
-      acts: activation function, e.g. ("tanh", T.tanh)
+      actfct[i]: activation function, e.g. "tanh"
       """
-      hidden_info.append((hidden_type[i], hidden_size[i], acts, hidden_name[i]))
+      hidden_info.append((hidden_type[i], hidden_size[i], actfct[i], hidden_name[i]))
 
     return cls(num_inputs=num_inputs, num_outputs=num_outputs,
                hidden_info=hidden_info,

@@ -45,8 +45,13 @@ ActivationFunctions = {
 
 def strtoact(act):
   """
-  :param str act: activation function name
-  :rtype: theano.Op
+  :type act: str | list[str]
+  :param act: activation function name, or multiple such as a list or separated by ":"
+  :rtype: theano.Op | list[theano.Op]
   """
-  assert ActivationFunctions.has_key(act), "invalid activation function: " + act
+  if isinstance(act, (list, tuple)):
+    return [strtoact(a) for a in act]
+  if ":" in act:
+    return [strtoact(a) for a in act.split(":")]
+  assert ActivationFunctions.has_key(act), "invalid activation function: %s" % act
   return ActivationFunctions[act]

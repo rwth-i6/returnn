@@ -8,7 +8,7 @@ from NetworkRecurrentLayer import RecurrentLayer
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
     kwargs.setdefault("layer_class", "lstm")
-    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs.setdefault("activation", "sigmoid")
     kwargs.setdefault("compile", False)
     kwargs["n_out"] = n_out * 4
     super(LstmLayer, self).__init__(**kwargs)
@@ -104,7 +104,7 @@ class LstmLayer(RecurrentLayer):
 class OptimizedLstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
     kwargs.setdefault("layer_class", "lstm_opt")
-    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
     super(OptimizedLstmLayer, self).__init__(**kwargs)
@@ -189,7 +189,7 @@ class OptimizedLstmLayer(RecurrentLayer):
 class NormalizedLstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
     kwargs.setdefault("layer_class", "lstm_norm")
-    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs.setdefault("activation", "sigmoid")
     kwargs["n_out"] = n_out * 4
     kwargs["compile"] = False
     super(NormalizedLstmLayer, self).__init__(**kwargs)
@@ -636,7 +636,7 @@ class MaxLstmLayer(RecurrentLayer):
 class GateLstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
     kwargs.setdefault("layer_class", "gatelstm")
-    kwargs.setdefault("activation", T.nnet.sigmoid)
+    kwargs.setdefault("activation", "sigmoid")
     kwargs["n_out"] = n_out * 4
     kwargs["compile"] = False
     super(GateLstmLayer, self).__init__(**kwargs)

@@ -10,7 +10,7 @@ class RecurrentLayer(HiddenLayer):
 
   def __init__(self, index, reverse=False, truncation=-1, compile=True, projection=None, **kwargs):
     kwargs.setdefault("layer_class", "recurrent")
-    kwargs.setdefault("activation", T.tanh)
+    kwargs.setdefault("activation", "tanh")
     super(RecurrentLayer, self).__init__(**kwargs)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
