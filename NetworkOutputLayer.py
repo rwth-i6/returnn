@@ -9,7 +9,7 @@ from SprintErrorSignals import SprintErrorSigOp
 
 
 class OutputLayer(Layer):
-  def __init__(self, index, loss='ce', **kwargs):
+  def __init__(self, index, loss, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
