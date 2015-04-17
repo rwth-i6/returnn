@@ -6,7 +6,6 @@ import inspect
 import theano.tensor as T
 import h5py
 
-from ActivationFunctions import strtoact
 from NetworkDescription import LayerNetworkDescription
 from NetworkHiddenLayer import ForwardLayer
 from NetworkLayer import Layer, SourceLayer
@@ -33,7 +32,7 @@ LayerClasses = {
 def get_layer_class(name):
   """
   :type name: str
-  :rtype: HiddenLayer
+  :rtype: type(NetworkHiddenLayer.HiddenLayer)
   """
   if name in LayerClasses:
     return LayerClasses[name]
@@ -131,7 +130,7 @@ class LayerNetwork(object):
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
-        network.add_layer(layer_name, layer_class(**params))
+        network.add_layer(layer_class(**params))
     traverse(topology, 'output', network)
     return network
 
@@ -176,7 +175,7 @@ class LayerNetwork(object):
           for p in ['truncation', 'projection', 'reverse', 'sharpgates']:
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
-        network.add_layer(layer_name, layer_class(**params))
+        network.add_layer(layer_class(**params))
     output = model.attrs['output']
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
@@ -184,13 +183,12 @@ class LayerNetwork(object):
     network.make_classifier(sources=sources, loss=loss, dropout=model[output].attrs['dropout'], mask=mask)
     return network
 
-  def add_layer(self, name, layer):
+  def add_layer(self, layer):
     """
-    :type name: str
     :type layer: NetworkHiddenLayer.HiddenLayer
-    :param str activation: activation function name
     """
-    self.hidden[name] = layer
+    assert layer.name
+    self.hidden[layer.name] = layer
     if isinstance(layer, RecurrentLayer):
       if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(layer.W_re.sum())
       if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (layer.W_re ** 2).sum()
@@ -268,9 +266,51 @@ class LayerNetwork(object):
     self.train_param_args = kwargs
     self.train_params_vars = self.get_params_vars(**kwargs)
 
+  def _make_layer(self, description, info, sources, reverse=False):
+    """
+    :type description: LayerNetworkDescription
+    :type info: dict[str]
+    :type sources: list[SourceLayer]
+    :type reverse: bool
+    :rtype: NetworkHiddenLayer.ForwardLayer | NetworkRecurrentLayer.RecurrentLayer
+    """
+    params = dict(description.default_layer_info)
+    params.update(info)
+    params["sources"] = sources
+    params["mask"] = self.mask
+    layer_class = get_layer_class(params["layer_class"])
+    if layer_class.recurrent:
+      self.recurrent = True
+      params['index'] = self.i
+      params['truncation'] = description.truncation
+      if self.bidirectional:
+        if not reverse:
+          params['name'] += "_fw"
+        else:
+          params['name'] += "_bw"
+          params['reverse'] = True
+      if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+        params['sharpgates'] = description.sharpgates
+    layer = layer_class(**params)
+    self.add_layer(layer=layer)
+    return layer
+
+  def _make_output(self, description, sources):
+    """
+    :type description: LayerNetworkDescription
+    :type sources: list[SourceLayer]
+    """
+    params = dict(description.default_layer_info)
+    params.pop("layer_class", None)  # Makes no sense to use this default.
+    params.update(description.output_info)
+    params["sources"] = sources
+    params["mask"] = self.mask
+    self.make_classifier(**params)
+
   def initialize(self, description):
     """
     :type description: LayerNetworkDescription
+
     Initializes the network based the description.
     """
     assert description.num_inputs == self.n_in
@@ -287,28 +327,10 @@ class LayerNetwork(object):
       del LstmLayer.sharpgates
     last_layer = None
     # create forward layers
-    for info, drop in zip(description.hidden_info, description.dropout[:-1]):
-      srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
-      params = {
-        'sources': srcs, 'n_out': info[1], 'activation': info[2],
-        'L1': description.L1_reg,
-        'L2': description.L2_reg,
-        'dropout': drop,
-        'mask': self.mask,
-        'name': info[3]}
-      layer_class = get_layer_class(info[0])
-      if layer_class.recurrent:
-        self.recurrent = True
-        params['index'] = self.i
-        params['truncation'] = description.truncation
-        if self.bidirectional:
-          params['name'] = info[3] + "_fw"
-        if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
-          params['sharpgates'] = description.sharpgates
-      name = params['name']; """ :type: str """
-      self.add_layer(name, layer_class(**params))
-      last_layer = self.hidden[name]
-      n_in = params['n_out']
+    for info in description.hidden_info:
+      last_layer = self._make_layer(description=description, info=info,
+                                    sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')])
+      n_in = last_layer.attrs['n_out']
       x_in = last_layer.output
     sources = [last_layer]
     # create backward layers
@@ -317,29 +339,14 @@ class LayerNetwork(object):
       last_layer = None
       n_in = self.n_in
       x_in = self.x
-      for info, drop in zip(description.hidden_info, description.dropout[:-1]):
-        srcs = [SourceLayer(n_out=n_in, x_out=x_in, name='')]
-        params = {
-          'sources': srcs, 'n_out': info[1], 'activation': info[2],
-          'L1': description.L1_reg,
-          'L2': description.L2_reg,
-          'dropout': drop,
-          'mask': self.mask,
-          'name': info[3] + "_bw"}
-        layer_class = get_layer_class(info[0])
-        if layer_class.recurrent:
-          params['index'] = self.i
-          params['truncation'] = description.truncation
-          if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
-            params['sharpgates'] = description.sharpgates
-          params['reverse'] = True
-        name = params['name']; """ :type: str """
-        self.add_layer(name, layer_class(**params))
-        last_layer = self.hidden[name]
-        n_in = params['n_out']
+      for info in description.hidden_info:
+        last_layer = self._make_layer(description=description, info=info,
+                                      sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')],
+                                      reverse=True)
+        n_in = last_layer.attrs['n_out']
         x_in = last_layer.output
-      sources.append(last_layer)
-    self.make_classifier(sources=sources, loss=description.loss, dropout=description.dropout[-1], mask=self.mask)
+      sources += [last_layer]
+    self._make_output(description=description, sources=sources)
 
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()

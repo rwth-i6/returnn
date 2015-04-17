@@ -141,7 +141,6 @@ def saveCrnnNetwork(epoch, layers):
     hidden = network.hidden[layerName]
     # Some checks whether this is a forward-layer.
     assert isinstance(hidden, ForwardLayer)
-    assert network.description.hidden_info[i][0] == "forward"
 
     saveCrnnLayer(hidden, *layers[i])
 

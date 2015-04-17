@@ -223,8 +223,8 @@ class Engine:
     print >> log.v2, "Network layer topology:"
     print >> log.v2, "  input #:", network.n_in
     if network.description:
-      for i in xrange(len(network.description.hidden_info)):
-        print >> log.v2, "  " + network.description.hidden_info[i][0] + " #:", network.description.hidden_info[i][1]
+      for info in network.description.hidden_info:
+        print >> log.v2, "  " + info["layer_class"] + " #:", info["n_out"]
     print >> log.v2, "  output #:", network.n_out
     print >> log.v2, "net params #:", network.num_params()
     print >> log.v2, "net trainable params:", network.train_params_vars

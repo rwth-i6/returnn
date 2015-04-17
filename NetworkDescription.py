@@ -1,6 +1,5 @@
 
 import inspect
-from ActivationFunctions import strtoact
 from Util import simpleObjRepr, hdf5_dimension
 
 
@@ -13,31 +12,27 @@ class LayerNetworkDescription:
 
   def __init__(self, num_inputs, num_outputs,
                hidden_info,
-               loss, L1_reg, L2_reg, dropout=(),
+               output_info,
+               default_layer_info,
                bidirectional=True, sharpgates='none',
                truncation=-1, entropy=0):
     """
     :type num_inputs: int
     :type num_outputs: int
-    :param list[(str,int,str,str)] hidden_info: list of
+    :param list[dict[str]] hidden_info: list of
       (layer_type, size, activation, name)
-    :param str loss: loss type, "ce", "ctc" etc
-    :type L1_reg: float
-    :type L2_reg: float
-    :type dropout: list[float]
+    :type output_info: dict[str]
+    :type default_layer_info: dict[str]
     :type bidirectional: bool
     :param str sharpgates: see LSTM layers
     :param int truncation: number of steps to use in truncated BPTT or -1. see theano.scan
     :param float entropy: ...
     """
-    assert len(dropout) == len(hidden_info) + 1
     self.num_inputs = num_inputs
     self.num_outputs = num_outputs
     self.hidden_info = list(hidden_info)
-    self.loss = loss
-    self.L1_reg = L1_reg
-    self.L2_reg = L2_reg
-    self.dropout = list(dropout)
+    self.output_info = output_info
+    self.default_layer_info = default_layer_info
     self.bidirectional = bidirectional
     self.sharpgates = sharpgates
     self.truncation = truncation
@@ -101,22 +96,22 @@ class LayerNetworkDescription:
       for i in xrange(len(hidden_size) + 1 - len(dropout)):
         dropout.append(dropout[-1])
     dropout = [float(d) for d in dropout]
-    hidden_info = []; """ :type: list[(str,int,str,str)] """
-    """
-    That represents (layer_type, size, activation_function, name).
-    name is a custom name for the layer, such as "hidden_2".
-    """
+    hidden_info = []; """ :type: list[dict[str]] """
     for i in xrange(len(hidden_size)):
-      """
-      hidden_name[i]: custom name of the hidden layer, such as "hidden_2"
-      hidden_type[i]: e.g. 'forward'
-      actfct[i]: activation function, e.g. "tanh"
-      """
-      hidden_info.append((hidden_type[i], hidden_size[i], actfct[i], hidden_name[i]))
+      hidden_info.append({
+        "layer_class": hidden_type[i],  # e.g. 'forward'
+        "n_out": hidden_size[i],
+        "activation": actfct[i],  # activation function, e.g. "tanh". see strtoact().
+        "name": hidden_name[i],  # custom name of the hidden layer, such as "hidden_2"
+        "dropout": dropout[i]
+      })
+    output_info = {"loss": loss, "dropout": dropout[-1]}
+    default_layer_info = {"L1": L1_reg, "L2": L2_reg}
 
     return cls(num_inputs=num_inputs, num_outputs=num_outputs,
                hidden_info=hidden_info,
-               loss=loss, L1_reg=L1_reg, L2_reg=L2_reg, dropout=dropout,
+               output_info=output_info,
+               default_layer_info=default_layer_info,
                bidirectional=bidirectional, sharpgates=sharpgates,
                truncation=truncation, entropy=entropy)
 
