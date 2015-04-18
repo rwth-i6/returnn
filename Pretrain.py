@@ -12,7 +12,7 @@ class Pretrain:
     :type copy_output_layer: bool
     """
     self.original_network_description = original_network_description
-    self.copy_output_layer = copy_output_layer if copy_output_layer is not None else False
+    self.copy_output_layer = copy_output_layer if copy_output_layer is not None else True
 
   def __str__(self):
     return "Default layerwise construction+pretraining, starting with input+hidden+output. " + \
