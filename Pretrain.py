@@ -6,11 +6,13 @@ from NetworkDescription import LayerNetworkDescription
 class Pretrain:
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_description):
+  def __init__(self, original_network_description, copy_output_layer=None):
     """
     :type original_network_description: NetworkDescription.LayerNetworkDescription
+    :type copy_output_layer: bool
     """
     self.original_network_description = original_network_description
+    self.copy_output_layer = copy_output_layer if copy_output_layer is not None else False
 
   def __str__(self):
     return "Default layerwise construction+pretraining, starting with input+hidden+output. " + \
@@ -51,22 +53,22 @@ class Pretrain:
       new_network.hidden[layer_name].set_params_by_dict(layer.get_params_dict())
 
     # network.output is the remaining output layer.
-    if False:
-        # This is a bit more complicated because the parameter names contain the source layer names,
-        # e.g. "hidden_N". Thus we need to translate the parameter names for the new network.
-        # For the translation, we expect that a sorted list of the old output source layer names
-        # matches the related list of new output source layer names.
-        assert len(old_network.output.params.keys()) == len(new_network.output.params.keys())
-        old_output_param_names = sorted(old_network.output.params.keys())
-        new_output_param_names = sorted(new_network.output.params.keys())
-        assert len(old_output_param_names) == len(new_output_param_names)
-        new_output_param_name_map = {old_param_name: new_param_name
-                                     for old_param_name, new_param_name in zip(old_output_param_names,
-                                                                               new_output_param_names)}
-        old_output_params = old_network.output.get_params_dict()
-        new_output_params = {new_output_param_name_map[old_param_name]: param
-                             for old_param_name, param in old_output_params.items()}
-        new_network.output.set_params_by_dict(new_output_params)
+    if self.copy_output_layer:
+      # This is a bit more complicated because the parameter names contain the source layer names,
+      # e.g. "hidden_N". Thus we need to translate the parameter names for the new network.
+      # For the translation, we expect that a sorted list of the old output source layer names
+      # matches the related list of new output source layer names.
+      assert len(old_network.output.params.keys()) == len(new_network.output.params.keys())
+      old_output_param_names = sorted(old_network.output.params.keys())
+      new_output_param_names = sorted(new_network.output.params.keys())
+      assert len(old_output_param_names) == len(new_output_param_names)
+      new_output_param_name_map = {old_param_name: new_param_name
+                                   for old_param_name, new_param_name in zip(old_output_param_names,
+                                                                             new_output_param_names)}
+      old_output_params = old_network.output.get_params_dict()
+      new_output_params = {new_output_param_name_map[old_param_name]: param
+                           for old_param_name, param in old_output_params.items()}
+      new_network.output.set_params_by_dict(new_output_params)
 
   def get_train_param_args_for_epoch(self, epoch):
     """
@@ -84,6 +86,7 @@ class Pretrain:
     new_hidden_layer_names = cur_network_layer_names_set.difference(prev_network_layer_names)
     return {"hidden_layer_selection": new_hidden_layer_names, "with_output": True}
 
+
 def pretrainFromConfig(config):
   """
   :type config: Config.Config
@@ -93,7 +96,9 @@ def pretrainFromConfig(config):
   if pretrainType == "default":
     assert config.network_topology_json is None, "Cannot handle JSON network topology in pretrain."
     original_network_description = LayerNetworkDescription.from_config(config)
-    return Pretrain(original_network_description)
+    copy_output_layer = config.bool("pretrain_copy_output_layer", None)
+    return Pretrain(original_network_description=original_network_description,
+                    copy_output_layer=copy_output_layer)
   elif pretrainType == "":
     return None
   else:
