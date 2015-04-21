@@ -30,6 +30,7 @@ class Engine:
     self.train_data = None; " :type: Dataset.Dataset "
     self.is_training = False
     self.training_finished = False
+    self.stop_train_after_epoch_request = False
     self.lock = threading.RLock()
     self.cond = threading.Condition(lock=self.lock)
     self.pretrain = None; " :type: Pretrain.Pretrain "
@@ -268,15 +269,20 @@ class Engine:
       self.init_train_epoch()
       self.train_epoch()
 
-    # Save final model.
+      if self.stop_train_after_epoch_request:
+        self.stop_train_after_epoch_request = False
+        break
+
+    # Save last model, in case it was not saved yet (depends on save_model_epoch_interval).
     if self.model_filename:
-      self.save_model(self.model_filename + ".%03d" % self.final_epoch, self.final_epoch)
+      self.save_model(self.model_filename + ".%03d" % self.epoch, self.epoch)
+
+    if self.epoch != self.final_epoch:
+      print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
 
     with self.lock:
       self.is_training = False
       self.training_finished = True
-      self.final_epoch = None
-      self.epoch = None
       self.cond.notify_all()
 
   @classmethod

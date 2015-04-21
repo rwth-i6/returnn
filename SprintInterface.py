@@ -166,9 +166,11 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
 def exit():
   print "Python train exit()"
   assert isInitialized
-  assert isTrainThreadStarted
-  sprintDataset.finishSprintEpoch()  # In case this was not called yet.
-  trainThread.join()
+  if isTrainThreadStarted:
+    engine.stop_train_after_epoch_request = True
+    sprintDataset.finishSprintEpoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    trainThread.join()
   rnn.finalize()
   print >> log.v3, ("elapsed total time: %f" % (time.time() - startTime))
 
