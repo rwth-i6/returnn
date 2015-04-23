@@ -55,7 +55,9 @@ class Config:
     return int(self.value(key, default, index))
 
   def bool(self, key, default, index=0):
-    v = str(self.value(key, default, index)).lower()
+    if key not in self.dict:
+      return default
+    v = str(self.value(key, None, index)).lower()
     if v == "true" or v == "1":
       return True
     if v == "false" or v == "0":
