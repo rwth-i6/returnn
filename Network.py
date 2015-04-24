@@ -7,36 +7,12 @@ import theano.tensor as T
 import h5py
 
 from NetworkDescription import LayerNetworkDescription
-from NetworkHiddenLayer import ForwardLayer
-from NetworkLayer import Layer, SourceLayer
-from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, NormalizedLstmLayer, MaxLstmLayer, GateLstmLayer, \
-  LstmPeepholeLayer
+from NetworkBaseLayer import Layer, SourceLayer
+from NetworkLayer import get_layer_class
+from NetworkLstmLayer import LstmLayer
 from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer
 from NetworkRecurrentLayer import RecurrentLayer
 from Log import log
-
-
-LayerClasses = {
-  'forward': ForwardLayer,  # used in crnn.config format
-  'hidden': ForwardLayer,  # used in JSON format
-  'recurrent': RecurrentLayer,
-  'lstm': LstmLayer,
-  'lstm_opt': OptimizedLstmLayer,
-  'lstm_norm': NormalizedLstmLayer,
-  'gatelstm': GateLstmLayer,
-  'peep_lstm': LstmPeepholeLayer,
-  'maxlstm': MaxLstmLayer
-}
-
-
-def get_layer_class(name):
-  """
-  :type name: str
-  :rtype: type(NetworkHiddenLayer.HiddenLayer)
-  """
-  if name in LayerClasses:
-    return LayerClasses[name]
-  assert False, "invalid layer type: " + name
 
 
 class LayerNetwork(object):

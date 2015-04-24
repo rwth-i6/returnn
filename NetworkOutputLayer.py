@@ -4,7 +4,7 @@ from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
-from NetworkLayer import Layer
+from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 
 
