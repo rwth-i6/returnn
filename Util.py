@@ -2,6 +2,8 @@ import subprocess
 import h5py
 from collections import deque
 import inspect
+import os
+import shlex
 
 
 def cmd(cmd):
@@ -14,6 +16,26 @@ def cmd(cmd):
   p.stdout.close()
   return result
 
+
+def eval_shell_env(token):
+  if token.startswith("$"):
+    return os.environ.get(token[1:], "")
+  return token
+
+def eval_shell_str(s):
+  """
+  :type s: str
+  :rtype: list[str]
+
+  Parses `s` as shell like arguments (via shlex.split) and evaluates shell environment variables (eval_shell_env).
+  """
+  tokens = []
+  for token in shlex.split(s):
+    if token.startswith("$"):
+      tokens += eval_shell_str(eval_shell_env(token))
+    else:
+      tokens += [token]
+  return tokens
 
 def hdf5_dimension(filename, dimension):
   fin = h5py.File(filename, "r")

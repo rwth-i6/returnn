@@ -8,24 +8,6 @@ from Log import log
 
 class HDFDataset(CachedDataset):
 
-  @classmethod
-  def load_data(cls, config, cache_byte_size, files_config_key, **kwargs):
-    """
-    :type config: Config.Config
-    :type cache_byte_size: int
-    :type chunking: str
-    :type seq_ordering: str
-    :rtype: (Dataset,int)
-    :returns the dataset, and the cache byte size left over if we cache the whole dataset.
-    """
-    if not config.has(files_config_key):
-      return None, 0
-    data = cls.from_config(config, cache_byte_size=cache_byte_size, **kwargs)
-    for f in config.list(files_config_key):
-      data.add_file(f)
-    data.initialize()
-    return data, data.definite_cache_leftover
-
   def __init__(self, *args, **kwargs):
     super(HDFDataset, self).__init__(*args, **kwargs)
     self.files = []; """ :type: list[str] """
@@ -128,3 +110,8 @@ class HDFDataset(CachedDataset):
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[sorted_seq_idx]
     return self.tags[ids]
+
+  def len_info(self):
+    return ", ".join(["HDF dataset",
+                      "sequences: %i" % self.num_seqs,
+                      "frames: %i" % self.get_num_timesteps()])

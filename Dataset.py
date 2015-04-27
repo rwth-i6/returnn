@@ -234,6 +234,14 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def len_info(self):
+    """
+    :rtype: str
+    Returns list of strings to present the user as information about our len.
+    Depending on our implementation, we can give some more or some less information.
+    """
+    return None
+
   def is_less_than_num_seqs(self, n):
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.

@@ -45,7 +45,7 @@ class SprintDataset(Dataset):
     assert window == 1
     super(SprintDataset, self).__init__(window, *args, **kwargs)
     self.cond = Condition(lock=self.lock)
-    self.sprint_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
+    self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
     self.reached_final_seq = False
     self.multiple_epochs = False
@@ -151,7 +151,7 @@ class SprintDataset(Dataset):
     if check():
       return
     # We need to wait.
-    assert thread.get_ident() != self.sprint_thread_id
+    assert thread.get_ident() != self.add_data_thread_id
     print >> log.v5, "SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
                      (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S"))
     while not check():
@@ -264,7 +264,7 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
 
   def _shuffle_seqs(self, start, end):
-    raise NotImplementedError("Shuffling in SprintDataset only via Sprint at the moment.")
+    assert False, "Shuffling in SprintDataset only via Sprint at the moment."
 
   def get_num_timesteps(self):
     with self.lock:
@@ -276,6 +276,9 @@ class SprintDataset(Dataset):
     with self.lock:
       assert self.reached_final_seq
       return self.next_seq_to_be_added
+
+  def len_info(self):
+    return "Sprint dataset, no len info"
 
   def is_less_than_num_seqs(self, n):
     with self.lock:
@@ -314,5 +317,5 @@ class SprintDataset(Dataset):
       return self._getSeq(sorted_seq_idx).targets
 
   def get_ctc_targets(self, sorted_seq_idx):
-    raise NotImplementedError
+    assert False, "No CTC targets."
 
