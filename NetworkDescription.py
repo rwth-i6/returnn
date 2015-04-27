@@ -135,14 +135,14 @@ class LayerNetworkDescription:
     num_inputs = config.int('num_inputs', 0)
     num_outputs = config.int('num_outputs', 0)
     target = config.value('target', 'classes')
-    if config.list('train'):
+    if config.list('train') and not config.value('train', '').startswith("sprint:"):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
-      except:
+      except Exception:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       try:
         _num_outputs = { 'classes' : [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
-      except:
+      except Exception:
         _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
         for k in _num_outputs:
           _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(config.list('train')[0], 'targets/data/' + k))]
