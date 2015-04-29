@@ -46,11 +46,13 @@ class ExternSprintDataset(SprintDataset):
         if interrupt:
           print >> log.v5, "ExternSprintDataset: interrupt child proc %i" % self.child_pid
           os.kill(self.child_pid, signal.SIGINT)
+      else:
+        self.child_pid = None
       self.pipe_p2c[1].close()
       self.pipe_c2p[0].close()
       if wait_thread:
         self.reader_thread.join()
-      if wait_proc:
+      if wait_proc and self.child_pid:
         self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
         self.child_pid = None
 
