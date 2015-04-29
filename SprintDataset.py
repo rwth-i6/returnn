@@ -277,6 +277,13 @@ class SprintDataset(Dataset):
       assert self.reached_final_seq
       return self.next_seq_to_be_added
 
+  def have_seqs(self):
+    with self.lock:
+      if self.next_seq_to_be_added > 0:
+        return True
+      self._waitForSeq(0)
+      return self.next_seq_to_be_added > 0
+
   def len_info(self):
     return "Sprint dataset, no len info"
 

@@ -242,6 +242,9 @@ class Dataset(object):
   def get_target_dim(self, target):
     raise NotImplementedError
 
+  def have_seqs(self):
+    return self.num_seqs > 0
+
   def len_info(self):
     """
     :rtype: str

@@ -335,7 +335,7 @@ def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
-    assert train.num_seqs > 0, "no train files specified, check train option: %s" % config.value('train', None)
+    assert train.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
     engine.init_train_from_config(config, train, dev, eval)
     engine.train()
   elif task == 'forward':
