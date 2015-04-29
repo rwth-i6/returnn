@@ -82,13 +82,10 @@ class ExternSprintDataset(SprintDataset):
     self.child_pid = pid
 
     try:
-      initSignal, (inputDim, outputDim, num_seqs) = self._read_next_raw()
+      initSignal, (inputDim, outputDim, num_segments) = self._read_next_raw()
       assert initSignal == "init"
       assert isinstance(inputDim, int) and isinstance(outputDim, int)
-      if num_seqs is not None:
-        assert isinstance(num_seqs, int)  # This information is optional.
-        if self._num_seqs is None:  # An earlier information is probably more correct.
-          self._num_seqs = num_seqs
+      # Ignore num_segments. It can be totally different than the real number of sequences.
       self.setDimensions(inputDim, outputDim)
     except Exception:
       print >> log.v1, "ExternSprintDataset: Sprint child process (%r) caused an exception." % args
