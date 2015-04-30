@@ -268,23 +268,25 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
 
-  def iterate_seqs(self):
+  def _iterate_seqs(self, chunk_size, chunk_step):
     """
     Takes chunking into consideration.
+    :type chunk_size: int
+    :type chunk_step: int
     :return: index, and seq start, seq end
     :rtype: list[(int,int,int)]
     """
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
-      if self.chunk_size == 0:
+      if chunk_size == 0:
         yield (s, numpy.array([0,0]), length)
       else:
         t = 0
         while t < length[0]:
-          l = min(t + self.chunk_size, length[0])
+          l = min(t + chunk_size, length[0])
           yield (s, numpy.array([t,t]), numpy.array([l,l]))
-          t += self.chunk_step
+          t += chunk_step
       s += 1
 
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
@@ -298,11 +300,15 @@ class Dataset(object):
     assert batch_size > 0
     if max_seqs == -1: max_seqs = float('inf')
     assert max_seqs > 0
+    chunk_size = self.chunk_size
+    chunk_step = self.chunk_step
     if not recurrent_net:
-      assert self.chunk_size == 0, "Chunking not supported for non-recurrent net"
+      if chunk_size != 0:
+        print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
+        chunk_size = 0
 
     batch = Batch()
-    for seq_idx, t_start, t_end in self.iterate_seqs():
+    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
         if max(length) > batch_size:
