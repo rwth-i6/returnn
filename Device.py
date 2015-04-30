@@ -117,10 +117,19 @@ class Device():
     # Note that we want a really new separate process, i.e. fork+exec, not just a fork.
     # This is to avoid many potential bugs, e.g. in Numpy or Theano.
     # See also the comment in TaskSystem.ExecingProcess.
+    theano_flags = {key: value for (key, value)
+                    in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+    # First set some sane default for compile dir.
+    theano_flags.setdefault("compiledir_format",
+                            "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
+    # Extend compile dir for this device.
+    theano_flags["compiledir_format"] += "--dev-%s" % self.name
+    env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
       func=self.process,
       name="Device %s proc" % self.name,
-      mustExec=True)
+      mustExec=True,
+      env_update=env_update)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 

@@ -281,10 +281,11 @@ class ExecingProcess:
     http://comments.gmane.org/gmane.comp.python.numeric.general/60204
   """
 
-  def __init__(self, target, args, name):
+  def __init__(self, target, args, name, env_update):
     self.target = target
     self.args = args
     self.name = name
+    self.env_update = env_update
     self.daemon = True
     self.pid = None
     self.exit_status = None
@@ -327,6 +328,8 @@ class ExecingProcess:
                 "--forkExecProc",
                 str(self.pipe_c2p[1].fileno()),
                 str(self.pipe_p2c[0].fileno())]
+        if self.env_update:
+          os.environ.update(self.env_update)
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
         print "ExecingProcess: Error at initialization."
@@ -464,30 +467,36 @@ class AsyncTask:
   multiprocessing.Pipe or ExecingProcess_Pipe.
   """
 
-  def __init__(self, func, name=None, mustExec=False):
+  def __init__(self, func, name=None, mustExec=False, env_update=None):
     """
     :param func: a function which gets a single parameter,
       which will be a reference to our instance in the fork,
       so that it can use our communication methods put/get.
     :type str name: name for the sub process
     :param bool mustExec: if True, we do fork+exec, not just fork
+    :param dict[str,str] env_update: for mustExec, also update these env vars
     """
     self.name = name or "unnamed"
     self.func = func
     self.mustExec = mustExec
+    self.env_update = env_update
     self.parent_pid = os.getpid()
+    proc_args = {
+      "target": funcCall,
+      "args": ((AsyncTask, "_asyncCall"), (self,)),
+      "name": self.name + " worker process"
+    }
     if mustExec and sys.platform != "win32":
       self.Process = ExecingProcess
       self.Pipe = ExecingProcess_Pipe
+      proc_args["env_update"] = env_update
     else:
+      assert not env_update, "not supported if not mustExec"
       from multiprocessing import Process, Pipe
       self.Process = Process
       self.Pipe = Pipe
     self.parent_conn, self.child_conn = self.Pipe()
-    self.proc = self.Process(
-      target = funcCall,
-      args = ((AsyncTask, "_asyncCall"), (self,)),
-      name = self.name + " worker process")
+    self.proc = self.Process(**proc_args)
     self.proc.daemon = True
     self.proc.start()
     self.child_conn.close()
