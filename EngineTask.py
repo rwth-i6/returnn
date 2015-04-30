@@ -595,7 +595,7 @@ class TrainTaskThread(TaskThread):
     score = sum(cost)
     #if numpy.isinf(score) or numpy.isnan(score):
     #  for i, res in enumerate(results):
-    #    if numpy.isinf(res[0]) or numpy.isnan(res[0]):
+    #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
     #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
     #  assert False  # Should not get here.
     if self.do_ctc_priors:
