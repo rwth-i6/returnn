@@ -116,6 +116,10 @@ class Device():
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
+    # Set device via flags.
+    theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
+    if self.name.startswith("gpu"):
+      theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
       func=self.process,
@@ -442,6 +446,7 @@ class Device():
       rnn.config = config
       rnn.initLog()
       print >> log.v3, "Device %s proc starting up" % device
+      print >> log.v3, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJson()
       rnn.maybeInitSprintCommunicator(device_proc=True)
@@ -466,14 +471,18 @@ class Device():
     output_queue = input_queue = asyncTask.conn
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
-      import cuda_ndarray.cuda_ndarray as cuda
       if device == 'gpuX': device = 'gpu'
       print "Use CUDA in device proc %s" % device
-      assert not theano.sandbox.cuda.cuda_enabled, "Must not yet be enabled. Otherwise sth is screwed."
-      theano.sandbox.cuda.use(device, force = True)
-      #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
-      device_id = cuda.active_device_number()
-      device_name = cuda.active_device_name()
+      assert theano.sandbox.cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
+      if not theano.sandbox.cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
+        theano.sandbox.cuda.use(device=device, force=True)
+        #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
+      try:
+        import cuda_ndarray.cuda_ndarray as theano_cuda_ndarray
+      except ImportError as exc:
+        raise Exception("Theano CUDA support seems broken: %s" % exc)
+      device_id = theano_cuda_ndarray.active_device_number()
+      device_name = theano_cuda_ndarray.active_device_name()
       device = "gpu%i" % device_id
     else:
       try:

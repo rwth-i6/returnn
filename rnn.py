@@ -147,8 +147,10 @@ def getDevicesInitArgs(config):
   if multiproc:
     assert len(tags) > 0
     devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag]} for tag in tags ]
-    assert not TheanoFlags.get("device", "").startswith("gpu"), \
-        "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+    import TaskSystem
+    if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+      assert not TheanoFlags.get("device", "").startswith("gpu"), \
+          "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
   else:
     devices = [ {"device": tags[0], "config": config, "blocking": True} ]
   if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
