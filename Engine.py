@@ -326,7 +326,8 @@ class Engine:
       self.network = new_network
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
-      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.pretrain_learning_rate)
+      self.learning_rate = self.pretrain_learning_rate
+      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
       self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
