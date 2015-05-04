@@ -158,6 +158,7 @@ class Engine:
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
     self.learning_rate = self.learning_rate_control.initialLearningRate
+    self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
     self.max_seqs = config.int('max_seqs', -1)
@@ -335,6 +336,7 @@ class Engine:
       self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
+      self.learning_rate = self.initial_learning_rate
       self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
     else:
       self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
