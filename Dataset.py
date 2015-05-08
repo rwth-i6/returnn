@@ -118,15 +118,15 @@ class Dataset(object):
 
     if self.shuffle_frames_of_nseqs > 0:
       # We always load N seqs at once and shuffle all their frames.
-      start, end = self._load_seqs_superset(start, end)
+      start, end = self._get_load_seqs_superset(start, end)
       self._load_seqs(start, end)
       while start < end:
-        self._shuffle_seqs(start, start + self.shuffle_frames_of_nseqs)
+        self._shuffle_frames_in_seqs(start, start + self.shuffle_frames_of_nseqs)
         start += self.shuffle_frames_of_nseqs
     else:
       self._load_seqs(start, end)
 
-  def _load_seqs_superset(self, start, end):
+  def _get_load_seqs_superset(self, start, end):
     """
     :type start: int
     :type end: int
@@ -143,7 +143,7 @@ class Dataset(object):
       end += (m - (end % m)) % m
     return start, end
 
-  def _shuffle_seqs(self, start, end):
+  def _shuffle_frames_in_seqs(self, start, end):
     raise NotImplementedError
 
   def _load_seqs(self, start, end):
@@ -211,7 +211,20 @@ class Dataset(object):
   def get_times(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def get_data(self, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: numpy.ndarray
+    :returns features: format 2d (time,feature) (float)
+    """
+    raise NotImplementedError
+
   def get_targets(self, target, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: numpy.ndarray
+    :returns targets: format 1d (time) (int: idx of output-feature)
+    """
     raise NotImplementedError
 
   def get_ctc_targets(self, sorted_seq_idx):
@@ -248,12 +261,18 @@ class Dataset(object):
   def len_info(self):
     """
     :rtype: str
-    Returns list of strings to present the user as information about our len.
+    :returns a string to present the user as information about our len.
     Depending on our implementation, we can give some more or some less information.
     """
     return None
 
   def is_less_than_num_seqs(self, n):
+    """
+    :type n: int
+    :rtype: bool
+    :returns whether n < num_seqs. In case num_seqs is not known in advance, it will wait
+    until it knows that n is behind the end or that we have the seq.
+    """
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.
     return n < self.num_seqs

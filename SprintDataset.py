@@ -9,6 +9,11 @@ import time
 
 class DataCache:
   def __init__(self, seq_idx, features, targets):
+    """
+    :param int seq_idx: sorted seq idx in the Dataset
+    :param numpy.ndarray features: format 2d (time,feature) (float)
+    :param numpy.ndarray targets: format 1d (time) (idx of output-feature)
+    """
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
@@ -210,9 +215,8 @@ class SprintDataset(Dataset):
     """
     Adds a new seq.
     This is called via the Sprint main thread.
-    :type segmentName: str
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param targets: format (time) (idx of output-feature)
+    :param numpy.ndarray targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -263,7 +267,7 @@ class SprintDataset(Dataset):
       self.ready_for_data = False
       self.cond.notify_all()
 
-  def _shuffle_seqs(self, start, end):
+  def _shuffle_frames_in_seqs(self, start, end):
     assert False, "Shuffling in SprintDataset only via Sprint at the moment."
 
   def get_num_timesteps(self):
