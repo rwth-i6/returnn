@@ -158,7 +158,7 @@ class CachedDataset(Dataset):
       if end != start:
         self.load_seqs(start, end, with_cache=False)
 
-  def _shuffle_seqs(self, start, end):
+  def _shuffle_frames_in_seqs(self, start, end):
     """
     :type start: int
     :type end: int
