@@ -117,9 +117,16 @@ class Container(object):
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_forward_weights(self, n, m, name=None):
+    """
+    :param int n: input dimension
+    :param int m: output dimension
+    :param str|None name: layer name
+    :rtype: theano.shared
+    """
     eval_locals = {
       "n": n,
       "m": m,
+      "sqrt": numpy.sqrt,
       "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
       "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
     }
