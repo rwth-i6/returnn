@@ -128,10 +128,15 @@ def betterRepr(o):
   if isinstance(o, deque):
     return "deque([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   if isinstance(o, tuple):
-    if len(o) == 1: return "(%s,)" % o[0]
+    if len(o) == 1:
+      return "(%s,)" % o[0]
     return "(%s)" % ", ".join(map(betterRepr, o))
   if isinstance(o, dict):
-    return "{\n%s}" % "".join(map(lambda (k,v): betterRepr(k) + ": " + betterRepr(v) + ",\n", sorted(o.iteritems())))
+    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.iteritems())]
+    if sum([len(v) for v in l]) >= 40:
+      return "{\n%s}" % "".join([v + ",\n" for v in l])
+    else:
+      return "{%s}" % ", ".join(l)
   if isinstance(o, set):
     return "set([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   # fallback
