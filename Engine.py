@@ -371,9 +371,8 @@ class Engine:
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
-    if "dev" not in self.eval_datasets:
-      self.learning_rate_control.setEpochError(self.epoch, trainer.score)
-      self.learning_rate_control.save()
+    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
+    self.learning_rate_control.save()
 
     eval_dump_str = []
     for name in self.eval_datasets.keys():
@@ -385,7 +384,7 @@ class Engine:
       trainer.elapsed += tester.elapsed
       eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
       if name == "dev":
-        self.learning_rate_control.setEpochError(self.epoch, tester.score)
+        self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
     print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed, " ".join(eval_dump_str)
 
