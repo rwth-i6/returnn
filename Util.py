@@ -11,8 +11,7 @@ def cmd(cmd):
   :type cmd: list[str] | str
   :rtype: list[str]
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
-                       env={"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
+  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True)
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
   return result

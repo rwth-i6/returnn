@@ -39,6 +39,7 @@ def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = {
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
