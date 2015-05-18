@@ -47,14 +47,11 @@ class LearningRateControl(object):
     :param str filename: load from and save to file
     """
     self.epochData = {1: self.EpochData(initialLearningRate)}
+    self.initialLearningRate = initialLearningRate
     self.errorMeasureKey = errorMeasureKey
     self.filename = filename
     if filename and os.path.exists(filename):
       self.load()
-
-  @property
-  def initialLearningRate(self):
-    return self.epochData[1].learningRate
 
   __repr__ = simpleObjRepr
 
