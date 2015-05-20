@@ -254,7 +254,7 @@ class NewbobAbs(LearningRateControl):
 def learningRateControlType(typeName):
   if typeName == "constant":
     return ConstantLearningRate
-  elif typeName in ("newbob", "newbob_relative"):  # Old setups expect the relative version.
+  elif typeName in ("newbob", "newbob_rel", "newbob_relative"):  # Old setups expect the relative version.
     return NewbobRelative
   elif typeName == "newbob_abs":
     return NewbobAbs
