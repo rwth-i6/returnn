@@ -104,25 +104,29 @@ class LearningRateControl(object):
     assert isinstance(error, dict)
     self.epochData[epoch].error.update(error)
 
-  def getErrorKey(self):
+  def getErrorKey(self, epoch):
+    if epoch not in self.epochData:
+      return self.errorMeasureKey
+    epoch_data = self.epochData[epoch]
+    if not epoch_data.error:
+      return None
+    if len(epoch_data.error) == 1 and "old_format_score" in epoch_data.error:
+      return "old_format_score"
     if self.errorMeasureKey:
       return self.errorMeasureKey
-    if not self.epochData:
-      return None
-    first_epoch = self.epochData[min(self.epochData.keys())]
-    if not first_epoch.error:
-      return None
-    if len(first_epoch.error) == 1:
-      return min(first_epoch.error.keys())
     for key in ["dev_score", "train_score"]:  # To keep old setups producing the same behavior, keep this order.
-      if key in first_epoch.error:
+      if key in epoch_data.error:
         return key
-    return min(first_epoch.error.keys())
+    return min(epoch_data.error.keys())
 
   def getEpochErrorValue(self, epoch):
-    key = self.getErrorKey()
-    assert key
+    if epoch not in self.epochData:
+      return None
     error = self.epochData[epoch].error
+    if not error:
+      return None
+    key = self.getErrorKey(epoch)
+    assert key
     assert key in error, "%r not in %r. fix %r in config. set it to %r or so." % \
                          (key, error, 'learning_rate_control_error_measure', 'dev_error')
     return error[key]
