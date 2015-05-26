@@ -164,6 +164,9 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   elif Task == "forward":
     prepareForwarding(epoch)
 
+  global startTime
+  startTime = time.time()
+
 
 def exit():
   print "Python train exit()"
@@ -347,8 +350,6 @@ def startTrainThread(epoch=None):
   trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
-  global startTime
-  startTime = time.time()
   isTrainThreadStarted = True
 
 
