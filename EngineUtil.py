@@ -91,7 +91,12 @@ def assign_dev_data_single_seq(device, dataset, seq):
   return success
 
 
-def subtract_priors(network, train, config):
+def maybe_subtract_priors(network, train, config):
+  """
+  :type network: Network.LayerNetwork
+  :type train: Dataset.Dataset
+  :type config: Config.Config
+  """
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)
     priors = train.calculate_priori()

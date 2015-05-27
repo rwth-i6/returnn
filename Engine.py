@@ -195,7 +195,7 @@ class Engine:
       last_epoch_model = network.load_hdf(model)
       assert last_epoch == last_epoch_model
       model.close()
-      EngineUtil.subtract_priors(network, self.train_data, config)
+      EngineUtil.maybe_subtract_priors(network, self.train_data, config)
 
     self.network = network
 
