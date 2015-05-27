@@ -12,7 +12,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "flat", forward_weights_init=None):
+  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "flat", forward_weights_init=None, bias_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -27,6 +27,7 @@ class Container(object):
     self.set_attr('depth', depth)
     self.set_attr('consensus', consensus)
     self.forward_weights_init = forward_weights_init or "random_normal()"
+    self.bias_init = bias_init or "zeros()"
 
   def dot(self, vec, mat):
     if self.depth == 1:
@@ -108,12 +109,32 @@ class Container(object):
   def set_attr(self, name, value):
     self.attrs[name] = value
 
-  def create_bias(self, n, prefix = 'b'):
+  def create_bias(self, n, prefix='b'):
+    """
+    :param int n: output dimension
+    :rtype: theano.shared
+    """
     name = "%s_%s" % (prefix, self.name)
     if self.depth > 1:
-      return theano.shared(value=numpy.zeros((self.depth, n), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+      size = (self.depth, n)
     else:
-      return theano.shared(value=numpy.zeros((n, ), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+      size = (n,)
+    def random_normal(scale, loc=0.0):
+      return self.rng.normal(loc=loc, scale=scale, size=size)
+    def random_uniform(l, loc=0.0):
+      return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
+    eval_locals = {
+      "n": n,
+      "sqrt": numpy.sqrt,
+      "log": numpy.log,
+      "zeros": (lambda: numpy.zeros(size, dtype=theano.config.floatX)),
+      "random_normal": random_normal,
+      "random_uniform": random_uniform
+    }
+    values = eval(self.bias_init, eval_locals)
+    values = numpy.asarray(values, dtype=theano.config.floatX)
+    assert values.shape == (n,)
+    return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
