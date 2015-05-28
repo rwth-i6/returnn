@@ -148,7 +148,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   if action == "train":
     pass
   elif action == "forward":
-    assert targetMode == "criterion-by-sprint"  # Hack in Sprint to just pass us the features.
+    assert targetMode in ["criterion-by-sprint", "forward-only"]
     targetMode = "forward"
   else:
     assert False, "unknown action: %r" % action
