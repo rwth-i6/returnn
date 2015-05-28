@@ -365,9 +365,10 @@ class LayerNetwork(object):
       n_in = last_layer.attrs['n_out']
       x_in = last_layer.output
     sources = [last_layer]
-    # create backward layers
-    assert self.recurrent or not self.bidirectional, "non-recurrent networks can not be bidirectional"
     if self.bidirectional:
+      # create backward layers
+      if not self.recurrent:
+        print >>log.v2, "warning: non-recurrent network is bidirectional"
       last_layer = None
       n_in = self.n_in
       x_in = self.x
