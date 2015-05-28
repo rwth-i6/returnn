@@ -227,6 +227,10 @@ def feedInputUnsupervised(features, weights=None, segmentName=None):
   assert features.shape[0] == InputDim
   train(segmentName, features)
 
+def feedInputForwarding(features, weights=None, segmentName=None):
+  assert Task == "forward"
+  return feedInput(features, weights=weights, segmentName=segmentName)
+
 # End Sprint PythonTrainer interface. }
 
 
