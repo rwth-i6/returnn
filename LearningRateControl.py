@@ -119,10 +119,13 @@ class LearningRateControl(object):
         return key
     return min(epoch_data.error.keys())
 
-  def getEpochErrorValue(self, epoch):
+  def getEpochErrorDict(self, epoch):
     if epoch not in self.epochData:
-      return None
-    error = self.epochData[epoch].error
+      return {}
+    return self.epochData[epoch].error
+
+  def getEpochErrorValue(self, epoch):
+    error = self.getEpochErrorDict(epoch)
     if not error:
       return None
     key = self.getErrorKey(epoch)

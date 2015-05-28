@@ -31,8 +31,6 @@ class Engine:
     self.is_training = False
     self.training_finished = False
     self.stop_train_after_epoch_request = False
-    self.lock = threading.RLock()
-    self.cond = threading.Condition(lock=self.lock)
     self.pretrain = None; " :type: Pretrain.Pretrain "
 
   @classmethod
@@ -176,15 +174,15 @@ class Engine:
 
     if last_model_epoch_filename:
       print >> log.v1, "loading weights from", last_model_epoch_filename
-      model = h5py.File(last_model_epoch_filename, "r")
+      last_model_hdf = h5py.File(last_model_epoch_filename, "r")
     else:
-      model = None
+      last_model_hdf = None
 
     if config.bool('initialize_from_model', False):
       # That's only about the topology, not the params.
       print >> log.v5, "initializing network topology from model"
-      assert model, "last model not specified. use 'load' in config. or don't use 'initialize_from_model'"
-      network = LayerNetwork.from_hdf_model_topology(model)
+      assert last_model_hdf, "last model not specified. use 'load' in config. or don't use 'initialize_from_model'"
+      network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
     else:
       if self.pretrain:
         # This would be obsolete if we don't want to load an existing model.
@@ -195,10 +193,10 @@ class Engine:
 
     # We have the parameters randomly initialized at this point.
     # Maybe load existing model parameters.
-    if model:
-      last_epoch_model = network.load_hdf(model)
-      assert last_epoch == last_epoch_model
-      model.close()
+    if last_model_hdf:
+      _last_epoch = network.load_hdf(last_model_hdf)
+      assert last_epoch == _last_epoch
+      last_model_hdf.close()
       EngineUtil.maybe_subtract_priors(network, self.train_data, config)
 
     self.network = network
@@ -237,16 +235,23 @@ class Engine:
     print >> log.v2, "net trainable params:", network.train_params_vars
     print >> log.v5, "net output:", network.output
 
+  def check_last_epoch(self):
+    if self.start_epoch == 1:
+      return
+    self.epoch = self.start_epoch - 1
+    if self.learning_rate_control:
+      if self.dev_data:
+        if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
+          # This can happen when we have a previous model but did not test it yet.
+          print >> log.v3, "Last epoch model not yet evaluated on dev. Doing that now."
+          self.eval_model()
+
   def train(self):
     if self.start_epoch:
       print >> log.v3, "start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch)
     print >> log.v4, "using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs)
     print >> log.v4, "learning rate control:", self.learning_rate_control
     print >> log.v4, "pretrain:", self.pretrain
-    self.eval_datasets = {}; """ :type: dict[str,Dataset.Dataset] """
-    for name, dataset in [("dev", self.dev_data), ("eval", self.eval_data)]:
-      if not dataset: continue
-      self.eval_datasets[name] = dataset
     if self.network.loss == 'priori':
       prior = self.train_data.calculate_priori()
       self.network.output.priori.set_value(prior)
@@ -255,26 +260,22 @@ class Engine:
     if self.network.recurrent:
       assert not self.train_data.shuffle_frames_of_nseqs, "Frames must not be shuffled in recurrent net."
 
-    with self.lock:
-      self.is_training = True
-      self.epoch = 0  # Not yet started. Will be >=1 later.
-      self.training_finished = False
-      self.cond.notify_all()
+    self.is_training = True
+    self.training_finished = False
 
     assert self.start_epoch >= 1, "Epochs start at 1."
     if self.start_epoch > self.final_epoch:
       print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
                        (self.start_epoch, self.final_epoch)
 
+    self.check_last_epoch()
+
     for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
       # In case of random seq ordering, we want to reorder each epoch.
       self.train_data.init_seq_order(epoch=epoch)
-      with self.lock:
-        # Notify about current epoch after we initialized the dataset seq order.
-        self.epoch = epoch
-        self.cond.notify_all()
+      self.epoch = epoch
 
-      for dataset in self.eval_datasets.values():
+      for dataset in self.get_eval_datasets().values():
         dataset.init_seq_order(self.epoch)
 
       self.init_train_epoch()
@@ -292,10 +293,15 @@ class Engine:
       if self.epoch != self.final_epoch:
         print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
 
-    with self.lock:
-      self.is_training = False
-      self.training_finished = True
-      self.cond.notify_all()
+    self.is_training = False
+    self.training_finished = True
+
+  def get_eval_datasets(self):
+    eval_datasets = {}; """ :type: dict[str,Dataset.Dataset] """
+    for name, dataset in [("dev", self.dev_data), ("eval", self.eval_data)]:
+      if not dataset: continue
+      eval_datasets[name] = dataset
+    return eval_datasets
 
   @classmethod
   def epoch_model_filename(cls, model_filename, epoch, is_pretrain):
@@ -373,23 +379,24 @@ class Engine:
       self.save_model(self.get_epoch_model_filename(), self.epoch)
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
     self.learning_rate_control.save()
+    if self.ctc_prior_file is not None:
+      trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
+    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed
+    self.eval_model()
+
+  def eval_model(self):
     eval_dump_str = []
-    for name in self.eval_datasets.keys():
-      dataset = self.eval_datasets[name]
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
+    for dataset_name, dataset in self.get_eval_datasets().items():
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               pad_batches=self.pad_batches)
       tester.join()
-      trainer.elapsed += tester.elapsed
-      eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
-      if name == "dev":
+      eval_dump_str += ["  %s: score %s error %s" % (dataset_name, tester.score, tester.error)]
+      if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed, " ".join(eval_dump_str)
-
-    if self.ctc_prior_file is not None:
-      trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
+    print >> log.v1, "\n".join(eval_dump_str)
 
   def save_model(self, filename, epoch):
     """
