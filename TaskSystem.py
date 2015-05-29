@@ -10,11 +10,9 @@ import os
 from StringIO import StringIO
 from contextlib import contextmanager
 import pickle
-import cPickle
 import types
 import marshal
-import importlib
-import time
+from importlib import import_module
 
 
 def execInMainProc(func):
@@ -151,16 +149,23 @@ def funcCall(attrChainArgs, args=()):
 
 Unpickler = pickle.Unpickler
 CellType = type((lambda x: lambda: x)(0).func_closure[0])
+ModuleType = type(sys)
 
 def makeFuncCell(value):
   return (lambda: value).func_closure[0]
 
 def getModuleDict(modname):
-  mod = importlib.import_module(modname)
+  mod = import_module(modname)
   return mod.__dict__
 
 def getModNameForModDict(obj):
-  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod}
+  """
+  :type obj: dict
+  :rtype: str | None
+  :returns The module name or None. It will not return '__main__' in any case
+  because that likely will not be the same in the unpickling environment.
+  """
+  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod and modname != "__main__"}
   modname = mods.get(id(obj), None)
   return modname
 
@@ -192,7 +197,8 @@ class Pickler(pickle.Pickler):
       obj.func_closure,
     ))
     self.write(pickle.REDUCE)
-    self.memoize(obj)
+    if id(obj) not in self.memo:  # Could be if we recursively landed here. See also pickle.save_tuple().
+      self.memoize(obj)
   dispatch[types.FunctionType] = save_func
 
   def save_method(self, obj):
@@ -237,11 +243,54 @@ class Pickler(pickle.Pickler):
     self.save_dict(obj)
   dispatch[types.DictionaryType] = intellisave_dict
 
+  def save_module(self, obj):
+    modname = getModNameForModDict(obj.__dict__)
+    if modname:
+      self.save(import_module)
+      self.save((modname,))
+      self.write(pickle.REDUCE)
+      self.memoize(obj)
+      return
+    # We could maybe construct it manually. For now, just fail.
+    raise pickle.PicklingError('cannot pickle module %r' % obj)
+  dispatch[ModuleType] = save_module
+
   def save_buffer(self, obj):
     self.save(buffer)
     self.save((str(obj),))
     self.write(pickle.REDUCE)
   dispatch[types.BufferType] = save_buffer
+
+  # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
+  def save_global(self, obj, name=None, pack=pickle.struct.pack):
+    assert obj
+    assert id(obj) not in self.memo
+    if name is None:
+      name = obj.__name__
+
+    module = getattr(obj, "__module__", None)
+    if module is None or module == "__main__":
+      module = pickle.whichmodule(obj, name)
+    if module is None or module == "__main__":
+      raise pickle.PicklingError(
+          "Can't pickle %r: module not found: %s" % (obj, module))
+
+    try:
+      __import__(module)
+      mod = sys.modules[module]
+      klass = getattr(mod, name)
+    except (ImportError, KeyError, AttributeError):
+      raise pickle.PicklingError(
+          "Can't pickle %r: it's not found as %s.%s" % (obj, module, name))
+    else:
+      if klass is not obj:
+        raise pickle.PicklingError(
+            "Can't pickle %r: it's not the same object as %s.%s" % (obj, module, name))
+
+    assert "\n" not in module
+    assert "\n" not in name
+    self.write(pickle.GLOBAL + module + '\n' + name + '\n')
+    self.memoize(obj)
 
   # Some types in the types modules are not correctly referenced,
   # such as types.FunctionType. This is fixed here.
@@ -377,8 +426,12 @@ class ExecingProcess:
   @staticmethod
   def checkExec():
     if "--forkExecProc" in sys.argv:
-      import better_exchook
-      better_exchook.install()
+      try:
+        import better_exchook
+      except ImportError:
+        pass  # Doesn't matter.
+      else:
+        better_exchook.install()
       argidx = sys.argv.index("--forkExecProc")
       writeFileNo = int(sys.argv[argidx + 1])
       readFileNo = int(sys.argv[argidx + 2])
@@ -551,7 +604,7 @@ class AsyncTask:
   @property
   def isChild(self):
     if self.isParent: return False
-    assert self.parent_pid == os.getppid()
+    # Note: self.parent_pid != os.getppid() if the parent died.
     return True
 
   # This might be called from the module code.
