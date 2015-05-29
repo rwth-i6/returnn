@@ -113,7 +113,10 @@ class LayerNetwork(object):
             encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       obj.pop('from', None)
-      params = { 'sources': source, 'dropout' : 0.0, 'name' : layer_name, 'mask' : mask, "train_flag": train_flag }
+      params = { 'sources': source, 'dropout' : 0.0,
+                 'name' : layer_name, 'mask' : mask,
+                 "train_flag": train_flag,
+                 'network': network }
       params.update(obj)
       if cl == 'softmax':
         if not 'target' in params:
@@ -192,7 +195,8 @@ class LayerNetwork(object):
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
                    'mask': model[layer_name].attrs['mask'],
-                   'train_flag' : train_flag }
+                   'train_flag' : train_flag,
+                   'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
@@ -312,6 +316,7 @@ class LayerNetwork(object):
     params.update(info)
     params["sources"] = sources
     params["mask"] = self.mask
+    params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
     if layer_class.recurrent:
       self.recurrent = True

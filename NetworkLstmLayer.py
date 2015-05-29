@@ -34,9 +34,10 @@ class LstmLayer(RecurrentLayer):
     for s, W in zip(self.sources, self.W_in):
       W.set_value(self.create_random_uniform_weights(n=s.attrs['n_out'], m=W_in_m,
                                                      p=s.attrs['n_out'] + n_out + W_in_m,
-                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+                                                     name=W.name).get_value(borrow=True, return_internal_type=True), borrow=True)
     self.o.set_value(numpy.ones((n_out,), dtype='int8')) #TODO what is this good for?
-    if sharpgates == 'global': self.sharpness = self.create_random_uniform_weights(3, n_out)
+    if sharpgates == 'global':
+      self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
       if not hasattr(LstmLayer, 'sharpgates'):
         LstmLayer.sharpgates = self.create_bias(3)
@@ -47,9 +48,11 @@ class LstmLayer(RecurrentLayer):
         LstmLayer.sharpgates = self.create_bias(1)
         self.add_param(LstmLayer.sharpgates, 'gate_scaling')
       self.sharpness = LstmLayer.sharpgates
-    else: self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda')
+    else:
+      self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name = 'lambda')
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
-    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
+      self.sharpness = self.add_param(self.sharpness, 'gate_scaling')
 
     assert self.attrs['optimization'] in ['memory', 'speed']
     if self.attrs['optimization'] == 'speed':
