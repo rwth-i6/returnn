@@ -11,11 +11,13 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", forward_weights_init=None, bias_init=None):
+  def __init__(self, layer_class, name="", forward_weights_init=None, bias_init=None, network=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
-    :param str forward_weights_init: see self.create_forward_weights
+    :param str forward_weights_init: see self.create_forward_weights()
+    :param str bias_init: see self.create_bias()
+    :param Network.LayerNetwork network: the network which we will be part of
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
@@ -23,6 +25,7 @@ class Container(object):
     self.name = name.encode("utf8")
     self.forward_weights_init = forward_weights_init or "random_normal()"
     self.bias_init = bias_init or "zeros()"
+    self.network = network
 
   def save(self, head):
     """
@@ -92,7 +95,10 @@ class Container(object):
     :type name: str
     :rtype: T
     """
-    if name == "": name = "param_%d" % len(self.params)
+    if not name:
+      name = getattr(param, "name", None)
+    if not name:
+      name = "param_%d" % len(self.params)
     self.params[name] = param
     return param
 

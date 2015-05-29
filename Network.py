@@ -95,11 +95,11 @@ class LayerNetwork(object):
             traverse(content, prev, network)
           source.append(network.hidden[prev])
       obj.pop('from', None)
-      params = { 'sources': source }
+      params = { 'sources': source, 'network': network }
       params.update(obj)
       if cl == 'softmax':
         network.make_classifier(sources=params['sources'], loss=params['loss'],
-                                dropout=params['dropout'], mask=mask)
+                                dropout=params['dropout'], mask=mask, network=network)
       else:
         layer_class = get_layer_class(cl)
         params.update({'activation': act, 'name': layer_name})
@@ -143,7 +143,8 @@ class LayerNetwork(object):
                    'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
-                   'mask': model[layer_name].attrs['mask'] }
+                   'mask': model[layer_name].attrs['mask'],
+                   'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
@@ -156,7 +157,9 @@ class LayerNetwork(object):
     traverse(model, output, network)
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
     loss = 'ce' if not 'loss' in model[output].attrs else model[output].attrs['loss']
-    network.make_classifier(sources=sources, loss=loss, dropout=model[output].attrs['dropout'], mask=mask)
+    network.make_classifier(sources=sources, loss=loss,
+                            dropout=model[output].attrs['dropout'], mask=mask,
+                            network=network)
     return network
 
   def add_layer(self, layer):
@@ -254,6 +257,7 @@ class LayerNetwork(object):
     params.update(info)
     params["sources"] = sources
     params["mask"] = self.mask
+    params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
     if layer_class.recurrent:
       self.recurrent = True

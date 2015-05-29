@@ -19,18 +19,18 @@ class RecurrentLayer(HiddenLayer):
     n_out = self.attrs['n_out']
     self.act = self.create_bias(n_out)
     if projection:
-      self.W_re = self.create_random_normal_weights(projection, n_out, n_in,
-                                                    "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
-      self.W_proj = self.create_forward_weights(n_out, projection)
-      self.add_param(self.W_proj, 'W_proj_%s'%self.name)
+      n_re_in = projection
     else:
-      self.W_re = self.create_random_normal_weights(n_out, n_out, n_in,
-                                                    "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
+      n_re_in = n_out
+    self.W_re = self.add_param(self.create_random_normal_weights(n=n_re_in, m=n_out, scale=n_in,
+                                                                 name="W_re_%s" % self.name))
+    if projection:
+      self.W_proj = self.add_param(self.create_forward_weights(n_out, projection, name='W_proj_%s' % self.name))
+    else:
       self.W_proj = None
     for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_normal_weights(s.attrs['n_out'], n_out, n_in,
-                                                    "W_in_%s_%s" % (s.name, self.name)).get_value())
-    self.add_param(self.W_re, 'W_re_%s' % self.name)
+      W.set_value(self.create_random_normal_weights(n=s.attrs['n_out'], m=n_out, scale=n_in,
+                                                    name=W.name).get_value())
     self.index = index
     self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
     if compile: self.compile()
