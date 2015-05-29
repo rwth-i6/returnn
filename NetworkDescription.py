@@ -109,7 +109,8 @@ class LayerNetworkDescription:
     default_layer_info = {
       "L1": L1_reg, "L2": L2_reg,
       "forward_weights_init": config.value("forward_weights_init", None),
-      "bias_init": config.value("bias_init", None)
+      "bias_init": config.value("bias_init", None),
+      "substitute_param_expr": config.value("substitute_param_expr", None)
     }
 
     return cls(num_inputs=num_inputs, num_outputs=num_outputs,

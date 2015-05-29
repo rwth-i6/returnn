@@ -12,13 +12,16 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "flat", forward_weights_init=None, bias_init=None, network=None):
+  def __init__(self, layer_class, name="", network=None,
+               train_flag=False, depth=1, consensus = "flat",
+               forward_weights_init=None, bias_init=None,
+               substitute_param_expr=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
+    :param Network.LayerNetwork network: the network which we will be part of
     :param str forward_weights_init: see self.create_forward_weights()
     :param str bias_init: see self.create_bias()
-    :param Network.LayerNetwork network: the network which we will be part of
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
@@ -28,9 +31,10 @@ class Container(object):
     self.depth = depth
     self.set_attr('depth', depth)
     self.set_attr('consensus', consensus)
+    self.network = network
     self.forward_weights_init = forward_weights_init or "random_normal()"
     self.bias_init = bias_init or "zeros()"
-    self.network = network
+    self.substitute_param_expr = substitute_param_expr
 
   def dot(self, vec, mat):
     if self.depth == 1:
@@ -108,6 +112,10 @@ class Container(object):
       name = getattr(param, "name", None)
     if not name:
       name = "param_%d" % len(self.params)
+    if self.substitute_param_expr:
+      substitute = eval(self.substitute_param_expr, {"self": self, "name": name, "value": param})
+      if substitute:
+        return substitute
     self.params[name] = param
     return param
 
