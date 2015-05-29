@@ -410,7 +410,9 @@ class Engine:
     :type combine_labels: str
     """
     cache = SprintCache.FileArchive(cache_file)
-    batches = data.generate_batches(self.network.recurrent, data.get_num_timesteps(), data.get_num_timesteps(), 1)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent,
+                                    batch_size=data.get_num_timesteps(),
+                                    max_seqs=1)
     merge = {}
     if combine_labels != '':
       for index, label in enumerate(data.labels):
