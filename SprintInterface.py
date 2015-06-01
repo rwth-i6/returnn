@@ -393,9 +393,8 @@ def getFinalEpoch():
   assert engine
   assert config
   config_num_epochs = engine.config_get_final_epoch(config)
-  with engine.lock:
-    if engine.is_training:
-      assert engine.final_epoch == config_num_epochs
+  if engine.is_training:
+    assert engine.final_epoch == config_num_epochs
   return config_num_epochs
 
 
