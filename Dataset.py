@@ -350,3 +350,22 @@ class Dataset(object):
     return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs))
 
 
+class DatasetSeq:
+  def __init__(self, seq_idx, features, targets, ctc_targets=None):
+    """
+    :param int seq_idx: sorted seq idx in the Dataset
+    :param numpy.ndarray features: format 2d (time,feature) (float)
+    :param numpy.ndarray targets: format 1d (time) (idx of output-feature)
+    :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
+    """
+    self.seq_idx = seq_idx
+    self.features = features
+    self.targets = targets
+    self.ctc_targets = ctc_targets
+
+  @property
+  def num_frames(self):
+    return self.features.shape[0]
+
+  def __repr__(self):
+    return "<DataCache seq_idx=%i>" % self.seq_idx

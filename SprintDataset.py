@@ -1,29 +1,10 @@
-
 import thread
 from threading import Condition, currentThread
-from Dataset import Dataset
-from Log import log
 import math
 import time
 
-
-class DataCache:
-  def __init__(self, seq_idx, features, targets):
-    """
-    :param int seq_idx: sorted seq idx in the Dataset
-    :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param numpy.ndarray targets: format 1d (time) (idx of output-feature)
-    """
-    self.seq_idx = seq_idx
-    self.features = features
-    self.targets = targets
-
-  @property
-  def num_frames(self):
-    return self.features.shape[0]
-
-  def __repr__(self):
-    return "<SprintDataset DataCache seq_idx=%i>" % self.seq_idx
+from Dataset import Dataset, DatasetSeq
+from Log import log
 
 
 class SprintDataset(Dataset):
@@ -86,7 +67,7 @@ class SprintDataset(Dataset):
     self.next_seq_to_be_added = 0
     self.reached_final_seq = False
     self._num_timesteps = 0
-    self.added_data = []; " :type: list[DataCache] "
+    self.added_data = []; " :type: list[DatasetSeq] "
     self.ready_for_data = True
 
   def initSprintEpoch(self, epoch):
@@ -251,7 +232,7 @@ class SprintDataset(Dataset):
           assert seq_idx + 1 == self.next_seq_to_be_added
           self.cond.wait()
 
-      self.added_data += [DataCache(seq_idx, features, targets)]
+      self.added_data += [DatasetSeq(seq_idx, features, targets)]
       self.cond.notify_all()
       return seq_idx
 
