@@ -4,6 +4,7 @@ from collections import deque
 import inspect
 import os
 import shlex
+import numpy as np
 
 
 def cmd(cmd):
@@ -246,3 +247,10 @@ def initThreadJoinHack():
     else:
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
+
+
+def class_idx_seq_to_features(seq, num_classes):
+  num_frames = len(seq)
+  m = np.zeros((num_frames, num_classes))
+  m[np.arange(num_frames), seq] = 1
+  return m
