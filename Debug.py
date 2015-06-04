@@ -41,8 +41,7 @@ def initBetterExchook():
         # Print the stack of all other threads.
         dumpAllThreadTracebacks({main_thread_id})
 
-    # http://stackoverflow.com/a/1237407/133374
-    if sys.stdin.isatty() and sys.stderr.isatty():
+    if os.environ.get("DEBUG", "") == "1":
       pdb.post_mortem(exc_tb)
 
   sys.excepthook = excepthook
