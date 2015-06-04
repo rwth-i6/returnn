@@ -31,22 +31,19 @@ def initBetterExchook():
   import pdb
 
   def excepthook(exc_type, exc_obj, exc_tb):
-    #if exc_type != KeyboardInterrupt:
-    if exc_type != KeyboardInterrupt:
-      print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
-      better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
+    print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
+    better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
 
-      if isinstance(threading.currentThread(), threading._MainThread):
-        main_thread_id = thread.get_ident()
-        if not isinstance(exc_type, Exception):
-          # We are the main thread and we got an exit-exception. This is likely fatal.
-          # This usually means an exit. (We ignore non-daemon threads and procs here.)
-          # Print the stack of all other threads.
-          dumpAllThreadTracebacks({main_thread_id})
+    if isinstance(threading.currentThread(), threading._MainThread):
+      main_thread_id = thread.get_ident()
+      if not isinstance(exc_type, Exception):
+        # We are the main thread and we got an exit-exception. This is likely fatal.
+        # This usually means an exit. (We ignore non-daemon threads and procs here.)
+        # Print the stack of all other threads.
+        dumpAllThreadTracebacks({main_thread_id})
 
-      # http://stackoverflow.com/a/1237407/133374
-      #if sys.stdin.isatty() and sys.stderr.isatty():
-      #  pdb.post_mortem(exc_tb)
+    if os.environ.get("DEBUG", "") == "1":
+      pdb.post_mortem(exc_tb)
 
   sys.excepthook = excepthook
 
