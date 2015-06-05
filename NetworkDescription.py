@@ -136,7 +136,7 @@ class LayerNetworkDescription:
     """
     num_inputs = config.int('num_inputs', 0)
     num_outputs = config.int('num_outputs', 0)
-    if config.list('train') and not config.value('train', '').startswith("sprint:"):
+    if config.list('train') and ":" not in config.value('train', ''):
       _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       _num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
       if num_inputs: assert num_inputs == _num_inputs
