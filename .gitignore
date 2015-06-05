@@ -1,3 +1,4 @@
 *.pyc
 .history*
 /.idea
+ipython-kernel-*.json
