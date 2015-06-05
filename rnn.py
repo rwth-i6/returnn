@@ -12,6 +12,7 @@ import re
 import os
 import sys
 import time
+from importlib import import_module
 from optparse import OptionParser
 from Log import log
 from Device import Device, get_num_devices
@@ -29,9 +30,9 @@ TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.envir
 
 config = None; """ :type: Config """
 engine = None; """ :type: Engine """
-train = None; """ :type: Dataset """
-dev = None; """ :type: Dataset """
-eval = None; """ :type: Dataset """
+train_data = None; """ :type: Dataset """
+dev_data = None; """ :type: Dataset """
+eval_data = None; """ :type: Dataset """
 
 
 def initConfig(configFilename, commandLineOptions):
@@ -229,7 +230,7 @@ def getCacheByteSizes():
 
 def load_data(config, cache_byte_size, files_config_key, **kwargs):
   """
-  :type config: Config.Config
+  :type config: Config
   :type cache_byte_size: int
   :type chunking: str
   :type seq_ordering: str
@@ -238,18 +239,29 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   """
   if not config.has(files_config_key):
     return None, 0
-  if config.value(files_config_key, "").startswith("sprint:"):
+  config_str = config.value(files_config_key, "")
+  if config_str.startswith("sprint:"):
     kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
     sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
     assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
     cls = ExternSprintDataset
+  elif re.match("^[A-Za-z_][A-Za-z0-9_]*::.*", config_str):
+    mod_name, cls_name, cls_args_s = re.match("^([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(.*)$",
+                                              config_str).groups()
+    mod = import_module(mod_name)
+    cls = getattr(mod, cls_name)
+    cls_args_s = cls_args_s.strip() or "()"
+    cls_args_s = "dict" + cls_args_s
+    cls_args = eval(cls_args_s)
+    kwargs.update(cls_args)
   else:
     kwargs["cache_byte_size"] = cache_byte_size
     cls = HDFDataset
   data = cls.from_config(config, **kwargs)
   if isinstance(data, HDFDataset):
     for f in config.list(files_config_key):
+      assert os.path.exists(f)
       data.add_file(f)
   data.initialize()
   cache_leftover = 0
@@ -266,16 +278,16 @@ def initData():
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
-  global train, dev, eval
-  dev, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
+  global train_data, dev_data, eval_data
+  dev_data, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
                                          seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
+  eval_data, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
                                            seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
     train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
-  train, extra_train = load_data(config, train_cache_bytes, 'train')
+  train_data, extra_train = load_data(config, train_cache_bytes, 'train')
 
 
 def printTaskProperties(devices=None):
@@ -283,17 +295,17 @@ def printTaskProperties(devices=None):
   :type devices: list[Device]
   """
 
-  if train:
+  if train_data:
     print >> log.v2, "Train data:"
-    print >> log.v2, "  input:", train.num_inputs, "x", train.window
-    print >> log.v2, "  output:", train.num_outputs
-    print >> log.v2, " ", train.len_info() or "no info"
-  if dev:
+    print >> log.v2, "  input:", train_data.num_inputs, "x", train_data.window
+    print >> log.v2, "  output:", train_data.num_outputs
+    print >> log.v2, " ", train_data.len_info() or "no info"
+  if dev_data:
     print >> log.v2, "Dev data:"
-    print >> log.v2, " ", dev.len_info() or "no info"
-  if eval:
+    print >> log.v2, " ", dev_data.len_info() or "no info"
+  if eval_data:
     print >> log.v2, "Eval data:"
-    print >> log.v2, " ", eval.len_info() or "no info"
+    print >> log.v2, " ", eval_data.len_info() or "no info"
 
   if devices:
     print >> log.v3, "Devices:"
@@ -342,16 +354,16 @@ def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
-    assert train.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
-    engine.init_train_from_config(config, train, dev, eval)
+    assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
+    engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.train()
   elif task == 'forward':
-    assert eval is not None, 'no eval data provided'
+    assert eval_data is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
     engine.init_network_from_config(config)
-    engine.forward_to_hdf(eval, output_file, combine_labels)
+    engine.forward_to_hdf(eval_data, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano.printing
     engine.init_network_from_config(config)
@@ -361,13 +373,13 @@ def executeMainTask():
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.init_network_from_config(config)
-    engine.analyze(engine.devices[0], eval, statistics)
+    engine.analyze(engine.devices[0], eval_data, statistics)
   elif task == "classify":
-    assert eval is not None, 'no eval data provided'
+    assert eval_data is not None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
-    engine.classify(engine.devices[0], eval, label_file)
+    engine.classify(engine.devices[0], eval_data, label_file)
   else:
     assert False, "unknown task: %s" % task
 

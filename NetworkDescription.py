@@ -137,7 +137,7 @@ class LayerNetworkDescription:
     num_inputs = config.int('num_inputs', 0)
     num_outputs = config.int('num_outputs', 0)
     target = config.value('target', 'classes')
-    if config.list('train') and not config.value('train', '').startswith("sprint:"):
+    if config.list('train') and ":" not in config.value('train', ''):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
       except Exception:
