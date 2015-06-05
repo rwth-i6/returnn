@@ -1,4 +1,4 @@
-#! /usr/bin/python2.7
+#!/usr/bin/env python2.7
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
