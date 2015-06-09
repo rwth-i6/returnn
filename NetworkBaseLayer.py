@@ -7,9 +7,11 @@ from Log import log
 
 
 class Container(object):
+  rng_seed = 1234
+
   @classmethod
   def initialize_rng(cls):
-    cls.rng = numpy.random.RandomState(1234)
+    cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class, name="", network=None,
                forward_weights_init=None, bias_init=None,
