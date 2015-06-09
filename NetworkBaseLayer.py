@@ -8,9 +8,11 @@ __author__ = 'az'
 
 
 class Container(object):
+  rng_seed = 1234
+
   @classmethod
   def initialize_rng(cls):
-    cls.rng = numpy.random.RandomState(1234)
+    cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class, name="", network=None,
                train_flag=False, depth=1, consensus = "flat",
