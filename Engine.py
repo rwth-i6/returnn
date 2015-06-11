@@ -285,10 +285,11 @@ class Engine:
         self.stop_train_after_epoch_request = False
         break
 
-    if self.epoch:  # We did train at least one epoch.
+    if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
+      assert self.epoch
       # Save last model, in case it was not saved yet (depends on save_model_epoch_interval).
       if self.model_filename:
-        self.save_model(self.model_filename + ".%03d" % self.epoch, self.epoch)
+        self.save_model(self.get_epoch_model_filename(), self.epoch)
 
       if self.epoch != self.final_epoch:
         print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
@@ -403,6 +404,7 @@ class Engine:
     :param str filename: full filename for model
     :param int epoch: save epoch idx
     """
+    print >> log.v3, "Save model from epoch %i under %s" % (epoch, filename)
     model = h5py.File(filename, "w")
     self.network.save_hdf(model, epoch)
     model.close()
