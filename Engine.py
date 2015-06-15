@@ -32,6 +32,7 @@ class Engine:
     self.training_finished = False
     self.stop_train_after_epoch_request = False
     self.pretrain = None; " :type: Pretrain.Pretrain "
+    self.init_train_epoch_posthook = None
 
   @classmethod
   def config_get_final_epoch(cls, config):
@@ -164,6 +165,7 @@ class Engine:
     self.pad_batches = config.bool("pad", False)
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     self.exclude = config.int_list('exclude', [])
+    self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -351,6 +353,10 @@ class Engine:
     if not self.is_pretrain_epoch():
       # Train the whole network.
       self.network.declare_train_params()
+
+    if self.init_train_epoch_posthook:
+      print >> log.v5, "execute init_train_epoch_posthook:", self.init_train_epoch_posthook
+      exec self.init_train_epoch_posthook
 
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
