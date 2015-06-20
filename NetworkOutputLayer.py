@@ -96,9 +96,9 @@ class FramewiseOutputLayer(OutputLayer):
     if self.loss == 'ce' or self.loss == 'priori':
       if self.y.type == T.ivector().type:
         logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
-        #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
+        #pcx = T.log(T.clip(pcx, 1.e-38, 1.e20))  # For pcx near zero, the gradient will likely explode.
       else:
-        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), self.y[self.i].T)
+        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
       return T.sum(logpcx), known_grads
     elif self.loss == 'sse':
