@@ -118,6 +118,8 @@ def getDevicesInitArgs(config):
   :rtype: list[dict[str]]
   """
   multiproc = config.bool('multiprocessing', True)
+  if config.value('task', 'train') == "theano_graph":
+    multiproc = False
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
   ncpus, ngpus = get_num_devices()
