@@ -117,6 +117,7 @@ class Device():
           raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number(); """ :type: int """
         self.device_name = cuda.active_device_name(); """ :type: str """
+        self._checkGpuFuncs(device, self.id)
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
@@ -345,7 +346,7 @@ class Device():
                                       name = "analyzer")
 
   def get_compute_func(self, task):
-    if task == "train":
+    if task == "train" or task == "theano_graph":
       if self.updater.updateOnDevice:
         task = "train_and_update"
       else:
