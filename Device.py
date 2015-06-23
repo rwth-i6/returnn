@@ -103,8 +103,6 @@ class Device():
     self.main_pid = os.getpid()
 
     if blocking:
-      self.initialize(config)
-      self.num_train_params = len(self.trainnet.train_params_vars)
       if device[0:3] == 'gpu':
         import theano.sandbox.cuda as theano_cuda
         assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
@@ -117,10 +115,12 @@ class Device():
           raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number(); """ :type: int """
         self.device_name = cuda.active_device_name(); """ :type: str """
-        self._checkGpuFuncs(device, self.id)
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
+      self.initialize(config)
+      self.num_train_params = len(self.trainnet.train_params_vars)
+      self._checkGpuFuncs(self.device_name, self.id)
     else:
       self.name = device
       self.startProc()
