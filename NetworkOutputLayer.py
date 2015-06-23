@@ -95,12 +95,12 @@ class FramewiseOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       if self.y.type == T.ivector().type:
-        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
+        #pcx = self.p_y_given_x[:, y[self.i]]
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
         #pcx = T.log(T.clip(pcx, 1.e-38, 1.e20))  # For pcx near zero, the gradient will likely explode.
       else:
-        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
-      #pcx = self.p_y_given_x[:, y[self.i]]
-      return T.sum(logpcx), known_grads
+        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
+      return T.sum(nll), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
