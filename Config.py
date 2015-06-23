@@ -23,13 +23,14 @@ class Config:
         continue
       line = line.split(None, 1)
       assert len(line) == 2, "unable to parse config line: %r" % line
-      key = line[0]
-      value = line[1]
-      if value.find(',') > 0:
-        value = value.split(',')
-      else:
-        value = [value]
-      self.dict[key] = value
+      self.add_line(key=line[0], value=line[1])
+
+  def add_line(self, key, value):
+    if value.find(',') > 0:
+      value = value.split(',')
+    else:
+      value = [value]
+    self.dict[key] = value
 
   def has(self, key):
     return key in self.dict

@@ -77,7 +77,11 @@ def initConfig(configFilename, commandLineOptions):
   for opt in options.keys():
     if options[opt] != None:
       config.set(opt, options[opt])
-
+  assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
+  for i in range(0, len(args), 2):
+    key, value = args[i:i+2]
+    assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
+    config.add_line(key=key[2:], value=value)
 
 def initLog():
   logs = config.list('log', [])
