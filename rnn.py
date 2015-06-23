@@ -338,7 +338,8 @@ def init(configFilename, commandLineOptions):
   initConfigJson()
   maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
-  initData()
+  if needData():
+    initData()
   printTaskProperties(devices)
   initEngine(devices)
 
@@ -348,6 +349,13 @@ def finalize():
     for device in engine.devices:
       device.terminate()
   maybeFinalizeSprintCommunicator(device_proc=False)
+
+
+def needData():
+  task = config.value('task', 'train')
+  if task == 'theano_graph':
+    return False
+  return True
 
 
 def executeMainTask():
