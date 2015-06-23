@@ -3,6 +3,19 @@ import os
 import sys
 
 
+global_exclude_thread_ids = set()
+
+def auto_exclude_all_new_threads(func):
+  def wrapped(*args, **kwargs):
+    old_threads = set(sys._current_frames().keys())
+    res = func(*args, **kwargs)
+    new_threads = set(sys._current_frames().keys())
+    new_threads -= old_threads
+    global_exclude_thread_ids.update(new_threads)
+    return res
+  return wrapped
+
+
 def dumpAllThreadTracebacks(exclude_thread_ids=set()):
   import better_exchook
   import threading
@@ -17,7 +30,10 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       # Note that this leaves out all threads not created via the threading module.
       if tid not in threads: continue
       print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
-      better_exchook.print_traceback(stack)
+      if tid in global_exclude_thread_ids:
+        print "(Auto-ignored traceback.)"
+      else:
+        better_exchook.print_traceback(stack)
       print ""
   else:
     print "Does not have sys._current_frames, cannot get thread tracebacks."
@@ -67,6 +83,7 @@ def initFaulthandler(sigusr1_chain=False):
       print "faulthandler enabled."
 
 
+@auto_exclude_all_new_threads
 def initIPythonKernel():
   # You can remotely connect to this kernel. See the output on stdout.
   try:
