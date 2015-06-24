@@ -462,7 +462,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, eval_batch_size, start_batch, pad_batches, report_prefix, exclude):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, **kwargs):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -470,16 +470,12 @@ class TrainTaskThread(TaskThread):
     :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
-    :type start_batch: int
-    :type pad_batches: bool
-    :type report_prefix: str
     """
     self.updater = updater
     self.learning_rate = learning_rate
     self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
-    super(TrainTaskThread, self).__init__("train", network, devices, data, batches, eval_batch_size, start_batch, pad_batches,
-                                          report_prefix, exclude)
+    super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
     self.score = 0
@@ -620,8 +616,8 @@ class TrainTaskThread(TaskThread):
 
 
 class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, pad_batches=False):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, pad_batches=pad_batches)
+    def __init__(self, network, devices, data, batches, **kwargs):
+      super(EvalTaskThread, self).__init__('eval', network, devices, data=data, batches=batches, **kwargs)
 
     def initialize(self):
       self.score = 0

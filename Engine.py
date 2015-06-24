@@ -16,6 +16,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
+from Util import hms
 
 
 class Engine:
@@ -370,9 +371,12 @@ class Engine:
                                                      max_seqs=self.max_seqs)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
-    trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
-                              self.learning_rate, self.updater, self.update_batch_size, start_batch, self.pad_batches,
-                              ("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch, self.exclude)
+    trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
+                              learning_rate=self.learning_rate, updater=self.updater,
+                              update_batch_size=self.update_batch_size,
+                              start_batch=start_batch, pad_batches=self.pad_batches,
+                              exclude=self.exclude,
+                              report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
     trainer.join()
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
@@ -389,7 +393,7 @@ class Engine:
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
-    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed
+    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", hms(trainer.elapsed)
     self.eval_model()
 
   def eval_model(self):
@@ -397,7 +401,8 @@ class Engine:
     for dataset_name, dataset in self.get_eval_datasets().items():
       batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
-                              pad_batches=self.pad_batches)
+                              pad_batches=self.pad_batches,
+                              report_prefix=self.get_epoch_str() + " eval")
       tester.join()
       eval_dump_str += ["  %s: score %s error %s" % (dataset_name, tester.score, tester.error)]
       if dataset_name == "dev":
