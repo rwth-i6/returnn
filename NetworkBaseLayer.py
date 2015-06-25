@@ -278,7 +278,7 @@ class Layer(Container):
     super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints +=  self.attrs['L1'] * abs(param.sum())
+        self.constraints +=  self.attrs['L1'] * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
         self.constraints +=  self.attrs['L2'] * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
