@@ -229,6 +229,22 @@ class Layer(Container):
     attrs['class'] = self.layer_class
     return attrs
 
+  def regularization_param_list(self):
+    return [self.b]
+
+  def param_regularization_objective(self):
+    o = T.constant(0)
+    l1 = self.attrs['L1']
+    l1c = T.constant(l1, dtype=theano.config.floatX)
+    l2 = self.attrs['L2']
+    l2c = T.constant(l2, dtype=theano.config.floatX)
+    for param in self.regularization_param_list():
+      if l1 > 0.0:
+        o += l1c * abs(param).sum()
+      if l2 > 0.0:
+        o += l2c * (param ** 2).sum()
+    return o
+
 
 class SourceLayer(Container):
   def __init__(self, n_out, x_out, name=""):

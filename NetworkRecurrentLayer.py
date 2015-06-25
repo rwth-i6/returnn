@@ -56,3 +56,11 @@ class RecurrentLayer(HiddenLayer):
   def create_recurrent_weights(self, n, m):
     nin = n + m + m + m
     return self.create_random_normal_weights(n, m, nin), self.create_random_normal_weights(m, m, nin)
+
+  def regularization_param_list(self):
+    l = super(RecurrentLayer, self).regularization_param_list()
+    l += [self.W_re]
+    if self.W_proj:
+      l += [self.W_proj]
+    return l
+

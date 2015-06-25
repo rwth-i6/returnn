@@ -79,8 +79,7 @@ class LayerNetwork(object):
       assert False, "invalid json content"
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
+    network.param_regularization_objective = T.constant(0)
     network.recurrent = False
     def traverse(content, layer_name, network):
       source = []
@@ -120,8 +119,7 @@ class LayerNetwork(object):
     grp = model['training']
     if mask is None: mask = grp.attrs['mask']
     network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
+    network.param_regularization_objective = T.constant(0)
     network.recurrent = False
     def traverse(model, layer_name, network):
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
@@ -168,12 +166,7 @@ class LayerNetwork(object):
     """
     assert layer.name
     self.hidden[layer.name] = layer
-    if isinstance(layer, RecurrentLayer):
-      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(layer.W_re).sum()
-      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (layer.W_re ** 2).sum()
-    for W in layer.W_in:
-      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(W).sum()
-      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (W ** 2).sum()
+    self.param_regularization_objective += layer.param_regularization_objective()
 
   def make_classifier(self, **kwargs):
     """
@@ -186,9 +179,7 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
     self.output = layer_class(index=self.i, n_out=self.n_out, name="output", **kwargs)
-    for W in self.output.W_in:
-      if self.output.attrs['L1'] > 0.0: self.L1 += self.output.attrs['L1'] * abs(W).sum()
-      if self.output.attrs['L2'] > 0.0: self.L2 += self.output.attrs['L2'] * (W ** 2).sum()
+    self.param_regularization_objective += self.output.param_regularization_objective()
     self.declare_train_params()
     targets = self.c if self.loss == 'ctc' else self.y
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y
@@ -200,7 +191,7 @@ class LayerNetwork(object):
       assert self.ctc_priors is not None
     else:
       self.ctc_priors = None
-    self.objective = self.cost + self.L1 + self.L2 #+ entropy * self.output.entropy()
+    self.objective = self.cost + self.param_regularization_objective #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
@@ -299,8 +290,7 @@ class LayerNetwork(object):
     self.description = description
     n_in = self.n_in
     x_in = self.x
-    self.L1 = T.constant(0)
-    self.L2 = T.constant(0)
+    self.param_regularization_objective = T.constant(0)
     self.recurrent = False
     self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):

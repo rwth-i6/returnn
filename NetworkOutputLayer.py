@@ -42,6 +42,9 @@ class OutputLayer(Layer):
     value = numpy.zeros((n,), dtype=theano.config.floatX) + bias
     return theano.shared(value=value, borrow=True, name=name)
 
+  def regularization_param_list(self):
+    return super(OutputLayer, self).regularization_param_list() + self.W_in
+
   def entropy(self):
     """
     :rtype: theano.Variable

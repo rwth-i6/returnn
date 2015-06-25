@@ -21,6 +21,9 @@ class HiddenLayer(Layer):
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
+  def regularization_param_list(self):
+    return super(HiddenLayer, self).regularization_param_list() + self.W_in
+
 
 class ForwardLayer(HiddenLayer):
   def __init__(self, **kwargs):
