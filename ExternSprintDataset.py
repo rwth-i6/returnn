@@ -66,6 +66,7 @@ class ExternSprintDataset(SprintDataset):
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
+    print >>log.v5, "ExternSprintDataset: epoch", epoch, "exec", args
 
     pid = os.fork()
     if pid == 0:  # child
@@ -113,7 +114,7 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
-    return [self.sprintTrainerExecPath] + self.sprintConfig + [
+    return [self.sprintTrainerExecPath] + [
       "--*.seed=%i" % (self.crnnEpoch or 1),
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
@@ -123,7 +124,8 @@ class ExternSprintDataset(SprintDataset):
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=SprintExternInterface",
       "--*.pymod-config=action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (self.pipe_c2p[1].fileno(),
-                                                                           self.pipe_p2c[0].fileno())]
+                                                                           self.pipe_p2c[0].fileno())] + \
+      self.sprintConfig
 
   def _read_next_raw(self):
     dataType, args = Unpickler(self.pipe_c2p[0]).load()
