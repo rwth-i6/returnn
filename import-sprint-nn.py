@@ -64,7 +64,7 @@ def loadSprintNetwork(params_prefix_path, float_type):
     print("Loading Sprint NN layer %i" % (l + 1))
 
     p = Popen(
-      [archiverExec, "--mode", "show", "--type", "bin-matrix", fn],
+      [archiverExec, "--mode", "show", "--type", "bin-matrix", "--full-precision", "true", fn],
       stdout=PIPE, stderr=PIPE)
     out,err = p.communicate()
     assert p.returncode == 0, "Return %i, Error: %s" % (p.returncode, err)
