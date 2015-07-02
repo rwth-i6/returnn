@@ -6,13 +6,19 @@ from NetworkDescription import LayerNetworkDescription
 class Pretrain:
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_description, copy_output_layer=None):
+  def __init__(self, original_network_description, copy_output_layer=None, greedy=None):
     """
     :type original_network_description: NetworkDescription.LayerNetworkDescription
-    :type copy_output_layer: bool
+    :param bool copy_output_layer: whether to copy the output layer params from last epoch or reinit
+    :param bool greedy: if True, only train output+last layer, otherwise train all
     """
     self.original_network_description = original_network_description
-    self.copy_output_layer = copy_output_layer if copy_output_layer is not None else True
+    if copy_output_layer is None:
+      copy_output_layer = True
+    self.copy_output_layer = copy_output_layer
+    if greedy is None:
+      greedy = False
+    self.greedy = greedy
 
   def __str__(self):
     return "Default layerwise construction+pretraining, starting with input+hidden+output. " + \
@@ -73,9 +79,11 @@ class Pretrain:
   def get_train_param_args_for_epoch(self, epoch):
     """
     :type epoch: int
-    :returns the kwargs for LayerNetwork.set_train_params.
+    :returns the kwargs for LayerNetwork.set_train_params, i.e. which params to train.
     :rtype: dict[str]
     """
+    if not self.greedy:
+      return {}  # This implies all available args.
     if epoch == 1:
       return {}  # This implies all available args.
     prev_network = self.get_network_for_epoch(epoch - 1)
@@ -97,8 +105,9 @@ def pretrainFromConfig(config):
     assert config.network_topology_json is None, "Cannot handle JSON network topology in pretrain."
     original_network_description = LayerNetworkDescription.from_config(config)
     copy_output_layer = config.bool("pretrain_copy_output_layer", None)
+    greedy = config.bool("pretrain_greedy", None)
     return Pretrain(original_network_description=original_network_description,
-                    copy_output_layer=copy_output_layer)
+                    copy_output_layer=copy_output_layer, greedy=greedy)
   elif pretrainType == "":
     return None
   else:
