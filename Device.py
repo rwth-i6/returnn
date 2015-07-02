@@ -226,7 +226,7 @@ class Device():
         print >> log.v3, theano.printing.pp(gparam)
         print >> log.v3, "-------------------------------------------"
         print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
-      gparams.append(theano.Out(gparam, borrow = True))
+      gparams.append(gparam)
       if self.gradient_norm is not None:
         self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
@@ -259,6 +259,14 @@ class Device():
       if self.gradient_norm is not None:
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
+      if False:
+        self.train_outputs_format += ["debugdump_grad_" + key.name for key in self.trainnet.train_params_vars]
+        outputs += [g / self.i.sum() for g in gparams]
+        self.train_outputs_format += ["debugdump_output"]
+        outputs += [self.trainnet.output.p_y_given_x]
+        for name, layer in self.trainnet.hidden.items():
+          self.train_outputs_format += ["debugdump_layer_%s_out" % name]
+          outputs += [layer.output[:,0,:]]
 
       if self.updater.updateOnDevice:
         self.updater.initVars(self.trainnet, self.gradients)
@@ -271,7 +279,7 @@ class Device():
 
       else:
         self.train_outputs_format += ["gparams..."]
-        outputs += gparams
+        outputs += [theano.Out(g, borrow=True) for g in gparams]
         self.trainer = theano.function(inputs=[],
                                        outputs=outputs,
                                        givens=train_givens,
@@ -911,3 +919,14 @@ class Device():
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
   def make_ce_ctc_givens(self, network):
     return [(network.x, self.x), (network.y, self.y), (network.c, self.c), (network.i, self.i)]
+
+  def debug_dump_params(self, batch_idx):
+    numpy.savetxt("/tmp/crnn-batch%i-layer0w" % batch_idx, sorted(self.trainnet.hidden.items())[0][1].W_in[0].get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-layer0b" % batch_idx, sorted(self.trainnet.hidden.items())[0][1].b.get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-lastlayerw" % batch_idx, sorted(self.trainnet.hidden.items())[-1][1].W_in[0].get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-lastlayerb" % batch_idx, sorted(self.trainnet.hidden.items())[-1][1].b.get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-outlayerw" % batch_idx, self.trainnet.output.W_in[0].get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-outlayerb" % batch_idx, self.trainnet.output.b.get_value())
+    numpy.savetxt("/tmp/crnn-batch%i-features" % batch_idx, self.data[:,0,:].transpose())
+    numpy.savetxt("/tmp/crnn-batch%i-targets" % batch_idx, self.targets)
+

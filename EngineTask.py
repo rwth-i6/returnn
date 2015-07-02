@@ -159,6 +159,9 @@ class TaskThread(threading.Thread):
           print >> log.v5, "on device", device.name
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
           self.parent.prepare_device_for_batch(device)
+          if False:
+            assert device.blocking  # Does only work in blocking mode.
+            device.debug_dump_params(batch_idx)
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -426,7 +429,13 @@ class TrainTaskThread(TaskThread):
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().
     for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
-      eval_info[attrib] = sum([res[attrib] for res in results])
+      value = sum([res[attrib] for res in results])
+      if attrib.startswith("debugdump_"):
+        dump_filename = "/tmp/crnn-batch%i-%s" % (self.batch_idx, attrib[len("debugdump_"):])
+        numpy.savetxt(dump_filename, value)
+        print >>log.v5, "dumped", dump_filename
+        continue
+      eval_info[attrib] = value
     return eval_info
 
   def finalize(self):
