@@ -58,10 +58,13 @@ class HDFDataset(CachedDataset):
     seq_start = [0]
     if 'times' in fin:
       self.timestamps.extend(fin['times'][...].tolist())
-    for l,t in zip(fin['seqLengths'][...].tolist(), tags):
-      self._seq_lengths.append(l)
+    seq_lengths = fin['seqLengths'][...]
+    if seq_lengths.shape[1] == 1:
+      seq_lengths = zip(seq_lengths.tolist(), seq_lengths.tolist())
+    for l in seq_lengths:
+      self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)
-      self.tags.append(t)
+    self.tags = tags[:]
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
     self._num_seqs += nseqs
@@ -76,7 +79,7 @@ class HDFDataset(CachedDataset):
     if self.num_outputs == 0:
       if 'numLabels'in fin.attrs:
         self.num_outputs = fin.attrs['numLabels']
-        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
       else:
         self.num_outputs = { k : fin['targets/size'].attrs[k] for k in fin['targets/size'].attrs }
     if 'ctcIndexTranscription' in fin:
