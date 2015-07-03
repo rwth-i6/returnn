@@ -4,7 +4,7 @@ from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
-from NetworkBaseLayer import Layer
+from NetworkLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 
 
@@ -41,9 +41,6 @@ class OutputLayer(Layer):
     bias = numpy.log(1.0 / n)  # More numerical stable.
     value = numpy.zeros((n,), dtype=theano.config.floatX) + bias
     return theano.shared(value=value, borrow=True, name=name)
-
-  def regularization_param_list(self):
-    return super(OutputLayer, self).regularization_param_list() + self.W_in
 
   def entropy(self):
     """
@@ -82,14 +79,10 @@ class FramewiseOutputLayer(OutputLayer):
 
   def cost(self, y):
     known_grads = None
-    if self.loss == 'ce':
-      # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
-      # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=y[self.i])
-      return T.sum(nll), known_grads
-    elif self.loss == 'priori':
+    if self.loss == 'ce' or self.loss == 'priori':
+      #pcx = self.p_y_given_x[self.i, y[self.i]]
       pcx = self.p_y_given_x[self.i, y[self.i]]
-      pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
+      pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')

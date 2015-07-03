@@ -1,6 +1,5 @@
 
 from Network import LayerNetwork
-from NetworkBaseLayer import Layer
 from NetworkDescription import LayerNetworkDescription
 
 
@@ -40,7 +39,6 @@ class Pretrain:
     :rtype: Network.LayerNetwork
     """
     description = self.get_network_description_for_epoch(epoch)
-    Layer.rng_seed = epoch
     return LayerNetwork.from_description(description, mask)
 
   def copy_params_from_old_network(self, new_network, old_network):

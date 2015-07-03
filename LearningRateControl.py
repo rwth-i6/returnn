@@ -1,7 +1,6 @@
 
 import os
 from Util import betterRepr, simpleObjRepr, ObjAsDict
-from Log import log
 
 
 class LearningRateControl(object):
@@ -10,13 +9,9 @@ class LearningRateControl(object):
     def __init__(self, learningRate, error=None):
       """
       :type learningRate: float
-      :type error: dict[str,float] | None
+      :type error: float | None
       """
       self.learningRate = learningRate
-      if isinstance(error, float):  # Old format.
-        error = {"old_format_score": error}
-      if error is None:
-        error = {}
       self.error = error
 
     __repr__ = simpleObjRepr
@@ -29,7 +24,6 @@ class LearningRateControl(object):
     """
     return {
       "initialLearningRate": config.float('learning_rate', 0.01),
-      "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
       "filename": config.value('learning_rate_file', None)}
 
   @classmethod
@@ -41,18 +35,19 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, initialLearningRate, errorMeasureKey=None, filename=None):
+  def __init__(self, initialLearningRate, filename=None):
     """
     :param float initialLearningRate: learning rate for epoch 1
-    :param str errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
     :param str filename: load from and save to file
     """
     self.epochData = {1: self.EpochData(initialLearningRate)}
-    self.initialLearningRate = initialLearningRate
-    self.errorMeasureKey = errorMeasureKey
     self.filename = filename
     if filename and os.path.exists(filename):
       self.load()
+
+  @property
+  def initialLearningRate(self):
+    return self.epochData[1].learningRate
 
   __repr__ = simpleObjRepr
 
@@ -99,43 +94,11 @@ class LearningRateControl(object):
   def setEpochError(self, epoch, error):
     """
     :type epoch: int
-    :type error: dict[str,float]
+    :type error: float
     """
-    if epoch not in self.epochData:
-      print >> log.v3, "Learning rate not set for epoch %i. Assuming default." % epoch
-      self.getLearningRateForEpoch(epoch)  # This will set it.
-    assert isinstance(error, dict)
-    self.epochData[epoch].error.update(error)
-
-  def getErrorKey(self, epoch):
-    if epoch not in self.epochData:
-      return self.errorMeasureKey
-    epoch_data = self.epochData[epoch]
-    if not epoch_data.error:
-      return None
-    if len(epoch_data.error) == 1 and "old_format_score" in epoch_data.error:
-      return "old_format_score"
-    if self.errorMeasureKey:
-      return self.errorMeasureKey
-    for key in ["dev_score", "train_score"]:  # To keep old setups producing the same behavior, keep this order.
-      if key in epoch_data.error:
-        return key
-    return min(epoch_data.error.keys())
-
-  def getEpochErrorDict(self, epoch):
-    if epoch not in self.epochData:
-      return {}
-    return self.epochData[epoch].error
-
-  def getEpochErrorValue(self, epoch):
-    error = self.getEpochErrorDict(epoch)
-    if not error:
-      return None
-    key = self.getErrorKey(epoch)
-    assert key
-    assert key in error, "%r not in %r. fix %r in config. set it to %r or so." % \
-                         (key, error, 'learning_rate_control_error_measure', 'dev_error')
-    return error[key]
+    assert epoch in self.epochData, "You did not called getLearningRateForEpoch(%i)?" % epoch
+    assert isinstance(error, float)
+    self.epochData[epoch].error = error
 
   def save(self):
     if not self.filename: return
@@ -161,7 +124,7 @@ class ConstantLearningRate(LearningRateControl):
     return self.initialLearningRate
 
 
-class NewbobRelative(LearningRateControl):
+class Newbob(LearningRateControl):
 
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
@@ -169,20 +132,20 @@ class NewbobRelative(LearningRateControl):
     :type config: Config.Config
     :rtype: dict[str]
     """
-    kwargs = super(NewbobRelative, cls).load_initial_kwargs_from_config(config)
+    kwargs = super(Newbob, cls).load_initial_kwargs_from_config(config)
     kwargs.update({
       "relativeErrorThreshold": config.float('newbob_relative_error_threshold', -0.01),
       "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
     return kwargs
 
-  def __init__(self, relativeErrorThreshold, learningRateDecayFactor, **kwargs):
+  def __init__(self, initialLearningRate, relativeErrorThreshold, learningRateDecayFactor, filename=None):
     """
     :param float initialLearningRate: learning rate for epoch 1+2
     :type relativeErrorThreshold: float
     :type learningRateDecayFactor: float
     :type filename: str
     """
-    super(NewbobRelative, self).__init__(**kwargs)
+    super(Newbob, self).__init__(initialLearningRate=initialLearningRate, filename=filename)
     self.relativeErrorThreshold = relativeErrorThreshold
     self.learningRateDecayFactor = learningRateDecayFactor
 
@@ -202,8 +165,8 @@ class NewbobRelative(LearningRateControl):
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
-    oldError = self.getEpochErrorValue(last2Epoch)
-    newError = self.getEpochErrorValue(lastEpoch)
+    oldError = self.epochData[last2Epoch].error
+    newError = self.epochData[lastEpoch].error
     if oldError is None or newError is None:
       return learningRate
     relativeError = (newError - oldError) / abs(newError)
@@ -212,65 +175,13 @@ class NewbobRelative(LearningRateControl):
     return learningRate
 
 
-class NewbobAbs(LearningRateControl):
-
-  @classmethod
-  def load_initial_kwargs_from_config(cls, config):
-    """
-    :type config: Config.Config
-    :rtype: dict[str]
-    """
-    kwargs = super(NewbobAbs, cls).load_initial_kwargs_from_config(config)
-    kwargs.update({
-      "errorThreshold": config.float('newbob_error_threshold', -0.01),
-      "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
-    return kwargs
-
-  def __init__(self, errorThreshold, learningRateDecayFactor, **kwargs):
-    """
-    :type errorThreshold: float
-    :type learningRateDecayFactor: float
-    """
-    super(NewbobAbs, self).__init__(**kwargs)
-    self.errorThreshold = errorThreshold
-    self.learningRateDecayFactor = learningRateDecayFactor
-
-  def calcLearningRateForEpoch(self, epoch):
-    """
-    Newbob+ on train data.
-    :type epoch: int
-    :returns learning rate
-    :rtype: float
-    """
-    lastEpoch = self.getLastEpoch(epoch)
-    if lastEpoch is None:
-      return self.initialLearningRate
-    learningRate = self.epochData[lastEpoch].learningRate
-    if learningRate is None:
-      return self.initialLearningRate
-    last2Epoch = self.getLastEpoch(lastEpoch)
-    if last2Epoch is None:
-      return learningRate
-    oldError = self.getEpochErrorValue(last2Epoch)
-    newError = self.getEpochErrorValue(lastEpoch)
-    if oldError is None or newError is None:
-      return learningRate
-    errorDiff = newError - oldError
-    if errorDiff > self.errorThreshold:
-      learningRate *= self.learningRateDecayFactor
-    return learningRate
-
-
 def learningRateControlType(typeName):
   if typeName == "constant":
     return ConstantLearningRate
-  elif typeName in ("newbob", "newbob_rel", "newbob_relative"):  # Old setups expect the relative version.
-    return NewbobRelative
-  elif typeName == "newbob_abs":
-    return NewbobAbs
+  elif typeName == "newbob":
+    return Newbob
   else:
     assert False, "unknown learning-rate-control type %s" % typeName
-
 
 def loadLearningRateControlFromConfig(config):
   """

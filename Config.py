@@ -16,21 +16,17 @@ class Config:
 
   def load_file(self, filename):
     for line in open(filename).readlines():
-      if "#" in line:  # Strip away comment.
-        line = line[:line.index("#")]
-      line = line.strip()
-      if not line:
+      if len(line.strip()) == 0 or line.strip()[0] == '#':
         continue
-      line = line.split(None, 1)
+      line = line.strip().split()
       assert len(line) == 2, "unable to parse config line: %r" % line
-      self.add_line(key=line[0], value=line[1])
-
-  def add_line(self, key, value):
-    if value.find(',') > 0:
-      value = value.split(',')
-    else:
-      value = [value]
-    self.dict[key] = value
+      key = line[0]
+      value = line[1]
+      if value.find(',') > 0:
+        value = value.split(',')
+      else:
+        value = [value]
+      self.dict[key] = value
 
   def has(self, key):
     return key in self.dict
@@ -59,9 +55,7 @@ class Config:
     return int(self.value(key, default, index))
 
   def bool(self, key, default, index=0):
-    if key not in self.dict:
-      return default
-    v = str(self.value(key, None, index)).lower()
+    v = str(self.value(key, default, index)).lower()
     if v == "true" or v == "1":
       return True
     if v == "false" or v == "0":

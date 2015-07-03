@@ -27,7 +27,7 @@ class CachedDataset(Dataset):
 
   def initialize(self):
     # Init with invalid values (-1).
-    self.targets = numpy.zeros((self.get_num_timesteps(),), dtype=theano.config.floatX) - 1
+    #self.targets = {}# numpy.zeros((self.get_num_timesteps(),), dtype=theano.config.floatX) - 1
 
     super(CachedDataset, self).initialize()
 
@@ -158,7 +158,7 @@ class CachedDataset(Dataset):
       if end != start:
         self.load_seqs(start, end, with_cache=False)
 
-  def _shuffle_frames_in_seqs(self, start, end):
+  def _shuffle_seqs(self, start, end):
     """
     :type start: int
     :type end: int
@@ -179,8 +179,9 @@ class CachedDataset(Dataset):
     data = alloc_data[alloc_offset:alloc_offset + num_frames]
     alloc_data[alloc_offset:alloc_offset + num_frames] = data[perm]
     # Permute targets.
-    targets = self.targets[self._seq_start[start]:self._seq_start[start] + num_frames]
-    self.targets[self._seq_start[start]:self._seq_start[start] + num_frames] = targets[perm]
+    for k in self.targets:
+      targets = self.targets[k][self._seq_start[start]:self._seq_start[start] + num_frames]
+      self.targets[k][self._seq_start[start]:self._seq_start[start] + num_frames] = targets[perm]
 
   def _set_alloc_intervals_data(self, idc, data):
     """
@@ -413,10 +414,10 @@ class CachedDataset(Dataset):
     assert alloc_data.shape[0] >= o + l
     return alloc_data[o:o + l]
 
-  def get_targets(self, sorted_seq_idx):
+  def get_targets(self, target, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)
     seq_len = self.get_seq_length(sorted_seq_idx)
-    return self.targets[seq_start:seq_start + seq_len]
+    return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_ctc_targets(self, sorted_seq_idx):
     ids = self._seq_index[sorted_seq_idx]

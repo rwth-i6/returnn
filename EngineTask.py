@@ -12,7 +12,7 @@ from Device import Device
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False, report_prefix=None):
+    def __init__(self, task, network, devices, data, batches, start_batch=0, pad_batches=False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -29,6 +29,7 @@ class TaskThread(threading.Thread):
       self.devices = devices
       self.network = network
       self.batches = batches
+      self.exclude = exclude
       self.task = task
       self.data = data
       self.daemon = True
@@ -49,7 +50,7 @@ class TaskThread(threading.Thread):
       self.stopped = True
 
     def assign_dev_data(self, device, batches):
-      return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches)
+      return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches, self.exclude)
 
     def allocate_devices(self):
       """
@@ -75,11 +76,14 @@ class TaskThread(threading.Thread):
           devices_batches.append(batches)
         else:
           # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
-          assert batch_adv_idx > 0
-          batch_idx = self.batches.get_current_batch_idx()
-          print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
-                           (range(batch_idx, batch_idx + batch_adv_idx),
-                            batches[batch_adv_idx - 1].start_seq)
+          if batch_adv_idx > 0:
+            batch_idx = self.batches.get_current_batch_idx()
+            print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
+                             (range(batch_idx, batch_idx + batch_adv_idx),
+                              batches[batch_adv_idx - 1].start_seq)
+          else:
+            assert len(devices) > 0
+            break
         self.batches.advance(batch_adv_idx)
       return devices, devices_batches
 
@@ -159,9 +163,6 @@ class TaskThread(threading.Thread):
           print >> log.v5, "on device", device.name
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
           self.parent.prepare_device_for_batch(device)
-          if False:
-            assert device.blocking  # Does only work in blocking mode.
-            device.debug_dump_params(batch_idx)
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -256,6 +257,7 @@ class TaskThread(threading.Thread):
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           thread.interrupt_main()
+          sys.exit(1)
 
     def run_inner(self):
       self.start_time = time.time()
@@ -343,7 +345,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, **kwargs):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, start_batch, pad_batches,  report_prefix, exclude):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -351,6 +353,9 @@ class TrainTaskThread(TaskThread):
     :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
+    :type start_batch: int
+    :type pad_batches: bool
+    :type report_prefix: str
     """
     self.updater = updater
     self.learning_rate = learning_rate
@@ -361,7 +366,8 @@ class TrainTaskThread(TaskThread):
       task = "train_and_update"
     else:
       task = "train_distributed"
-    super(TrainTaskThread, self).__init__(task, network, devices, data=data, batches=batches, **kwargs)
+    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, start_batch, pad_batches,
+                                          report_prefix, exclude)
 
   def initialize(self):
     self.score = 0
@@ -371,7 +377,8 @@ class TrainTaskThread(TaskThread):
       assert len(self.devices) == 1
       self.devices[0].set_learning_rate(self.learning_rate)
     else:
-      self.updater.initVars(self.network, None)
+      if not self.updater.isInitialized:
+        self.updater.initVars(self.network, None)
       self.updater.setLearningRate(self.learning_rate)
       self.updater_func = self.updater.getUpdateFunction()
 
@@ -406,7 +413,7 @@ class TrainTaskThread(TaskThread):
     score = sum([res["cost"] for res in results])
     if numpy.isinf(score) or numpy.isnan(score):
       for i, res in enumerate(results):
-        if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
+        if numpy.isinf(res[0]) or numpy.isnan(res[0]):
           raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
       assert False  # Should not get here.
     if self.do_ctc_priors:
@@ -415,27 +422,24 @@ class TrainTaskThread(TaskThread):
     self.score += score
     if not self.updater.updateOnDevice:
       gparams = {}
-      for p in self.network.train_params_vars:
-        gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+      for k in self.network.cost:
+        gparams[k] = {}
+        for p in self.network.train_params_vars:
+          gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
       # Add up all gparams.
       for res in results:
         res_gparams = res["gparams"]
-        assert len(self.network.train_params_vars) == len(res_gparams)
-        for p, q in zip(self.network.train_params_vars, res_gparams):
-          gparams[p] += q
+        assert len(self.network.train_params_vars) * len(self.network.cost.keys()) == len(res_gparams), "expected " + str(len(self.network.train_params_vars) * len(self.network.cost.keys())) + " got " + str(len(res_gparams))
+        for i,k in enumerate(self.network.cost):
+          for p, q in zip(self.network.train_params_vars, res_gparams[i * len(self.network.train_params_vars):(i+1) * len(self.network.train_params_vars)]):
+            gparams[k][p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().
     for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
-      value = sum([res[attrib] for res in results])
-      if attrib.startswith("debugdump_"):
-        dump_filename = "/tmp/crnn-batch%i-%s" % (self.batch_idx, attrib[len("debugdump_"):])
-        numpy.savetxt(dump_filename, value)
-        print >>log.v5, "dumped", dump_filename
-        continue
-      eval_info[attrib] = value
+      eval_info[attrib] = sum([res[attrib] for res in results])
     return eval_info
 
   def finalize(self):
@@ -456,8 +460,8 @@ class TrainTaskThread(TaskThread):
 
 
 class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, **kwargs):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data=data, batches=batches, **kwargs)
+    def __init__(self, network, devices, data, batches, pad_batches=False):
+      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, pad_batches=pad_batches)
 
     def initialize(self):
       self.score = 0
@@ -474,10 +478,9 @@ class EvalTaskThread(TaskThread):
       assert results
       assert num_frames > 0
       score = sum([res[0] for res in results])
-      error = sum([res[1] for res in results])
       self.score += score
-      self.error += error
-      return {"score": score / num_frames, "error": error / num_frames}
+      self.error += sum([res[1] for res in results])
+      return {"score": score / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0
@@ -537,17 +540,18 @@ class HDFForwardTaskThread(TaskThread):
       self.tags = []
       self.merge = merge
       self.cache = cache
+      target = network.output['output'].attrs['target']
       cache.attrs['numSeqs'] = data.num_seqs
-      cache.attrs['numTimesteps'] = data.num_timesteps
+      cache.attrs['numTimesteps'] = data.get_num_timesteps()
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
-      cache.attrs['numLabels'] = data.num_outputs
-      hdf5_strings(cache, 'labels', data.labels)
-      self.targets = cache.create_dataset("targetClasses", (data.num_timesteps,), dtype='i')
+      cache.attrs['numLabels'] = data.num_outputs[target]
+      hdf5_strings(cache, 'targetlabels', data.labels[target])
+      self.targets = { k: cache.create_dataset(k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
       self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
       if data.timestamps:
-        times = cache.create_dataset("times", data.timestamps.shape, dtype='i')
+        times = self.cache.create_dataset("times", (len(data.timestamps), 2), dtype='f')
         times[...] = data.timestamps
 
     def initialize(self):

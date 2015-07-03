@@ -4,7 +4,7 @@ from EngineBatch import Batch
 from Log import log
 
 
-def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False):
+def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False, exclude=None):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
@@ -14,6 +14,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
+  if not exclude: exclude = []
   # The final device.data.shape is in format (time,batch,feature).
   shape = [0, 0]  # time,batch
   for batch in batches:
@@ -22,7 +23,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     return False, len(batches)
   assert shape[0] * shape[1] > 0
 
-  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.get_max_ctc_length(), pad=pad_batches)
+  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.targets, dataset.get_max_ctc_length(), pad=pad_batches)
 
   offset_slice = 0
   for batch in batches:
@@ -38,26 +39,30 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
 
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
-        targets = dataset.get_targets(seq.seq_idx)
         device.data[o:o + l, q] = data[seq.seq_start_frame:seq.seq_end_frame]
-        if targets is not None:
-          device.targets[o:o + l, q] = targets[seq.seq_start_frame:seq.seq_end_frame]
+        for target in dataset.targets:
+          targets = dataset.get_targets(target, seq.seq_idx)
+          if targets is not None:
+            device.targets[target][o:o + l, q] = targets[seq.seq_start_frame:seq.seq_end_frame]
+            for i in xrange(l):
+              if device.targets[target][o + i, q] in exclude:
+                device.index[o + i, q] = 0
 
-        if recurrent and pad_batches:
-          assert o == 0  # Doesn't make sense otherwise.
-          # pad with equivalent to 0
-          # these are the hardcoded values for IAM
-          # TODO load this from somewhere
-          pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
-                      -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
-                      0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
-                      0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-          device.data[o + l:, q] = pad_data
-          # also pad targets
-          # hardcoded si for IAM
-          # TODO load this from somewhere
-          pad_target = 189
-          device.targets[o + l:, q] = pad_target
+            if recurrent and pad_batches:
+              assert o == 0  # Doesn't make sense otherwise.
+              # pad with equivalent to 0
+              # these are the hardcoded values for IAM
+              # TODO load this from somewhere
+              pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
+                          -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
+                          0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
+                          0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
+              device.data[o + l:, q] = pad_data
+              # also pad targets
+              # hardcoded si for IAM
+              # TODO load this from somewhere
+              pad_target = 189
+              device.targets[target][o + l:, q] = pad_target
 
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
@@ -91,12 +96,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   return success
 
 
-def maybe_subtract_priors(network, train, config):
-  """
-  :type network: Network.LayerNetwork
-  :type train: Dataset.Dataset
-  :type config: Config.Config
-  """
+def subtract_priors(network, train, config):
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)
     priors = train.calculate_priori()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#! /usr/bin/python2.7
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
@@ -12,7 +12,6 @@ import re
 import os
 import sys
 import time
-from importlib import import_module
 from optparse import OptionParser
 from Log import log
 from Device import Device, get_num_devices
@@ -20,7 +19,6 @@ from Config import Config
 from Engine import Engine
 from Dataset import Dataset
 from HDFDataset import HDFDataset
-from ExternSprintDataset import ExternSprintDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
@@ -30,9 +28,9 @@ TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.envir
 
 config = None; """ :type: Config """
 engine = None; """ :type: Engine """
-train_data = None; """ :type: Dataset """
-dev_data = None; """ :type: Dataset """
-eval_data = None; """ :type: Dataset """
+train = None; """ :type: Dataset """
+dev = None; """ :type: Dataset """
+eval = None; """ :type: Dataset """
 
 
 def initConfig(configFilename, commandLineOptions):
@@ -77,11 +75,7 @@ def initConfig(configFilename, commandLineOptions):
   for opt in options.keys():
     if options[opt] != None:
       config.set(opt, options[opt])
-  assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
-  for i in range(0, len(args), 2):
-    key, value = args[i:i+2]
-    assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
-    config.add_line(key=key[2:], value=value)
+
 
 def initLog():
   logs = config.list('log', [])
@@ -118,8 +112,6 @@ def getDevicesInitArgs(config):
   :rtype: list[dict[str]]
   """
   multiproc = config.bool('multiprocessing', True)
-  if config.value('task', 'train') == "theano_graph":
-    multiproc = False
   device_info = config.list('device', ['cpu0'])
   device_tags = {}
   ncpus, ngpus = get_num_devices()
@@ -154,10 +146,8 @@ def getDevicesInitArgs(config):
   if multiproc:
     assert len(tags) > 0
     devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag]} for tag in tags ]
-    import TaskSystem
-    if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-      assert not TheanoFlags.get("device", "").startswith("gpu"), \
-          "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+    assert not TheanoFlags.get("device", "").startswith("gpu"), \
+        "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
   else:
     devices = [ {"device": tags[0], "config": config, "blocking": True} ]
   if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
@@ -188,15 +178,15 @@ def initDevices():
     # This is important because Theano likely already has initialized that device.
     oldDeviceConfig = ",".join(config.list('device', ['default']))
     config.set("device", TheanoFlags["device"])
-    print >> log.v2, "Devices: Use %s via THEANO_FLAGS instead of %s." % \
+    print >> log.v4, "Devices: Use %s via THEANO_FLAGS instead of %s." % \
                      (TheanoFlags["device"], oldDeviceConfig)
   devArgs = getDevicesInitArgs(config)
   assert len(devArgs) > 0
   devices = [Device(**kwargs) for kwargs in devArgs]
   if devices[0].blocking:
-    print >> log.v2, "Devices: Used in blocking / single proc mode."
+    print >> log.v4, "Devices: Used in blocking / single proc mode."
   else:
-    print >> log.v2, "Devices: Used in multiprocessing mode."
+    print >> log.v4, "Devices: Used in multiprocessing mode."
   return devices
 
 
@@ -205,7 +195,7 @@ def getCacheByteSizes():
   :rtype: (int,int,int)
   :returns cache size in bytes for (train,dev,eval)
   """
-  cache_sizes_user = config.list('cache_size', ["0"])
+  cache_sizes_user = config.list('cache_size', ["1024G"])
   num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
@@ -227,48 +217,6 @@ def getCacheByteSizes():
   return cache_sizes
 
 
-def load_data(config, cache_byte_size, files_config_key, **kwargs):
-  """
-  :type config: Config
-  :type cache_byte_size: int
-  :type chunking: str
-  :type seq_ordering: str
-  :rtype: (Dataset,int)
-  :returns the dataset, and the cache byte size left over if we cache the whole dataset.
-  """
-  if not config.has(files_config_key):
-    return None, 0
-  config_str = config.value(files_config_key, "")
-  if config_str.startswith("sprint:"):
-    kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
-    sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
-    assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
-    kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
-    cls = ExternSprintDataset
-  elif re.match("^[A-Za-z_][A-Za-z0-9_]*::.*", config_str):
-    mod_name, cls_name, cls_args_s = re.match("^([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(.*)$",
-                                              config_str).groups()
-    mod = import_module(mod_name)
-    cls = getattr(mod, cls_name)
-    cls_args_s = cls_args_s.strip() or "()"
-    cls_args_s = "dict" + cls_args_s
-    cls_args = eval(cls_args_s)
-    kwargs.update(cls_args)
-  else:
-    kwargs["cache_byte_size"] = cache_byte_size
-    cls = HDFDataset
-  data = cls.from_config(config, **kwargs)
-  if isinstance(data, HDFDataset):
-    for f in config.list(files_config_key):
-      assert os.path.exists(f)
-      data.add_file(f)
-  data.initialize()
-  cache_leftover = 0
-  if isinstance(data, HDFDataset):
-    cache_leftover = data.definite_cache_leftover
-  return data, cache_leftover
-
-
 def initData():
   """
   Initializes the globals train,dev,eval of type Dataset.
@@ -277,43 +225,45 @@ def initData():
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
-  global train_data, dev_data, eval_data
-  dev_data, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
-                                         seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval_data, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
-                                           seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  global train, dev, eval
+  dev, extra_cache_bytes_dev = HDFDataset.load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
+                                                    seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  eval, extra_cache_bytes_eval = HDFDataset.load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
+                                                      seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
     train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
-  train_data, extra_train = load_data(config, train_cache_bytes, 'train')
+  train, extra_train = HDFDataset.load_data(config, train_cache_bytes, 'train')
 
 
-def printTaskProperties(devices=None):
+def printTaskProperties(devices):
   """
   :type devices: list[Device]
   """
 
-  if train_data:
+  if train:
     print >> log.v2, "Train data:"
-    print >> log.v2, "  input:", train_data.num_inputs, "x", train_data.window
-    print >> log.v2, "  output:", train_data.num_outputs
-    print >> log.v2, " ", train_data.len_info() or "no info"
-  if dev_data:
+    print >> log.v2, "  input:", train.num_inputs, "x", train.window
+    print >> log.v2, "  output:", train.num_outputs
+    print >> log.v2, "  sequences:", train.num_seqs
+    print >> log.v2, "  frames:", train.get_num_timesteps()
+  if dev:
     print >> log.v2, "Dev data:"
-    print >> log.v2, " ", dev_data.len_info() or "no info"
-  if eval_data:
+    print >> log.v2, "  sequences:", dev.num_seqs
+    print >> log.v2, "  frames:", dev.get_num_timesteps()
+  if eval:
     print >> log.v2, "Eval data:"
-    print >> log.v2, " ", eval_data.len_info() or "no info"
+    print >> log.v2, "  sequences:", eval.num_seqs
+    print >> log.v2, "  frames:", eval.get_num_timesteps()
 
-  if devices:
-    print >> log.v3, "Devices:"
-    for device in devices:
-      print >> log.v3, "  %s: %s" % (device.name, device.device_name),
-      print >> log.v3, "(units:", device.get_device_shaders(), \
-                       "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
-                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
-      print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+  print >> log.v3, "Devices:"
+  for device in devices:
+    print >> log.v3, "  %s: %s" % (device.name, device.device_name),
+    print >> log.v3, "(units:", device.get_device_shaders(), \
+                     "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
+                     "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
+    print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
 
 
 def initEngine(devices):
@@ -336,40 +286,31 @@ def init(configFilename, commandLineOptions):
   initConfigJson()
   maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
-  if needData():
-    initData()
+  initData()
   printTaskProperties(devices)
   initEngine(devices)
 
 
 def finalize():
-  if engine:
-    for device in engine.devices:
-      device.terminate()
+  for device in engine.devices:
+    device.terminate()
   maybeFinalizeSprintCommunicator(device_proc=False)
-
-
-def needData():
-  task = config.value('task', 'train')
-  if task == 'theano_graph':
-    return False
-  return True
 
 
 def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
   if task == 'train':
-    assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
-    engine.init_train_from_config(config, train_data, dev_data, eval_data)
+    assert train.num_seqs > 0, "no train files specified, check train option: %s" % config.value('train', None)
+    engine.init_train_from_config(config, train, dev, eval)
     engine.train()
   elif task == 'forward':
-    assert eval_data is not None, 'no eval data provided'
+    assert eval is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
     engine.init_network_from_config(config)
-    engine.forward_to_hdf(eval_data, output_file, combine_labels)
+    engine.forward_to_hdf(eval, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano.printing
     engine.init_network_from_config(config)
@@ -379,13 +320,13 @@ def executeMainTask():
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.init_network_from_config(config)
-    engine.analyze(engine.devices[0], eval_data, statistics)
+    engine.analyze(engine.devices[0], eval, statistics)
   elif task == "classify":
-    assert eval_data is not None, 'no eval data provided'
+    assert eval is not None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
-    engine.classify(engine.devices[0], eval_data, label_file)
+    engine.classify(engine.devices[0], eval, label_file)
   else:
     assert False, "unknown task: %s" % task
 

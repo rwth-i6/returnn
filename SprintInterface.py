@@ -148,7 +148,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   if action == "train":
     pass
   elif action == "forward":
-    assert targetMode in ["criterion-by-sprint", "forward-only"]
+    assert targetMode == "criterion-by-sprint"  # Hack in Sprint to just pass us the features.
     targetMode = "forward"
   else:
     assert False, "unknown action: %r" % action
@@ -161,9 +161,6 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
     startTrainThread(epoch)
   elif Task == "forward":
     prepareForwarding(epoch)
-
-  global startTime
-  startTime = time.time()
 
 
 def exit():
@@ -224,10 +221,6 @@ def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, seg
 def feedInputUnsupervised(features, weights=None, segmentName=None):
   assert features.shape[0] == InputDim
   train(segmentName, features)
-
-def feedInputForwarding(features, weights=None, segmentName=None):
-  assert Task == "forward"
-  return feedInput(features, weights=weights, segmentName=segmentName)
 
 # End Sprint PythonTrainer interface. }
 
@@ -352,6 +345,8 @@ def startTrainThread(epoch=None):
   trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
+  global startTime
+  startTime = time.time()
   isTrainThreadStarted = True
 
 
@@ -383,8 +378,9 @@ def getFinalEpoch():
   assert engine
   assert config
   config_num_epochs = engine.config_get_final_epoch(config)
-  if engine.is_training:
-    assert engine.final_epoch == config_num_epochs
+  with engine.lock:
+    if engine.is_training:
+      assert engine.final_epoch == config_num_epochs
   return config_num_epochs
 
 
@@ -417,7 +413,7 @@ def train(segmentName, features, targets=None):
     assert posteriors.shape[0] == T
     assert posteriors.shape[1] == 1
     assert OutputDim == posteriors.shape[2]
-    assert OutputDim == engine.network.n_out
+    #assert OutputDim == engine.network.n_out
     assert len(posteriors.shape) == 3
     # reformat to Sprint expected format (emission,time)
     posteriors = posteriors[:,0,:]

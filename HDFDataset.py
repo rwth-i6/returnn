@@ -2,11 +2,30 @@
 import gc
 import h5py
 import numpy
+import theano
 from CachedDataset import CachedDataset
 from Log import log
 
 
 class HDFDataset(CachedDataset):
+
+  @classmethod
+  def load_data(cls, config, cache_byte_size, files_config_key, **kwargs):
+    """
+    :type config: Config.Config
+    :type cache_byte_size: int
+    :type chunking: str
+    :type seq_ordering: str
+    :rtype: (Dataset,int)
+    :returns the dataset, and the cache byte size left over if we cache the whole dataset.
+    """
+    if not config.has(files_config_key):
+      return None, 0
+    data = cls.from_config(config, cache_byte_size=cache_byte_size, **kwargs)
+    for f in config.list(files_config_key):
+      data.add_file(f)
+    data.initialize()
+    return data, data.definite_cache_leftover
 
   def __init__(self, *args, **kwargs):
     super(HDFDataset, self).__init__(*args, **kwargs)
@@ -15,6 +34,7 @@ class HDFDataset(CachedDataset):
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
     self.tags = []; """ :type: list[str] """
+    self.targets = {}
 
   def add_file(self, filename):
     """
@@ -27,10 +47,12 @@ class HDFDataset(CachedDataset):
     :type filename: str
     """
     fin = h5py.File(filename, "r")
-    labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
+    if 'targets' in fin:
+      self.labels = { k : [ item.split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
     if not self.labels:
-      self.labels = labels
-    assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
+      labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
+      self.labels = { 'classes' : labels }
+      assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
     tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     seq_start = [0]
@@ -52,8 +74,11 @@ class HDFDataset(CachedDataset):
       self.num_inputs = fin.attrs['inputPattSize']
     assert self.num_inputs == fin.attrs['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs['inputPattSize']) + ")"
     if self.num_outputs == 0:
-      self.num_outputs = fin.attrs['numLabels']
-    assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+      if 'numLabels'in fin.attrs:
+        self.num_outputs = fin.attrs['numLabels']
+        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+      else:
+        self.num_outputs = { k : fin['targets/size'].attrs[k] for k in fin['targets/size'].attrs }
     if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
         self.ctc_targets = fin['ctcIndexTranscription'][...]
@@ -65,6 +90,9 @@ class HDFDataset(CachedDataset):
         self.ctc_targets = numpy.pad(self.ctc_targets, ((0,0),(0,pad_width)), 'constant', constant_values=-1)
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
+    if 'targets' in fin:
+      for name in fin['targets/data']:
+        self.targets[name] = numpy.zeros((self.get_num_timesteps(),), dtype=theano.config.floatX) - 1
     fin.close()
 
   def _load_seqs(self, start, end):
@@ -73,6 +101,7 @@ class HDFDataset(CachedDataset):
     As a side effect, will modify / fill-up:
       self.alloc_intervals
       self.targets
+      self.chars
 
     :param int start: start sorted seq idx
     :param int end: end sorted seq idx
@@ -92,15 +121,14 @@ class HDFDataset(CachedDataset):
       print >> log.v4, "loading file", self.files[i]
       fin = h5py.File(self.files[i], 'r')
       inputs = fin['inputs'][...]; """ :type: numpy.ndarray """
-      if 'targetClasses' in fin:
-        targs = fin['targetClasses'][...]
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
         l = self._seq_lengths[ids]
-        if 'targetClasses' in fin:
-          y = targs[p : p + l]; """ :type: list[int] """
-          self.targets[self.get_seq_start(idc):self.get_seq_start(idc) + l] = y
+        if 'targets' in fin:
+          for k in fin['targets/data']:
+            y = fin['targets/data'][k][...]
+            self.targets[k][self.get_seq_start(idc):self.get_seq_start(idc) + l] = y[p : p + l]
         x = inputs[p : p + l]
         self._set_alloc_intervals_data(idc, data=x)
       fin.close()
@@ -110,8 +138,3 @@ class HDFDataset(CachedDataset):
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[sorted_seq_idx]
     return self.tags[ids]
-
-  def len_info(self):
-    return ", ".join(["HDF dataset",
-                      "sequences: %i" % self.num_seqs,
-                      "frames: %i" % self.get_num_timesteps()])

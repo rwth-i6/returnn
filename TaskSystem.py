@@ -12,7 +12,7 @@ from contextlib import contextmanager
 import pickle
 import types
 import marshal
-from importlib import import_module
+import importlib
 
 
 def execInMainProc(func):
@@ -149,23 +149,16 @@ def funcCall(attrChainArgs, args=()):
 
 Unpickler = pickle.Unpickler
 CellType = type((lambda x: lambda: x)(0).func_closure[0])
-ModuleType = type(sys)
 
 def makeFuncCell(value):
   return (lambda: value).func_closure[0]
 
 def getModuleDict(modname):
-  mod = import_module(modname)
+  mod = importlib.import_module(modname)
   return mod.__dict__
 
 def getModNameForModDict(obj):
-  """
-  :type obj: dict
-  :rtype: str | None
-  :returns The module name or None. It will not return '__main__' in any case
-  because that likely will not be the same in the unpickling environment.
-  """
-  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod and modname != "__main__"}
+  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod}
   modname = mods.get(id(obj), None)
   return modname
 
@@ -197,8 +190,7 @@ class Pickler(pickle.Pickler):
       obj.func_closure,
     ))
     self.write(pickle.REDUCE)
-    if id(obj) not in self.memo:  # Could be if we recursively landed here. See also pickle.save_tuple().
-      self.memoize(obj)
+    self.memoize(obj)
   dispatch[types.FunctionType] = save_func
 
   def save_method(self, obj):
@@ -243,54 +235,11 @@ class Pickler(pickle.Pickler):
     self.save_dict(obj)
   dispatch[types.DictionaryType] = intellisave_dict
 
-  def save_module(self, obj):
-    modname = getModNameForModDict(obj.__dict__)
-    if modname:
-      self.save(import_module)
-      self.save((modname,))
-      self.write(pickle.REDUCE)
-      self.memoize(obj)
-      return
-    # We could maybe construct it manually. For now, just fail.
-    raise pickle.PicklingError('cannot pickle module %r' % obj)
-  dispatch[ModuleType] = save_module
-
   def save_buffer(self, obj):
     self.save(buffer)
     self.save((str(obj),))
     self.write(pickle.REDUCE)
   dispatch[types.BufferType] = save_buffer
-
-  # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
-  def save_global(self, obj, name=None, pack=pickle.struct.pack):
-    assert obj
-    assert id(obj) not in self.memo
-    if name is None:
-      name = obj.__name__
-
-    module = getattr(obj, "__module__", None)
-    if module is None or module == "__main__":
-      module = pickle.whichmodule(obj, name)
-    if module is None or module == "__main__":
-      raise pickle.PicklingError(
-          "Can't pickle %r: module not found: %s" % (obj, module))
-
-    try:
-      __import__(module)
-      mod = sys.modules[module]
-      klass = getattr(mod, name)
-    except (ImportError, KeyError, AttributeError):
-      raise pickle.PicklingError(
-          "Can't pickle %r: it's not found as %s.%s" % (obj, module, name))
-    else:
-      if klass is not obj:
-        raise pickle.PicklingError(
-            "Can't pickle %r: it's not the same object as %s.%s" % (obj, module, name))
-
-    assert "\n" not in module
-    assert "\n" not in name
-    self.write(pickle.GLOBAL + module + '\n' + name + '\n')
-    self.memoize(obj)
 
   # Some types in the types modules are not correctly referenced,
   # such as types.FunctionType. This is fixed here.
@@ -330,11 +279,10 @@ class ExecingProcess:
     http://comments.gmane.org/gmane.comp.python.numeric.general/60204
   """
 
-  def __init__(self, target, args, name, env_update):
+  def __init__(self, target, args, name):
     self.target = target
     self.args = args
     self.name = name
-    self.env_update = env_update
     self.daemon = True
     self.pid = None
     self.exit_status = None
@@ -368,8 +316,6 @@ class ExecingProcess:
                 "--forkExecProc",
                 str(self.pipe_c2p[1].fileno()),
                 str(self.pipe_p2c[0].fileno())]
-        if self.env_update:
-          os.environ.update(self.env_update)
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
         print "ExecingProcess: Error at initialization."
@@ -417,12 +363,8 @@ class ExecingProcess:
   @staticmethod
   def checkExec():
     if "--forkExecProc" in sys.argv:
-      try:
-        import better_exchook
-      except ImportError:
-        pass  # Doesn't matter.
-      else:
-        better_exchook.install()
+      import better_exchook
+      better_exchook.install()
       argidx = sys.argv.index("--forkExecProc")
       writeFileNo = int(sys.argv[argidx + 1])
       readFileNo = int(sys.argv[argidx + 2])
@@ -510,36 +452,30 @@ class AsyncTask:
   multiprocessing.Pipe or ExecingProcess_Pipe.
   """
 
-  def __init__(self, func, name=None, mustExec=False, env_update=None):
+  def __init__(self, func, name=None, mustExec=False):
     """
     :param func: a function which gets a single parameter,
       which will be a reference to our instance in the fork,
       so that it can use our communication methods put/get.
     :type str name: name for the sub process
     :param bool mustExec: if True, we do fork+exec, not just fork
-    :param dict[str,str] env_update: for mustExec, also update these env vars
     """
     self.name = name or "unnamed"
     self.func = func
     self.mustExec = mustExec
-    self.env_update = env_update
     self.parent_pid = os.getpid()
-    proc_args = {
-      "target": funcCall,
-      "args": ((AsyncTask, "_asyncCall"), (self,)),
-      "name": self.name + " worker process"
-    }
     if mustExec and sys.platform != "win32":
       self.Process = ExecingProcess
       self.Pipe = ExecingProcess_Pipe
-      proc_args["env_update"] = env_update
     else:
-      assert not env_update, "not supported if not mustExec"
       from multiprocessing import Process, Pipe
       self.Process = Process
       self.Pipe = Pipe
     self.parent_conn, self.child_conn = self.Pipe()
-    self.proc = self.Process(**proc_args)
+    self.proc = self.Process(
+      target = funcCall,
+      args = ((AsyncTask, "_asyncCall"), (self,)),
+      name = self.name + " worker process")
     self.proc.daemon = True
     self.proc.start()
     self.child_conn.close()
@@ -594,7 +530,7 @@ class AsyncTask:
   @property
   def isChild(self):
     if self.isParent: return False
-    # Note: self.parent_pid != os.getppid() if the parent died.
+    assert self.parent_pid == os.getppid()
     return True
 
   # This might be called from the module code.

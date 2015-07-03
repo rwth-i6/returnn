@@ -2,9 +2,6 @@ import subprocess
 import h5py
 from collections import deque
 import inspect
-import os
-import shlex
-import numpy as np
 
 
 def cmd(cmd):
@@ -12,38 +9,27 @@ def cmd(cmd):
   :type cmd: list[str] | str
   :rtype: list[str]
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
-                       env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
+  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True)
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
   return result
 
 
-def eval_shell_env(token):
-  if token.startswith("$"):
-    return os.environ.get(token[1:], "")
-  return token
-
-def eval_shell_str(s):
-  """
-  :type s: str
-  :rtype: list[str]
-
-  Parses `s` as shell like arguments (via shlex.split) and evaluates shell environment variables (eval_shell_env).
-  """
-  tokens = []
-  for token in shlex.split(s):
-    if token.startswith("$"):
-      tokens += eval_shell_str(eval_shell_env(token))
-    else:
-      tokens += [token]
-  return tokens
-
 def hdf5_dimension(filename, dimension):
   fin = h5py.File(filename, "r")
-  res = fin.attrs[dimension]
+  if '/' in dimension:
+    res = fin['/'.join(dimension.split('/')[:-1])].attrs[dimension.split('/')[-1]]
+  else:
+    res = fin.attrs[dimension]
   fin.close()
   return res
+
+def hdf5_group(filename, dimension):
+  fin = h5py.File(filename, "r")
+  res = { k : fin[dimension].attrs[k] for k in fin[dimension].attrs }
+  fin.close()
+  return res
+
 
 
 def hdf5_strings(handle, name, data):
@@ -115,15 +101,10 @@ def betterRepr(o):
   if isinstance(o, deque):
     return "deque([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   if isinstance(o, tuple):
-    if len(o) == 1:
-      return "(%s,)" % o[0]
+    if len(o) == 1: return "(%s,)" % o[0]
     return "(%s)" % ", ".join(map(betterRepr, o))
   if isinstance(o, dict):
-    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.iteritems())]
-    if sum([len(v) for v in l]) >= 40:
-      return "{\n%s}" % "".join([v + ",\n" for v in l])
-    else:
-      return "{%s}" % ", ".join(l)
+    return "{\n%s}" % "".join(map(lambda (k,v): betterRepr(k) + ": " + betterRepr(v) + ",\n", sorted(o.iteritems())))
   if isinstance(o, set):
     return "set([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   # fallback
@@ -232,10 +213,3 @@ def initThreadJoinHack():
     else:
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
-
-
-def class_idx_seq_to_features(seq, num_classes):
-  num_frames = len(seq)
-  m = np.zeros((num_frames, num_classes))
-  m[np.arange(num_frames), seq] = 1
-  return m

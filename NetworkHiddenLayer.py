@@ -1,6 +1,6 @@
 
 from theano import tensor as T
-from NetworkBaseLayer import Layer
+from NetworkLayer import Layer
 from ActivationFunctions import strtoact
 
 
@@ -17,12 +17,10 @@ class HiddenLayer(Layer):
     self.activation = strtoact(activation)
     self.W_in = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
                                                             self.attrs['n_out'],
-                                                            name="W_in_%s_%s" % (s.name, self.name)))
+                                                            name=self.name + "_" + s.name),
+                                "W_in_%s_%s" % (s.name, self.name))
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-
-  def regularization_param_list(self):
-    return super(HiddenLayer, self).regularization_param_list() + self.W_in
 
 
 class ForwardLayer(HiddenLayer):

@@ -1,10 +1,24 @@
+
 import thread
 from threading import Condition, currentThread
+from Dataset import Dataset
+from Log import log
 import math
 import time
 
-from Dataset import Dataset, DatasetSeq
-from Log import log
+
+class DataCache:
+  def __init__(self, seq_idx, features, targets):
+    self.seq_idx = seq_idx
+    self.features = features
+    self.targets = targets
+
+  @property
+  def num_frames(self):
+    return self.features.shape[0]
+
+  def __repr__(self):
+    return "<SprintDataset DataCache seq_idx=%i>" % self.seq_idx
 
 
 class SprintDataset(Dataset):
@@ -31,7 +45,7 @@ class SprintDataset(Dataset):
     assert window == 1
     super(SprintDataset, self).__init__(window, *args, **kwargs)
     self.cond = Condition(lock=self.lock)
-    self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
+    self.sprint_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
     self.reached_final_seq = False
     self.multiple_epochs = False
@@ -67,7 +81,7 @@ class SprintDataset(Dataset):
     self.next_seq_to_be_added = 0
     self.reached_final_seq = False
     self._num_timesteps = 0
-    self.added_data = []; " :type: list[DatasetSeq] "
+    self.added_data = []; " :type: list[DataCache] "
     self.ready_for_data = True
 
   def initSprintEpoch(self, epoch):
@@ -137,7 +151,7 @@ class SprintDataset(Dataset):
     if check():
       return
     # We need to wait.
-    assert thread.get_ident() != self.add_data_thread_id
+    assert thread.get_ident() != self.sprint_thread_id
     print >> log.v5, "SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
                      (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S"))
     while not check():
@@ -196,8 +210,9 @@ class SprintDataset(Dataset):
     """
     Adds a new seq.
     This is called via the Sprint main thread.
+    :type segmentName: str
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param numpy.ndarray targets: format (time) (idx of output-feature)
+    :param targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -232,7 +247,7 @@ class SprintDataset(Dataset):
           assert seq_idx + 1 == self.next_seq_to_be_added
           self.cond.wait()
 
-      self.added_data += [DatasetSeq(seq_idx, features, targets)]
+      self.added_data += [DataCache(seq_idx, features, targets)]
       self.cond.notify_all()
       return seq_idx
 
@@ -248,8 +263,8 @@ class SprintDataset(Dataset):
       self.ready_for_data = False
       self.cond.notify_all()
 
-  def _shuffle_frames_in_seqs(self, start, end):
-    assert False, "Shuffling in SprintDataset only via Sprint at the moment."
+  def _shuffle_seqs(self, start, end):
+    raise NotImplementedError("Shuffling in SprintDataset only via Sprint at the moment.")
 
   def get_num_timesteps(self):
     with self.lock:
@@ -261,16 +276,6 @@ class SprintDataset(Dataset):
     with self.lock:
       assert self.reached_final_seq
       return self.next_seq_to_be_added
-
-  def have_seqs(self):
-    with self.lock:
-      if self.next_seq_to_be_added > 0:
-        return True
-      self._waitForSeq(0)
-      return self.next_seq_to_be_added > 0
-
-  def len_info(self):
-    return "Sprint dataset, no len info"
 
   def is_less_than_num_seqs(self, n):
     with self.lock:
@@ -309,5 +314,5 @@ class SprintDataset(Dataset):
       return self._getSeq(sorted_seq_idx).targets
 
   def get_ctc_targets(self, sorted_seq_idx):
-    assert False, "No CTC targets."
+    raise NotImplementedError
 

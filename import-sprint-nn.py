@@ -64,7 +64,7 @@ def loadSprintNetwork(params_prefix_path, float_type):
     print("Loading Sprint NN layer %i" % (l + 1))
 
     p = Popen(
-      [archiverExec, "--mode", "show", "--type", "bin-matrix", "--full-precision", "true", fn],
+      [archiverExec, "--mode", "show", "--type", "bin-matrix", fn],
       stdout=PIPE, stderr=PIPE)
     out,err = p.communicate()
     assert p.returncode == 0, "Return %i, Error: %s" % (p.returncode, err)
@@ -126,13 +126,13 @@ def saveCrnnNetwork(epoch, layers):
   print "Crnn Network layer topology:"
   print "input dim:", network.n_in
   print "hidden layer count:", nHiddenLayers
-  print "output dim:", network.n_out
+  #print "output dim:", network.n_out
   print "net weights #:", network.num_params()
   print "net params:", network.train_params_vars
   print "net output:", network.output
 
   assert network.n_in == inputDim
-  assert network.n_out == outputDim
+  #assert network.n_out == outputDim
   assert nHiddenLayers + 1 == layerCount  # hidden + output layer
   assert len(layers) == layerCount
   assert len(network.description.hidden_info) == len(network.hidden)

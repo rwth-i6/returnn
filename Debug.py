@@ -2,19 +2,7 @@
 import os
 import sys
 
-
-global_exclude_thread_ids = set()
-
-def auto_exclude_all_new_threads(func):
-  def wrapped(*args, **kwargs):
-    old_threads = set(sys._current_frames().keys())
-    res = func(*args, **kwargs)
-    new_threads = set(sys._current_frames().keys())
-    new_threads -= old_threads
-    global_exclude_thread_ids.update(new_threads)
-    return res
-  return wrapped
-
+_debug = False
 
 def dumpAllThreadTracebacks(exclude_thread_ids=set()):
   import better_exchook
@@ -30,10 +18,7 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       # Note that this leaves out all threads not created via the threading module.
       if tid not in threads: continue
       print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
-      if tid in global_exclude_thread_ids:
-        print "(Auto-ignored traceback.)"
-      else:
-        better_exchook.print_traceback(stack)
+      better_exchook.print_traceback(stack)
       print ""
   else:
     print "Does not have sys._current_frames, cannot get thread tracebacks."
@@ -57,8 +42,9 @@ def initBetterExchook():
         # Print the stack of all other threads.
         dumpAllThreadTracebacks({main_thread_id})
 
-    if os.environ.get("DEBUG", "") == "1":
-      pdb.post_mortem(exc_tb)
+    # http://stackoverflow.com/a/1237407/133374
+    #if sys.stdin.isatty() and sys.stderr.isatty():
+    #  pdb.post_mortem(exc_tb)
 
   sys.excepthook = excepthook
 
@@ -67,6 +53,7 @@ def initFaulthandler(sigusr1_chain=False):
   """
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
+  if not _debug: return
   try:
     import faulthandler
   except ImportError, e:
@@ -83,8 +70,8 @@ def initFaulthandler(sigusr1_chain=False):
       print "faulthandler enabled."
 
 
-@auto_exclude_all_new_threads
 def initIPythonKernel():
+  if not _debug: return
   # You can remotely connect to this kernel. See the output on stdout.
   try:
     import IPython.kernel.zmq.ipkernel

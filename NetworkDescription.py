@@ -1,6 +1,6 @@
 
 import inspect
-from Util import simpleObjRepr, hdf5_dimension
+from Util import simpleObjRepr, hdf5_dimension, hdf5_group
 
 
 class LayerNetworkDescription:
@@ -108,9 +108,7 @@ class LayerNetworkDescription:
     output_info = {"loss": loss, "dropout": dropout[-1]}
     default_layer_info = {
       "L1": L1_reg, "L2": L2_reg,
-      "forward_weights_init": config.value("forward_weights_init", None),
-      "bias_init": config.value("bias_init", None),
-      "substitute_param_expr": config.value("substitute_param_expr", None)
+      "forward_weights_init": config.value("forward_weights_init", None)
     }
 
     return cls(num_inputs=num_inputs, num_outputs=num_outputs,
@@ -136,9 +134,13 @@ class LayerNetworkDescription:
     """
     num_inputs = config.int('num_inputs', 0)
     num_outputs = config.int('num_outputs', 0)
-    if config.list('train') and ":" not in config.value('train', ''):
+    target = config.value('target', 'classes')
+    if config.list('train'):
       _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
-      _num_outputs = hdf5_dimension(config.list('train')[0], 'numLabels')
+      try:
+        _num_outputs = { 'classes' : hdf5_dimension(config.list('train')[0], 'numLabels') }
+      except:
+        _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
       if num_inputs: assert num_inputs == _num_inputs
       if num_outputs: assert num_outputs == _num_outputs
       num_inputs = _num_inputs

@@ -11,7 +11,7 @@ class Updater:
   def initFromConfig(cls, config):
     import rnn
     kwargs = {
-      "updateOnDevice": rnn.isUpdateOnDevice(config),
+      "updateOnDevice": False, #rnn.isUpdateOnDevice(config),
       "gradient_clip": config.float('gradient_clip', -1),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
@@ -39,13 +39,13 @@ class Updater:
     assert not (self.adagrad and self.adadelta)
     if self.adadelta:
       self.momentum = 0.0
-      print >> log.v3, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
+      print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
     if self.adagrad:
-      print >> log.v3, "using adagrad"
+      print >> log.v4, "using adagrad"
     if self.momentum:
-      print >> log.v3, "using momentum %f" % self.momentum
+      print >> log.v4, "using momentum %f" % self.momentum
     if self.gradient_clip > 0:
-      print >> log.v3, "using gradient clipping %f" % self.gradient_clip
+      print >> log.v4, "using gradient clipping %f" % self.gradient_clip
 
   def initVars(self, network, net_param_deltas):
     """
@@ -64,20 +64,20 @@ class Updater:
       self.net_train_param_deltas = net_param_deltas
     else:
       assert net_param_deltas is None
-      self.net_train_param_deltas = {p: theano.shared(numpy.zeros(p.get_value(borrow=True,
+      self.net_train_param_deltas = {k: {p : theano.shared(numpy.zeros(p.get_value(borrow=True,
                                                                               return_internal_type=True).shape,
                                                                   dtype=theano.config.floatX))
-                                     for p in network.train_params_vars}
+                                     for p in network.train_params_vars} for k in network.cost}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0))
     " :type: theano.compile.sharedvalue.SharedVariable "
 
     if self.momentum > 0:
-      self.deltas = {p: theano.shared(
+      self.deltas = { k : {p: theano.shared(
                      value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
-                     for p in self.network.train_params_vars}
+                     for p in network.train_params_vars} for k in self.network.cost}
     if self.adagrad:
       self.sqrsum = {p: theano.shared(
                      value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
@@ -103,42 +103,46 @@ class Updater:
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
     assert not self.updateOnDevice
-    for p in self.network.train_params_vars:
-      self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
+    for k in self.net_train_param_deltas:
+      for p in self.network.train_params_vars:
+        self.net_train_param_deltas[k][p].set_value(net_param_deltas[k][p], borrow=True)
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
     for param in self.network.train_params_vars:
-      deltas = self.net_train_param_deltas[param]  # usually the gradients
-      if self.gradient_clip > 0:
-        # Note that there is also theano.gradient.grad_clip, which would clip it already
-        # at the backprop step and which would affect also other dependent gradients.
-        # However, this is simpler for now.
-        # Also note that this is yet without the learning rate factor -
-        # this might be different to other gradient clipping implementations.
-        deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
-      upd = - self.learning_rate_var * deltas
+      upd = 0
+      for target in self.net_train_param_deltas:
+        deltas = self.net_train_param_deltas[target][param]  # usually the gradients
+        if self.gradient_clip > 0:
+          # Note that there is also theano.gradient.grad_clip, which would clip it already
+          # at the backprop step and which would affect also other dependent gradients.
+          # However, this is simpler for now.
+          # Also note that this is yet without the learning rate factor -
+          # this might be different to other gradient clipping implementations.
+          deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
+        upd += - self.learning_rate_var * deltas
+        if self.momentum > 0:
+          upd += self.momentum * self.deltas[target][param]
+        if self.adagrad:
+          updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
+          upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
+        if self.adadelta:
+          # http://arxiv.org/pdf/1212.5701v1.pdf
+          decay = self.adadelta_decay
+          offset = self.adadelta_offset
+          g = deltas
+          g2 = g ** 2
+          eg2_new = decay * self.eg2[param] + (1 - decay) * g2
+          dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
+          edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
+          updates.append((self.eg2[param], eg2_new))
+          updates.append((self.edx2[param], edx2_new))
+          updates.append((self.dx[param], dx_new))
+          upd = dx_new
       if self.momentum > 0:
-        upd += self.momentum * self.deltas[param]
-        updates.append((self.deltas[param], upd))
-      if self.adagrad:
-        updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
-        upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
-      if self.adadelta:
-        # http://arxiv.org/pdf/1212.5701v1.pdf
-        decay = self.adadelta_decay
-        offset = self.adadelta_offset
-        g = deltas
-        g2 = g ** 2
-        eg2_new = decay * self.eg2[param] + (1 - decay) * g2
-        dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
-        edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
-        updates.append((self.eg2[param], eg2_new))
-        updates.append((self.edx2[param], edx2_new))
-        updates.append((self.dx[param], dx_new))
-        upd = dx_new
+        updates.append((self.deltas[target][param], upd))
       updates.append((param, param + upd))
 
     return updates
