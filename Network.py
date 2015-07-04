@@ -166,12 +166,15 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
-          else:
+          elif s != "null":
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
       else:
         x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
+      if 'encoder' in model[layer_name].attrs:
+        if not network.hidden.has_key(model[layer_name].attrs['encoder']):
+          traverse(model, model[layer_name].attrs['encoder'], network)
       cl = model[layer_name].attrs['class']
       if cl == 'softmax':
         if not 'target' in model[layer_name].attrs:
@@ -196,6 +199,8 @@ class LayerNetwork(object):
           for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling']:
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
+          if 'encoder' in model[layer_name].attrs:
+            params['encoder'] = network.hidden[model[layer_name].attrs['encoder']]
         network.add_layer(layer_class(**params))
     for layer_name in model:
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
