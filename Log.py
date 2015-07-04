@@ -54,7 +54,8 @@ class Log:
       elif os.path.isdir(os.path.dirname(t)):
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
-      else: assert False, "invalid log target"
+      else:
+        assert False, "invalid log target %r" % t
       handler.setFormatter(f)
       for j in xrange(v + 1):
         if not handler in self.v[j].handlers:
