@@ -166,7 +166,7 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
-          elif s != "null":
+          elif s != "null" and s != "":
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
