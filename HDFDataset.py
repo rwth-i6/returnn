@@ -55,19 +55,23 @@ class HDFDataset(CachedDataset):
       assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
     tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
-    seq_start = [0]
+    seq_start = [numpy.array([0,0])]
     if 'times' in fin:
       self.timestamps.extend(fin['times'][...].tolist())
-    for l,t in zip(fin['seqLengths'][...].tolist(), tags):
-      self._seq_lengths.append(l)
+    seq_lengths = fin['seqLengths'][...]
+    if len(seq_lengths.shape) == 1:
+      seq_lengths = zip(seq_lengths.tolist(), seq_lengths.tolist())
+    for l in seq_lengths:
+      self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)
-      self.tags.append(t)
+    self.tags += tags
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
     self._num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
-    self._num_timesteps = sum(self._seq_lengths)
+    self._num_timesteps = sum([s[0] for s in self._seq_lengths])
+    self._num_codesteps = sum([s[1] for s in self._seq_lengths])
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
@@ -76,7 +80,7 @@ class HDFDataset(CachedDataset):
     if self.num_outputs == 0:
       if 'numLabels'in fin.attrs:
         self.num_outputs = fin.attrs['numLabels']
-        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
       else:
         self.num_outputs = { k : fin['targets/size'].attrs[k] for k in fin['targets/size'].attrs }
     if 'ctcIndexTranscription' in fin:
@@ -92,7 +96,7 @@ class HDFDataset(CachedDataset):
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
       for name in fin['targets/data']:
-        self.targets[name] = numpy.zeros((self.get_num_timesteps(),), dtype=theano.config.floatX) - 1
+        self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
     fin.close()
 
   def _load_seqs(self, start, end):
@@ -128,8 +132,8 @@ class HDFDataset(CachedDataset):
         if 'targets' in fin:
           for k in fin['targets/data']:
             y = fin['targets/data'][k][...]
-            self.targets[k][self.get_seq_start(idc):self.get_seq_start(idc) + l] = y[p : p + l]
-        x = inputs[p : p + l]
+            self.targets[k][self.get_seq_start(idc)[1]:self.get_seq_start(idc)[1] + l[1]] = y[p[1] : p[1] + l[1]]
+        x = inputs[p[0] : p[0] + l[0]]
         self._set_alloc_intervals_data(idc, data=x)
       fin.close()
     gc.collect()

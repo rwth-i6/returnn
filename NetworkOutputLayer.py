@@ -80,8 +80,8 @@ class FramewiseOutputLayer(OutputLayer):
   def cost(self, y):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      #pcx = self.p_y_given_x[self.i, y[self.i]]
       pcx = self.p_y_given_x[self.i, y[self.i]]
+      #pcx = self.p_y_given_x[:, y[self.i]]
       pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':

@@ -33,36 +33,37 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       o = seq.batch_frame_offset
       q = seq.batch_slice + offset_slice
       l = seq.frame_length
-      assert o + l <= shape[0]
+      #assert o + l[0] <= shape[0]
       assert q < shape[1]
-      device.index[o:o + l, q] = numpy.ones((l,), dtype='int8')
+      device.index[o:o + max(l), q] = numpy.ones((max(l),), dtype='int8')
 
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
-        device.data[o:o + l, q] = data[seq.seq_start_frame:seq.seq_end_frame]
+        device.data[o:o + l[0], q] = data[seq.seq_start_frame[0]:seq.seq_end_frame[0]]
         for target in dataset.targets:
           targets = dataset.get_targets(target, seq.seq_idx)
           if targets is not None:
-            device.targets[target][o:o + l, q] = targets[seq.seq_start_frame:seq.seq_end_frame]
-            for i in xrange(l):
-              if device.targets[target][o + i, q] in exclude:
-                device.index[o + i, q] = 0
+            device.targets[target][o:o + l[1], q] = targets[seq.seq_start_frame[1]:seq.seq_end_frame[1]]
+            if exclude:
+              for i in xrange(l[1]):
+                if device.targets[target][o + i, q] in exclude:
+                  device.index[o + i, q] = 0
 
-            if recurrent and pad_batches:
-              assert o == 0  # Doesn't make sense otherwise.
-              # pad with equivalent to 0
-              # these are the hardcoded values for IAM
-              # TODO load this from somewhere
-              pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
-                          -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
-                          0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
-                          0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-              device.data[o + l:, q] = pad_data
-              # also pad targets
-              # hardcoded si for IAM
-              # TODO load this from somewhere
-              pad_target = 189
-              device.targets[target][o + l:, q] = pad_target
+            #if recurrent and pad_batches:
+            #  assert o == 0  # Doesn't make sense otherwise. # lol, obviously
+            #  # pad with equivalent to 0
+            #  # these are the hardcoded values for IAM
+            #  # TODO load this from somewhere
+            #  pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
+            #              -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
+            #              0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
+            #              0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
+            #  device.data[o + l:, q] = pad_data
+            #  # also pad targets
+            #  # hardcoded si for IAM
+            #  # TODO load this from somewhere
+            #  pad_target = 189
+            #  device.targets[target][o + l:, q] = pad_target
 
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
@@ -91,7 +92,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
+  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq)[0])
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 

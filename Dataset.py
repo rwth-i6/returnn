@@ -101,6 +101,10 @@ class Dataset(object):
     assert self._num_timesteps > 0
     return self._num_timesteps
 
+  def get_num_codesteps(self):
+    assert self._num_codesteps > 0
+    return self._num_codesteps
+
   def load_seqs(self, start, end):
     """
     Load data sequences, such that self.get_data() & friends can return the data.
@@ -165,7 +169,7 @@ class Dataset(object):
       pass  # Keep order as-is.
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
-      seq_index.sort(key=get_seq_len)  # sort by length
+      seq_index.sort(key=lambda x: get_seq_len(x)[0])  # sort by length
     elif self.seq_ordering == 'random':
       # Keep this deterministic! Use fixed seed.
       rnd_seed = epoch or 1
@@ -202,6 +206,9 @@ class Dataset(object):
       self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype=theano.config.floatX)
 
     self.init_seq_order()
+
+  def get_times(self, sorted_seq_idx):
+    raise NotImplementedError
 
   def get_targets(self, target, sorted_seq_idx):
     raise NotImplementedError
@@ -256,11 +263,12 @@ class Dataset(object):
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if self.chunk_size == 0:
-        yield (s, 0, length)
+        yield (s, numpy.array([0,0]), length)
       else:
         t = 0
-        while t < length:
-          yield (s, t, min(t + self.chunk_size, length))
+        while t < length[0]:
+          l = min(t + self.chunk_size, length[0])
+          yield (s, numpy.array([t,t]), numpy.array([l,l]))
           t += self.chunk_step
       s += 1
 
@@ -281,7 +289,7 @@ class Dataset(object):
     for seq_idx, t_start, t_end in self.iterate_seqs():
       if recurrent_net:
         length = t_end - t_start
-        if length > batch_size:
+        if max(length) > batch_size:
           print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length, batch_size)
 
         dt, ds = batch.try_sequence_as_slice(length)
@@ -292,9 +300,9 @@ class Dataset(object):
 
       else:  # Not recurrent.
 
-        while t_start < t_end:
-          length = t_end - t_start
-          num_frames = min(length, batch_size - batch.get_all_slices_num_frames())
+        while t_start[0] < t_end[0]:
+          length = t_end[0] - t_start[0]
+          num_frames = min(length[0], batch_size - batch.get_all_slices_num_frames())
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch

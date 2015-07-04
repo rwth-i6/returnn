@@ -78,6 +78,7 @@ class Device():
     self.result_called_count = 0
     self.compute_total_time = 0
     self.update_total_time = 0
+    self.data = None
     self.main_pid = os.getpid()
 
     if blocking:

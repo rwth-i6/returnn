@@ -50,7 +50,7 @@ class Batch:
     :return: new shape which covers the old shape and one more data-batch, format (time,batch)
     :rtype: (int,int)
     """
-    return [max(self.data_shape[0], length), self.data_shape[1] + 1]
+    return [max(self.data_shape[0], max(length)), self.data_shape[1] + 1]
 
   def add_sequence_as_slice(self, seq_idx, seq_start_frame, length):
     """
@@ -70,7 +70,7 @@ class Batch:
     Will add one data-batch if we don't have one yet.
     :param int length: number of (time) frames
     """
-    self.data_shape = [self.data_shape[0] + length, max(self.data_shape[1], 1)]
+    self.data_shape = [self.data_shape[0] + length[0], max(self.data_shape[1], 1)]
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
@@ -93,7 +93,7 @@ class Batch:
     return self.data_shape[1]
 
   def get_total_num_frames(self):
-    return sum([s.frame_length for s in self.seqs])
+    return sum([s.frame_length[0] for s in self.seqs])
 
   @property
   def start_seq(self):

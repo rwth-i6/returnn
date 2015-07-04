@@ -109,6 +109,8 @@ class OptimizedLstmLayer(RecurrentLayer):
     kwargs["n_out"] = n_out * 4
     super(OptimizedLstmLayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
+    if encoder:
+      self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
     if not isinstance(self.activation, (list, tuple)):
       self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]

@@ -486,7 +486,7 @@ class EvalTaskThread(TaskThread):
       assert self.num_frames > 0
       self.score /= float(self.num_frames)
       if self.network.loss in ('ctc', 'ce_ctc'):
-        assert self.num_frames == self.data.get_num_timesteps()  # Wrong otherwise. E.g. chunking.
+        assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
         self.error /= float(self.data.num_running_chars)
       else:
         self.error /= float(self.num_frames)
@@ -550,15 +550,16 @@ class HDFForwardTaskThread(TaskThread):
       self.targets = { k: cache.create_dataset(k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
       self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
-      if data.timestamps:
-        times = self.cache.create_dataset("times", (len(data.timestamps), 2), dtype='f')
-        times[...] = data.timestamps
+      self.times = []
 
     def initialize(self):
       self.toffset = 0
 
     def finalize(self):
       hdf5_strings(self.cache, 'seqTags', self.tags)
+      if self.times:
+        times = self.cache.create_dataset("times", (len(self.times), 2), dtype='f')
+        times[...] = self.times
 
     def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)
@@ -585,3 +586,4 @@ class HDFForwardTaskThread(TaskThread):
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
       self.tags.append(self.data.get_tag(seq_idx))
+      self.times.extend(self.data.get_times(seq_idx))

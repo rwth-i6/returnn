@@ -21,7 +21,7 @@ class CachedDataset(Dataset):
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
-    self._seq_start = [0]  # uses sorted seq idx, see set_batching()
+    self._seq_start = [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
     self._seq_lengths = []; """ :type: list[int] """  # uses real seq idx
 
@@ -75,7 +75,7 @@ class CachedDataset(Dataset):
     # and data is a numpy.array.
 
   def _init_seq_starts(self):
-    self._seq_start = [0]  # idx like in seq_index, *not* real idx
+    self._seq_start = [numpy.array([0,0])]  # idx like in seq_index, *not* real idx
     for i in xrange(self.num_seqs):
       ids = self._seq_index[i]
       self._seq_start.append(self._seq_start[-1] + self._seq_lengths[ids])
@@ -90,7 +90,7 @@ class CachedDataset(Dataset):
     cached_bytes = 0
     for i in xrange(self.num_seqs):
       if i == num_cached:
-        nbytes = self.get_seq_length(i) * self.nbytes
+        nbytes = self.get_seq_length(i)[0] * self.nbytes
         if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
           num_cached = i + 1
           cached_bytes += nbytes
@@ -127,7 +127,7 @@ class CachedDataset(Dataset):
     raise NotImplementedError
 
   def _load_seqs_with_cache(self, start, end):
-    num_needed_cache_frames = self.get_seq_start(end) - self.get_seq_start(start)
+    num_needed_cache_frames = self.get_seq_start(end)[0] - self.get_seq_start(start)[0]
     if self.cache_num_frames_free < num_needed_cache_frames:
       self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
       gc.collect()
@@ -139,7 +139,7 @@ class CachedDataset(Dataset):
     gc.collect()
     # Load as much as we can so that we fill up the cache.
     while end < self.num_seqs:
-      num_needed_cache_frames = self.get_seq_length(end)
+      num_needed_cache_frames = self.get_seq_length(end)[0]
       if self.cache_num_frames_free - num_needed_cache_frames < 0:
         break
       self.cache_num_frames_free -= num_needed_cache_frames
@@ -150,7 +150,7 @@ class CachedDataset(Dataset):
       start = self.num_seqs_cached_at_start
       end = start
       while end < start:
-        num_needed_cache_frames = self.get_seq_length(end)
+        num_needed_cache_frames = self.get_seq_length(end)[0]
         if self.cache_num_frames_free - num_needed_cache_frames < 0:
           break
         self.cache_num_frames_free -= num_needed_cache_frames
@@ -170,18 +170,18 @@ class CachedDataset(Dataset):
     assert start >= alloc_start
     assert end <= alloc_end
     rnd = numpy.random.RandomState(start)  # Some deterministic way to shuffle!
-    num_frames = self._seq_start[end] - self._seq_start[start]
+    num_frames = self._seq_start[end][0] - self._seq_start[start][0]
     assert num_frames > 0
     perm = rnd.permutation(num_frames)
-    alloc_offset = self._seq_start[start] - self._seq_start[alloc_start]
+    alloc_offset = self._seq_start[start][0] - self._seq_start[alloc_start][0]
     assert alloc_offset + num_frames <= alloc_data.shape[0]
     # Permute alloc_data.
     data = alloc_data[alloc_offset:alloc_offset + num_frames]
     alloc_data[alloc_offset:alloc_offset + num_frames] = data[perm]
     # Permute targets.
     for k in self.targets:
-      targets = self.targets[k][self._seq_start[start]:self._seq_start[start] + num_frames]
-      self.targets[k][self._seq_start[start]:self._seq_start[start] + num_frames] = targets[perm]
+      targets = self.targets[k][self._seq_start[start][1]:self._seq_start[start][1] + num_frames]
+      self.targets[k][self._seq_start[start][1]:self._seq_start[start][1] + self._seq_start[end][1] - self._seq_start[start][1]] = targets[perm]
 
   def _set_alloc_intervals_data(self, idc, data):
     """
@@ -190,7 +190,7 @@ class CachedDataset(Dataset):
     """
     idi = self.alloc_interval_index(idc)
     assert idi >= 0
-    o = self._seq_start[idc] - self._seq_start[self.alloc_intervals[idi][0]]
+    o = self._seq_start[idc][0] - self._seq_start[self.alloc_intervals[idi][0]][0]
     l = data.shape[0]
     x = data
     x = self.preprocess(x)
@@ -240,7 +240,7 @@ class CachedDataset(Dataset):
          numpy.concatenate(
            [xc,
             numpy.zeros(
-              (self._seq_start[ni] - self._seq_start[ci], self.num_inputs * self.window),
+              (self._seq_start[ni][0] - self._seq_start[ci][0], self.num_inputs * self.window),
               dtype=theano.config.floatX),
             xn])))
       del self.alloc_intervals[pos + 1]
@@ -249,19 +249,19 @@ class CachedDataset(Dataset):
     elif value[0] == ci:
       self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
                                         value[1],
-                                        numpy.concatenate([xc, numpy.zeros((self._seq_start[value[1]] - self._seq_start[ci], self.num_inputs * self.window), dtype=theano.config.floatX)])))
+                                        numpy.concatenate([xc, numpy.zeros((self._seq_start[value[1]][0] - self._seq_start[ci][0], self.num_inputs * self.window), dtype=theano.config.floatX)])))
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
       self.alloc_intervals.insert(pos + 1, (value[0],
                                             self.alloc_intervals[pos + 1][1],
-                                            numpy.concatenate([numpy.zeros((self._seq_start[ni] - self._seq_start[value[0]], self.num_inputs * self.window), dtype=theano.config.floatX), xc])))
+                                            numpy.concatenate([numpy.zeros((self._seq_start[ni][0] - self._seq_start[value[0]][0], self.num_inputs * self.window), dtype=theano.config.floatX), xc])))
       del self.alloc_intervals[pos + 2]
       return 0
     else:
       self.alloc_intervals.insert(pos + 1,
         value + (numpy.zeros(
-            (self._seq_start[value[1]] - self._seq_start[value[0]],
+            (self._seq_start[value[1]][0] - self._seq_start[value[0]][0],
              self.num_inputs * self.window),
             dtype=theano.config.floatX),))
       return 1
@@ -278,16 +278,16 @@ class CachedDataset(Dataset):
       del self.alloc_intervals[pos]
       return -1
     elif value[0] == ci:
-      self.alloc_intervals.insert(pos, (value[1], ni, xi[self._seq_start[value[1]] - self._seq_start[ci]:]))
+      self.alloc_intervals.insert(pos, (value[1], ni, xi[self._seq_start[value[1]][0] - self._seq_start[ci][0]:]))
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
-      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self._seq_start[value[0]] - self._seq_start[ci]]))
+      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self._seq_start[value[0]][0] - self._seq_start[ci][0]]))
       del self.alloc_intervals[pos + 1]
       return 0
     else:
-      self.alloc_intervals.insert(pos, (value[1], ni, xi[self._seq_start[value[1]] - self._seq_start[ci]:]))
-      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self._seq_start[value[0]] - self._seq_start[ci]]))
+      self.alloc_intervals.insert(pos, (value[1], ni, xi[self._seq_start[value[1]][0] - self._seq_start[ci][0]:]))
+      self.alloc_intervals.insert(pos, (ci, value[0], xi[:self._seq_start[value[0]][0] - self._seq_start[ci][0]]))
       del self.alloc_intervals[pos + 2]
       return 1
 
@@ -404,19 +404,24 @@ class CachedDataset(Dataset):
     """
     return self._seq_start[sorted_seq_idx]
 
+  def get_times(self, sorted_seq_idx):
+    seq_start = self.get_seq_start(sorted_seq_idx)[0]
+    seq_len = self.get_seq_length(sorted_seq_idx)[0]
+    return self.times[seq_start:seq_start + seq_len]
+
   def get_data(self, sorted_seq_idx):
     idi = self.alloc_interval_index(sorted_seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx
     alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]
-    o = self.get_seq_start(sorted_seq_idx) - self.get_seq_start(alloc_start_seq)
+    o = self.get_seq_start(sorted_seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
     assert o >= 0
-    l = self.get_seq_length(sorted_seq_idx)
+    l = self.get_seq_length(sorted_seq_idx)[0]
     assert alloc_data.shape[0] >= o + l
     return alloc_data[o:o + l]
 
   def get_targets(self, target, sorted_seq_idx):
-    seq_start = self.get_seq_start(sorted_seq_idx)
-    seq_len = self.get_seq_length(sorted_seq_idx)
+    seq_start = self.get_seq_start(sorted_seq_idx)[1]
+    seq_len = self.get_seq_length(sorted_seq_idx)[1]
     return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_ctc_targets(self, sorted_seq_idx):
