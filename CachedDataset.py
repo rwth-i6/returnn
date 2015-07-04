@@ -407,7 +407,7 @@ class CachedDataset(Dataset):
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
     seq_len = self.get_seq_length(sorted_seq_idx)[0]
-    return self.times[seq_start:seq_start + seq_len]
+    return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_data(self, sorted_seq_idx):
     idi = self.alloc_interval_index(sorted_seq_idx)
