@@ -142,6 +142,8 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
     epoch = int(epoch)
     assert epoch >= 1
 
+  configfile = config.get("configfile", None)
+
   global Task
   action = config["action"]
   Task = action
@@ -153,7 +155,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   else:
     assert False, "unknown action: %r" % action
 
-  initBase(targetMode=targetMode)
+  initBase(targetMode=targetMode, configfile=configfile)
   sprintDataset.setDimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
@@ -357,8 +359,16 @@ def prepareForwarding(epoch):
   assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
                                                    "You have: %s" % config.list('extract')
 
+  if epoch:
+    assert config.value('load', None) is None, "'load' = %r" % config.value('load', None)
+    model_filename = config.value('model', '')
+    fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
+    fns_existing = [fn for fn in fns if os.path.exists(fn)]
+    assert len(fns_existing) == 1, "%s not found" % fns
+    config.set('load', fns_existing[0])
+
   lastEpoch, _, _ = engine.get_last_epoch_batch_model(config)
-  assert lastEpoch == epoch  # Would otherwise require some redesign of initBase(), or reload net params here.
+  assert lastEpoch == epoch
 
   # Load network and copy over net params.
   engine.init_network_from_config(config)
