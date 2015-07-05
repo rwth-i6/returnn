@@ -151,6 +151,12 @@ class ObjAsDict:
 
 
 def obj_diff_str(self, other):
+  if self is None and other is None:
+    return "No diff."
+  if self is None and other is not None:
+    return "self is None and other is %r" % other
+  if self is not None and other is None:
+    return "other is None and self is %r" % self
   s = []
   for attrib in sorted(set(other.__dict__).union(other.__dict__.keys())):
     if attrib not in self.__dict__ or attrib not in other.__dict__:
