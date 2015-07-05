@@ -60,7 +60,7 @@ class HDFDataset(CachedDataset):
       self.timestamps.extend(fin['times'][...].tolist())
     seq_lengths = fin['seqLengths'][...]
     if len(seq_lengths.shape) == 1:
-      seq_lengths = zip(seq_lengths.tolist(), seq_lengths.tolist())
+      seq_lengths = numpy.array(zip(seq_lengths.tolist(), seq_lengths.tolist()))
     for l in seq_lengths:
       self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)

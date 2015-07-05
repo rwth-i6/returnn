@@ -70,12 +70,12 @@ class Batch:
     Will add one data-batch if we don't have one yet.
     :param int length: number of (time) frames
     """
-    self.data_shape = [self.data_shape[0] + length[0], max(self.data_shape[1], 1)]
+    self.data_shape = [self.data_shape[0] + max(length), max(self.data_shape[1], 1)]
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
-                                   batch_frame_offset=self.data_shape[0] - length)]
+                                   batch_frame_offset=self.data_shape[0] - max(length))]
 
   def get_all_slices_num_frames(self):
     """

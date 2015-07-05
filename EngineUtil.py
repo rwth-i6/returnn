@@ -92,7 +92,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq)[0])
+  batch.add_frames(seq_idx=seq, seq_start_frame=numpy.array([0,0]), length=dataset.get_seq_length(seq))
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 

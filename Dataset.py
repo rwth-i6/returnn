@@ -297,7 +297,6 @@ class Dataset(object):
           yield batch
           batch = Batch()
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
-
       else:  # Not recurrent.
 
         while t_start[0] < t_end[0]:
