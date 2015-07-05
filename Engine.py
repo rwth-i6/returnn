@@ -229,6 +229,8 @@ class Engine:
     if network.description:
       for info in network.description.hidden_info:
         print >> log.v2, "  " + info["layer_class"] + " #:", info["n_out"]
+    else:
+      print >> log.v2, "  ..."
     print >> log.v2, "  output #:", network.n_out
     print >> log.v2, "net params #:", network.num_params()
     print >> log.v2, "net trainable params:", network.train_params_vars
