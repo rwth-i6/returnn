@@ -365,12 +365,14 @@ def prepareForwarding(epoch):
                                                    "You have: %s" % config.list('extract')
 
   if epoch:
-    assert config.value('load', None) is None, "'load' = %r" % config.value('load', None)
     model_filename = config.value('model', '')
     fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fns_existing = [fn for fn in fns if os.path.exists(fn)]
     assert len(fns_existing) == 1, "%s not found" % fns
-    config.set('load', fns_existing[0])
+    if config.value('load', None) is not None:
+      assert config.value('load', '') == fns_existing[0], "'load' = %r" % config.value('load', None)
+    else:
+      config.set('load', fns_existing[0])
 
   lastEpoch, _, _ = engine.get_last_epoch_batch_model(config)
   assert lastEpoch == epoch
