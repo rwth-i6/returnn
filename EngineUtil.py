@@ -23,7 +23,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     return False, len(batches)
   assert shape[0] * shape[1] > 0
 
-  output_shape = { k : shape for k in dataset.num_outputs }
+  output_shape = { k : shape[:] for k in dataset.num_outputs }
   for k in output_shape:
     if dataset.get_target_dim(k) > 1:
       output_shape[k] += [dataset.get_target_dim(k)]

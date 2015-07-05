@@ -647,7 +647,11 @@ class Device():
       self.input_queue.send("update-data")
       self.input_queue.send(self.data)
       for target in self.targetkeys:
-        self.input_queue.send(self.targets[target].flatten())
+        if len(self.targets[target].shape) == 3:
+          #numpy.swapaxes(self.targets[target], 1, 2).
+          self.input_queue.send(self.targets[target].reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
+        else:
+          self.input_queue.send(self.targets[target].flatten())
       self.input_queue.send(self.index)
       self.input_queue.send(self.tags)
       if self.config.value('loss','') == 'ctc':
