@@ -54,8 +54,12 @@ class OutputLayer(Layer):
     :rtype: theano.Variable
     """
     if y.dtype.startswith('int'):
-      return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
-    else: raise NotImplementedError()
+      if y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
+      else:
+        return T.sum(T.neq(self.y_pred[self.i], T.argmax(y[self.i], axis = -1)))
+    else:
+      raise NotImplementedError()
 
 
 class FramewiseOutputLayer(OutputLayer):
@@ -80,7 +84,10 @@ class FramewiseOutputLayer(OutputLayer):
   def cost(self, y):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      pcx = self.p_y_given_x[self.i, y[self.i]]
+      if y.type == T.ivector().type:
+        pcx = self.p_y_given_x[self.i, y[self.i]]
+      else:
+        pcx = T.dot(self.p_y_given_x[self.i], y[self.i])
       #pcx = self.p_y_given_x[:, y[self.i]]
       pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads

@@ -419,6 +419,9 @@ class CachedDataset(Dataset):
     assert alloc_data.shape[0] >= o + l
     return alloc_data[o:o + l]
 
+  def get_target_dim(self, target):
+    return 1 if len(self.targets[target].shape) == 1 else self.targets[target].shape[1]
+
   def get_targets(self, target, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[1]
     seq_len = self.get_seq_length(sorted_seq_idx)[1]

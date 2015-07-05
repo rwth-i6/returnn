@@ -238,6 +238,9 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def get_target_dim(self, target):
+    raise NotImplementedError
+
   def is_less_than_num_seqs(self, n):
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.
