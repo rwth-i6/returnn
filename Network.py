@@ -118,7 +118,12 @@ class LayerNetwork(object):
     """
     grp = model['training']
     if mask is None: mask = grp.attrs['mask']
-    network = cls(model.attrs['n_in'], model.attrs['n_out'], mask)
+    n_in = model.attrs['n_in']
+    try:
+      n_out = model.attrs['n_out']
+    except KeyError:
+      n_out = model['n_out'].attrs['classes']  # try new version with multiple output classes
+    network = cls(n_in, n_out, mask)
     network.param_regularization_objective = T.constant(0)
     network.recurrent = False
     def traverse(model, layer_name, network):
