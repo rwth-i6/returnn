@@ -153,10 +153,15 @@ class LayerNetwork(object):
     """
     grp = model['training']
     if mask is None: mask = grp.attrs['mask']
+
+    n_out = {}
     try:
-      network = cls(model.attrs['n_in'], model['n_out'].attrs, mask)
+      for k in model['n_out'].attrs:
+        dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
+        n_out[k] = [model['n_out'].attrs[k], 1]
     except:
-      network = cls(model.attrs['n_in'], {'classes':model.attrs['n_out']}, mask)
+      n_out = {'classes':[model.attrs['n_out'],1]}
+    network = cls(model.attrs['n_in'], n_out, mask)
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
@@ -230,13 +235,16 @@ class LayerNetwork(object):
       layer_class = SequenceOutputLayer
     else:
       layer_class = FramewiseOutputLayer
-    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target], name=name, target=target, **kwargs)
+    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, **kwargs)
     for W in self.output[name].W_in:
       if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
       if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
     self.declare_train_params()
     if not target in self.y:
-      self.y[target] = T.ivector('y')
+      if self.n_out[target][1] == 1:
+        self.y[target] = T.ivector('y')
+      else:
+        self.y[target] = T.imatrix('y')
     targets = self.c if self.loss == 'ctc' else self.y[target]
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y[target]
     self.errors[target] = self.output[name].errors(error_targets)
@@ -407,7 +415,10 @@ class LayerNetwork(object):
     model.attrs['n_in'] = self.n_in
     out = model.create_group('n_out')
     for k in self.n_out:
-      out.attrs[k] = self.n_out[k]
+      out.attrs[k] = self.n_out[k][0]
+    out_dim = out.create_group("dim")
+    for k in self.n_out:
+      out_dim.attrs[k] = self.n_out[k][1]
     for h in self.hidden:
       self.hidden[h].save(model)
     for k in self.output:

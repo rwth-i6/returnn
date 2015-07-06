@@ -60,7 +60,7 @@ class HDFDataset(CachedDataset):
       self.timestamps.extend(fin['times'][...].tolist())
     seq_lengths = fin['seqLengths'][...]
     if len(seq_lengths.shape) == 1:
-      seq_lengths = zip(seq_lengths.tolist(), seq_lengths.tolist())
+      seq_lengths = numpy.array(zip(seq_lengths.tolist(), seq_lengths.tolist()))
     for l in seq_lengths:
       self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)
@@ -79,10 +79,10 @@ class HDFDataset(CachedDataset):
     assert self.num_inputs == fin.attrs['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs['inputPattSize']) + ")"
     if self.num_outputs == 0:
       if 'numLabels'in fin.attrs:
-        self.num_outputs = fin.attrs['numLabels']
-        assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+        self.num_outputs = { 'classes' : fin.attrs['numLabels'] }
+        assert self.num_outputs['classes'] == fin.attrs['numLabels'], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs['classes']) + " got " + str(fin.attrs['numLabels']) + ")"
       else:
-        self.num_outputs = { k : fin['targets/size'].attrs[k] for k in fin['targets/size'].attrs }
+        self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
     if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
         self.ctc_targets = fin['ctcIndexTranscription'][...]
@@ -96,7 +96,11 @@ class HDFDataset(CachedDataset):
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
       for name in fin['targets/data']:
-        self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
+        tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
+        if tdim == 1:
+          self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
+        else:
+          self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
     fin.close()
 
   def _load_seqs(self, start, end):
@@ -131,8 +135,7 @@ class HDFDataset(CachedDataset):
         l = self._seq_lengths[ids]
         if 'targets' in fin:
           for k in fin['targets/data']:
-            y = fin['targets/data'][k][...]
-            self.targets[k][self.get_seq_start(idc)[1]:self.get_seq_start(idc)[1] + l[1]] = y[p[1] : p[1] + l[1]]
+            self.targets[k][self.get_seq_start(idc)[1]:self.get_seq_start(idc)[1] + l[1]] = fin['targets/data/' + k][p[1] : p[1] + l[1]][...]
         x = inputs[p[0] : p[0] + l[0]]
         self._set_alloc_intervals_data(idc, data=x)
       fin.close()

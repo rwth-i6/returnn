@@ -1,6 +1,6 @@
 
 import inspect
-from Util import simpleObjRepr, hdf5_dimension, hdf5_group
+from Util import simpleObjRepr, hdf5_dimension, hdf5_group, hdf5_shape
 
 
 class LayerNetworkDescription:
@@ -138,9 +138,11 @@ class LayerNetworkDescription:
     if config.list('train'):
       _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       try:
-        _num_outputs = { 'classes' : hdf5_dimension(config.list('train')[0], 'numLabels') }
+        _num_outputs = { 'classes' : [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
       except:
         _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
+        for k in _num_outputs:
+          _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(config.list('train')[0], 'targets/data/' + k))]
       if num_inputs: assert num_inputs == _num_inputs
       if num_outputs: assert num_outputs == _num_outputs
       num_inputs = _num_inputs

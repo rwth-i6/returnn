@@ -54,8 +54,12 @@ class OutputLayer(Layer):
     :rtype: theano.Variable
     """
     if y.dtype.startswith('int'):
-      return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
-    else: raise NotImplementedError()
+      if y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
+      else:
+        return T.sum(T.neq(self.y_pred[self.i], T.argmax(y[self.i], axis = -1)))
+    else:
+      raise NotImplementedError()
 
 
 class FramewiseOutputLayer(OutputLayer):
@@ -80,10 +84,13 @@ class FramewiseOutputLayer(OutputLayer):
   def cost(self, y):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      pcx = self.p_y_given_x[self.i, y[self.i]]
+      if y.type == T.ivector().type:
+        logpcx = T.log(self.p_y_given_x[self.i, y[self.i]])
+        #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
+      else:
+        logpcx = T.dot(T.log(self.p_y_given_x[self.i]), y[self.i].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
-      pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
-      return -T.sum(T.log(pcx)), known_grads
+      return -T.sum(logpcx), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))

@@ -23,7 +23,12 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     return False, len(batches)
   assert shape[0] * shape[1] > 0
 
-  device.alloc_data(shape + [dataset.num_inputs * dataset.window], dataset.targets, dataset.get_max_ctc_length(), pad=pad_batches)
+  output_shape = { k : shape[:] for k in dataset.num_outputs }
+  for k in output_shape:
+    if dataset.get_target_dim(k) > 1:
+      output_shape[k] += [dataset.get_target_dim(k)]
+
+  device.alloc_data(shape + [dataset.num_inputs * dataset.window], output_shape, dataset.targets, dataset.get_max_ctc_length(), pad=pad_batches)
 
   offset_slice = 0
   for batch in batches:
@@ -92,7 +97,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq)[0])
+  batch.add_frames(seq_idx=seq, seq_start_frame=numpy.array([0,0]), length=dataset.get_seq_length(seq))
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 
