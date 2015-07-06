@@ -88,7 +88,7 @@ class FramewiseOutputLayer(OutputLayer):
         logpcx = T.log(self.p_y_given_x[self.i, y[self.i]])
         #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
       else:
-        logpcx = T.dot(T.log(self.p_y_given_x[self.i]), y[self.i].T)
+        logpcx = T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), y[self.i].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
       return -T.sum(logpcx), known_grads
     elif self.loss == 'sse':
