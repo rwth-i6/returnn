@@ -137,7 +137,7 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, target=None, **kwargs):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
     """
     :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -151,6 +151,7 @@ class Layer(Container):
     self.num_sources = len(sources)
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
+    self.set_attr('sparse', sparse)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
@@ -189,7 +190,8 @@ class Layer(Container):
 
 
 class SourceLayer(Container):
-  def __init__(self, n_out, x_out, name=""):
+  def __init__(self, n_out, x_out, sparse = False, name=""):
     super(SourceLayer, self).__init__(layer_class='source', name=name)
     self.output = x_out
     self.set_attr('n_out', n_out)
+    self.set_attr('sparse', sparse)
