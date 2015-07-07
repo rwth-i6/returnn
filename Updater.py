@@ -138,7 +138,7 @@ class Updater:
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
-        upd = dx_new
+        upd = dx_new * self.learning_rate_var
       updates.append((param, param + upd))
 
     return updates
