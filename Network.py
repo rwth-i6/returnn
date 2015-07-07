@@ -68,7 +68,7 @@ class LayerNetwork(object):
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.value('target', 'classes'))
+      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'))
 
     description = LayerNetworkDescription.from_config(config)
     return cls.from_description(description, mask)
@@ -85,7 +85,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, target = 'classes'):
+  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes'):
     """
     :type json_content: str
     :type n_in: int
@@ -113,7 +113,7 @@ class LayerNetwork(object):
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
       if not 'from' in obj:
-        source = [SourceLayer(network.n_in, network.x, name = 'data')]
+        source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
       else:
         for prev in obj['from']:
           if prev != "null":
@@ -145,7 +145,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity", target = 'classes'):
+  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False,  target = 'classes'):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -176,7 +176,7 @@ class LayerNetwork(object):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
       else:
-        x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
+        x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
         if not network.hidden.has_key(model[layer_name].attrs['encoder']):
           traverse(model, model[layer_name].attrs['encoder'], network)

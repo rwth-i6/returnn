@@ -154,7 +154,9 @@ class OptimizedLstmLayer(RecurrentLayer):
 
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
-      if m is None:
+      if x_t.attrs['sparse']:
+        z += W[T.cast(x_t.output[0], 'int32')]
+      elif m is None:
         z += T.dot(x_t.output, W)
       else:
         z += T.dot(self.mass * m * x_t.output, W)
