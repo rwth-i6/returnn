@@ -153,7 +153,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors(y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, sharpgates='none', encoder = None, loss = 'ce', **kwargs):
+  def __init__(self, n_out, n_units, sharpgates='none', encoder = None, loss = 'cedec', loop = True, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -162,6 +162,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('loss', loss.encode("utf8"))
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
+    self.set_attr('loop', loop)
     if encoder:
       self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
@@ -210,8 +211,9 @@ class LstmOutputLayer(RecurrentLayer):
         z += T.dot(self.mass * m * x_t.output, W)
 
     def step(z, i_t, s_p, h_p):
-      z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)] + T.dot(h_p, self.W_re)
+      z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
+      if loop: z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])

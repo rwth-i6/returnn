@@ -57,7 +57,9 @@ class TaskThread(threading.Thread):
       batches = self.batches.peek_next_n(device.num_batches)
       success, batch_adv_idx = self.assign_dev_data(device, batches)
       if not success: return []
+      self.lock.acquire()
       self.batches.advance(batch_adv_idx)
+      self.lock.release()
       return batches
 
     def allocate_devices(self):
@@ -310,11 +312,14 @@ class TaskThread(threading.Thread):
           print >> log.v5, "%s stopped" % self
           return
 
+        self.lock.acquire()
         self.batch_idx = self.batches.get_current_batch_idx()
         if self.batches.has_more():
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
+            self.lock.release()
             continue
+          self.lock.release()
           for i in xrange(len(self.devices)):
             if not deviceRuns[i] or deviceRuns[i].finished:
               deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
@@ -322,10 +327,11 @@ class TaskThread(threading.Thread):
             elif deviceRuns[i] and deviceRuns[i].crashed:
               return
         else:
+          self.lock.release()
           break
 
-      for device in self.devices:
-        if deviceRuns[i]:
+      for i,device in enumerate(self.devices):
+        if deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
           deviceRuns[i].join()
         device.finish_epoch_stats()
       self.finalize()
