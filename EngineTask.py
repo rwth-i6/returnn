@@ -40,6 +40,7 @@ class TaskThread(threading.Thread):
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
+      self.lock = threading.Lock()
       # There is no generic way to see whether Python is exiting.
       # This is our workaround. We check for it in self.run_inner().
       self.stopped = False
@@ -51,6 +52,13 @@ class TaskThread(threading.Thread):
 
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches, self.exclude)
+
+    def allocate_device(self, device):
+      batches = self.batches.peek_next_n(device.num_batches)
+      success, batch_adv_idx = self.assign_dev_data(device, batches)
+      if not success: return []
+      self.batches.advance(batch_adv_idx)
+      return batches
 
     def allocate_devices(self):
       """
@@ -106,15 +114,19 @@ class TaskThread(threading.Thread):
     def finalize(self):
       self.finalized = True
 
-    class DeviceBatchRun:
-      def __init__(self, parent):
+    class DeviceBatchRun(threading.Thread):
+      def __init__(self, parent, devices):
         """
         :type parent: TaskThread
         """
+        threading.Thread.__init__(self, name="DeviceThread %s" % " ".join([dev.name for dev in devices]))
+        self.alloc_devices = devices
         self.parent = parent
         self.run_start_batch_idx = parent.batches.get_current_batch_idx()
         self.eval_info = None; " :type: dict[str] | None "
         self.num_frames = 0
+        self.finished = False
+        self.crashed = False
         self.start()
 
       def finish(self):
@@ -129,24 +141,29 @@ class TaskThread(threading.Thread):
         if device_results is None:
           print >> log.v2, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
+          self.crashed = True
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
+        self.parent.lock.acquire()
         self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
                                               results=device_results,
                                               result_format=outputs_format,
                                               num_frames=self.num_frames)
         self.parent.num_frames += self.num_frames
         self.print_process()
+        self.parent.lock.release()
+        self.finished = True
         return True
 
-      def start(self):
-        self.alloc_devices, self.devices_batches = \
-          self.parent.allocate_devices()
+      def run(self):
+        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
         # Note that alloc_devices could be empty if we skipped seqs.
         if not self.alloc_devices:
+          self.finished = True
           return
         self.device_run()
+        self.finish()
 
       def device_run(self):
         batch_idx = self.run_start_batch_idx
@@ -162,7 +179,9 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
+          self.parent.lock.acquire()
           self.parent.prepare_device_for_batch(device)
+          self.parent.lock.release()
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -277,6 +296,8 @@ class TaskThread(threading.Thread):
       for device in self.devices:
         device.start_epoch_stats()
 
+      deviceRuns = [ None for i in xrange(len(self.devices)) ]
+
       while True:
         # Note about the async logic:
         # We start device.run() twice before we do the first device.result() call.
@@ -294,36 +315,18 @@ class TaskThread(threading.Thread):
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
             continue
-          deviceRun = self.DeviceBatchRun(self)
-        else:
-          deviceRun = None
-
-        if remainingDeviceRun:  # Set when canRunAsync.
-          try:
-            if not remainingDeviceRun.finish():
+          for i in xrange(len(self.devices)):
+            if not deviceRuns[i] or deviceRuns[i].finished:
+              deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
+              break
+            elif deviceRuns[i] and deviceRuns[i].crashed:
               return
-          except Exception:
-            if deviceRun:
-              # Finish up so that the dev proc protocol is in a sane state.
-              # This is only needed in async mode.
-              try:
-                deviceRun.device_collect_results()
-              except Exception, e:
-                print >> log.v3, "In exception cleanup, got another exception:", e
-                print >> log.v3, "We ignore this and keep handling the original exception."
-            raise
-
-        if not deviceRun:  # Finished loop.
+        else:
           break
 
-        if canRunAsync:
-          remainingDeviceRun = deviceRun
-        else:
-          if not deviceRun.finish():
-            # We leave self.finalized == False. That way, the engine can see that the device crashed.
-            return
-
       for device in self.devices:
+        if deviceRuns[i]:
+          deviceRuns[i].join()
         device.finish_epoch_stats()
       self.finalize()
       self.elapsed = (time.time() - self.start_time)
