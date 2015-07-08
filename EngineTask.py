@@ -564,7 +564,7 @@ class HDFForwardTaskThread(TaskThread):
     def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)
       if not "inputs" in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f', maxshape=(None, features.shape[2]))
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f')
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
         for i in xrange(len(features)):
@@ -583,8 +583,6 @@ class HDFForwardTaskThread(TaskThread):
       print >> log.v5, "extracting", features.shape[2], "features over", features.shape[1], "time steps for sequence", self.data.get_tag(seq_idx)
       self.seq_dims[seq_idx] = [features.shape[1]]
       self.seq_lengths[seq_idx] = features.shape[1]
-      if self.inputs.shape[0] < self.toffset + features.shape[1]:
-        self.inputs.resize(self.toffset + features.shape[1], axis = 0)
       self.inputs[self.toffset:self.toffset + features.shape[1]] = numpy.asarray(features)
       self.toffset += features.shape[1]
       self.tags.append(self.data.get_tag(seq_idx))

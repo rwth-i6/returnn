@@ -30,11 +30,6 @@ def hdf5_group(filename, dimension):
   fin.close()
   return res
 
-def hdf5_shape(filename, dimension):
-  fin = h5py.File(filename, "r")
-  res = fin[dimension].shape
-  fin.close()
-  return res
 
 
 def hdf5_strings(handle, name, data):

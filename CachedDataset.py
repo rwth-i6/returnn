@@ -407,7 +407,7 @@ class CachedDataset(Dataset):
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
     seq_len = self.get_seq_length(sorted_seq_idx)[0]
-    return self.timestamps[seq_start:seq_start + seq_len]
+    return self.times[seq_start:seq_start + seq_len]
 
   def get_data(self, sorted_seq_idx):
     idi = self.alloc_interval_index(sorted_seq_idx)
@@ -418,9 +418,6 @@ class CachedDataset(Dataset):
     l = self.get_seq_length(sorted_seq_idx)[0]
     assert alloc_data.shape[0] >= o + l
     return alloc_data[o:o + l]
-
-  def get_target_dim(self, target):
-    return 1 if len(self.targets[target].shape) == 1 else self.targets[target].shape[1]
 
   def get_targets(self, target, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[1]

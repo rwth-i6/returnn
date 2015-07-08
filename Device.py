@@ -157,8 +157,8 @@ class Device():
       self.testnet = LayerNetwork.from_description(network_description, "unity")
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = LayerNetwork.from_hdf_model_topology(model, mask, config.bool("sparse_input", False), target)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, "unity", config.bool("sparse_input", False), target)
+      self.trainnet = LayerNetwork.from_hdf_model_topology(model, mask, target)
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, "unity", target)
       model.close()
     else:
       self.trainnet = LayerNetwork.from_config_topology(config, mask)
@@ -167,12 +167,7 @@ class Device():
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
-    self.y = {}
-    for k in self.trainnet.y:
-      if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
-      else:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
+    self.y = { k: theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True) for k in self.trainnet.cost }
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
@@ -611,22 +606,22 @@ class Device():
     else:
       return self.testnet
 
-  def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0, pad=False):
+  def alloc_data(self, shape, targets, max_ctc_length=0, pad=False):
     """
     :param list[int] shape: format (time,batch,features)
     :type max_ctc_length: int
     """
-    assert len(input_shape) == 3
-    assert all([s > 0 for s in input_shape])
+    assert len(shape) == 3
+    assert all([s > 0 for s in shape])
     import theano
-    self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
-    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in targets}
-    self.ctc_targets = numpy.zeros((output_shape['classes'][1], max_ctc_length), dtype=theano.config.floatX)
+    self.data = numpy.zeros(shape, dtype=theano.config.floatX)
+    self.targets = {k: numpy.zeros(shape[0:2], dtype=theano.config.floatX) for k in targets}
+    self.ctc_targets = numpy.zeros((shape[1], max_ctc_length), dtype=theano.config.floatX)
     if pad:
-      self.index = numpy.ones(input_shape[0:2], dtype='int8')
+      self.index = numpy.ones(shape[0:2], dtype='int8')
     else:
-      self.index = numpy.zeros(input_shape[0:2], dtype='int8')
-    self.tags = [None] * input_shape[1]  # TODO
+      self.index = numpy.zeros(shape[0:2], dtype='int8')
+    self.tags = [None] * shape[1]  # TODO
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
@@ -647,11 +642,7 @@ class Device():
       self.input_queue.send("update-data")
       self.input_queue.send(self.data)
       for target in self.targetkeys:
-        if len(self.targets[target].shape) == 3:
-          #numpy.swapaxes(self.targets[target], 1, 2).
-          self.input_queue.send(self.targets[target].reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
-        else:
-          self.input_queue.send(self.targets[target].flatten())
+        self.input_queue.send(self.targets[target].flatten())
       self.input_queue.send(self.index)
       self.input_queue.send(self.tags)
       if self.config.value('loss','') == 'ctc':
