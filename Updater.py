@@ -140,7 +140,7 @@ class Updater:
           updates.append((self.eg2[param], eg2_new))
           updates.append((self.edx2[param], edx2_new))
           updates.append((self.dx[param], dx_new))
-          upd = dx_new
+          upd = self.learning_rate_var * dx_new
       if self.momentum > 0:
         updates.append((self.deltas[target][param], upd))
       updates.append((param, param + upd))

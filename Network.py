@@ -10,7 +10,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkHiddenLayer import ForwardLayer
 from NetworkLayer import Layer, SourceLayer
 from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer
+from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer
 from NetworkRecurrentLayer import RecurrentLayer
 from Log import log
 
@@ -130,8 +130,7 @@ class LayerNetwork(object):
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
-        network.make_classifier(name = layer_name, sources=params['sources'], target=params['target'], loss=params['loss'],
-                                dropout=params['dropout'], mask=mask)
+        network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
         params.update({'activation': act, 'name': layer_name})
@@ -233,6 +232,8 @@ class LayerNetwork(object):
     self.loss = kwargs["loss"]
     if self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
+    elif self.loss == 'cedec':
+      layer_class = LstmOutputLayer
     else:
       layer_class = FramewiseOutputLayer
     self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, **kwargs)

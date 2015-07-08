@@ -155,7 +155,7 @@ class OptimizedLstmLayer(RecurrentLayer):
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
-        z += W[T.cast(x_t.output[0], 'int32')]
+        z += W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         z += T.dot(x_t.output, W)
       else:
@@ -180,15 +180,16 @@ class OptimizedLstmLayer(RecurrentLayer):
       return s_i * i, h_t * j
 
     for s in xrange(self.attrs['sampling']):
+      sequences = z
       if encoder:
         n_dec = encoder.output.shape[0]
         outputs_info = [ encoder.state[-1],
                          encoder.output[-1], ]
-        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
+        if not self.sources:
+          sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
-        sequences = z
       [state, act], _ = theano.scan(step,
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],

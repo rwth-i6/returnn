@@ -366,7 +366,7 @@ class Engine:
 
     if log.verbose[1]:
       eval_dump_str = []
-      testing_device = self.devices[-1]
+      testing_device = self.devices[0]
       for name in self.eval_datasets.keys():
         dataset = self.eval_datasets[name]
         batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)

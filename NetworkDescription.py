@@ -136,7 +136,10 @@ class LayerNetworkDescription:
     num_outputs = config.int('num_outputs', 0)
     target = config.value('target', 'classes')
     if config.list('train'):
-      _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+      try:
+        _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
+      except:
+        _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       try:
         _num_outputs = { 'classes' : [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
       except:
