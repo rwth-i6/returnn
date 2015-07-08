@@ -366,7 +366,7 @@ class Engine:
 
     if log.verbose[1]:
       eval_dump_str = []
-      testing_device = self.devices[-1]
+      testing_device = self.devices[0]
       for name in self.eval_datasets.keys():
         dataset = self.eval_datasets[name]
         batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
@@ -375,7 +375,7 @@ class Engine:
         tester.join()
         trainer.elapsed += tester.elapsed
         eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
-      print >> log.v1, self.get_epoch_str(), "score: %.5f elapsed: %d%s" % (trainer.score, trainer.elapsed, " ".join(eval_dump_str))
+      print >> log.v1, self.get_epoch_str(), "score: %.5f elapsed: %.3f%s" % (trainer.score, trainer.elapsed, " ".join(eval_dump_str))
       if self.ctc_prior_file is not None:
         trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 

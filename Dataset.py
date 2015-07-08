@@ -238,6 +238,9 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def get_target_dim(self, target):
+    raise NotImplementedError
+
   def is_less_than_num_seqs(self, n):
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.
@@ -297,7 +300,6 @@ class Dataset(object):
           yield batch
           batch = Batch()
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
-
       else:  # Not recurrent.
 
         while t_start[0] < t_end[0]:

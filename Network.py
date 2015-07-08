@@ -10,7 +10,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkHiddenLayer import ForwardLayer
 from NetworkLayer import Layer, SourceLayer
 from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer
+from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer
 from NetworkRecurrentLayer import RecurrentLayer
 from Log import log
 
@@ -68,7 +68,7 @@ class LayerNetwork(object):
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.value('target', 'classes'))
+      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'))
 
     description = LayerNetworkDescription.from_config(config)
     return cls.from_description(description, mask)
@@ -85,7 +85,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, target = 'classes'):
+  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes'):
     """
     :type json_content: str
     :type n_in: int
@@ -113,7 +113,7 @@ class LayerNetwork(object):
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
       if not 'from' in obj:
-        source = [SourceLayer(network.n_in, network.x, name = 'data')]
+        source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
       else:
         for prev in obj['from']:
           if prev != "null":
@@ -130,8 +130,7 @@ class LayerNetwork(object):
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
-        network.make_classifier(name = layer_name, sources=params['sources'], target=params['target'], loss=params['loss'],
-                                dropout=params['dropout'], mask=mask)
+        network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
         params.update({'activation': act, 'name': layer_name})
@@ -145,7 +144,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity", target = 'classes'):
+  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False,  target = 'classes'):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -153,10 +152,15 @@ class LayerNetwork(object):
     """
     grp = model['training']
     if mask is None: mask = grp.attrs['mask']
+
+    n_out = {}
     try:
-      network = cls(model.attrs['n_in'], model['n_out'].attrs, mask)
+      for k in model['n_out'].attrs:
+        dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
+        n_out[k] = [model['n_out'].attrs[k], 1]
     except:
-      network = cls(model.attrs['n_in'], {'classes':model.attrs['n_out']}, mask)
+      n_out = {'classes':[model.attrs['n_out'],1]}
+    network = cls(model.attrs['n_in'], n_out, mask)
     network.L1 = T.constant(0)
     network.L2 = T.constant(0)
     network.recurrent = False
@@ -166,12 +170,15 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
-          else:
+          elif s != "null" and s != "":
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
       else:
-        x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
+        x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
+      if 'encoder' in model[layer_name].attrs:
+        if not network.hidden.has_key(model[layer_name].attrs['encoder']):
+          traverse(model, model[layer_name].attrs['encoder'], network)
       cl = model[layer_name].attrs['class']
       if cl == 'softmax':
         if not 'target' in model[layer_name].attrs:
@@ -196,6 +203,8 @@ class LayerNetwork(object):
           for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling']:
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
+          if 'encoder' in model[layer_name].attrs:
+            params['encoder'] = network.hidden[model[layer_name].attrs['encoder']]
         network.add_layer(layer_class(**params))
     for layer_name in model:
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
@@ -223,15 +232,20 @@ class LayerNetwork(object):
     self.loss = kwargs["loss"]
     if self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
+    elif self.loss == 'cedec':
+      layer_class = LstmOutputLayer
     else:
       layer_class = FramewiseOutputLayer
-    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target], name=name, target=target, **kwargs)
+    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, **kwargs)
     for W in self.output[name].W_in:
       if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
       if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
     self.declare_train_params()
     if not target in self.y:
-      self.y[target] = T.ivector('y')
+      if self.n_out[target][1] == 1:
+        self.y[target] = T.ivector('y')
+      else:
+        self.y[target] = T.imatrix('y')
     targets = self.c if self.loss == 'ctc' else self.y[target]
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y[target]
     self.errors[target] = self.output[name].errors(error_targets)
@@ -402,7 +416,10 @@ class LayerNetwork(object):
     model.attrs['n_in'] = self.n_in
     out = model.create_group('n_out')
     for k in self.n_out:
-      out.attrs[k] = self.n_out[k]
+      out.attrs[k] = self.n_out[k][0]
+    out_dim = out.create_group("dim")
+    for k in self.n_out:
+      out_dim.attrs[k] = self.n_out[k][1]
     for h in self.hidden:
       self.hidden[h].save(model)
     for k in self.output:

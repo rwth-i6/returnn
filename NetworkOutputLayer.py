@@ -6,7 +6,7 @@ from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from NetworkLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
-
+from NetworkRecurrentLayer import RecurrentLayer
 
 class OutputLayer(Layer):
   def __init__(self, index, loss, **kwargs):
@@ -54,8 +54,12 @@ class OutputLayer(Layer):
     :rtype: theano.Variable
     """
     if y.dtype.startswith('int'):
-      return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
-    else: raise NotImplementedError()
+      if y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
+      else:
+        return T.sum(T.neq(self.y_pred[self.i], T.argmax(y[self.i], axis = -1)))
+    else:
+      raise NotImplementedError()
 
 
 class FramewiseOutputLayer(OutputLayer):
@@ -80,10 +84,13 @@ class FramewiseOutputLayer(OutputLayer):
   def cost(self, y):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      pcx = self.p_y_given_x[self.i, y[self.i]]
+      if y.type == T.ivector().type:
+        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
+        #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
+      else:
+        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), y[self.i].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
-      pcx = T.clip(pcx, 1.e-20, 1.e20)  # For pcx near zero, the gradient will likely explode.
-      return -T.sum(T.log(pcx)), known_grads
+      return T.sum(logpcx), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
@@ -144,3 +151,135 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis=0)))
     else:
       return super(SequenceOutputLayer, self).errors(y)
+
+class LstmOutputLayer(RecurrentLayer):
+  def __init__(self, n_out, n_units, sharpgates='none', encoder = None, loss = 'ce', **kwargs):
+    kwargs.setdefault("layer_class", "lstm_softmax")
+    kwargs.setdefault("activation", "sigmoid")
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_units * 4
+    super(LstmOutputLayer, self).__init__(**kwargs)
+    self.set_attr('loss', loss.encode("utf8"))
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_units', n_units)
+    if encoder:
+      self.set_attr('encoder', encoder.name)
+    projection = kwargs.get("projection", None)
+    if not isinstance(self.activation, (list, tuple)):
+      self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
+    else:
+      assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
+    self.set_attr('sharpgates', sharpgates)
+    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    n_re = projection if projection is not None else n_units
+    #self.state = self.create_bias(n_out, 'state')
+    #self.act = self.create_bias(n_re, 'act')
+    self.b.set_value(numpy.zeros((n_units * 3 + n_re,), dtype = theano.config.floatX))
+    if projection:
+      W_proj = self.create_random_uniform_weights(n_units, n_re, n_in + n_units + n_re, name="W_proj_%s" % self.name)
+      self.W_proj.set_value(W_proj.get_value())
+    W_re = self.create_random_uniform_weights(n_re, n_units * 3 + n_re, n_in + n_re + n_units * 3 + n_re,
+                                              name="W_re_%s" % self.name)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_units * 3 + n_re,
+                                                     s.attrs['n_out'] + n_units + n_units * 3 + n_re,
+                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+
+    self.W_cls = self.add_param(self.create_forward_weights(self.attrs['n_units'], self.attrs['n_out'],
+                                                            name="W_cls_%s_%s" % (self.name, self.name)),
+                                "W_cls_%s_%s" % (self.name, self.name))
+    self.W_rec = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_units'] * 3 + n_re, n_in + n_re + self.attrs['n_units'] * 3 + n_re,
+                                              name="W_rec_%s" % self.name),
+                                "W_rec_%s" % (self.name))
+
+    self.o.set_value(numpy.ones((n_units,), dtype='int8'))
+    self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name='lambda')
+    self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
+    if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
+      self.add_param(self.sharpness, 'gate_scaling')
+
+    z = self.b
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+      if x_t.attrs['sparse']:
+        z += W[T.cast(x_t.output[:,:,0], 'int32')]
+      elif m is None:
+        z += T.dot(x_t.output, W)
+      else:
+        z += T.dot(self.mass * m * x_t.output, W)
+
+    def step(z, i_t, s_p, h_p):
+      z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)] + T.dot(h_p, self.W_re)
+      #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
+      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
+      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
+      ingate = GI(z[:,n_units: 2 * n_units])
+      forgetgate = GF(z[:,2 * n_units:3 * n_units])
+      outgate = GO(z[:,3 * n_units:])
+      input = CI(z[:,:n_units])
+      s_i = input * ingate + s_p * forgetgate
+      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      h_t = CO(s_t) * outgate
+      return s_i * i, h_t * j
+
+    for s in xrange(self.attrs['sampling']):
+      if encoder:
+        n_dec = encoder.output.shape[0]
+        outputs_info = [ encoder.state[-1],
+                         encoder.output[-1] ]
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
+      else:
+        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
+                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
+        sequences = z
+      [state, act], _ = theano.scan(step,
+                                    name = "scan_%s"%self.name,
+                                    truncate_gradient = self.attrs['truncation'],
+                                    go_backwards = self.attrs['reverse'],
+                                    sequences = [ sequences[s::self.attrs['sampling']], self.index[s::self.attrs['sampling']] ],
+                                    outputs_info = outputs_info)
+      if self.attrs['sampling'] > 1: # time batch dim
+        if s == 0:
+          totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
+        else:
+          totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
+      else:
+        totact = act
+    self.state = state
+    self.act = totact
+    self.lstm_output = totact[::-(2 * self.attrs['reverse'] - 1)]
+
+    self.y_m = T.dot(self.lstm_output, self.W_cls).dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
+    self.y_pred = T.argmax(self.y_m, axis=-1)
+    self.output = T.argmax(self.y_m, axis=-1, keepdims=True).dimshuffle(1,0).reshape(self.lstm_output.shape, ndim = 3).dimshuffle(1,2,0) #.argmax(self.p_y_given_x, axis=-1, keepdim)
+    self.attrs['sparse'] = True
+    self.j = (self.index.flatten() > 0).nonzero()
+
+
+  def cost(self, y):
+    known_grads = None
+    if self.attrs['loss'] == 'cedec' or self.attrs['loss'] == 'priori':
+      if y.type == T.ivector().type:
+        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.j], y_idx=y[self.j])
+        #logpcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.j], y_idx=y[self.j]) #T.log(self.p_y_given_x[self.i, y[self.i]])
+        #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
+      else:
+        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.j], 1.e-20, 1.e20)), y[self.j].T)
+      #pcx = self.p_y_given_x[:, y[self.i]]
+      return T.sum(logpcx), known_grads
+    else:
+      assert False, "unknown loss: %s" % self.attrs['loss']
+
+  def errors(self, y):
+    """
+    :type y: theano.Variable
+    :rtype: theano.Variable
+    """
+    if y.dtype.startswith('int'):
+      if y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.j], y[self.j]))
+      else:
+        return T.sum(T.neq(self.y_pred[self.j], T.argmax(y[self.j], axis = -1)))
+    else:
+      raise NotImplementedError()

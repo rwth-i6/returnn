@@ -30,7 +30,9 @@ class ForwardLayer(HiddenLayer):
     z = self.b
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(self.sources, self.masks, self.W_in):
-      if m is None:
+      if s.attrs['sparse']:
+        z += W_in[T.cast(s.output[:,:,0], 'int32')]
+      elif m is None:
         z += T.dot(s.output, W_in)
       else:
         z += T.dot(self.mass * m * s.output, W_in)
