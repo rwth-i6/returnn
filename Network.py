@@ -223,7 +223,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
     elif self.loss == 'cedec':
       layer_class = LstmOutputLayer
