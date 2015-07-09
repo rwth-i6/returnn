@@ -176,6 +176,7 @@ class Device():
       else:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
+    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
       self.c = T.cast(self.cp, 'int32')
@@ -527,6 +528,7 @@ class Device():
         for k in self.y:
           t[k] = input_queue.recv()
         i = input_queue.recv()
+        j = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
         if self.trainnet.loss in ('ctc','ce_ctc'):
@@ -539,6 +541,7 @@ class Device():
           self.y[k].set_value(t[k].astype('int32'), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
+        self.j.set_value(j.astype('int8'), borrow = True)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
@@ -624,10 +627,8 @@ class Device():
     self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
     self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in targets}
     self.ctc_targets = numpy.zeros((output_shape['classes'][1], max_ctc_length), dtype=theano.config.floatX)
-    if pad:
-      self.index = numpy.ones(input_shape[0:2], dtype='int8')
-    else:
-      self.index = numpy.zeros(input_shape[0:2], dtype='int8')
+    self.input_index = numpy.zeros(input_shape[0:2], dtype='int8')
+    self.output_index = numpy.zeros(input_shape[0:2], dtype='int8')
     self.tags = [None] * input_shape[1]  # TODO
 
   def update_data(self):
@@ -638,7 +639,8 @@ class Device():
       #self.t.set_value(self.targets, borrow = True)
       for target in self.y:
         self.y[target].set_value(self.targets[target].flatten().astype('int32'), borrow = True)
-      self.i.set_value(self.index, borrow = True)
+      self.i.set_value(self.input_index, borrow = True)
+      self.j.set_value(self.output_index, borrow = True)
       if SprintCommunicator.instance is not None:
         SprintCommunicator.instance.segments = self.tags
       if self.trainnet.loss in ('ctc','ce_ctc'):
@@ -654,7 +656,8 @@ class Device():
           self.input_queue.send(self.targets[target].reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
         else:
           self.input_queue.send(self.targets[target].flatten())
-      self.input_queue.send(self.index)
+      self.input_queue.send(self.input_index)
+      self.input_queue.send(self.output_index)
       self.input_queue.send(self.tags)
       if self.config.value('loss','') == 'ctc':
         self.input_queue.send(self.ctc_targets)
@@ -892,7 +895,7 @@ class Device():
     return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)] + [ (network.y[k], self.y[k]) for k in self.y ]
+    return [(network.x, self.x), (network.i, self.i), (network.j, self.j)] + [ (network.y[k], self.y[k]) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
       return [(network.x, self.x), (network.i, self.i)]

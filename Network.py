@@ -46,6 +46,7 @@ class LayerNetwork(object):
     self.l = T.ivector('l'); """ :type: theano.Variable """
     self.c = {} #T.imatrix('c'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
+    self.j = T.bmatrix('j'); """ :type: theano.Variable """
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
@@ -250,7 +251,7 @@ class LayerNetwork(object):
       kwargs['n_out'] = self.n_out[target][0]
       targets = self.c if self.loss == 'ctc' else self.y[target]
 
-    self.output[name] = layer_class(index=self.i, name=name, target=target, y = targets, **kwargs)
+    self.output[name] = layer_class(index=self.j, name=name, target=target, y = targets, **kwargs)
     if target != "null":
       self.errors[target] = self.output[name].errors()
 

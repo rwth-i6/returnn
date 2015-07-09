@@ -40,7 +40,8 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       l = seq.frame_length
       #assert o + l[0] <= shape[0]
       assert q < shape[1]
-      device.index[o:o + max(l), q] = numpy.ones((max(l),), dtype='int8')
+      device.input_index[o:o + l[0], q] = numpy.ones((l[0],), dtype='int8')
+      device.output_index[o:o + l[1], q] = numpy.ones((l[1],), dtype='int8')
 
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
