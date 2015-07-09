@@ -37,7 +37,9 @@ def get_device_attributes():
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
-                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024)}
+                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
+                 }
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
   cpu = 0
   #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
