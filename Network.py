@@ -60,7 +60,7 @@ class LayerNetwork(object):
     self.errors = {}
 
   @classmethod
-  def from_config_topology(cls, config, mask="unity"):
+  def from_config_topology(cls, config, mask="unity", train_flag = False):
     """
     :type config: Config.Config
     :param str mask: e.g. "unity" or "dropout"
@@ -74,7 +74,7 @@ class LayerNetwork(object):
     return cls.from_description(description, mask)
 
   @classmethod
-  def from_description(cls, description, mask="unity"):
+  def from_description(cls, description, mask="unity", train_flag = False):
     """
     :type description: NetworkDescription.LayerNetworkDescription
     :param str mask: e.g. "unity" or "dropout"
@@ -85,7 +85,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes'):
+  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, train_flag = False, target = 'classes'):
     """
     :type json_content: str
     :type n_in: int
@@ -125,7 +125,7 @@ class LayerNetwork(object):
           traverse(content, obj['encoder'], network)
         obj['encoder'] = network.hidden[obj['encoder']]
       obj.pop('from', None)
-      params = { 'sources': source, 'dropout' : 0.0, 'name' : 'output', 'mask' : mask }
+      params = { 'sources': source, 'dropout' : 0.0, 'name' : 'output', 'mask' : mask, "train_flag": train_flag }
       params.update(obj)
       if cl == 'softmax':
         if not 'target' in params:
@@ -144,7 +144,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False,  target = 'classes'):
+  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False, train_flag = False, target = 'classes'):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -181,13 +181,14 @@ class LayerNetwork(object):
           traverse(model, model[layer_name].attrs['encoder'], network)
       cl = model[layer_name].attrs['class']
       if cl == 'softmax':
-        if not 'target' in model[layer_name].attrs:
-          targ = target
-        else:
-          targ = model[layer_name].attrs['target']
-        loss = 'ce' if not 'loss' in model[layer_name].attrs else model[layer_name].attrs['loss']
-        network.make_classifier(name = layer_name, target=targ, sources=x_in, loss=loss,
-                                dropout=model[layer_name].attrs['dropout'], mask=mask)
+        params = { 'dropout' : 0.0, 'name' : 'output', 'mask' : mask }
+        params.update(model[layer_name].attrs)
+        if not 'target' in params:
+          params['target'] = target
+        params['sources'] = x_in
+        params.pop('from', None)
+        params.pop('class', None)
+        network.make_classifier(**params)
       else:
         act = model[layer_name].attrs['activation']
         params = { 'sources': x_in,

@@ -127,6 +127,9 @@ class TaskThread(threading.Thread):
         self.num_frames = 0
         self.finished = False
         self.crashed = False
+        self.parent.lock.acquire()
+        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
+        self.parent.lock.release()
         self.start()
 
       def finish(self):
@@ -157,9 +160,6 @@ class TaskThread(threading.Thread):
         return True
 
       def run(self):
-        self.parent.lock.acquire()
-        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
-        self.parent.lock.release()
         # Note that alloc_devices could be empty if we skipped seqs.
         if not self.alloc_devices:
           self.finished = True

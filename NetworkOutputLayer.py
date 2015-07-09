@@ -213,9 +213,6 @@ class LstmOutputLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
-    if not loop:
-      z += self.W_rec[self.y]
-
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
@@ -238,6 +235,8 @@ class LstmOutputLayer(RecurrentLayer):
         outputs_info = [ encoder.state[-1],
                          encoder.output[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
+        if not loop and self.train_flag:
+          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((encoder.output.shape[0], encoder.output.shape[1]), ndim=2)][:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
