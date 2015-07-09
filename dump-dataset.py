@@ -23,7 +23,7 @@ def dump_dataset(dataset, options):
     data = dataset.get_data(seq_idx)
     targets = dataset.get_targets(seq_idx)
     numpy.savetxt(options.dump_prefix + "%i.data.txt" % seq_idx, data)
-    numpy.savetxt(options.dump_prefix + "%i.targets.txt" % seq_idx, targets)
+    numpy.savetxt(options.dump_prefix + "%i.targets.txt" % seq_idx, targets, fmt='%i')
     seq_idx += 1
 
   print >> log.v3, "Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx)
