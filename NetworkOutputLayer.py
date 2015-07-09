@@ -9,7 +9,7 @@ from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
 
 class OutputLayer(Layer):
-  def __init__(self, index, loss, **kwargs):
+  def __init__(self, index, loss, y, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -17,6 +17,7 @@ class OutputLayer(Layer):
     kwargs.setdefault("layer_class", "softmax")
     super(OutputLayer, self).__init__(**kwargs)
     self.z = self.b
+    self.y = y
     self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
@@ -48,16 +49,16 @@ class OutputLayer(Layer):
     """
     return -T.sum(self.p_y_given_x[self.i] * T.log(self.p_y_given_x[self.i]))
 
-  def errors(self, y):
+  def errors(self):
     """
     :type y: theano.Variable
     :rtype: theano.Variable
     """
-    if y.dtype.startswith('int'):
-      if y.type == T.ivector().type:
-        return T.sum(T.neq(self.y_pred[self.i], y[self.i]))
+    if self.y.dtype.startswith('int'):
+      if self.y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.i], self.y[self.i]))
       else:
-        return T.sum(T.neq(self.y_pred[self.i], T.argmax(y[self.i], axis = -1)))
+        return T.sum(T.neq(self.y_pred[self.i], T.argmax(self.y[self.i], axis = -1)))
     else:
       raise NotImplementedError()
 
@@ -81,18 +82,18 @@ class FramewiseOutputLayer(OutputLayer):
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.p_y_given_x, axis=-1)
 
-  def cost(self, y):
+  def cost(self):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      if y.type == T.ivector().type:
-        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
+      if self.y.type == T.ivector().type:
+        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
         #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
       else:
-        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), y[self.i].T)
+        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), self.y[self.i].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
       return T.sum(logpcx), known_grads
     elif self.loss == 'sse':
-      y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
+      y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
       return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
     else:
@@ -115,7 +116,7 @@ class SequenceOutputLayer(OutputLayer):
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
   def cost(self, y):
-    y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
+    y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
       err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
@@ -146,14 +147,14 @@ class SequenceOutputLayer(OutputLayer):
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
 
-  def errors(self, y):
+  def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
-      return T.sum(BestPathDecodeOp()(self.p_y_given_x, y, T.sum(self.index, axis=0)))
+      return T.sum(BestPathDecodeOp()(self.p_y_given_x, self.y, T.sum(self.index, axis=0)))
     else:
-      return super(SequenceOutputLayer, self).errors(y)
+      return super(SequenceOutputLayer, self).errors(self.y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, sharpgates='none', encoder = None, loss = 'cedec', loop = True, **kwargs):
+  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = True, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -163,6 +164,8 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
     self.set_attr('loop', loop)
+    self.y = y
+    if not y: loop = False
     if encoder:
       self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
@@ -210,10 +213,14 @@ class LstmOutputLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
+    if not loop:
+      z += self.W_rec[self.y]
+
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
-      if loop: z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
+      if loop:
+        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])
@@ -223,7 +230,7 @@ class LstmOutputLayer(RecurrentLayer):
       s_i = input * ingate + s_p * forgetgate
       s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
-      return s_i * i, h_t * j
+      return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
 
     for s in xrange(self.attrs['sampling']):
       if encoder:
@@ -259,29 +266,29 @@ class LstmOutputLayer(RecurrentLayer):
     self.j = (self.index.flatten() > 0).nonzero()
 
 
-  def cost(self, y):
+  def cost(self):
     known_grads = None
     if self.attrs['loss'] == 'cedec' or self.attrs['loss'] == 'priori':
-      if y.type == T.ivector().type:
-        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.j], y_idx=y[self.j])
+      if self.y.type == T.ivector().type:
+        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.j], y_idx=self.y[self.j])
         #logpcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.j], y_idx=y[self.j]) #T.log(self.p_y_given_x[self.i, y[self.i]])
         #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
       else:
-        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.j], 1.e-20, 1.e20)), y[self.j].T)
+        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.j], 1.e-20, 1.e20)), self.y[self.j].T)
       #pcx = self.p_y_given_x[:, y[self.i]]
       return T.sum(logpcx), known_grads
     else:
       assert False, "unknown loss: %s" % self.attrs['loss']
 
-  def errors(self, y):
+  def errors(self):
     """
     :type y: theano.Variable
     :rtype: theano.Variable
     """
-    if y.dtype.startswith('int'):
-      if y.type == T.ivector().type:
-        return T.sum(T.neq(self.y_pred[self.j], y[self.j]))
+    if self.y.dtype.startswith('int'):
+      if self.y.type == T.ivector().type:
+        return T.sum(T.neq(self.y_pred[self.j], self.y[self.j]))
       else:
-        return T.sum(T.neq(self.y_pred[self.j], T.argmax(y[self.j], axis = -1)))
+        return T.sum(T.neq(self.y_pred[self.j], T.argmax(self.y[self.j], axis = -1)))
     else:
       raise NotImplementedError()

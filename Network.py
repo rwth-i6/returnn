@@ -236,11 +236,7 @@ class LayerNetwork(object):
       layer_class = LstmOutputLayer
     else:
       layer_class = FramewiseOutputLayer
-    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, **kwargs)
-    for W in self.output[name].W_in:
-      if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
-      if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
-    self.declare_train_params()
+
     if not target in self.y:
       if self.n_out[target][1] == 1:
         self.y[target] = T.ivector('y')
@@ -248,8 +244,15 @@ class LayerNetwork(object):
         self.y[target] = T.imatrix('y')
     targets = self.c if self.loss == 'ctc' else self.y[target]
     error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y[target]
-    self.errors[target] = self.output[name].errors(error_targets)
-    cost = self.output[name].cost(targets)
+
+    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, y = targets, **kwargs)
+    self.errors[target] = self.output[name].errors()
+
+    for W in self.output[name].W_in:
+      if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
+      if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
+    self.declare_train_params()
+    cost = self.output[name].cost()
     self.cost[target], self.known_grads = cost[:2]
     if len(cost) > 2:
       self.ctc_priors = cost[2]

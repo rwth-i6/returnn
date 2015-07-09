@@ -245,6 +245,7 @@ class TaskThread(threading.Thread):
           progress_bar(complete, hms(remaining_estimated))
 
     def device_can_run_async(self):
+      return False
       if len(self.devices) != 1:
         return False
       if self.devices[0].blocking:
