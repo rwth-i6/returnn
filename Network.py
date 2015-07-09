@@ -117,15 +117,15 @@ class LayerNetwork(object):
       else:
         for prev in obj['from']:
           if prev != "null":
-            if not network.hidden.has_key(prev):
+            if not network.hidden.has_key(prev) and not network.output.has_key(prev):
               traverse(content, prev, network)
-            source.append(network.hidden[prev])
+            source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
-        if not network.hidden.has_key(obj['encoder']):
+        if not network.hidden.has_key(obj['encoder']) and not network.output.has_key(obj['encoder']):
           traverse(content, obj['encoder'], network)
-        obj['encoder'] = network.hidden[obj['encoder']]
+        obj['encoder'] = network.hidden[obj['encoder']] if obj['encoder'] in network.hidden else network.output[obj['encoder']]
       obj.pop('from', None)
-      params = { 'sources': source, 'dropout' : 0.0, 'name' : 'output', 'mask' : mask, "train_flag": train_flag }
+      params = { 'sources': source, 'dropout' : 0.0, 'name' : layer_name, 'mask' : mask, "train_flag": train_flag }
       params.update(obj)
       if cl == 'softmax':
         if not 'target' in params:
@@ -238,29 +238,34 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
 
-    if not target in self.y:
+    if not 'n_out' in kwargs and not target in self.y:
       if self.n_out[target][1] == 1:
         self.y[target] = T.ivector('y')
       else:
         self.y[target] = T.imatrix('y')
-    targets = self.c if self.loss == 'ctc' else self.y[target]
-    error_targets = self.c if self.loss in ('ctc','ce_ctc') else self.y[target]
 
-    self.output[name] = layer_class(index=self.i, n_out=self.n_out[target][0], name=name, target=target, y = targets, **kwargs)
-    self.errors[target] = self.output[name].errors()
-
-    for W in self.output[name].W_in:
-      if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
-      if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
-    self.declare_train_params()
-    cost = self.output[name].cost()
-    self.cost[target], self.known_grads = cost[:2]
-    if len(cost) > 2:
-      self.ctc_priors = cost[2]
-      assert self.ctc_priors is not None
+    if 'n_out' in kwargs:
+      targets = T.ivector()
     else:
-      self.ctc_priors = None
-    self.objective[target] = self.cost[target] + self.L1 + self.L2 #+ entropy * self.output.entropy()
+      kwargs['n_out'] = self.n_out[target][0]
+      targets = self.c if self.loss == 'ctc' else self.y[target]
+
+    self.output[name] = layer_class(index=self.i, name=name, target=target, y = targets, **kwargs)
+    if target != "null":
+      self.errors[target] = self.output[name].errors()
+
+      for W in self.output[name].W_in:
+        if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
+        if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
+      self.declare_train_params()
+      cost = self.output[name].cost()
+      self.cost[target], self.known_grads = cost[:2]
+      if len(cost) > 2:
+        self.ctc_priors = cost[2]
+        assert self.ctc_priors is not None
+      else:
+        self.ctc_priors = None
+      self.objective[target] = self.cost[target] + self.L1 + self.L2 #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)

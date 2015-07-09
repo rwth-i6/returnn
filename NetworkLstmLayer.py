@@ -102,13 +102,14 @@ class LstmLayer(RecurrentLayer):
 
 #faster but needs much more memory
 class OptimizedLstmLayer(RecurrentLayer):
-  def __init__(self, n_out, sharpgates='none', encoder = None, **kwargs):
+  def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_opt")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
     super(OptimizedLstmLayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
+    if n_dec: self.set_attr('n_dec', n_dec)
     if encoder:
       self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
@@ -161,7 +162,12 @@ class OptimizedLstmLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
-    def step(z, i_t, s_p, h_p):
+    def step(z_batch, i_t, s_batch, h_batch):
+      j_t = (i_t > 0).nonzero()
+      z = z_batch[j_t]
+      s_p = s_batch[j_t]
+      h_p = h_batch[j_t]
+
       z += T.dot(h_p, self.W_re)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
@@ -177,16 +183,26 @@ class OptimizedLstmLayer(RecurrentLayer):
       s_i = input * ingate + s_p * forgetgate
       s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
-      return s_i * i, h_t * j
+      s_tmp = T.zeros_like(s_p, dtype = 'float32')
+      s_out = T.set_subtensor(s_tmp[j_t], s_i)
+      h_tmp = T.zeros_like(h_p, dtype = 'float32')
+      h_out = T.set_subtensor(h_tmp[j_t], h_t)
+      return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
+    self.out_dec = encoder.output.shape[0] if encoder else self.sources[0].output.shape[0]
+    if encoder and 'n_dec' in encoder.attrs:
+      self.out_dec = encoder.out_dec
     for s in xrange(self.attrs['sampling']):
+      index = self.index[s::self.attrs['sampling']]
       sequences = z
       if encoder:
-        n_dec = encoder.output.shape[0]
+        n_dec = self.out_dec
+        if 'n_dec' in self.attrs:
+          n_dec = self.attrs['n_dec']
+          index = T.alloc(numpy.cast[theano.config.floatX](1), n_dec, encoder.output.shape[1])
         outputs_info = [ encoder.state[-1],
-                         encoder.output[-1], ]
-        if not self.sources:
-          sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
+                         encoder.act[-1] ]
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
@@ -194,7 +210,7 @@ class OptimizedLstmLayer(RecurrentLayer):
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], self.index[s::self.attrs['sampling']] ],
+                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
                                     outputs_info = outputs_info)
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
@@ -204,6 +220,9 @@ class OptimizedLstmLayer(RecurrentLayer):
       else:
         totact = act
     self.state = state
-    self.act = totact
-    self.output = totact[::-(2 * self.attrs['reverse'] - 1)]
+    self.act = totact[::-(2 * self.attrs['reverse'] - 1)]
+    if self.attrs['sparse']:
+      self.output = T.argmax(self.act, axis=-1, keepdims=True)
+    else:
+      self.output = totact[::-(2 * self.attrs['reverse'] - 1)]
 

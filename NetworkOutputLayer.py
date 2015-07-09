@@ -154,7 +154,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors(self.y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = True, **kwargs):
+  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = True, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -164,6 +164,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
     self.set_attr('loop', loop)
+    if n_dec: self.set_attr('n_dec', n_dec)
     self.y = y
     if not y: loop = False
     if encoder:
@@ -213,10 +214,10 @@ class LstmOutputLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
-    def step(z, i_t, s_p, h_p):
+    def ostep(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
-      if loop:
+      if loop and not self.train_flag:
         z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
@@ -229,23 +230,53 @@ class LstmOutputLayer(RecurrentLayer):
       h_t = CO(s_t) * outgate
       return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
 
+    def step(z_batch, i_t, s_batch, h_batch):
+      j_t = (i_t > 0).nonzero()
+      z = z_batch[j_t]
+      s_p = s_batch[j_t]
+      h_p = h_batch[j_t]
+
+      z += T.dot(h_p, self.W_re)
+      #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
+      if loop and not self.train_flag:
+        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
+      ingate = GI(z[:,n_units: 2 * n_units])
+      forgetgate = GF(z[:,2 * n_units:3 * n_units])
+      outgate = GO(z[:,3 * n_units:])
+      input = CI(z[:,:n_units])
+      s_i = input * ingate + s_p * forgetgate
+      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      h_t = CO(s_t) * outgate
+      s_tmp = T.zeros_like(s_p, dtype = 'float32')
+      s_out = T.set_subtensor(s_tmp[j_t], s_i)
+      h_tmp = T.zeros_like(h_p, dtype = 'float32')
+      h_out = T.set_subtensor(h_tmp[j_t], h_t)
+      return theano.gradient.grad_clip(s_out, -50, 50), h_out
+
+    self.out_dec = encoder.output.shape[0] if encoder else self.sources[0].output.shape[0]
+    if encoder and 'n_dec' in encoder.attrs:
+      self.out_dec = encoder.out_dec
     for s in xrange(self.attrs['sampling']):
+      index = self.index[s::self.attrs['sampling']]
+      sequences = z
       if encoder:
-        n_dec = encoder.output.shape[0]
+        n_dec = self.out_dec
+        if 'n_dec' in self.attrs:
+          n_dec = self.attrs['n_dec']
+          index = T.alloc(numpy.cast[theano.config.floatX](1), n_dec, encoder.output.shape[1])
         outputs_info = [ encoder.state[-1],
-                         encoder.output[-1] ]
+                         encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
-        if not loop and self.train_flag:
-          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((encoder.output.shape[0], encoder.output.shape[1]), ndim=2)][:-1])
+        if loop and self.train_flag:
+          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
-        sequences = z
       [state, act], _ = theano.scan(step,
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], self.index[s::self.attrs['sampling']] ],
+                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
                                     outputs_info = outputs_info)
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
@@ -255,12 +286,12 @@ class LstmOutputLayer(RecurrentLayer):
       else:
         totact = act
     self.state = state
-    self.act = totact
+    self.act = totact[::-(2 * self.attrs['reverse'] - 1)]
     self.lstm_output = totact[::-(2 * self.attrs['reverse'] - 1)]
 
     self.y_m = T.dot(self.lstm_output, self.W_cls).dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     self.y_pred = T.argmax(self.y_m, axis=-1)
-    self.output = T.argmax(self.y_m, axis=-1, keepdims=True).dimshuffle(1,0).reshape(self.lstm_output.shape, ndim = 3).dimshuffle(1,2,0) #.argmax(self.p_y_given_x, axis=-1, keepdim)
+    self.output = T.argmax(self.lstm_output, axis=-1, keepdims=True) #T.argmax(self.y_m, axis=-1, keepdims=True).dimshuffle(1,0).reshape(self.lstm_output.shape, ndim = 3).dimshuffle(1,2,0) #.argmax(self.p_y_given_x, axis=-1, keepdim)
     self.attrs['sparse'] = True
     self.j = (self.index.flatten() > 0).nonzero()
 

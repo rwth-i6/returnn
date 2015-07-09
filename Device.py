@@ -694,7 +694,8 @@ class Device():
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-net-params")
-      self.input_queue.send([numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
+      p = [numpy.asarray(p.get_value()) for p in network.get_all_params_vars()]
+      self.input_queue.send(p)
 
   def maybe_update_network(self, network):
     """

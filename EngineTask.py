@@ -127,9 +127,10 @@ class TaskThread(threading.Thread):
         self.num_frames = 0
         self.finished = False
         self.crashed = False
-        self.parent.lock.acquire()
         self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
-        self.parent.lock.release()
+        if not self.alloc_devices:
+          self.finished = True
+          return
         self.start()
 
       def finish(self):
@@ -148,7 +149,10 @@ class TaskThread(threading.Thread):
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
+        s = time.time()
+        print >> log.v5, self.alloc_devices[0].name, "acquire time:", time.time() - s
         self.parent.lock.acquire()
+        s = time.time()
         self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
                                               results=device_results,
                                               result_format=outputs_format,
@@ -156,15 +160,13 @@ class TaskThread(threading.Thread):
         self.parent.num_frames += self.num_frames
         self.print_process()
         self.parent.lock.release()
+        print >> log.v5, self.alloc_devices[0].name, "lock time:", time.time() - s
         self.finished = True
         return True
 
       def run(self):
-        # Note that alloc_devices could be empty if we skipped seqs.
-        if not self.alloc_devices:
-          self.finished = True
-          return
         self.device_run()
+        # Note that alloc_devices could be empty if we skipped seqs.
         self.finish()
 
       def device_run(self):
@@ -181,9 +183,7 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
-          self.parent.lock.acquire()
           self.parent.prepare_device_for_batch(device)
-          self.parent.lock.release()
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -313,22 +313,20 @@ class TaskThread(threading.Thread):
           print >> log.v5, "%s stopped" % self
           return
 
-        self.lock.acquire()
         self.batch_idx = self.batches.get_current_batch_idx()
         if self.batches.has_more():
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
-            self.lock.release()
             continue
-          self.lock.release()
           for i in xrange(len(self.devices)):
             if not deviceRuns[i] or deviceRuns[i].finished:
+              s = time.time()
               deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
+              print >> log.v5, self.devices[i].name, "assign time:", time.time() - s
               break
             elif deviceRuns[i] and deviceRuns[i].crashed:
               return
         else:
-          self.lock.release()
           break
 
       for i,device in enumerate(self.devices):
@@ -421,11 +419,11 @@ class TrainTaskThread(TaskThread):
     assert num_frames > 0
     results = [Device.make_result_dict(res, result_format) for res in results]
     score = sum([res["cost"] for res in results])
-    if numpy.isinf(score) or numpy.isnan(score):
-      for i, res in enumerate(results):
-        if numpy.isinf(res[0]) or numpy.isnan(res[0]):
-          raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
-      assert False  # Should not get here.
+    #if numpy.isinf(score) or numpy.isnan(score):
+    #  for i, res in enumerate(results):
+    #    if numpy.isinf(res[0]) or numpy.isnan(res[0]):
+    #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
+    #  assert False  # Should not get here.
     if self.do_ctc_priors:
       for res in results:
         self.ctc_priors += res["ctc_priors"]
