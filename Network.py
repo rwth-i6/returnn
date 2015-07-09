@@ -179,7 +179,7 @@ class LayerNetwork(object):
     :param str loss: loss type, "ce", "ctc" etc
     """
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
     else:
       layer_class = FramewiseOutputLayer

@@ -108,13 +108,17 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
   def cost(self, y):
+    """
+    :param y: shape (time*batch,) -> label
+    :return: error scalar, known_grads dict
+    """
     y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
@@ -145,6 +149,16 @@ class SequenceOutputLayer(OutputLayer):
       pcx = p_y_given_x[self.i, y[self.i]]
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
+    elif self.loss == 'ctc2':
+      from NetworkCtcLayer import ctc_cost, uniq_with_lengths, log_sum
+      max_time = self.z.shape[0]
+      num_batches = self.z.shape[1]
+      time_mask = self.index.reshape((max_time, num_batches))
+      y_batches = y.reshape((max_time, num_batches))
+      targets, seq_lens = uniq_with_lengths(y_batches, time_mask)
+      log_pcx = self.z - log_sum(self.z, axis=0, keepdims=True)
+      err = ctc_cost(log_pcx, time_mask, targets, seq_lens)
+      return err, known_grads
 
   def errors(self, y):
     if self.loss in ('ctc', 'ce_ctc'):
