@@ -11,7 +11,7 @@ class Updater:
   def initFromConfig(cls, config):
     import rnn
     kwargs = {
-      "updateOnDevice": False, #rnn.isUpdateOnDevice(config),
+      "updateOnDevice": config.bool('live_update', True),
       "gradient_clip": config.float('gradient_clip', -1),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
@@ -114,6 +114,8 @@ class Updater:
     for param in self.network.train_params_vars:
       upd = 0
       for target in self.net_train_param_deltas:
+        if not param in self.net_train_param_deltas[target]:
+          continue
         deltas = self.net_train_param_deltas[target][param]  # usually the gradients
         if self.gradient_clip > 0:
           # Note that there is also theano.gradient.grad_clip, which would clip it already

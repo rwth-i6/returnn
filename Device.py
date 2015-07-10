@@ -571,9 +571,7 @@ class Device():
         output_queue.send("task-result")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
-        t = time.time()
         output_queue.send([numpy.asarray(v) for v in output])
-        print self.name,"t",time.time() - t
         #output_queue.send(output)
         output_queue.send(outputs_format)
       else:

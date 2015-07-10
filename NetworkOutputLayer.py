@@ -220,7 +220,7 @@ class LstmOutputLayer(RecurrentLayer):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
       if loop and not self.train_flag:
-        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
+        z += T.dot(self.W_cls[T.argmax(T.dot(h_p, self.W_cls), axis = -1)], self.W_rec)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])
@@ -271,7 +271,7 @@ class LstmOutputLayer(RecurrentLayer):
                          encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
         if self.attrs['loop'] == 'hard' and self.train_flag:
-          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
+          sequences = T.inc_subtensor(sequences[1:], T.dot(self.W_cls[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)], self.W_rec)[:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]

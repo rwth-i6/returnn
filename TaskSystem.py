@@ -9,7 +9,8 @@ import sys
 import os
 from StringIO import StringIO
 from contextlib import contextmanager
-import pickle as pickle
+import pickle
+import cPickle
 import types
 import marshal
 import importlib

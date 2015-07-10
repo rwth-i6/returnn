@@ -356,7 +356,7 @@ class TaskThread(threading.Thread):
             results['num_frames'] = 0
             print "eval:", time.time() - se
           else:
-            time.sleep(0.1)
+            time.sleep(0.01)
             continue
 
         self.batch_idx = self.batches.get_current_batch_idx()
@@ -377,8 +377,8 @@ class TaskThread(threading.Thread):
         if deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
           deviceRuns[i].join()
         if deviceRuns[i] and deviceRuns[i].finished:
-          results['batchess'] += deviceRuns[i].result['batchess'][:]
-          results['results'] += deviceRuns[i].result['results'][:]
+          results['batchess'] += deviceRuns[i].result['batchess']
+          results['results'] += deviceRuns[i].result['results']
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
         device.finish_epoch_stats()
@@ -434,8 +434,8 @@ class TrainTaskThread(TaskThread):
     if self.do_ctc_priors:
       self.ctc_priors = numpy.zeros(shape=(self.network.n_out,), dtype=theano.config.floatX)
     if self.updater.updateOnDevice:
-      assert len(self.devices) == 1
-      self.devices[0].set_learning_rate(self.learning_rate)
+      for device in self.devices:
+        device.set_learning_rate(self.learning_rate)
     else:
       if not self.updater.isInitialized:
         self.updater.initVars(self.network, None)
@@ -444,7 +444,7 @@ class TrainTaskThread(TaskThread):
 
   def prepare_device_for_batch(self, device):
     """ :type device: Device.Device """
-    if device.eval_batch_idx < self.eval_batch_idx:
+    if not self.updater.updateOnDevice and device.eval_batch_idx < self.eval_batch_idx:
       device.set_net_params(self.network)
       device.eval_batch_idx = self.eval_batch_idx
 
@@ -460,6 +460,23 @@ class TrainTaskThread(TaskThread):
       print >> f, epoch_str
       numpy.savetxt(f, self.ctc_priors, newline=" ")
       print >> f
+
+  def create_consensus(self):
+    basenet = [p.get_value() for p in self.network.get_all_params_vars()]
+    hypnets = []
+    consnet = []
+    nparams = len(basenet)
+    for device in self.devices:
+      hypnets.append(device.get_net_train_params())
+    # consnesus via average
+    consnet = [numpy.zeros(p.shape, dtype='float32') for p in basenet]
+    for net in hypnets:
+      for i in xrange(nparams):
+        consnet[i] += net[i] / len(hypnets)
+    for p, c in zip(self.network.get_all_params_vars(), consnet):
+      p.set_value(c)
+    for device in self.devices:
+      device.set_net_params(self.network)
 
   def evaluate(self, batchess, results, result_format, num_frames):
     """
@@ -482,7 +499,7 @@ class TrainTaskThread(TaskThread):
       for res in results:
         self.ctc_priors += res["ctc_priors"]
     self.score += score
-    if True: #not self.updater.updateOnDevice:
+    if not self.updater.updateOnDevice:
       gparams = {}
       for k in self.network.cost:
         gparams[k] = {}
@@ -497,6 +514,9 @@ class TrainTaskThread(TaskThread):
             gparams[k][p] += q
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
+    else:
+      self.create_consensus()
+
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().
@@ -505,7 +525,7 @@ class TrainTaskThread(TaskThread):
     return eval_info
 
   def finalize(self):
-    if self.updater.updateOnDevice:
+    if False and self.updater.updateOnDevice:
       # Copy over params at the very end. Also only if we did training.
       assert len(self.devices) == 1
       params = self.devices[0].get_net_train_params()
@@ -514,6 +534,7 @@ class TrainTaskThread(TaskThread):
       for i in range(len(params)):
         our_params[i].set_value(params[i])
     assert self.num_frames > 0
+    self.create_consensus()
     # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
     self.score /= float(self.num_frames)
     if self.do_ctc_priors:
