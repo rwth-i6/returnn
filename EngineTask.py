@@ -133,7 +133,6 @@ class TaskThread(threading.Thread):
         if not self.alloc_devices:
           self.finished = True
           return
-        self.device_run()
         self.start()
 
       def finish(self):
@@ -159,13 +158,19 @@ class TaskThread(threading.Thread):
         self.parent.lock.acquire()
         self.parent.num_frames += self.num_frames
         self.print_process()
+
         self.parent.lock.release()
-        self.finished = True
         return True
 
       def run(self):
+        s = time.time()
+        self.device_run()
+        self.se = time.time () - s
+        s = time.time()
         # Note that alloc_devices could be empty if we skipped seqs.
         self.finish()
+        self.fe = time.time() - s
+        self.finished = True
 
       def device_run(self):
         batch_idx = self.run_start_batch_idx
@@ -297,11 +302,15 @@ class TaskThread(threading.Thread):
       for device in self.devices:
         device.eval_batch_idx = -1
         device.start_epoch_stats()
+        device.tot = 0
+        device.se = 0
+        device.fe = 0
 
       deviceRuns = [ None for i in xrange(len(self.devices)) ]
 
       results = {'batchess': [], 'results': [], 'num_frames' : 0 }
       run_frames = 0
+      se = time.time()
 
       while True:
         # Note about the async logic:
@@ -315,38 +324,54 @@ class TaskThread(threading.Thread):
           print >> log.v5, "%s stopped" % self
           return
 
+        for i in xrange(len(self.devices)):
+          if deviceRuns[i]:
+            if deviceRuns[i].crashed:
+              return
+            if deviceRuns[i].finished:
+              results['batchess'] += deviceRuns[i].result['batchess'][:]
+              results['results'] += deviceRuns[i].result['results'][:]
+              results['result_format'] = deviceRuns[i].result['result_format']
+              results['num_frames'] += deviceRuns[i].num_frames
+              self.devices[i].tot += time.time() - self.devices[i].te
+              self.devices[i].se += deviceRuns[i].se
+              self.devices[i].fe += deviceRuns[i].fe
+              deviceRuns[i] = None
+              #print self.devices[i].name, "tot", time.time() - self.devices[i].se
+
+        if results['num_frames'] > self.eval_batch_size:
+          if all(dev == None for dev in deviceRuns):
+            print "train:", time.time() - se
+            for dev in self.devices:
+              print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
+              dev.tot = 0
+              dev.se = 0
+              dev.fe = 0
+            se = time.time()
+            self.evaluate(**results)
+            self.eval_batch_idx += 1
+            run_frames = 0
+            results['batchess'] = []
+            results['results'] = []
+            results['num_frames'] = 0
+            print "eval:", time.time() - se
+          else:
+            time.sleep(0.1)
+            continue
+
         self.batch_idx = self.batches.get_current_batch_idx()
-        if self.batches.has_more():
+        if self.batches.has_more() and run_frames <= self.eval_batch_size:
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
             continue
-          found = False
           for i in xrange(len(self.devices)):
-            if not deviceRuns[i] or deviceRuns[i].finished:
-              if deviceRuns[i]:
-                results['batchess'] += deviceRuns[i].result['batchess'][:]
-                results['results'] += deviceRuns[i].result['results'][:]
-                results['result_format'] = deviceRuns[i].result['result_format']
-                results['num_frames'] += deviceRuns[i].num_frames
-                deviceRuns[i] = None
-              if not found and run_frames <= self.eval_batch_size:
-                deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
-                run_frames += deviceRuns[i].num_frames
-                found = True
-            elif deviceRuns[i] and deviceRuns[i].crashed:
-              return
+            if not deviceRuns[i]:
+              self.devices[i].te = time.time()
+              deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
+              run_frames += deviceRuns[i].num_frames
+              break
         else:
           break
-
-        if results['num_frames'] > self.eval_batch_size:
-          self.evaluate(**results)
-          self.eval_batch_idx += 1
-          run_frames = 0
-          results['batchess'] = []
-          results['results'] = []
-          results['num_frames'] = 0
-        elif run_frames > self.eval_batch_size:
-          time.sleep(0.1)
 
       for i,device in enumerate(self.devices):
         if deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:

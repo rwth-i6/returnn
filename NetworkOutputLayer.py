@@ -154,7 +154,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors(self.y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = True, n_dec = 0, **kwargs):
+  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = 'hard', n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -163,6 +163,8 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('loss', loss.encode("utf8"))
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
+    if loop == True:
+      loop = 'soft'
     self.set_attr('loop', loop)
     if n_dec: self.set_attr('n_dec', n_dec)
     self.y = y
@@ -241,7 +243,7 @@ class LstmOutputLayer(RecurrentLayer):
 
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
-      if loop and not self.train_flag:
+      if self.attrs['loop'] == 'soft' or (self.attrs['loop'] != 'none' and not self.train_flag):
         z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
       ingate = GI(z[:,n_units: 2 * n_units])
       forgetgate = GF(z[:,2 * n_units:3 * n_units])
@@ -268,7 +270,7 @@ class LstmOutputLayer(RecurrentLayer):
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
-        if loop and self.train_flag:
+        if self.attrs['loop'] == 'hard' and self.train_flag:
           sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),

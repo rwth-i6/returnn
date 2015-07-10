@@ -10,7 +10,7 @@ import os
 import errno
 import time
 import pickle
-
+from scipy.sparse import csr_matrix
 
 def get_num_devices():
   if os.name == 'nt':
@@ -197,14 +197,6 @@ class Device():
           gparams.append(T.constant(0))
           continue
         self.gradients[target][param] = gparam
-        if False and param.name == 'lambda':
-          f = theano.function(inputs = [],
-                              outputs = [gparam],
-                              givens = self.make_givens(self.trainnet),
-                              name = "f via trainnet")
-          print >> log.v3, theano.printing.pp(gparam)
-          print >> log.v3, "-------------------------------------------"
-          print >> log.v3, theano.printing.pp(f.maker.fgraph.outputs[0])
         gparams.append(theano.Out(gparam, borrow = True))
         if self.gradient_norm is not None:
           self.gradient_norm += T.sum(gparam ** 2)
@@ -368,9 +360,9 @@ class Device():
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
-    model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
-    if model_broken_info:
-      self.handle_model_broken(model_broken_info)
+    #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
+    #if model_broken_info:
+    #  self.handle_model_broken(model_broken_info)
       # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
@@ -458,9 +450,9 @@ class Device():
       print >> log.v3, "Device %s proc starting up" % device
       rnn.initFaulthandler()
       rnn.initConfigJson()
-      rnn.maybeInitSprintCommunicator(device_proc=True)
+      #rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, asyncTask)
-      rnn.maybeFinalizeSprintCommunicator(device_proc=True)
+      #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
       print >> log.v2, "Device %s proc got KeyboardInterrupt" % device
@@ -579,7 +571,10 @@ class Device():
         output_queue.send("task-result")
         # We can get cuda_ndarray or other references to internal device memory.
         # We explicitly want to copy them over to CPU memory.
+        t = time.time()
         output_queue.send([numpy.asarray(v) for v in output])
+        print self.name,"t",time.time() - t
+        #output_queue.send(output)
         output_queue.send(outputs_format)
       else:
         raise Exception("cmd %s unknown" % cmd)
@@ -842,7 +837,7 @@ class Device():
       assert self.result_called_count <= self.run_called_count
       if not self.proc.is_alive():
         return None, None
-      timeout = 60 * 5  # 5 minutes execution timeout
+      timeout = 60 * 10  # 10 minutes execution timeout
       while timeout > 0:
         try:
           if self.output_queue.poll(1):

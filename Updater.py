@@ -103,8 +103,8 @@ class Updater:
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
     assert not self.updateOnDevice
-    for k in self.net_train_param_deltas:
-      for p in self.network.train_params_vars:
+    for k in net_param_deltas:
+      for p in net_param_deltas[k]:
         self.net_train_param_deltas[k][p].set_value(net_param_deltas[k][p], borrow=True)
 
   def getUpdateList(self):
@@ -122,7 +122,6 @@ class Updater:
           # Also note that this is yet without the learning rate factor -
           # this might be different to other gradient clipping implementations.
           deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
-        upd += - self.learning_rate_var * deltas
         if self.momentum > 0:
           upd += self.momentum * self.deltas[target][param]
         if self.adagrad:
@@ -140,7 +139,9 @@ class Updater:
           updates.append((self.eg2[param], eg2_new))
           updates.append((self.edx2[param], edx2_new))
           updates.append((self.dx[param], dx_new))
-          upd = self.learning_rate_var * dx_new
+          upd += self.learning_rate_var * dx_new
+        else:
+          upd += - self.learning_rate_var * deltas
       if self.momentum > 0:
         updates.append((self.deltas[target][param], upd))
       updates.append((param, param + upd))

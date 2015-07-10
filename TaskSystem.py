@@ -9,10 +9,11 @@ import sys
 import os
 from StringIO import StringIO
 from contextlib import contextmanager
-import pickle
+import pickle as pickle
 import types
 import marshal
 import importlib
+import time
 
 
 def execInMainProc(func):
@@ -424,7 +425,8 @@ class ExecingProcess_ConnectionWrapper(object):
     self._check_readable()
     buf = self.conn.recv_bytes()
     f = StringIO(buf)
-    return Unpickler(f).load()
+    res = Unpickler(f).load()
+    return res
 
 
 def ExecingProcess_Pipe():
