@@ -50,10 +50,10 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
           targets = dataset.get_targets(target, seq.seq_idx)
           if targets is not None:
             device.targets[target][o:o + l[1], q] = targets[seq.seq_start_frame[1]:seq.seq_end_frame[1]]
-            if exclude:
-              for i in xrange(l[1]):
-                if device.targets[target][o + i, q] in exclude:
-                  device.index[o + i, q] = 0
+            #if exclude:
+            #  for i in xrange(l[1]):
+            #    if device.targets[target][o + i, q] in exclude:
+            #      device.index[o + i, q] = 0
 
             #if recurrent and pad_batches:
             #  assert o == 0  # Doesn't make sense otherwise. # lol, obviously
@@ -80,6 +80,14 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
 
+    #for i in xrange(device.input_index.shape[0]):
+    #  if numpy.sum(device.input_index[i,:]) == 0:
+    #    print "hi"
+    #    device.input_index[i,0] = 1
+    #for i in xrange(device.output_index.shape[0]):
+    #  if numpy.sum(device.output_index[i,:]) == 0:
+    #    print "ho"
+    #    device.output_index[i,0] = 1
     # Note on multiple batches for the non-recurrent case:
     # We could either concatenate all into a single slice, or do multiple slices.
     # We do multiple slices here.

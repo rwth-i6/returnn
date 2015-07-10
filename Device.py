@@ -898,7 +898,7 @@ class Device():
     return [(network.x, self.x), (network.i, self.i), (network.j, self.j)] + [ (network.y[k], self.y[k]) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
-      return [(network.x, self.x), (network.i, self.i)]
+      return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
     else:
       return [(network.x, self.x)]
   def make_sprint_givens(self, network):

@@ -214,7 +214,7 @@ class LstmOutputLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
-    def ostep(z, i_t, s_p, h_p):
+    def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
       if loop and not self.train_flag:
@@ -230,8 +230,11 @@ class LstmOutputLayer(RecurrentLayer):
       h_t = CO(s_t) * outgate
       return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
 
-    def step(z_batch, i_t, s_batch, h_batch):
+    def nstep(z_batch, i_t, s_batch, h_batch):
+      #t_t = T.switch(T.eq(T.sum(i_t), 0), i_t + 1, i_t)
+      #j_t = (t_t > 0).nonzero()
       j_t = (i_t > 0).nonzero()
+      #j_t = i_t
       z = z_batch[j_t]
       s_p = s_batch[j_t]
       h_p = h_batch[j_t]
@@ -251,7 +254,7 @@ class LstmOutputLayer(RecurrentLayer):
       h_out = T.set_subtensor(h_p[j_t], h_t)
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
-    self.out_dec = encoder.output.shape[0] if encoder else self.sources[0].output.shape[0]
+    self.out_dec = self.index.shape[0] #encoder.output.shape[0] if encoder else self.sources[0].output.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
       self.out_dec = encoder.out_dec
     for s in xrange(self.attrs['sampling']):
@@ -261,7 +264,7 @@ class LstmOutputLayer(RecurrentLayer):
         n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
@@ -278,7 +281,7 @@ class LstmOutputLayer(RecurrentLayer):
                                     outputs_info = outputs_info)
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
-          totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
+          totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:n_dec]
         else:
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:

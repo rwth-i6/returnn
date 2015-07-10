@@ -162,23 +162,32 @@ class OptimizedLstmLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
-    def step(z_batch, i_t, s_batch, h_batch):
+    def step(z, i_t, s_p, h_p):
+      z += T.dot(h_p, self.W_re)
+      #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
+      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
+      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
+      ingate = GI(z[:,n_out: 2 * n_out])
+      forgetgate = GF(z[:,2 * n_out:3 * n_out])
+      outgate = GO(z[:,3 * n_out:])
+      input = CI(z[:,:n_out])
+      s_i = input * ingate + s_p * forgetgate
+      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      h_t = CO(s_t) * outgate
+      return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
+
+    def nstep(z_batch, i_t, s_batch, h_batch):
+      #t_t = T.switch(T.eq(T.sum(i_t), 0), i_t + 1, i_t)
+      #j_t = (t_t > 0).nonzero()
       j_t = (i_t > 0).nonzero()
       z = z_batch[j_t]
       s_p = s_batch[j_t]
       h_p = h_batch[j_t]
 
       z += T.dot(h_p, self.W_re)
-      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
-      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
-      if sharpgates != 'none':
-        ingate = GI(self.sharpness[0] * z[:,n_out: 2 * n_out])
-        forgetgate = GF(self.sharpness[1] * z[:,2 * n_out:3 * n_out])
-        outgate = GO(self.sharpness[2] * z[:,3 * n_out:])
-      else:
-        ingate = GI(z[:,n_out: 2 * n_out])
-        forgetgate = GF(z[:,2 * n_out:3 * n_out])
-        outgate = GO(z[:,3 * n_out:])
+      ingate = GI(z[:,n_out: 2 * n_out])
+      forgetgate = GF(z[:,2 * n_out:3 * n_out])
+      outgate = GO(z[:,3 * n_out:])
       input = CI(z[:,:n_out])
       s_i = input * ingate + s_p * forgetgate
       s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
@@ -187,7 +196,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       h_out = T.set_subtensor(h_p[j_t], h_t)
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
-    self.out_dec = encoder.output.shape[0] if encoder else self.sources[0].output.shape[0]
+    self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
       self.out_dec = encoder.out_dec
     for s in xrange(self.attrs['sampling']):
@@ -197,7 +206,8 @@ class OptimizedLstmLayer(RecurrentLayer):
         n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
+          #index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1]) #index[:n_dec] #T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
