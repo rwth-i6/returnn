@@ -104,8 +104,8 @@ class Dataset(object):
   def load_seqs(self, start, end):
     """
     Load data sequences, such that self.get_data() & friends can return the data.
-    :param int start: start sorted seq idx
-    :param int end: end sorted seq idx
+    :param int start: start sorted seq idx, inclusive
+    :param int end: end sorted seq idx, exclusive
     """
     assert start >= 0
     assert start <= end
