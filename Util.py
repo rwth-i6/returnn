@@ -260,3 +260,18 @@ def class_idx_seq_to_features(seq, num_classes):
   m = np.zeros((num_frames, num_classes))
   m[np.arange(num_frames), seq] = 1
   return m
+
+
+def uniq(seq):
+  """
+  Like Unix tool uniq. Removes repeated entries.
+  :param seq: numpy.array
+  :return: seq
+  """
+  diffs = np.ones_like(seq)
+  diffs[1:] = seq[1:] - seq[:-1]
+  idx = diffs.nonzero()
+  return seq[idx]
+
+def test_uniq():
+  assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
