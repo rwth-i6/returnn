@@ -178,11 +178,11 @@ class LayerNetwork(object):
       else:
         x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
-        if not network.hidden.has_key(model[layer_name].attrs['encoder']):
+        if not network.hidden.has_key(model[layer_name].attrs['encoder']) and not network.output.has_key(model[layer_name].attrs['encoder']):
           traverse(model, model[layer_name].attrs['encoder'], network)
       cl = model[layer_name].attrs['class']
       if cl == 'softmax':
-        params = { 'dropout' : 0.0, 'name' : 'output', 'mask' : mask }
+        params = { 'dropout' : 0.0, 'name' : 'output', 'mask' : mask, 'train_flag' : train_flag }
         params.update(model[layer_name].attrs)
         if not 'target' in params:
           params['target'] = target
@@ -197,7 +197,8 @@ class LayerNetwork(object):
                    'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
-                   'mask': model[layer_name].attrs['mask'] }
+                   'mask': model[layer_name].attrs['mask'],
+                   'train_flag' : train_flag}
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
@@ -206,7 +207,7 @@ class LayerNetwork(object):
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
-            params['encoder'] = network.hidden[model[layer_name].attrs['encoder']]
+            params['encoder'] = network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         network.add_layer(layer_class(**params))
     for layer_name in model:
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:

@@ -849,9 +849,9 @@ class Device():
             r = self.output_queue.recv()
             if r == "error": return None
             assert r == "task-result"
-            self.output = self.output_queue.recv()
-            self.outputs_format = self.output_queue.recv()
-            return self.output, self.outputs_format
+            output = self.output_queue.recv()
+            outputs_format = self.output_queue.recv()
+            return output, outputs_format
         except EOFError:
           # The process is dying or died.
           return None, None

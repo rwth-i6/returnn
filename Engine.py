@@ -153,6 +153,7 @@ class Engine:
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
+    self.update_batch_size = config.int('update_batch_size', 0)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
@@ -348,7 +349,7 @@ class Engine:
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, self.train_data, train_batches,
-                              self.learning_rate, self.updater, start_batch, self.pad_batches,
+                              self.learning_rate, self.updater, self.update_batch_size, start_batch, self.pad_batches,
                               ("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch, self.exclude)
     trainer.join()
     if not trainer.finalized:

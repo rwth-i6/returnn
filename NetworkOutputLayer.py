@@ -231,7 +231,7 @@ class LstmOutputLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
 
     def step(z_batch, i_t, s_batch, h_batch):
-      j_t = i_t #(i_t > 0).nonzero()
+      j_t = (i_t > 0).nonzero()
       z = z_batch[j_t]
       s_p = s_batch[j_t]
       h_p = h_batch[j_t]
