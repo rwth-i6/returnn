@@ -17,6 +17,8 @@ from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
 from Util import hms
+import errno
+import time
 
 
 class Engine:
@@ -418,9 +420,22 @@ class Engine:
     :param int epoch: save epoch idx
     """
     print >> log.v3, "Save model from epoch %i under %s" % (epoch, filename)
-    model = h5py.File(filename, "w")
-    self.network.save_hdf(model, epoch)
-    model.close()
+    # We add some extra logic to try again for DiskQuota and other errors.
+    # This could save us multiple hours of computation.
+    try_again_wait_time = 10
+    while True:
+      try:
+        model = h5py.File(filename, "w")
+        self.network.save_hdf(model, epoch)
+        model.close()
+        break
+      except IOError as e:
+        if e.errno in [errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC]:
+          print >> log.v3, "Exception while saving:", e
+          print >> log.v3, "Trying again in %s secs." % try_again_wait_time
+          time.sleep(try_again_wait_time)
+          continue
+        raise
 
   def forward_to_sprint(self, data, cache_file, combine_labels=''):
     """
