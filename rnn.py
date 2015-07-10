@@ -20,7 +20,6 @@ from Config import Config
 from Engine import Engine
 from Dataset import Dataset
 from HDFDataset import HDFDataset
-from ExternSprintDataset import ExternSprintDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
@@ -244,7 +243,12 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
     sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
     assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
+    from ExternSprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
+  elif config_str.startswith("numpydump:"):
+    kwargs.update(eval("dict(%s)" % config_str[len("numpydump:"):]))
+    from NumpyDumpDataset import NumpyDumpDataset
+    cls = NumpyDumpDataset
   elif re.match("^[A-Za-z_][A-Za-z0-9_]*::.*", config_str):
     mod_name, cls_name, cls_args_s = re.match("^([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(.*)$",
                                               config_str).groups()
