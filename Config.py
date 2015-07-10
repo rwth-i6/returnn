@@ -44,16 +44,20 @@ class Config:
     value = [str(v) for v in value]
     self.dict[key] = value
 
-  def value(self, key, default, index=0):
+  def value(self, key, default, index=None):
     """
     :type key: str
     :type default: T
-    :type index: int
+    :type index: int | None
     :rtype: str | T
     """
     if key not in self.dict:
       return default
-    return self.dict[key][index]
+    l = self.dict[key]
+    if index is None:
+      return ",".join(l)
+    else:
+      return l[index]
 
   def int(self, key, default, index=0):
     return int(self.value(key, default, index))
