@@ -371,6 +371,8 @@ class TaskThread(threading.Thread):
               run_frames += deviceRuns[i].num_frames
               break
         else:
+          if not self.batches.has_more():
+            break
           time.sleep(0.01)
           continue
 
