@@ -24,7 +24,7 @@ class TaskThread(threading.Thread):
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
-      if len(devices) == 1:
+      if len(devices) == 1 or eval_batch_size == 0:
         eval_batch_size = sys.maxint
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
@@ -395,7 +395,7 @@ class TaskThread(threading.Thread):
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
         device.finish_epoch_stats()
-        print device.name, "tot", device.tot,"start",device.se,"finish",device.fe
+        #print device.name, "tot", device.tot,"start",device.se,"finish",device.fe
       if crashed: return
       if results['results']:
         self.evaluate(**results)
@@ -518,34 +518,34 @@ class TrainTaskThread(TaskThread):
 
 
   def create_consensus(self, cost):
-    h = time.time()
+    #h = time.time()
     for device in self.devices:
       device.sync_net_train_params()
-    a = time.time()
-    basenet = [p for p in self.network.train_params_vars]
+    #a = time.time()
+    basenet = self.network.train_params_vars
     consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
     hypnets = []
     nparams = len(basenet)
     encoded = []
     #pipe = self.CopyManager(self.devices)
-    b = time.time()
+    #b = time.time()
     #hypnets = pipe.copy_from_device()
     for device in self.devices:
       hypnets.append(device.get_net_train_params(self.network))
     # consensus via average
-    c = time.time()
+    #c = time.time()
     for i in xrange(nparams):
       consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) / len(hypnets)
-    d = time.time()
-    for p, q in zip(self.network.train_params_vars, consnet):
+    #d = time.time()
+    for p, q in zip(basenet, consnet):
       p.set_value(q)
       encoded.append(q.tostring())
-    e = time.time()
+    #e = time.time()
     for device in self.devices:
       device.set_net_encoded_params(encoded)
     #pipe.copy_to_device(self.network)
-    f = time.time()
-    print "consensus:","h",a-h,"a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e,"tot", f - h
+    #f = time.time()
+    #print "consensus:","h",a-h,"a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e,"tot", f - h
 
   def evaluate(self, batchess, results, result_format, num_frames):
     """
