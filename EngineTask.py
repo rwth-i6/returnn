@@ -343,7 +343,7 @@ class TaskThread(threading.Thread):
           if all(dev == None for dev in deviceRuns):
             print "train:", time.time() - se
             for dev in self.devices:
-              print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
+              #print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
               dev.tot = 0
               dev.se = 0
               dev.fe = 0
@@ -461,22 +461,72 @@ class TrainTaskThread(TaskThread):
       numpy.savetxt(f, self.ctc_priors, newline=" ")
       print >> f
 
-  def create_consensus(self):
-    basenet = [p.get_value() for p in self.network.get_all_params_vars()]
+  class CopyManager():
+    class CopyThread(threading.Thread):
+      def __init__(self, device, network, copy_to_device):
+        threading.Thread.__init__(self, name="CopyThread %s" % device.name)
+        self.copy_to_device = copy_to_device
+        self.device = device
+        self.network = network
+        self.active = True
+        self.start()
+
+      def run(self):
+        if self.copy_to_device:
+          self.device.set_net_params(self.network)
+          self.result = True
+        else:
+          self.result = self.device.get_net_train_params()
+        self.active = False
+
+    def __init__(self, devices):
+      self.devices = devices
+      self.network = None
+
+    def _copy(self, copy_to_device):
+      threads = []
+      for device in self.devices:
+        threads.append(self.CopyThread(device, self.network, copy_to_device))
+      result = []
+      for thread in threads:
+        if thread.active:
+          thread.join()
+        result.append(thread.result)
+      return result
+
+    def copy_to_device(self, network):
+      self.network = network
+      return self._copy(True)
+
+    def copy_from_device(self):
+      return self._copy(False)
+
+
+  def create_consensus(self, cost):
+    a = time.time()
+    basenet = [p for p in self.network.train_params_vars]
+    consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
     hypnets = []
-    consnet = []
     nparams = len(basenet)
+    #pipe = self.CopyManager(self.devices)
+    b = time.time()
+    #hypnets = pipe.copy_from_device()
     for device in self.devices:
       hypnets.append(device.get_net_train_params())
-    # consnesus via average
-    consnet = [numpy.zeros(p.shape, dtype='float32') for p in basenet]
+    # consensus via average
+    c = time.time()
     for net in hypnets:
       for i in xrange(nparams):
         consnet[i] += net[i] / len(hypnets)
-    for p, c in zip(self.network.get_all_params_vars(), consnet):
-      p.set_value(c)
+    d = time.time()
+    for p, q in zip(self.network.train_params_vars, consnet):
+      p.set_value(q)
+    e = time.time()
     for device in self.devices:
       device.set_net_params(self.network)
+    #pipe.copy_to_device(self.network)
+    f = time.time()
+    print "consensus:","a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e
 
   def evaluate(self, batchess, results, result_format, num_frames):
     """
@@ -489,7 +539,8 @@ class TrainTaskThread(TaskThread):
     assert result_format  # train should always have the format
     assert num_frames > 0
     results = [Device.make_result_dict(res, result_format) for res in results]
-    score = sum([res["cost"] for res in results])
+    cost = [res["cost"] for res in results]
+    score = sum(cost)
     #if numpy.isinf(score) or numpy.isnan(score):
     #  for i, res in enumerate(results):
     #    if numpy.isinf(res[0]) or numpy.isnan(res[0]):
@@ -515,7 +566,7 @@ class TrainTaskThread(TaskThread):
       self.updater.setNetParamDeltas(gparams)
       self.updater_func()
     else:
-      self.create_consensus()
+      self.create_consensus(cost)
 
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
@@ -534,7 +585,6 @@ class TrainTaskThread(TaskThread):
       for i in range(len(params)):
         our_params[i].set_value(params[i])
     assert self.num_frames > 0
-    self.create_consensus()
     # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
     self.score /= float(self.num_frames)
     if self.do_ctc_priors:

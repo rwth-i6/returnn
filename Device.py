@@ -10,7 +10,7 @@ import os
 import errno
 import time
 import pickle
-from scipy.sparse import csr_matrix
+from thread import start_new_thread
 
 def get_num_devices():
   if os.name == 'nt':
@@ -101,13 +101,15 @@ class Device():
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
+      self.attributes = get_device_attributes()[self.device_name]
+      self.name = device[0:3] + str(self.id)
+      self.initialized = True
     else:
       self.name = device
-      self.startProc()
-    self.attributes = get_device_attributes()[self.device_name]
-    self.name = device[0:3] + str(self.id)
+      self.initialized = False
+      start_new_thread(self.startProc, (device,))
 
-  def startProc(self):
+  def startProc(self, device_tag):
     assert not self.blocking
     # Note that we want a really new separate process, i.e. fork+exec, not just a fork.
     # This is to avoid many potential bugs, e.g. in Numpy or Theano.
@@ -122,6 +124,9 @@ class Device():
     self.id = self.output_queue.recv(); """ :type: int """
     self.device_name = self.output_queue.recv(); """ :type: str """
     self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+    self.attributes = get_device_attributes()[self.device_name]
+    self.name = device_tag[0:3] + str(self.id)
+    self.initialized = True
 
   def restart(self):
     self.proc.terminate()
@@ -265,7 +270,7 @@ class Device():
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "classification":
-          source.append(T.argmax(self.testnet.output['output'].p_y_given_x, axis = -1, keepdims = True))
+          source.append(T.argmax(self.testnet.output['output'].y_m, axis = -1, keepdims = True))
         elif extract == "log-posteriors":
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
@@ -532,7 +537,11 @@ class Device():
         for k in self.y:
           self.y[k].set_value(t[k].astype('int32'), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
+        if len(i.shape) == 1:
+          i = numpy.expand_dims(i, axis=0)
         self.i.set_value(i.astype('int8'), borrow = True)
+        #if len(j.shape) == 1:
+        #  j = numpy.expand_dims(j, axis=0)
         self.j.set_value(j.astype('int8'), borrow = True)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()

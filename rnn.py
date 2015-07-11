@@ -183,6 +183,9 @@ def initDevices():
   devArgs = getDevicesInitArgs(config)
   assert len(devArgs) > 0
   devices = [Device(**kwargs) for kwargs in devArgs]
+  for device in devices:
+    while not device.initialized:
+      time.sleep(0.25)
   if devices[0].blocking:
     print >> log.v4, "Devices: Used in blocking / single proc mode."
   else:

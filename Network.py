@@ -69,10 +69,10 @@ class LayerNetwork(object):
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'))
+      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'), train_flag)
 
     description = LayerNetworkDescription.from_config(config)
-    return cls.from_description(description, mask)
+    return cls.from_description(description, mask, train_flag)
 
   @classmethod
   def from_description(cls, description, mask="unity", train_flag = False):
@@ -86,7 +86,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, train_flag = False, target = 'classes'):
+  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
     :type json_content: str
     :type n_in: int
@@ -113,6 +113,7 @@ class LayerNetwork(object):
       obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
+
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
       else:
@@ -145,7 +146,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False, train_flag = False, target = 'classes'):
+  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False, target = 'classes', train_flag = False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -181,9 +182,11 @@ class LayerNetwork(object):
         if not network.hidden.has_key(model[layer_name].attrs['encoder']) and not network.output.has_key(model[layer_name].attrs['encoder']):
           traverse(model, model[layer_name].attrs['encoder'], network)
       cl = model[layer_name].attrs['class']
-      if cl == 'softmax':
+      if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0, 'name' : 'output', 'mask' : mask, 'train_flag' : train_flag }
         params.update(model[layer_name].attrs)
+        if 'encoder' in model[layer_name].attrs:
+          params['encoder'] = network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         if not 'target' in params:
           params['target'] = target
         params['sources'] = x_in
@@ -240,14 +243,15 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
 
-    if not 'n_out' in kwargs and not target in self.y:
+    if not 'n_symbols' in kwargs and not target in self.y:
       if self.n_out[target][1] == 1:
         self.y[target] = T.ivector('y')
       else:
         self.y[target] = T.imatrix('y')
 
-    if 'n_out' in kwargs:
+    if 'n_symbols' in kwargs:
       targets = T.ivector()
+      kwargs['n_out'] = kwargs.pop('n_symbols', 0)
     else:
       kwargs['n_out'] = self.n_out[target][0]
       targets = self.c if self.loss == 'ctc' else self.y[target]

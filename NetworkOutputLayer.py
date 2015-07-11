@@ -35,6 +35,7 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
       self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
+    self.output = self.z
 
   def create_bias(self, n, prefix='b'):
     name = "%s_%s" % (prefix, self.name)
@@ -81,6 +82,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.p_y_given_x, axis=-1)
+    self.output = self.p_y_given_x
 
   def cost(self):
     known_grads = None
@@ -164,7 +166,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
     if loop == True:
-      loop = 'soft'
+      loop = 'hard' if self.train_flag else 'soft'
     self.set_attr('loop', loop)
     if n_dec: self.set_attr('n_dec', n_dec)
     self.y = y
@@ -219,8 +221,8 @@ class LstmOutputLayer(RecurrentLayer):
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
-      if loop and not self.train_flag:
-        z += T.dot(self.W_cls[T.argmax(T.dot(h_p, self.W_cls), axis = -1)], self.W_rec)
+      if self.attrs['loop'] == 'soft' or (self.attrs['loop'] != 'none' and not self.train_flag):
+        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])
@@ -271,7 +273,7 @@ class LstmOutputLayer(RecurrentLayer):
                          encoder.act[-1] ]
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
         if self.attrs['loop'] == 'hard' and self.train_flag:
-          sequences = T.inc_subtensor(sequences[1:], T.dot(self.W_cls[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)], self.W_rec)[:-1])
+          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
