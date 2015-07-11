@@ -293,7 +293,7 @@ class Dataset(object):
       if recurrent_net:
         length = t_end - t_start
         if max(length) > batch_size:
-          print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length, batch_size)
+          print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (max(length), batch_size)
 
         dt, ds = batch.try_sequence_as_slice(length)
         if ds > 1 and (dt * ds > batch_size or ds > max_seqs):

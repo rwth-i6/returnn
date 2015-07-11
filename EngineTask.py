@@ -266,7 +266,7 @@ class TaskThread(threading.Thread):
       try:
         self.run_inner()
       except IOError, e:  # Such as broken pipe.
-        print >> log.v2, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
+        print >> log.v3, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
       except Exception:
         # Catch all standard exceptions.
@@ -312,22 +312,21 @@ class TaskThread(threading.Thread):
       run_frames = 0
       se = time.time()
 
-      while True:
-        # Note about the async logic:
-        # We start device.run() twice before we do the first device.result() call.
-        # That works because the device proc will push the results on the queue
-        # and device.result() reads it from there without sending another command.
+      crashed = False
 
+      while True:
         if self.stopped:
           # This happens when we exit Python.
           # Without this check, this thread would keep running until all exit handlers of Python are done.
           print >> log.v5, "%s stopped" % self
-          return
+          crashed = True
+          break
 
         for i in xrange(len(self.devices)):
           if deviceRuns[i]:
             if deviceRuns[i].crashed:
-              return
+              crashed = True
+              break
             if deviceRuns[i].finished:
               results['batchess'] += deviceRuns[i].result['batchess'][:]
               results['results'] += deviceRuns[i].result['results'][:]
@@ -381,16 +380,17 @@ class TaskThread(threading.Thread):
           if not deviceRuns[i].finished and not deviceRuns[i].crashed:
             deviceRuns[i].join()
           if deviceRuns[i].crashed:
-            return
+            crashed = True
         if deviceRuns[i] and deviceRuns[i].finished:
           results['batchess'] += deviceRuns[i].result['batchess']
           results['results'] += deviceRuns[i].result['results']
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
+        device.finish_epoch_stats()
+      if crashed: return
       if results['results']:
         self.evaluate(**results)
         self.eval_batch_idx += 1
-      device.finish_epoch_stats()
       self.finalize()
       self.elapsed = (time.time() - self.start_time)
 
@@ -521,9 +521,8 @@ class TrainTaskThread(TaskThread):
       hypnets.append(device.get_net_train_params())
     # consensus via average
     c = time.time()
-    for net in hypnets:
-      for i in xrange(nparams):
-        consnet[i] += net[i] / len(hypnets)
+    for i in xrange(nparams):
+      consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) / len(hypnets)
     d = time.time()
     for p, q in zip(self.network.train_params_vars, consnet):
       p.set_value(q)
