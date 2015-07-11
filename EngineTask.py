@@ -145,7 +145,7 @@ class TaskThread(threading.Thread):
 
         device_results, outputs_format = self.device_collect_results()
         if device_results is None:
-          print >> log.v2, "device crashed on batch", self.run_start_batch_idx
+          print >> log.v3, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
           self.crashed = True
           return False
@@ -371,20 +371,24 @@ class TaskThread(threading.Thread):
               run_frames += deviceRuns[i].num_frames
               break
         else:
-          break
+          time.sleep(0.01)
+          continue
 
       for i,device in enumerate(self.devices):
-        if deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
-          deviceRuns[i].join()
+        if deviceRuns[i]:
+          if not deviceRuns[i].finished and not deviceRuns[i].crashed:
+            deviceRuns[i].join()
+          if deviceRuns[i].crashed:
+            return
         if deviceRuns[i] and deviceRuns[i].finished:
           results['batchess'] += deviceRuns[i].result['batchess']
           results['results'] += deviceRuns[i].result['results']
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
-        device.finish_epoch_stats()
       if results['results']:
         self.evaluate(**results)
         self.eval_batch_idx += 1
+      device.finish_epoch_stats()
       self.finalize()
       self.elapsed = (time.time() - self.start_time)
 
