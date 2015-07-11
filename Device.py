@@ -498,6 +498,7 @@ class Device():
     self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
+    network_params = []
     while True:
       try:
         cmd = input_queue.recv()
@@ -537,11 +538,7 @@ class Device():
         for k in self.y:
           self.y[k].set_value(t[k].astype('int32'), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
-        if len(i.shape) == 1:
-          i = numpy.expand_dims(i, axis=0)
         self.i.set_value(i.astype('int8'), borrow = True)
-        #if len(j.shape) == 1:
-        #  j = numpy.expand_dims(j, axis=0)
         self.j.set_value(j.astype('int8'), borrow = True)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
@@ -550,22 +547,28 @@ class Device():
         assert self.updater.updateOnDevice
         self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
-        params = input_queue.recv()
-        assert isinstance(params, list)
         our_params_trainnet = self.trainnet.get_all_params_vars()
+        params = []
+        for p in our_params_trainnet:
+          params.append(input_queue.recv_bytes())
+        assert isinstance(params, list)
         our_params_testnet = self.testnet.get_all_params_vars()
         assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
         for param, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
           our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
-          assert our_param_shape == param.shape
-          assert numpy.isfinite(param).all()
-          our_p_train.set_value(param)
-          our_p_test.set_value(param)
+          #assert our_param_shape == param.shape
+          #assert numpy.isfinite(param).all()
+          converted = numpy.fromstring(param, dtype='float32').reshape(our_p_train.get_value().shape)
+          our_p_train.set_value(converted)
+          our_p_test.set_value(converted)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
-        # We can get cuda_ndarray or other references to internal device memory.
-        # We explicitly want to copy them over to CPU memory.
-        output_queue.send([numpy.asarray(p.get_value()) for p in self.trainnet.train_params_vars])
+        for p in network_params:
+          output_queue.send_bytes(p)
+      elif cmd == "sync-net-train-params":
+        network_params = []
+        for p in self.trainnet.get_all_params_vars():
+          network_params.append(numpy.asarray(p.get_value()).tostring())
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -585,6 +588,52 @@ class Device():
         output_queue.send(outputs_format)
       else:
         raise Exception("cmd %s unknown" % cmd)
+
+  def sync_net_train_params(self):
+    if not self.blocking:
+      self.input_queue.send("sync-net-train-params")
+
+  def get_net_train_params(self, network):
+    if self.blocking:
+      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.get_all_params_vars()]
+    else:
+      assert self.main_pid == os.getpid()
+      self.input_queue.send("get-net-train-params")
+      r = self.output_queue.recv()
+      assert r == "net-train-params"
+      res = []
+      raw = []
+      vars = network.get_all_params_vars()
+      for p in vars:
+        raw.append(self.output_queue.recv_bytes())
+      for p,q in zip(vars,raw):
+        res.append(numpy.fromstring(q, dtype='float32').reshape(p.get_value().shape))
+      return res
+
+  def set_net_encoded_params(self, network_params):
+    """
+    :type network: Network.LayerNetwork
+    This updates *all* params, not just the train params.
+    """
+    assert not self.blocking
+    self.input_queue.send("set-net-params")
+    for p in network_params:
+      self.input_queue.send_bytes(p)
+
+  def set_net_params(self, network):
+    """
+    :type network: Network.LayerNetwork
+    This updates *all* params, not just the train params.
+    """
+    if self.blocking:
+      self.trainnet.set_params_by_dict(network.get_params_dict())
+      self.testnet.set_params_by_dict(network.get_params_dict())
+    else:
+      assert self.main_pid == os.getpid()
+      self.input_queue.send("set-net-params")
+      p = [numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()]
+      for x in p:
+        self.input_queue.send_bytes(x)
 
   def is_device_proc(self):
     if self.blocking:
@@ -676,31 +725,6 @@ class Device():
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-learning-rate")
       self.input_queue.send(learning_rate)
-
-  def get_net_train_params(self):
-    if self.blocking:
-      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.train_params_vars]
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("get-net-train-params")
-      r = self.output_queue.recv()
-      assert r == "net-train-params"
-      r = self.output_queue.recv()
-      return r
-
-  def set_net_params(self, network):
-    """
-    :type network: Network.LayerNetwork
-    This updates *all* params, not just the train params.
-    """
-    if self.blocking:
-      self.trainnet.set_params_by_dict(network.get_params_dict())
-      self.testnet.set_params_by_dict(network.get_params_dict())
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("set-net-params")
-      p = [numpy.asarray(p.get_value()) for p in network.get_all_params_vars()]
-      self.input_queue.send(p)
 
   def maybe_update_network(self, network):
     """

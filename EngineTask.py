@@ -24,6 +24,8 @@ class TaskThread(threading.Thread):
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
+      if len(devices) == 1:
+        eval_batch_size = sys.maxint
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
       self.start_batch = start_batch
@@ -143,7 +145,10 @@ class TaskThread(threading.Thread):
           # We skipped segments. That's fine.
           return True
 
-        device_results, outputs_format = self.device_collect_results()
+        try:
+          device_results, outputs_format = self.device_collect_results()
+        except:
+          device_results = None
         if device_results is None:
           print >> log.v3, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
@@ -186,7 +191,6 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
-          self.parent.prepare_device_for_batch(device)
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -340,39 +344,42 @@ class TaskThread(threading.Thread):
 
         if results['num_frames'] > self.eval_batch_size:
           if all(dev == None for dev in deviceRuns):
-            print "train:", time.time() - se
-            for dev in self.devices:
-              #print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
-              dev.tot = 0
-              dev.se = 0
-              dev.fe = 0
-            se = time.time()
+            #print "train:", time.time() - se
+            #se = time.time()
+            #for dev in self.devices:
+            #  print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
+            #  dev.tot = 0
+            #  dev.se = 0
+            #  dev.fe = 0
             self.evaluate(**results)
             self.eval_batch_idx += 1
             run_frames = 0
             results['batchess'] = []
             results['results'] = []
             results['num_frames'] = 0
-            print "eval:", time.time() - se
           else:
             time.sleep(0.01)
             continue
 
-        self.batch_idx = self.batches.get_current_batch_idx()
-        if self.batches.has_more() and run_frames <= self.eval_batch_size:
+        match = True
+        while self.batches.has_more() and run_frames <= self.eval_batch_size and match:
+          self.batch_idx = self.batches.get_current_batch_idx()
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
-            continue
+            break
+          match = False
           for i in xrange(len(self.devices)):
             if not deviceRuns[i]:
               self.devices[i].te = time.time()
               deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
               run_frames += deviceRuns[i].num_frames
+              match = True
               break
         else:
           if not self.batches.has_more():
             break
-          time.sleep(0.01)
+          if not match:
+            time.sleep(0.01)
           continue
 
       for i,device in enumerate(self.devices):
@@ -380,6 +387,7 @@ class TaskThread(threading.Thread):
           if not deviceRuns[i].finished and not deviceRuns[i].crashed:
             deviceRuns[i].join()
           if deviceRuns[i].crashed:
+            deviceRuns[i] = None
             crashed = True
         if deviceRuns[i] and deviceRuns[i].finished:
           results['batchess'] += deviceRuns[i].result['batchess']
@@ -387,6 +395,7 @@ class TaskThread(threading.Thread):
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
         device.finish_epoch_stats()
+        print device.name, "tot", device.tot,"start",device.se,"finish",device.fe
       if crashed: return
       if results['results']:
         self.evaluate(**results)
@@ -482,7 +491,7 @@ class TrainTaskThread(TaskThread):
           self.device.set_net_params(self.network)
           self.result = True
         else:
-          self.result = self.device.get_net_train_params()
+          self.result = self.device.get_net_train_params(self.network)
         self.active = False
 
     def __init__(self, devices):
@@ -509,16 +518,20 @@ class TrainTaskThread(TaskThread):
 
 
   def create_consensus(self, cost):
+    h = time.time()
+    for device in self.devices:
+      device.sync_net_train_params()
     a = time.time()
     basenet = [p for p in self.network.train_params_vars]
     consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
     hypnets = []
     nparams = len(basenet)
+    encoded = []
     #pipe = self.CopyManager(self.devices)
     b = time.time()
     #hypnets = pipe.copy_from_device()
     for device in self.devices:
-      hypnets.append(device.get_net_train_params())
+      hypnets.append(device.get_net_train_params(self.network))
     # consensus via average
     c = time.time()
     for i in xrange(nparams):
@@ -526,12 +539,13 @@ class TrainTaskThread(TaskThread):
     d = time.time()
     for p, q in zip(self.network.train_params_vars, consnet):
       p.set_value(q)
+      encoded.append(q.tostring())
     e = time.time()
     for device in self.devices:
-      device.set_net_params(self.network)
+      device.set_net_encoded_params(encoded)
     #pipe.copy_to_device(self.network)
     f = time.time()
-    print "consensus:","a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e
+    print "consensus:","h",a-h,"a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e,"tot", f - h
 
   def evaluate(self, batchess, results, result_format, num_frames):
     """
@@ -581,14 +595,6 @@ class TrainTaskThread(TaskThread):
     return eval_info
 
   def finalize(self):
-    if False and self.updater.updateOnDevice:
-      # Copy over params at the very end. Also only if we did training.
-      assert len(self.devices) == 1
-      params = self.devices[0].get_net_train_params()
-      our_params = self.network.train_params_vars
-      assert len(params) == len(our_params)
-      for i in range(len(params)):
-        our_params[i].set_value(params[i])
     assert self.num_frames > 0
     # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
     self.score /= float(self.num_frames)
