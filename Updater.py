@@ -105,6 +105,26 @@ class Updater:
       for p in net_param_deltas[k]:
         self.net_train_param_deltas[k][p].set_value(net_param_deltas[k][p], borrow=True)
 
+  def norm_constraint(self, tensor_var, max_norm, norm_axes=None, epsilon=1e-7):
+    ndim = tensor_var.ndim
+
+    if norm_axes is not None:
+        sum_over = tuple(norm_axes)
+    elif ndim == 2:  # DenseLayer
+        sum_over = (0,)
+    elif ndim in [3, 4, 5]:  # Conv{1,2,3}DLayer
+        sum_over = tuple(range(1, ndim))
+    else:
+        sum_over = (0,)
+
+    dtype = numpy.dtype(theano.config.floatX).type
+    norms = T.sqrt(T.sum(T.sqr(tensor_var), axis=sum_over, keepdims=True))
+    target_norms = T.clip(norms, 0, dtype(max_norm))
+    constrained_output = \
+        (tensor_var * (target_norms / (dtype(epsilon) + norms)))
+
+    return constrained_output
+
   def getUpdateList(self):
     assert self.pid == os.getpid()
     updates = []
@@ -138,7 +158,7 @@ class Updater:
           g = deltas
           g2 = g ** 2
           eg2_new = decay * self.eg2[param] + (1 - decay) * g2
-          dx_new = - T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset) * g
+          dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
           edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
           updates.append((self.eg2[param], eg2_new))
           updates.append((self.edx2[param], edx2_new))
@@ -149,7 +169,8 @@ class Updater:
       if self.momentum > 0:
         updates.append((self.deltas[target][param], upd))
       if upd:
-        updates.append((param, param + upd))
+        #updates.append((param, self.norm_constraint(param + upd, 1.0)))
+    updates.append(param, param + upd)
 
     return updates
 
