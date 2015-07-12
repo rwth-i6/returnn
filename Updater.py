@@ -170,7 +170,7 @@ class Updater:
         updates.append((self.deltas[target][param], upd))
       if upd:
         #updates.append((param, self.norm_constraint(param + upd, 1.0)))
-    updates.append(param, param + upd)
+        updates.append(param, param + upd)
 
     return updates
 
