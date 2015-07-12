@@ -54,7 +54,7 @@ def get_device_attributes():
 
 
 class Device():
-  def __init__(self, device, config, blocking=False, num_batches=1):
+  def __init__(self, device, config, blocking=False, num_batches=1, device_update = True):
     """
     :param str device: name, "gpu*" or "cpu*"
     :param Config.Config config: config
@@ -80,6 +80,7 @@ class Device():
     self.result_called_count = 0
     self.compute_total_time = 0
     self.update_total_time = 0
+    self.device_update = device_update
     self.data = None
     self.main_pid = os.getpid()
 
@@ -141,7 +142,7 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, network_description=None, train_param_args=None):
+  def initialize(self, config, device_update = True, network_description=None, train_param_args=None):
     """
     :type config: Config.Config
     :type network_description: NetworkDescription.LayerNetworkDescription | None
@@ -209,6 +210,7 @@ class Device():
 
     # initialize functions
     self.updater = None
+    self.device_update = device_update
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -224,7 +226,8 @@ class Device():
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
 
-      self.updater = Updater.initFromConfig(config)
+      if self.device_update:
+        self.updater = Updater.initFromConfig(config)
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost"]
@@ -236,15 +239,15 @@ class Device():
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
 
-      if self.updater.updateOnDevice:
+      if self.device_update:
         self.updater.initVars(self.trainnet, self.gradients)
-        self.train_and_updater = theano.function(inputs=[],
-                                                 outputs=outputs,
-                                                 givens=train_givens,
-                                                 updates=self.updater.getUpdateList(),
-                                                 on_unused_input='warn',
-                                                 no_default_updates=False,
-                                                 name="train_and_updater")
+        self.trainer = theano.function(inputs=[],
+                                       outputs=outputs,
+                                       givens=train_givens,
+                                       updates=self.updater.getUpdateList(),
+                                       on_unused_input='warn',
+                                       no_default_updates=False,
+                                       name="train_and_updater")
 
       else:
         self.train_outputs_format += ["gparams..."]
@@ -254,8 +257,8 @@ class Device():
                                        givens=train_givens,
                                        no_default_updates=False,
                                        on_unused_input='warn',
-                                       name="train_distributed")#,
-                                       #mode = theano.compile.MonitorMode(post_func=self.detect_nan))
+                                       name="train_distributed")
+
 
       self.tester = theano.function(inputs=[],
                                     outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
@@ -329,32 +332,20 @@ class Device():
                                       givens = self.make_input_givens(self.testnet),
                                       name = "analyzer")
 
-  def get_compute_func(self, task):
+  def compute_run(self, task):
+    compute_start_time = time.time()
     if task == "train":
-      if self.updater.updateOnDevice:
-        task = "train_and_update"
-      else:
-        task = "train_distributed"
-
-    if task == "train_distributed":
-      return self.trainer
-    elif task == "train_and_update":
-      return self.train_and_updater
+      output = self.trainer()
     elif task == "eval":
-      return self.tester
+      output = self.tester()
     elif task == "extract" or task == "forward":
-      return self.extractor
+      output = self.extractor()
     elif task == 'classify':
-      return self.classifier
+      output = self.classifier()
     elif task == "analyze":
-      return self.analyzer
+      output = self.analyzer()
     else:
       assert False, "invalid command: " + task
-
-  def compute_run(self, task):
-    compute_func = self.get_compute_func(task)
-    compute_start_time = time.time()
-    output = compute_func()
     compute_end_time = time.time()
     self.compute_total_time += compute_end_time - compute_start_time
     # output is a list the outputs which we specified when creating the Theano function in self.initialize().
@@ -445,6 +436,7 @@ class Device():
     """
     device = self.name
     config = self.config
+    device_update = self.device_update
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
@@ -456,7 +448,7 @@ class Device():
       rnn.initFaulthandler()
       rnn.initConfigJson()
       #rnn.maybeInitSprintCommunicator(device_proc=True)
-      self.process_inner(device, config, asyncTask)
+      self.process_inner(device, config, device_update, asyncTask)
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
@@ -467,7 +459,7 @@ class Device():
       sys.excepthook(*sys.exc_info())
       sys.exit(1)
 
-  def process_inner(self, device, config, asyncTask):
+  def process_inner(self, device, config, device_update, asyncTask):
     """
     :type device: str
     :type config: Config.Config
@@ -494,8 +486,8 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config)
-    self._checkGpuFuncs(device, device_id)
+    self.initialize(config, device_update)
+    #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
     network_params = []
@@ -543,9 +535,8 @@ class Device():
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
-        assert self.updater, "Only set if in train mode. Task = %s" % self.network_task
-        assert self.updater.updateOnDevice
-        self.updater.setLearningRate(learning_rate)
+        if self.device_update:
+          self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
         params = []
@@ -717,10 +708,9 @@ class Device():
     """
     :type learning_rate: float
     """
-    assert self.updater, "Only set if in train mode. Task = %s" % self.network_task
-    assert self.updater.updateOnDevice
     if self.blocking:
-      self.updater.setLearningRate(learning_rate)
+      if self.device_update:
+        self.updater.setLearningRate(learning_rate)
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-learning-rate")
@@ -731,11 +721,7 @@ class Device():
     This is usually called before we start a new batch.
     :type network: LayerNetwork
     """
-    if not self.updater or self.updater.updateOnDevice:
-      # We keep the model on the device and update it online.
-      # Thus, no need to update it externally.
-      return
-    self.set_net_params(network)
+    return
 
   def start_epoch_stats(self):
     if not self.is_device_proc():
@@ -800,15 +786,9 @@ class Device():
     :type train_param_args: dict | None
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
-    if not self.blocking:
-      # In blocking, we would have initialized our own updater via self.initialize().
-      self.updater = updater
     # Reinit if needed.
     self.reinit(network.description, train_param_args)
-    if not self.updater or self.updater.updateOnDevice:
-      # If there is no updater, or we do the updates online, we must copy the net params now.
-      # Otherwise we will always update the model via self.maybe_update_network().
-      self.set_net_params(network)
+    self.set_net_params(network)
     self.targetkeys = network.cost.keys()
 
   def run(self, task):

@@ -155,7 +155,39 @@ class TaskThread(threading.Thread):
           self.crashed = True
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
-        self.result = { 'batchess': self.devices_batches, 'results': device_results, 'result_format': outputs_format, 'num_frames': self.num_frames}
+
+        if outputs_format and "gparams..." in outputs_format:
+          output_results = []
+          for i in xrange(len(self.alloc_devices)):
+            res = Device.make_result_dict(device_results[i], outputs_format)
+            if "gparams" in res:
+              self.alloc_devices[i].sync_net_train_params()
+              devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
+              vars = self.parent.network.get_all_params_vars()
+              for p, q in zip(vars, devnet):
+                p.set_value(q)
+              gparams = {}
+              for k in self.parent.network.cost:
+                gparams[k] = {}
+                for p in vars:
+                  gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+              res_gparams = res["gparams"]
+              for i,k in enumerate(self.parent.network.cost):
+                for p, q in zip(vars, res_gparams): # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
+                  if q.shape == p.get_value().shape:
+                    gparams[k][p] = q
+                  elif q.shape:
+                    print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
+              self.parent.updater.setNetParamDeltas(gparams)
+              self.parent.updater.update()
+              self.alloc_devices[i].set_net_params(self.parent.network)
+              res.pop('gparams', None)
+            output_results.append([res[k] for k in res if k != 'gparams'])
+          outputs_format = res.keys()
+        else:
+          output_results = device_results
+
+        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames}
         #self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
         #                                      results=device_results,
         #                                      result_format=outputs_format,
@@ -163,7 +195,6 @@ class TaskThread(threading.Thread):
         self.parent.lock.acquire()
         self.parent.num_frames += self.num_frames
         self.print_process()
-
         self.parent.lock.release()
         return True
 
@@ -436,32 +467,22 @@ class TrainTaskThread(TaskThread):
     self.learning_rate = learning_rate
     self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
-    # The task is passed to Device.run().
-    if self.updater.updateOnDevice:
-      task = "train_and_update"
-    else:
-      task = "train_distributed"
-    super(TrainTaskThread, self).__init__(task, network, devices, data, batches, eval_batch_size, start_batch, pad_batches,
+    super(TrainTaskThread, self).__init__("train", network, devices, data, batches, eval_batch_size, start_batch, pad_batches,
                                           report_prefix, exclude)
 
   def initialize(self):
     self.score = 0
     if self.do_ctc_priors:
       self.ctc_priors = numpy.zeros(shape=(self.network.n_out,), dtype=theano.config.floatX)
-    if self.updater.updateOnDevice:
-      for device in self.devices:
-        device.set_learning_rate(self.learning_rate)
-    else:
-      if not self.updater.isInitialized:
-        self.updater.initVars(self.network, None)
+    for device in self.devices:
+      device.set_learning_rate(self.learning_rate)
+    if not self.updater.isInitialized:
+      self.updater.initVars(self.network, None)
       self.updater.setLearningRate(self.learning_rate)
-      self.updater_func = self.updater.getUpdateFunction()
 
   def prepare_device_for_batch(self, device):
     """ :type device: Device.Device """
-    if not self.updater.updateOnDevice and device.eval_batch_idx < self.eval_batch_idx:
-      device.set_net_params(self.network)
-      device.eval_batch_idx = self.eval_batch_idx
+    return
 
   def get_device_prepare_args(self):
     kwargs = super(TrainTaskThread, self).get_device_prepare_args()
@@ -518,34 +539,29 @@ class TrainTaskThread(TaskThread):
 
 
   def create_consensus(self, cost):
-    #h = time.time()
     for device in self.devices:
       device.sync_net_train_params()
-    #a = time.time()
     basenet = self.network.train_params_vars
     consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
     hypnets = []
     nparams = len(basenet)
     encoded = []
     #pipe = self.CopyManager(self.devices)
-    #b = time.time()
     #hypnets = pipe.copy_from_device()
     for device in self.devices:
       hypnets.append(device.get_net_train_params(self.network))
-    # consensus via average
-    #c = time.time()
-    for i in xrange(nparams):
-      consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) / len(hypnets)
-    #d = time.time()
-    for p, q in zip(basenet, consnet):
+    if len(hypnets) == 1:
+      consnet = hypnets[0]
+    else:
+      # consensus via average
+      for i in xrange(nparams):
+        consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) / len(hypnets)
+    for p, q in zip(self.network.train_params_vars, consnet):
       p.set_value(q)
       encoded.append(q.tostring())
-    #e = time.time()
     for device in self.devices:
       device.set_net_encoded_params(encoded)
     #pipe.copy_to_device(self.network)
-    #f = time.time()
-    #print "consensus:","h",a-h,"a",b-a,"b",c-b,"c",d-c,"d",e-d,"e",f-e,"tot", f - h
 
   def evaluate(self, batchess, results, result_format, num_frames):
     """
@@ -569,24 +585,7 @@ class TrainTaskThread(TaskThread):
       for res in results:
         self.ctc_priors += res["ctc_priors"]
     self.score += score
-    if not self.updater.updateOnDevice:
-      gparams = {}
-      for k in self.network.cost:
-        gparams[k] = {}
-        for p in self.network.train_params_vars:
-          gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-      # Add up all gparams.
-      for res in results:
-        res_gparams = res["gparams"]
-        assert len(self.network.train_params_vars) * len(self.network.cost.keys()) == len(res_gparams), "expected " + str(len(self.network.train_params_vars) * len(self.network.cost.keys())) + " got " + str(len(res_gparams))
-        for i,k in enumerate(self.network.cost):
-          for p, q in zip(self.network.train_params_vars, res_gparams[i * len(self.network.train_params_vars):(i+1) * len(self.network.train_params_vars)]):
-            gparams[k][p] += q
-      self.updater.setNetParamDeltas(gparams)
-      self.updater_func()
-    else:
-      self.create_consensus(cost)
-
+    self.create_consensus(cost)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().

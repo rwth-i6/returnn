@@ -116,10 +116,14 @@ def getDevicesInitArgs(config):
   device_tags = {}
   ncpus, ngpus = get_num_devices()
   if "all" in device_info:
-    device_tags = { tag: 1 for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
+    device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
   else:
     for info in device_info:
+      device_update = True
       num_batches = 1
+      if info[0] == '_':
+        device_update = False
+        info = info[1:]
       if ':' in info:
         num_batches = int(info.split(':')[1])
         info = info.split(':')[0]
@@ -139,19 +143,14 @@ def getDevicesInitArgs(config):
         match = False
         for p in xrange(np):
           if re.match(uid, str(p)):
-            device_tags[utype + str(p)] = num_batches
+            device_tags[utype + str(p)] = [num_batches, device_update]
             match = True
         assert match, "invalid device specified: " + info
   tags = sorted(device_tags.keys())
-  if multiproc:
-    assert len(tags) > 0
-    devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag]} for tag in tags ]
-    assert not TheanoFlags.get("device", "").startswith("gpu"), \
-        "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
-  else:
-    devices = [ {"device": tags[0], "config": config, "blocking": True} ]
-  if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
-    devices.append({"device": "cpu127", "config": config})
+  assert len(tags) > 0
+  devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "device_update" : device_tags[tag][1]} for tag in tags ]
+  #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
+  #  devices.append({"device": "cpu127", "config": config})
   return devices
 
 
@@ -266,7 +265,8 @@ def printTaskProperties(devices):
     print >> log.v3, "(units:", device.get_device_shaders(), \
                      "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
                      "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
-    print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+    print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch",
+    print >> log.v3, "(update on device)" if device.device_update else "(update on host)"
 
 
 def initEngine(devices):

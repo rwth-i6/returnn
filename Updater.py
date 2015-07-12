@@ -11,7 +11,6 @@ class Updater:
   def initFromConfig(cls, config):
     import rnn
     kwargs = {
-      "updateOnDevice": config.bool('live_update', True),
       "gradient_clip": config.float('gradient_clip', -1),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
@@ -20,13 +19,12 @@ class Updater:
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, updateOnDevice):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset):
     """
     :type momentum: float
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
-    :type updateOnDevice: bool
     """
     self.momentum = momentum
     self.gradient_clip = gradient_clip
@@ -34,7 +32,6 @@ class Updater:
     self.adadelta = adadelta
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
-    self.updateOnDevice = updateOnDevice
     self.pid = -1
     assert not (self.adagrad and self.adadelta)
     if self.adadelta:
@@ -59,11 +56,9 @@ class Updater:
     assert not self.isInitialized
     self.pid = os.getpid()
     self.network = network
-    if self.updateOnDevice:
-      assert net_param_deltas is not None
+    if net_param_deltas is not None:
       self.net_train_param_deltas = net_param_deltas
     else:
-      assert net_param_deltas is None
       self.net_train_param_deltas = {k: {p : theano.shared(numpy.zeros(p.get_value(borrow=True,
                                                                               return_internal_type=True).shape,
                                                                   dtype=theano.config.floatX))
@@ -102,7 +97,6 @@ class Updater:
 
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
-    assert not self.updateOnDevice
     for k in net_param_deltas:
       for p in net_param_deltas[k]:
         self.net_train_param_deltas[k][p].set_value(net_param_deltas[k][p], borrow=True)
@@ -157,7 +151,8 @@ class Updater:
     assert self.pid == os.getpid()
     self.learning_rate_var.set_value(learning_rate)
 
-  def getUpdateFunction(self):
+  def update(self):
     assert self.pid == os.getpid()
     updates = self.getUpdateList()
-    return theano.function(inputs=[], updates=updates, name="updater")
+    updater = theano.function(inputs=[], updates=updates, name="updater")
+    return updater()

@@ -209,17 +209,28 @@ class LstmOutputLayer(RecurrentLayer):
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
       self.add_param(self.sharpness, 'gate_scaling')
 
-    z = self.b
-    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
-      if x_t.attrs['sparse']:
-        z += W[T.cast(x_t.output[:,:,0], 'int32')]
-      elif m is None:
-        z += T.dot(x_t.output, W)
-      else:
-        z += T.dot(self.mass * m * x_t.output, W)
+    assert self.attrs['optimization'] in ['memory', 'speed']
+    if self.attrs['optimization'] == 'speed':
+      z = self.b
+      for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+        if x_t.attrs['sparse']:
+          z += W[T.cast(x_t.output[:,:,0], 'int32')]
+        elif m is None:
+          z += T.dot(x_t.output, W)
+        else:
+          z += T.dot(self.mass * m * x_t.output, W)
 
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
+      if self.attrs['optimization'] == 'memory':
+        z += self.b
+        for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+          if x_t.attrs['sparse']:
+            z += W[T.cast(x_t.output[:,:,0], 'int32')]
+          elif m is None:
+            z += T.dot(x_t.output, W)
+          else:
+            z += T.dot(self.mass * m * x_t.output, W)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
       if self.attrs['loop'] == 'soft' or (self.attrs['loop'] != 'none' and not self.train_flag):
         z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
@@ -237,7 +248,7 @@ class LstmOutputLayer(RecurrentLayer):
     def nstep(z_batch, i_t, s_batch, h_batch):
       #t_t = T.switch(T.eq(T.sum(i_t), 0), i_t + 1, i_t)
       #j_t = (t_t > 0).nonzero()
-      j_t = (i_t > 0).nonzero()
+      j_t = (i_t.flatten() > 0).nonzero()
       #j_t = i_t
       z = z_batch[j_t]
       s_p = s_batch[j_t]
@@ -254,6 +265,10 @@ class LstmOutputLayer(RecurrentLayer):
       s_i = input * ingate + s_p * forgetgate
       s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
+      #s_q = T.zeros_like(s_p, dtype = theano.config.floatX)
+      #s_out = T.inc_subtensor(s_q[j_t], s_i)
+      #h_q = T.zeros_like(h_p, dtype = theano.config.floatX)
+      #h_out = T.inc_subtensor(h_q[j_t], h_t)
       s_out = T.set_subtensor(s_p[j_t], s_i)
       h_out = T.set_subtensor(h_p[j_t], h_t)
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
@@ -271,7 +286,7 @@ class LstmOutputLayer(RecurrentLayer):
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
-        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re)
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re) + self.b
         if self.attrs['loop'] == 'hard' and self.train_flag:
           sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
       else:
