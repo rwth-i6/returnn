@@ -432,6 +432,7 @@ class TaskThread(threading.Thread):
         self.evaluate(**results)
         self.eval_batch_idx += 1
       self.finalize()
+      if self.interactive: progress_bar()
       self.elapsed = (time.time() - self.start_time)
 
 

@@ -52,7 +52,46 @@ class LstmLayer(RecurrentLayer):
     self.sharpness.set_value(numpy.ones(self.sharpness.get_value().shape, dtype = theano.config.floatX))
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single": self.add_param(self.sharpness, 'gate_scaling')
 
-    def step(*args):
+    assert self.attrs['optimization'] in ['memory', 'speed']
+    if self.attrs['optimization'] == 'speed':
+      z = self.b
+      for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+        if x_t.attrs['sparse']:
+          z += W[T.cast(x_t.output[:,:,0], 'int32')]
+        elif m is None:
+          z += T.dot(x_t.output, W)
+        else:
+          z += T.dot(self.mass * m * x_t.output, W)
+    else:
+      z = 0 if not self.sources else T.concatenate([x.output for x in self.sources], axis = -1)
+
+    def step(z, i_t, s_p, h_p):
+      if self.attrs['optimization'] == 'memory':
+        offset = 0
+        y = 0
+        for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+          xin = z[:,:,offset:x_t.output.shape[2]]
+          offset += x_t.output.shape[2]
+          if x_t.attrs['sparse']:
+            y += W[T.cast(xin[:,:,0], 'int32')]
+          elif m is None:
+            y += T.dot(xin, W)
+          else:
+            y += T.dot(self.mass * m * xin, W)
+        z = y + self.b
+      z += T.dot(h_p, self.W_re)
+      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
+      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
+      ingate = GI(z[:,n_out: 2 * n_out])
+      forgetgate = GF(z[:,2 * n_out:3 * n_out])
+      outgate = GO(z[:,3 * n_out:])
+      input = CI(z[:,:n_out])
+      s_i = input * ingate + s_p * forgetgate
+      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      h_t = CO(s_t) * outgate
+      return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
+
+    def osstep(*args):
       x_ts = args[:self.num_sources]
       i_t = args[self.num_sources]
       s_p = args[self.num_sources + 1]
@@ -162,9 +201,26 @@ class OptimizedLstmLayer(RecurrentLayer):
       else:
         z += T.dot(self.mass * m * x_t.output, W)
 
+    def index_step(z_batch, i_t, s_batch, h_batch): # why is this slower :(
+      q_t = i_t #T.switch(T.any(i_t), i_t, T.ones_like(i_t))
+      j_t = (q_t > 0).nonzero()
+      s_p = s_batch[j_t]
+      h_p = h_batch[j_t]
+      z = z_batch[j_t]
+      z += T.dot(h_p, self.W_re)
+      ingate = GI(z[:,n_out: 2 * n_out])
+      forgetgate = GF(z[:,2 * n_out:3 * n_out])
+      outgate = GO(z[:,3 * n_out:])
+      input = CI(z[:,:n_out])
+      s_i = input * ingate + s_p * forgetgate
+      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      h_t = CO(s_t) * outgate
+      s_out = T.set_subtensor(s_batch[j_t], s_i)
+      h_out = T.set_subtensor(h_batch[j_t], h_t)
+      return theano.gradient.grad_clip(s_out, -50, 50), h_out
+
     def step(z, i_t, s_p, h_p):
       z += T.dot(h_p, self.W_re)
-      #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_out: 2 * n_out])
@@ -174,27 +230,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       s_i = input * ingate + s_p * forgetgate
       s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
-      return theano.gradient.grad_clip(s_i * i, -50, 50), h_t * j
-
-    def nstep(z_batch, i_t, s_batch, h_batch):
-      #t_t = T.switch(T.eq(T.sum(i_t), 0), i_t + 1, i_t)
-      #j_t = (t_t > 0).nonzero()
-      j_t = (i_t > 0).nonzero()
-      z = z_batch[j_t]
-      s_p = s_batch[j_t]
-      h_p = h_batch[j_t]
-
-      z += T.dot(h_p, self.W_re)
-      ingate = GI(z[:,n_out: 2 * n_out])
-      forgetgate = GF(z[:,2 * n_out:3 * n_out])
-      outgate = GO(z[:,3 * n_out:])
-      input = CI(z[:,:n_out])
-      s_i = input * ingate + s_p * forgetgate
-      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
-      h_t = CO(s_t) * outgate
-      s_out = T.set_subtensor(s_p[j_t], s_i)
-      h_out = T.set_subtensor(h_p[j_t], h_t)
-      return theano.gradient.grad_clip(s_out, -50, 50), h_out
+      return theano.gradient.grad_clip(s_i * i + s_p * (1-i), -50, 50), h_t * j + h_p * (1-j)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:

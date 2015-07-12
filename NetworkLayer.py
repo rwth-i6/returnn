@@ -138,7 +138,7 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, target=None, sparse = False, optimization = "speed", **kwargs):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
     """
     :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -156,7 +156,6 @@ class Layer(Container):
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
-    self.set_attr('optimization', optimization)
     if target:
       self.set_attr('target', target)
     self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)

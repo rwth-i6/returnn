@@ -54,23 +54,6 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
             #  for i in xrange(l[1]):
             #    if device.targets[target][o + i, q] in exclude:
             #      device.index[o + i, q] = 0
-
-            #if recurrent and pad_batches:
-            #  assert o == 0  # Doesn't make sense otherwise. # lol, obviously
-            #  # pad with equivalent to 0
-            #  # these are the hardcoded values for IAM
-            #  # TODO load this from somewhere
-            #  pad_data = [-1.46374, -0.151816, -0.161173, 0.0686325, 0.0231148, -0.154613,
-            #              -0.105614, 0.00550198, 0.0911985, 0.00502809, 0.0512826, -0.0181915,
-            #              0.0225053, -0.00149681, 0.0782062, 0.0412163, 0.0526166, -0.0722563,
-            #              0.0268245, -0.0277465, 0.258805, -0.187777, -2.3835, -1.42065]
-            #  device.data[o + l:, q] = pad_data
-            #  # also pad targets
-            #  # hardcoded si for IAM
-            #  # TODO load this from somewhere
-            #  pad_target = 189
-            #  device.targets[target][o + l:, q] = pad_target
-
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
@@ -82,11 +65,9 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
 
     #for i in xrange(device.input_index.shape[0]):
     #  if numpy.sum(device.input_index[i,:]) == 0:
-    #    print "hi"
     #    device.input_index[i,0] = 1
     #for i in xrange(device.output_index.shape[0]):
     #  if numpy.sum(device.output_index[i,:]) == 0:
-    #    print "ho"
     #    device.output_index[i,0] = 1
     # Note on multiple batches for the non-recurrent case:
     # We could either concatenate all into a single slice, or do multiple slices.
