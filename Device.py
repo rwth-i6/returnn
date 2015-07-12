@@ -187,6 +187,7 @@ class Device():
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
       self.c = T.cast(self.cp, 'int32')
     gparams = []
+    exclude = []
     self.gradients = { k : {} for k in self.y }
     if config.bool('debug_gradient_norm', False):
       # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
@@ -197,9 +198,16 @@ class Device():
     for target in self.y:
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        try:
-          gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
-        except theano.gradient.DisconnectedInputError:
+        if False: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
+          gparam = 0
+        else:
+          try:
+            gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
+          except theano.gradient.DisconnectedInputError:
+            gparam = 0
+        if gparam == 0:
+          exclude.append(param)
+          print "exclude:", param.name
           gparams.append(T.constant(0))
           continue
         self.gradients[target][param] = gparam
@@ -241,12 +249,13 @@ class Device():
 
       if self.device_update:
         self.updater.initVars(self.trainnet, self.gradients)
+        print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[],
                                        outputs=outputs,
                                        givens=train_givens,
                                        updates=self.updater.getUpdateList(),
                                        on_unused_input='warn',
-                                       no_default_updates=False,
+                                       no_default_updates=exclude,
                                        name="train_and_updater")
 
       else:

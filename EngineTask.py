@@ -551,7 +551,9 @@ class TrainTaskThread(TaskThread):
     #hypnets = pipe.copy_from_device()
     for device in self.devices:
       hypnets.append(device.get_net_train_params(self.network))
-    if len(hypnets) == 1:
+    if len(hypnets) == 0:
+      consnet = basenet
+    elif len(hypnets) == 1:
       consnet = hypnets[0]
     else:
       # consensus via average
@@ -560,8 +562,9 @@ class TrainTaskThread(TaskThread):
     for p, q in zip(self.network.train_params_vars, consnet):
       p.set_value(q)
       encoded.append(q.tostring())
-    for device in self.devices:
-      device.set_net_encoded_params(encoded)
+    if len(hypnets) > 1:
+      for device in self.devices:
+        device.set_net_encoded_params(encoded)
     #pipe.copy_to_device(self.network)
 
   def evaluate(self, batchess, results, result_format, num_frames):

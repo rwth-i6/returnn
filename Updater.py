@@ -74,11 +74,15 @@ class Updater:
                      name="deltas_%s" % p)
                      for p in network.train_params_vars} for k in self.network.cost}
     if self.adagrad:
-      self.sqrsum = {p: theano.shared(
+      self.accu = {p: theano.shared(
                      value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), borrow=True,
-                     name="sqrsum_%s " % p)
-                     for p in self.network.train_params_vars}
+                                       dtype=theano.config.floatX), borrow=True, name="accu_%s " % p)
+                  for p in self.network.train_params_vars}
+      #self.sqrsum = {p: theano.shared(
+      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+      #                                 dtype=theano.config.floatX), borrow=True,
+      #               name="sqrsum_%s " % p)
+      #               for p in self.network.train_params_vars}
     if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
@@ -121,9 +125,13 @@ class Updater:
         if self.momentum > 0:
           upd += self.momentum * self.deltas[target][param]
         if self.adagrad:
-          updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
-          upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
-        if self.adadelta:
+          epsilon = 1e-6
+          accu_new = self.accu[param] + deltas ** 2
+          updates.append((self.accu[param], accu_new))
+          upd += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
+          #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
+          #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
+        elif self.adadelta:
           # http://arxiv.org/pdf/1212.5701v1.pdf
           decay = self.adadelta_decay
           offset = self.adadelta_offset
@@ -140,7 +148,8 @@ class Updater:
           upd += - self.learning_rate_var * deltas
       if self.momentum > 0:
         updates.append((self.deltas[target][param], upd))
-      updates.append((param, param + upd))
+      if upd:
+        updates.append((param, param + upd))
 
     return updates
 
