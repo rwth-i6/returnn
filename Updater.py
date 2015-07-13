@@ -169,7 +169,7 @@ class Updater:
         #if self.momentum > 0:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
-          self.use_adagrad = True #False
+          self.use_adagrad = False
           self.delta_clip = None
           self.decay = 0.95
           self.upper_bound_tau = 1e8
