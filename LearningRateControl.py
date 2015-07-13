@@ -23,7 +23,7 @@ class LearningRateControl(object):
     :rtype: dict[str]
     """
     return {
-      "initialLearningRate": config.float('learning_rate', 0.01),
+      "initialLearningRate": config.float('learning_rate', 1.0),
       "filename": config.value('learning_rate_file', None)}
 
   @classmethod

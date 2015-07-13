@@ -348,7 +348,7 @@ class CachedDataset(Dataset):
       assert nframes > 0
     deleted = 0
     i = 0
-    while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
+    while (not nframes or min(deleted) < nframes) and i < len(self.alloc_intervals.shape[0]):
       ai = self.alloc_intervals[i]
       if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
         s = max(ai[0], self.num_seqs_cached_at_start)

@@ -37,9 +37,7 @@ class Updater:
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.pid = -1
-    if self.adadelta or self.adagrad:
-      self.varreg = False
-    assert not (self.adagrad and self.adadelta)
+    assert not (self.adagrad and self.adadelta and not self.varreg)
     if self.adadelta:
       self.momentum = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
