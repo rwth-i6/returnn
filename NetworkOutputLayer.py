@@ -300,21 +300,26 @@ class LstmOutputLayer(RecurrentLayer):
   def get_branching(self):
     return sum([W.get_value().shape[0] for W in self.W_in]) + 1 + self.attrs['n_units'] + self.attrs['n_classes']
 
-  def get_energy(self):
+  def get_energyo(self):
     energy =  self.b / (4 * self.attrs['n_units'])
     for W in self.W_in:
       energy += T.sum(W, axis = 0)
     energy += T.sum(self.W_re, axis = 0)
     return energy
 
+  def get_energy(self):
+    energy =  abs(self.b) / (4 * self.attrs['n_out'])
+    for W in self.W_in:
+      energy += T.sum(abs(W), axis = 0)
+    energy += T.sum(abs(self.W_re), axis = 0)
+    return energy
+
   def make_constraints(self):
     if self.attrs['varreg'] > 0.0:
       # input: W_in, W_re, b
-      energy =  self.b / (4 * self.attrs['n_units'])
-      for W in self.W_in:
-        energy += T.sum(W, axis = 0)
-      energy += T.sum(self.W_re, axis = 0) + T.sum(self.W_rec, axis = 0)
-      self.constraints = self.attrs['varreg'] * (1.0 * T.sqrt(T.var(energy)) - 6.0)**2
+      energy = self.get_energy()
+      #self.constraints = self.attrs['varreg'] * T.mean((energy - 6.0)**2) #(6.0 - T.var(energy, axis = 0))**2) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
+      self.constraints =  self.attrs['varreg'] * T.sum(energy) - T.sqrt(6.) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
     return super(LstmOutputLayer, self).make_constraints()
 
   def cost(self):
