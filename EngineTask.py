@@ -301,8 +301,10 @@ class TaskThread(threading.Thread):
       try:
         self.run_inner()
       except IOError, e:  # Such as broken pipe.
-        print >> log.v3, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
+        print >> log.v4, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
+      except KeyboardInterrupt:
+        sys.exit(1)
       except Exception:
         # Catch all standard exceptions.
         # These are not device errors. We should have caught them in the code
@@ -312,8 +314,9 @@ class TaskThread(threading.Thread):
         # trigger KeyboardInterrupt in the main thread only.
         try:
           print >> log.v1, "%s failed" % self.name
-          sys.excepthook(*sys.exc_info())
-          print ""
+          if self.log.v[3]:
+            sys.excepthook(*sys.exc_info())
+            print ""
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           thread.interrupt_main()

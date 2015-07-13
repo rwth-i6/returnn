@@ -91,6 +91,7 @@ class Container(object):
     :rtype: T
     """
     if name == "": name = "param_%d" % len(self.params)
+    param.layer = self
     self.params[name] = param
     return param
 
@@ -103,15 +104,18 @@ class Container(object):
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
-    if not scale: scale = numpy.sqrt(12. / (n + m))
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=(n, m)), dtype=theano.config.floatX)
+    if not scale:
+      scale =  numpy.sqrt((n + m) / 12.)
+    else:
+      scale = numpy.sqrt(scale / 12.)
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
-    if not l: l = sqrt(6) / sqrt(p)  # 1 / sqrt(p)
+    if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
@@ -138,7 +142,7 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=1.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
     """
     :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -156,9 +160,11 @@ class Layer(Container):
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
+    self.set_attr('varreg', varreg)
+    self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name, False)
     self.mass = T.constant(1., name = "mass_%s" % self.name)
     if mask == "unity" or dropout == 0:
       self.masks = [None] * len(self.sources)
@@ -183,6 +189,35 @@ class Layer(Container):
       if p != 'b':
         self.params[p].set_value(numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = min(len(self.params[p].get_value().shape) - 1, axis)))
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
+
+
+  def add_param(self, param, name="", constraints = True):
+    """
+    :type param: T
+    :type name: str
+    :rtype: T
+    """
+    super(Layer, self).add_param(param, name)
+    if constraints:
+      if 'L1' in self.attrs and self.attrs['L1'] > 0:
+        self.constraints +=  self.attrs['L1'] * abs(param.sum())
+      if 'L2' in self.attrs and self.attrs['L2'] > 0:
+        self.constraints +=  self.attrs['L2'] * (param**2).sum()
+      if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
+        self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
+    return param
+
+  def get_branching(self):
+    return sum([W.get_value().shape[0] for W in self.W_in]) + 1
+
+  def get_energy(self):
+    energy =  self.b / self.attrs['n_out']
+    for W in self.W_in:
+      energy += T.sum(W, axis = 0)
+    return energy
+
+  def make_constraints(self):
+    return self.constraints
 
   def to_json(self):
     attrs = super(Layer, self).to_json()

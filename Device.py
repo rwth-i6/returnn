@@ -123,8 +123,11 @@ class Device():
     self.input_queue = self.output_queue = self.proc.conn
 
     self.id = self.output_queue.recv(); """ :type: int """
-    self.device_name = self.output_queue.recv(); """ :type: str """
-    self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+    try:
+      self.device_name = self.output_queue.recv(); """ :type: str """
+      self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+    except EOFError:
+      raise KeyboardInterrupt
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
@@ -249,7 +252,7 @@ class Device():
 
       if self.device_update:
         self.updater.initVars(self.trainnet, self.gradients)
-        print self.updater.getUpdateList()
+        #print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[],
                                        outputs=outputs,
                                        givens=train_givens,
@@ -461,8 +464,10 @@ class Device():
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
-      print >> log.v2, "Device %s proc got KeyboardInterrupt" % device
-      sys.excepthook(*sys.exc_info())
+      if log.v[4]:
+        print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
+        sys.excepthook(*sys.exc_info())
+      sys.exit(1)
     except Exception as e:
       print >> log.v2, "Device %s proc exception: %s" % (device, e)
       sys.excepthook(*sys.exc_info())

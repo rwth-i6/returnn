@@ -2,6 +2,7 @@
 
 import json
 import inspect
+import numpy
 
 import theano.tensor as T
 import h5py
@@ -47,6 +48,7 @@ class LayerNetwork(object):
     self.c = {} #T.imatrix('c'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
     self.j = T.bmatrix('j'); """ :type: theano.Variable """
+    self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
@@ -223,12 +225,7 @@ class LayerNetwork(object):
     """
     assert layer.name
     self.hidden[layer.name] = layer
-    if isinstance(layer, RecurrentLayer):
-      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(layer.W_re.sum())
-      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (layer.W_re ** 2).sum()
-    for W in layer.W_in:
-      if layer.attrs['L1'] > 0.0: self.L1 += layer.attrs['L1'] * abs(W.sum())
-      if layer.attrs['L2'] > 0.0: self.L2 += layer.attrs['L2'] * (W ** 2).sum()
+    self.constraints += layer.make_constraints()
 
   def make_classifier(self, name, target, **kwargs):
     """
@@ -259,10 +256,6 @@ class LayerNetwork(object):
     self.output[name] = layer_class(index=self.j, name=name, target=target, y = targets, **kwargs)
     if target != "null":
       self.errors[target] = self.output[name].errors()
-
-      for W in self.output[name].W_in:
-        if self.output[name].attrs['L1'] > 0.0: self.L1 += self.output[name].attrs['L1'] * abs(W.sum())
-        if self.output[name].attrs['L2'] > 0.0: self.L2 += self.output[name].attrs['L2'] * (W ** 2).sum()
       self.declare_train_params()
       cost = self.output[name].cost()
       self.cost[target], self.known_grads = cost[:2]
@@ -271,7 +264,7 @@ class LayerNetwork(object):
         assert self.ctc_priors is not None
       else:
         self.ctc_priors = None
-      self.objective[target] = self.cost[target] + self.L1 + self.L2 #+ entropy * self.output.entropy()
+      self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
@@ -370,8 +363,6 @@ class LayerNetwork(object):
     self.description = description
     n_in = self.n_in
     x_in = self.x
-    self.L1 = T.constant(0)
-    self.L2 = T.constant(0)
     self.recurrent = False
     self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):

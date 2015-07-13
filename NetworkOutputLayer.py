@@ -165,6 +165,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('loss', loss.encode("utf8"))
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
+    self.set_attr('n_classes', n_out)
     if loop == True:
       loop = 'hard' if self.train_flag else 'soft'
     self.set_attr('loop', loop)
@@ -196,10 +197,10 @@ class LstmOutputLayer(RecurrentLayer):
                                                      s.attrs['n_out'] + n_units + n_units * 3 + n_re,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
 
-    self.W_cls = self.add_param(self.create_forward_weights(self.attrs['n_units'], self.attrs['n_out'],
+    self.W_cls = self.add_param(self.create_forward_weights(self.attrs['n_units'], self.attrs['n_classes'],
                                                             name="W_cls_%s_%s" % (self.name, self.name)),
                                 "W_cls_%s_%s" % (self.name, self.name))
-    self.W_rec = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_units'] * 3 + n_re, n_in + n_re + self.attrs['n_units'] * 3 + n_re,
+    self.W_rec = self.add_param(self.create_random_uniform_weights(self.attrs['n_classes'], self.attrs['n_units'] * 3 + n_re, n_in + n_re + self.attrs['n_units'] * 3 + n_re,
                                               name="W_rec_%s" % self.name),
                                 "W_rec_%s" % (self.name))
 
@@ -296,6 +297,25 @@ class LstmOutputLayer(RecurrentLayer):
     self.attrs['sparse'] = True
     self.j = (self.index.flatten() > 0).nonzero()
 
+  def get_branching(self):
+    return sum([W.get_value().shape[0] for W in self.W_in]) + 1 + self.attrs['n_units'] + self.attrs['n_classes']
+
+  def get_energy(self):
+    energy =  self.b / (4 * self.attrs['n_units'])
+    for W in self.W_in:
+      energy += T.sum(W, axis = 0)
+    energy += T.sum(self.W_re, axis = 0)
+    return energy
+
+  def make_constraints(self):
+    if self.attrs['varreg'] > 0.0:
+      # input: W_in, W_re, b
+      energy =  self.b / (4 * self.attrs['n_units'])
+      for W in self.W_in:
+        energy += T.sum(W, axis = 0)
+      energy += T.sum(self.W_re, axis = 0) + T.sum(self.W_rec, axis = 0)
+      self.constraints = self.attrs['varreg'] * (1.0 * T.sqrt(T.var(energy)) - 6.0)**2
+    return super(LstmOutputLayer, self).make_constraints()
 
   def cost(self):
     known_grads = None

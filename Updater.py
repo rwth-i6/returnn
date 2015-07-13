@@ -3,6 +3,7 @@ import theano
 import numpy
 import os
 from Log import log
+from math import sqrt
 import theano.tensor as T
 
 class Updater:
@@ -14,25 +15,30 @@ class Updater:
       "gradient_clip": config.float('gradient_clip', -1),
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
+      "varreg" : config.bool('varreg', False),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, varreg):
     """
     :type momentum: float
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
     """
+    self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.gradient_clip = gradient_clip
+    self.varreg = varreg
     self.adagrad = adagrad
     self.adadelta = adadelta
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.pid = -1
+    if self.adadelta or self.adagrad:
+      self.varreg = False
     assert not (self.adagrad and self.adadelta)
     if self.adadelta:
       self.momentum = 0.0
@@ -74,16 +80,25 @@ class Updater:
                      name="deltas_%s" % p)
                      for p in network.train_params_vars} for k in self.network.cost}
     if self.adagrad:
-      self.accu = {p: theano.shared(
-                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), borrow=True, name="accu_%s " % p)
-                  for p in self.network.train_params_vars}
+      self.accu = {}
+      for p in self.net_train_param_deltas[self.net_train_param_deltas.keys()[0]]:
+        shape = p.get_value(borrow=True, return_internal_type=True).shape
+        scale = numpy.sqrt(12. / numpy.sum(shape))
+        values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
+        values = p.get_value()
+        values = numpy.zeros(shape, dtype=theano.config.floatX)
+        self.accu[p] = theano.shared(value=values)
+
+      #self.accu = {p: theano.shared(
+      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+      #                                 dtype=theano.config.floatX), borrow=True, name="accu_%s " % p)
+      #            for p in self.network.train_params_vars}
       #self.sqrsum = {p: theano.shared(
       #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
       #                                 dtype=theano.config.floatX), borrow=True,
       #               name="sqrsum_%s " % p)
       #               for p in self.network.train_params_vars}
-    if self.adadelta:
+    if self.adadelta or self.varreg:
       # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                                      dtype=theano.config.floatX))
@@ -151,6 +166,27 @@ class Updater:
           upd += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
           #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
           #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
+        elif self.varreg:
+          offset = 6.0 / param.layer.get_branching()
+          decay = 1.0 - sqrt(offset)
+          g = deltas
+          g2 = g ** 2
+          #z_eg2 = T.sum(self.eg2[param])
+          #z_g2 = T.sum(g2)
+          #z = z_eg2 + z_g2
+          #eg2_new = self.eg2[param] * z_eg2 / z + g2 * z_g2 / z
+          eg2_new = decay * self.eg2[param] + (1 - decay) * g2
+          dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
+          edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
+          #r_edx2 = T.sum(self.edx2[param], axis = 0)
+          #r_dx_new = T.sum(dx_new**2, axis = 0)
+          #r = r_edx2 + r_dx_new
+          #edx2_new = self.edx2[param] * z_eg2 / z + (dx_new**2) * z_g2 / z
+          #edx2_new = self.edx2[param] * r_edx2 / r + (dx_new**2) * r_dx_new / r
+          updates.append((self.eg2[param], eg2_new))
+          updates.append((self.edx2[param], edx2_new))
+          updates.append((self.dx[param], dx_new))
+          upd += self.learning_rate_var * dx_new
         elif self.adadelta:
           # http://arxiv.org/pdf/1212.5701v1.pdf
           decay = self.adadelta_decay
@@ -170,7 +206,7 @@ class Updater:
         updates.append((self.deltas[target][param], upd))
       if upd:
         #updates.append((param, self.norm_constraint(param + upd, 1.0)))
-        updates.append(param, param + upd)
+        updates.append((param, param + upd))
 
     return updates
 

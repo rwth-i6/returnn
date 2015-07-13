@@ -219,8 +219,8 @@ class OptimizedLstmLayer(RecurrentLayer):
       h_out = T.set_subtensor(h_batch[j_t], h_t)
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
-    def step(z, i_t, s_p, h_p):
-      z += T.dot(h_p, self.W_re)
+    def step(z, i_t, s_p, h_p, W_re):
+      z += T.dot(h_p, W_re)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_out: 2 * n_out])
@@ -251,11 +251,13 @@ class OptimizedLstmLayer(RecurrentLayer):
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
       [state, act], _ = theano.scan(step,
+                                    #strict = True,
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
                                     sequences = [ sequences[s::self.attrs['sampling']], index ],
-                                    outputs_info = outputs_info)
+                                    outputs_info = outputs_info,
+                                    non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
           totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
@@ -270,3 +272,20 @@ class OptimizedLstmLayer(RecurrentLayer):
     else:
       self.output = totact[::-(2 * self.attrs['reverse'] - 1)]
 
+  def get_branching(self):
+    return sum([W.get_value().shape[0] for W in self.W_in]) + 1 + self.attrs['n_out']
+
+  def get_energy(self):
+    energy =  self.b / (4 * self.attrs['n_out'])
+    for W in self.W_in:
+      energy += T.sum(W, axis = 0)
+    energy += T.sum(self.W_re, axis = 0)
+    return energy
+
+  def make_constraints(self):
+    if self.attrs['varreg'] > 0.0:
+      # input: W_in, W_re, b
+      energy = self.get_energy()
+      self.constraints = self.attrs['varreg'] * (1.0 * T.sqrt(T.var(energy)) - 6.0)**2
+
+    return super(OptimizedLstmLayer, self).make_constraints()
