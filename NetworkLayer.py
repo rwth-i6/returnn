@@ -142,7 +142,7 @@ class Container(object):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=1.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
     """
     :param list[SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
