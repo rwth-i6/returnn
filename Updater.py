@@ -168,7 +168,7 @@ class Updater:
           #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
         elif self.varreg:
           offset = 6.0 / param.layer.get_branching()
-          decay = 1.0 - sqrt(offset)
+          decay = 1.0 - 1.0 / sqrt(param.layer.get_branching())
           g = deltas
           g2 = g ** 2
           #z_eg2 = T.sum(self.eg2[param])
