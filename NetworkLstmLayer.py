@@ -287,6 +287,6 @@ class OptimizedLstmLayer(RecurrentLayer):
       # input: W_in, W_re, b
       energy = self.get_energy()
       #self.constraints = self.attrs['varreg'] * (2.0 * T.sqrt(T.var(energy)) - 6.0)**2
-      self.constraints =  self.attrs['varreg'] * T.sum(energy) - T.sqrt(6.) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
+      self.constraints =  self.attrs['varreg'] * (T.mean(energy) - T.sqrt(6.)) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
 
     return super(OptimizedLstmLayer, self).make_constraints()

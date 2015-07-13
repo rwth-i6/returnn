@@ -4,6 +4,7 @@ import numpy
 import os
 from Log import log
 from math import sqrt
+from theano.compat.python2x import OrderedDict
 import theano.tensor as T
 
 class Updater:
@@ -109,11 +110,6 @@ class Updater:
       self.dx = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                                     dtype=theano.config.floatX))
                   for p in self.network.train_params_vars} #\delta x
-                  
-    if self.adasecant:
-      self.step = theano.shared(value = 0, dtype = theano.config.floatX, name = "adasecant_step")
-      
-      
 
   @property
   def isInitialized(self):
@@ -145,16 +141,24 @@ class Updater:
 
     return constrained_output
 
+  @staticmethod
+  def var(value, name = ""):
+    return theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+
   def getUpdateList(self):
     assert self.pid == os.getpid()
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
-    for param in self.network.train_params_vars:
-      upd = 0
-      for target in self.net_train_param_deltas:
-        if not param in self.net_train_param_deltas[target]:
-          continue
-        deltas = self.net_train_param_deltas[target][param]  # usually the gradients
+    upd = { p: 0 for p in self.net_train_param_deltas.values()[0] }
+    for target in self.net_train_param_deltas:
+      eps = 1e-7
+      if self.adasecant:
+        grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (self.net_train_param_deltas[target][p].norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
+        step = self.var(0, "adasecant_step")
+      else:
+        grads = self.net_train_param_deltas[target]
+      for param in grads.keys():
+        deltas = grads[param]
         if self.gradient_clip > 0:
           # Note that there is also theano.gradient.grad_clip, which would clip it already
           # at the backprop step and which would affect also other dependent gradients.
@@ -162,231 +166,232 @@ class Updater:
           # Also note that this is yet without the learning rate factor -
           # this might be different to other gradient clipping implementations.
           deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
-        if self.momentum > 0:
-          upd += self.momentum * self.deltas[target][param]
+        #if self.momentum > 0:
+        #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
-          step = theano.shared(value = 0, dtype = theano.config.floatX, name = "adasecant_step")
-          eps = 1e-7
-          grads = OrderedDict({p: self.net_train_param_deltas[p] / (self.net_train_param_deltas[p].norm(2) + eps) for p in self.net_train_param_deltas.keys()})
-          nparams = len(grads.keys())
-          for param in grads.keys():
-            param = param / param.norm(2)
-            #grads[param].name = "grad_%s" % param.name
-            mean_grad = theano.shared(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, dtype = theano.config.floatX)
-            mean_corrected_grad = theano.shared(param.get_value() * 0 + eps, name="mean_corrected_grad_%s" % param.name, dtype = theano.config.floatX)
-            if self.use_adagrad:
-              # sum_square_grad := \sum_i g_i^2
-              sum_square_grad = theano.shared(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name, dtype = theano.config.floatX)
-            taus_x_t = theano.shared((np.ones_like(param.get_value()) + eps) * slow_constant,
-                               name="taus_x_t_" + param.name, dtype = theano.config.floatX)
-            self.taus_x_t = taus_x_t
+          self.use_adagrad = True #False
+          self.delta_clip = None
+          self.decay = 0.95
+          self.upper_bound_tau = 1e8
+          self.lower_bound_tau = 1.5
+          self.gamma_clip = 1.8
+          self.use_corrected_grad = True
+          self.skip_nan_inf = False
+          self.start_var_reduction = 0
+          grads[param].name = "grad_%s" % param.name
+          mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name)
+          slow_constant = 2.1
+          mean_corrected_grad = self.var(param.get_value() * 0 + eps, name="mean_corrected_grad_%s" % param.name)
+          if self.use_adagrad:
+            # sum_square_grad := \sum_i g_i^2
+            sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name)
+          taus_x_t = self.var((numpy.ones_like(param.get_value()) + eps) * slow_constant,
+                             name="taus_x_t_" + param.name)
+          self.taus_x_t = taus_x_t
 
-            #Variance reduction parameters
-            #Numerator of the gamma:
-            gamma_nume_sqr = theano.shared(np.zeros_like(param.get_value()) + eps,
-                                     name="gamma_nume_sqr_" + param.name, dtype = theano.config.floatX)
+          #Variance reduction parameters
+          #Numerator of the gamma:
+          gamma_nume_sqr = self.var(numpy.zeros_like(param.get_value()) + eps,
+                                   name="gamma_nume_sqr_" + param.name)
 
-            #Denominator of the gamma:
-            gamma_deno_sqr = theano.shared(np.zeros_like(param.get_value()) + eps,
-                                     name="gamma_deno_sqr_" + param.name, dtype = theano.config.floatX)
+          #Denominator of the gamma:
+          gamma_deno_sqr = self.var(numpy.zeros_like(param.get_value()) + eps,
+                                   name="gamma_deno_sqr_" + param.name)
 
-            #For the covariance parameter := E[\gamma \alpha]_{t-1}
-            cov_num_t = theano.shared(np.zeros_like(param.get_value()) + eps,
-                                      name="cov_num_t_" + param.name, dtype = theano.config.floatX)
+          #For the covariance parameter := E[\gamma \alpha]_{t-1}
+          cov_num_t = self.var(numpy.zeros_like(param.get_value()) + eps,
+                                    name="cov_num_t_" + param.name)
 
-            # mean_squared_grad := E[g^2]_{t-1}
-            mean_square_grad = theano.shared(np.zeros_like(param.get_value()) + eps,
-                                             name="msg_" + param.name, dtype = theano.config.floatX)
+          # mean_squared_grad := E[g^2]_{t-1}
+          mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps,
+                                           name="msg_" + param.name)
 
-            # mean_square_dx := E[(\Delta x)^2]_{t-1}
-            mean_square_dx = theano.shared(param.get_value() * 0., name="msd_" + param.name, dtype = theano.config.floatX)
-            if self.use_corrected_grad:
-                old_grad = theano.shared(param.get_value() * 0. + eps, dtype = theano.config.floatX)
+          # mean_square_dx := E[(\Delta x)^2]_{t-1}
+          mean_square_dx = self.var(value = param.get_value() * 0., name="msd_" + param.name)
+          if self.use_corrected_grad:
+              old_grad = self.var(value = param.get_value() * 0. + eps)
 
-            #The uncorrected gradient of previous of the previous update:
-            old_plain_grad = theano.shared(param.get_value() * 0. + eps, dtype=theano.config.floatX)
-            mean_curvature = theano.shared(param.get_value() * 0. + eps, dtype=theano.config.floatX)
-            mean_curvature_sqr = theano.shared(param.get_value() * 0. + eps, dtype=theano.config.floatX)
+          #The uncorrected gradient of previous of the previous update:
+          old_plain_grad = self.var(param.get_value() * 0 + eps)
+          mean_curvature = self.var(param.get_value() * 0 + eps)
+          mean_curvature_sqr = self.var(param.get_value() * 0 + eps)
 
-            # Initialize the E[\Delta]_{t-1}
-            mean_dx = theano.shared(param.get_value() * 0., dtype=theano.config.floatX)
-            slow_constant = 2.1
-            
-            # Block-wise normalize the gradient:
-            norm_grad = grads[param]
+          # Initialize the E[\Delta]_{t-1}
+          mean_dx = self.var(param.get_value() * 0.)
 
-            #For the first time-step, assume that delta_x_t := norm_grad
-            cond = T.eq(step, 0)
-            msdx = cond * norm_grad**2 + (1 - cond) * mean_square_dx
-            mdx = cond * norm_grad + (1 - cond) * mean_dx
+          # Block-wise normalize the gradient:
+          norm_grad = grads[param]
 
-            """
-            Compute the new updated values.
-            """
-            # E[g_i^2]_t
-            new_mean_squared_grad = (
-                mean_square_grad * (self.decay)  +
-                T.sqr(norm_grad) * (1 - self.decay)
-            )
-            new_mean_squared_grad.name = "msg_" + param.name
-            # E[g_i]_t
-            new_mean_grad = (
-                mean_grad * (self.decay) +
-                norm_grad * (1 - self.decay)
-            )
-            new_mean_grad.name = "nmg_" + param.name
+          #For the first time-step, assume that delta_x_t := norm_grad
+          cond = T.eq(step, 0)
+          msdx = cond * norm_grad**2 + (1 - cond) * mean_square_dx
+          mdx = cond * norm_grad + (1 - cond) * mean_dx
 
-            mg = new_mean_grad
-            mgsq = new_mean_squared_grad
+          """
+          Compute the new updated values.
+          """
+          # E[g_i^2]_t
+          new_mean_squared_grad = (
+              mean_square_grad * (self.decay)  +
+              T.sqr(norm_grad) * (1 - self.decay)
+          )
+          new_mean_squared_grad.name = "msg_" + param.name
+          # E[g_i]_t
+          new_mean_grad = (
+              mean_grad * (self.decay) +
+              norm_grad * (1 - self.decay)
+          )
+          new_mean_grad.name = "nmg_" + param.name
 
-            # Keep the rms for numerator and denominator of gamma.
-            new_gamma_nume_sqr = (
-                gamma_nume_sqr * (1 - 1 / taus_x_t) +
-                T.sqr((norm_grad - old_grad) * (old_grad - mg)) / taus_x_t
-            )
-            new_gamma_nume_sqr.name = "ngammasqr_num_" + param.name
+          mg = new_mean_grad
+          mgsq = new_mean_squared_grad
 
-            new_gamma_deno_sqr = (
-                gamma_deno_sqr * (1 - 1 / taus_x_t) +
-                T.sqr((mg - norm_grad) * (old_grad - mg)) / taus_x_t
-            )
-            new_gamma_deno_sqr.name = "ngammasqr_den_" + param.name
+          # Keep the rms for numerator and denominator of gamma.
+          new_gamma_nume_sqr = (
+              gamma_nume_sqr * (1 - 1 / taus_x_t) +
+              T.sqr((norm_grad - old_grad) * (old_grad - mg)) / taus_x_t
+          )
+          new_gamma_nume_sqr.name = "ngammasqr_num_" + param.name
 
-            gamma = T.sqrt(gamma_nume_sqr) / T.sqrt(gamma_deno_sqr + eps)
-            gamma.name = "gamma_" + param.name
+          new_gamma_deno_sqr = (
+              gamma_deno_sqr * (1 - 1 / taus_x_t) +
+              T.sqr((mg - norm_grad) * (old_grad - mg)) / taus_x_t
+          )
+          new_gamma_deno_sqr.name = "ngammasqr_den_" + param.name
 
-            if self.gamma_clip:
-                gamma = T.minimum(gamma, self.gamma_clip)
+          gamma = T.sqrt(gamma_nume_sqr) / T.sqrt(gamma_deno_sqr + eps)
+          gamma.name = "gamma_" + param.name
 
-            momentum_step = gamma * mg
-            corrected_grad_cand = (norm_grad + momentum_step) / (1 + gamma)
+          if self.gamma_clip:
+              gamma = T.minimum(gamma, self.gamma_clip)
 
-            #For starting the variance reduction.
-            if self.start_var_reduction > -1:
-                cond = T.le(self.start_var_reduction, step)
-                corrected_grad = cond * corrected_grad_cand + (1 - cond) * norm_grad
-            else:
-                corrected_grad = norm_grad
+          momentum_step = gamma * mg
+          corrected_grad_cand = (norm_grad + momentum_step) / (1 + gamma)
 
-            if self.use_adagrad:
-                g = corrected_grad
-                # Accumulate gradient
-                new_sum_squared_grad = (
-                    sum_square_grad + T.sqr(g)
-                )
+          #For starting the variance reduction.
+          if self.start_var_reduction > -1:
+              cond = T.le(self.start_var_reduction, step)
+              corrected_grad = cond * corrected_grad_cand + (1 - cond) * norm_grad
+          else:
+              corrected_grad = norm_grad
 
-                rms_g_t = T.sqrt(new_sum_squared_grad)
-                rms_g_t = T.maximum(rms_g_t, 1.0)
+          if self.use_adagrad:
+              g = corrected_grad
+              # Accumulate gradient
+              new_sum_squared_grad = (
+                  sum_square_grad + T.sqr(g)
+              )
 
-            # Use the gradients from the previous update
-            # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
-            cur_curvature = norm_grad - old_plain_grad
-            cur_curvature_sqr = T.sqr(cur_curvature)
+              rms_g_t = T.sqrt(new_sum_squared_grad)
+              rms_g_t = T.maximum(rms_g_t, 1.0)
 
-            new_curvature_ave = (
-                mean_curvature * (1 - 1 / taus_x_t) +
-                (cur_curvature / taus_x_t)
-            )
-            new_curvature_ave.name = "ncurve_ave_" + param.name
+          # Use the gradients from the previous update
+          # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
+          cur_curvature = norm_grad - old_plain_grad
+          cur_curvature_sqr = T.sqr(cur_curvature)
 
-            #Average average curvature
-            nc_ave = new_curvature_ave
+          new_curvature_ave = (
+              mean_curvature * (1 - 1 / taus_x_t) +
+              (cur_curvature / taus_x_t)
+          )
+          new_curvature_ave.name = "ncurve_ave_" + param.name
 
-            new_curvature_sqr_ave = (
-                mean_curvature_sqr * (1 - 1 / taus_x_t) +
-                (cur_curvature_sqr / taus_x_t)
-            )
-            new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
+          #Average average curvature
+          nc_ave = new_curvature_ave
 
-            #Unbiased average squared curvature
-            nc_sq_ave = new_curvature_sqr_ave
+          new_curvature_sqr_ave = (
+              mean_curvature_sqr * (1 - 1 / taus_x_t) +
+              (cur_curvature_sqr / taus_x_t)
+          )
+          new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
 
-            epsilon = lr_scalers.get(param, 1.) * learning_rate
-            scaled_lr = lr_scalers.get(param, 1.) * sharedX(1.0)
-            rms_dx_tm1 = T.sqrt(msdx + epsilon)
+          #Unbiased average squared curvature
+          nc_sq_ave = new_curvature_sqr_ave
 
-            rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
+          epsilon = self.learning_rate_var #lr_scalers.get(param, 1.) * self.learning_rate_var
+          scaled_lr = self.var(1) #lr_scalers.get(param, 1.) * theano.shared(1.0, dtype = theano.config.floatX)
+          rms_dx_tm1 = T.sqrt(msdx + epsilon)
 
-            #This is where the update step is being defined
-            delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
-            delta_x_t.name = "delta_x_t_" + param.name
+          rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
 
-            # This part seems to be necessary for only RNNs
-            # For feedforward networks this does not seem to be important.
-            if self.delta_clip:
-                logger.info("Clipping will be applied on the adaptive step size.")
-                delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
-                if self.use_adagrad:
-                    delta_x_t = delta_x_t * corrected_grad / rms_g_t
-                else:
-                    logger.info("Clipped adagrad is disabled.")
-                    delta_x_t = delta_x_t * corrected_grad
-            else:
-                logger.info("Clipping will not be applied on the adaptive step size.")
-                if self.use_adagrad:
-                    delta_x_t = delta_x_t * corrected_grad / rms_g_t
-                else:
-                    logger.info("Clipped adagrad will not be used.")
-                    delta_x_t = delta_x_t * corrected_grad
+          #This is where the update step is being defined
+          delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
+          delta_x_t.name = "delta_x_t_" + param.name
 
-            new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + sharedX(1 + eps, "stabilized")
+          # This part seems to be necessary for only RNNs
+          # For feedforward networks this does not seem to be important.
+          if self.delta_clip:
+              #logger.info("Clipping will be applied on the adaptive step size.")
+              delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
+              if self.use_adagrad:
+                  delta_x_t = delta_x_t * corrected_grad / rms_g_t
+              else:
+                  #logger.info("Clipped adagrad is disabled.")
+                  delta_x_t = delta_x_t * corrected_grad
+          else:
+              #logger.info("Clipping will not be applied on the adaptive step size.")
+              if self.use_adagrad:
+                  delta_x_t = delta_x_t * corrected_grad / rms_g_t
+              else:
+                  #logger.info("Clipped adagrad will not be used.")
+                  delta_x_t = delta_x_t * corrected_grad
 
-            #To compute the E[\Delta^2]_t
-            new_mean_square_dx = (
-                 msdx * (1 - 1 / taus_x_t) +
-                 (T.sqr(delta_x_t) / taus_x_t)
-             )
+          new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
 
-            #To compute the E[\Delta]_t
-            new_mean_dx = (
-                mean_dx * (1 - 1 / taus_x_t) +
-                (delta_x_t / (taus_x_t))
-            )
+          #To compute the E[\Delta^2]_t
+          new_mean_square_dx = (
+               msdx * (1 - 1 / taus_x_t) +
+               (T.sqr(delta_x_t) / taus_x_t)
+           )
 
-            #Perform the outlier detection:
-            #This outlier detection is slightly different:
-            new_taus_t = T.switch(T.or_(abs(norm_grad - mg) > (2 * T.sqrt(mgsq  - mg**2)),
-                                        abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave**2))),
-                                        sharedX(2.2), new_taus_t)
+          #To compute the E[\Delta]_t
+          new_mean_dx = (
+              mean_dx * (1 - 1 / taus_x_t) +
+              (delta_x_t / (taus_x_t))
+          )
 
-            #Apply the bound constraints on tau:
-            new_taus_t = T.maximum(self.lower_bound_tau, new_taus_t)
-            new_taus_t = T.minimum(self.upper_bound_tau, new_taus_t)
+          #Perform the outlier detection:
+          #This outlier detection is slightly different:
+          new_taus_t = T.switch(T.or_(abs(norm_grad - mg) > (2 * T.sqrt(mgsq  - mg**2)),
+                                      abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave**2))),
+                                      self.var(value=2.2), new_taus_t)
 
-            new_cov_num_t = (
-                cov_num_t * (1 - 1 / taus_x_t) +
-                (delta_x_t * cur_curvature) * (1 / taus_x_t)
-            )
+          #Apply the bound constraints on tau:
+          new_taus_t = T.maximum(self.lower_bound_tau, new_taus_t)
+          new_taus_t = T.minimum(self.upper_bound_tau, new_taus_t)
 
-            update_step = delta_x_t
+          new_cov_num_t = (
+              cov_num_t * (1 - 1 / taus_x_t) +
+              (delta_x_t * cur_curvature) * (1 / taus_x_t)
+          )
 
-            # Apply updates
-            updates.append((mean_square_grad, new_mean_squared_grad))
-            updates.append((mean_square_dx, new_mean_squared_dx))
-            updates.append((mean_dx, new_mean_dx))
-            updates.append((gamma_nume_sqr, new_gamma_nume_sqr))
-            updates.append((gamma_deno_sqr, new_gamma_deno_sqr))
-            updates.append((taus_x_t, new_taus_t))
-            updates.append((cov_num_t, new_cov_num_t))
-            updates.append((mean_grad, new_mean_grad))
-            updates.append((old_plain_grad, norm_grad))
-            updates.append((mean_curvature, new_curvature_ave))
-            updates.append((mean_curvature_sqr, new_mean_squared_grad))
-            updates.append((mean_square_grad, new_curvature_sqr_ave))
-            updates.append((param, param + update_step))
-            updates.append((step, step + 1))
+          upd[param] += delta_x_t
 
-            if self.use_adagrad:
-                updates.append((sum_square_grad, new_sum_squared_grad))
+          # Apply updates
+          updates.append((mean_square_grad, new_mean_squared_grad))
+          updates.append((mean_square_dx, new_mean_square_dx))
+          updates.append((mean_dx, new_mean_dx))
+          updates.append((gamma_nume_sqr, new_gamma_nume_sqr))
+          updates.append((gamma_deno_sqr, new_gamma_deno_sqr))
+          updates.append((taus_x_t, new_taus_t))
+          updates.append((cov_num_t, new_cov_num_t))
+          updates.append((mean_grad, new_mean_grad))
+          updates.append((old_plain_grad, norm_grad))
+          updates.append((mean_curvature, new_curvature_ave))
+          updates.append((mean_curvature_sqr, new_curvature_sqr_ave))
+          #updates.append((param, param + update_step))
 
-            if self.use_corrected_grad:
-                updates.append((old_grad, corrected_grad))
+          if self.use_adagrad:
+              updates.append((sum_square_grad, new_sum_squared_grad))
+
+          if self.use_corrected_grad:
+              updates.append((old_grad, corrected_grad))
           
         elif self.adagrad:
           epsilon = 1e-6
           accu_new = self.accu[param] + deltas ** 2
           updates.append((self.accu[param], accu_new))
-          upd += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
+          upd[param] += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
           #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
           #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
         elif self.varreg:
@@ -409,7 +414,7 @@ class Updater:
           updates.append((self.eg2[param], eg2_new))
           updates.append((self.edx2[param], edx2_new))
           updates.append((self.dx[param], dx_new))
-          upd += self.learning_rate_var * dx_new
+          upd[param] += self.learning_rate_var * dx_new
         elif self.adadelta:
           # http://arxiv.org/pdf/1212.5701v1.pdf
           decay = self.adadelta_decay
@@ -422,15 +427,20 @@ class Updater:
           updates.append((self.eg2[param], eg2_new))
           updates.append((self.edx2[param], edx2_new))
           updates.append((self.dx[param], dx_new))
-          upd += self.learning_rate_var * dx_new
+          upd[param] += self.learning_rate_var * dx_new
         else:
-          upd += - self.learning_rate_var * deltas
-      if self.momentum > 0:
-        updates.append((self.deltas[target][param], upd))
-      if upd:
+          upd[param] += - self.learning_rate_var * deltas
+        #if self.momentum > 0:
+        #  updates.append((self.deltas[target][param], upd))
+      #if upd:
         #updates.append((param, self.norm_constraint(param + upd, 1.0)))
-        updates.append((param, param + upd))
+        #updates.append((param, param + upd))
+    updates.extend([(p, p + upd[p]) for p in upd if upd[p]])
 
+    if self.adasecant:
+      updates.append((step, step + 1))
+    #for u in updates:
+    #  print ">>>>", u
     return updates
 
   def setLearningRate(self, learning_rate):
