@@ -159,20 +159,21 @@ class OptimizedLstmLayer(RecurrentLayer):
     self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     n_in = sum([s.attrs['n_out'] for s in self.sources])
-    n_re = projection if projection is not None else n_out
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
-    self.b.set_value(numpy.zeros((n_out * 3 + n_re,), dtype = theano.config.floatX))
+    self.b.set_value(numpy.zeros((n_out * 4,), dtype = theano.config.floatX))
     if projection:
-      W_proj = self.create_random_uniform_weights(n_out, n_re, n_in + n_out + n_re, name="W_proj_%s" % self.name)
+      n_re = projection
+      W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
       self.W_proj.set_value(W_proj.get_value())
-    W_re = self.create_random_uniform_weights(n_re, n_out * 3 + n_re, n_in + n_re + n_out * 3 + n_re,
+    W_re = self.create_random_uniform_weights(n_re, n_out * 4, n_in + n_out * 4,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3 + n_re,
-                                                     s.attrs['n_out'] + n_out + n_out * 3 + n_re,
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4,
+                                                     s.attrs['n_out'] + n_out + n_out * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
+
     self.o.set_value(numpy.ones((n_out,), dtype='int8'))
     if sharpgates == 'global':
       self.sharpness = self.create_random_uniform_weights(3, n_out)
@@ -220,17 +221,18 @@ class OptimizedLstmLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p, W_re):
-      z += T.dot(h_p, W_re)
+      h_q = h_p if not self.attrs['projection'] else T.dot(h_p, self.W_proj)
+      z += T.dot(h_q, self.W_re)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
-      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
+      j = i # if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_out: 2 * n_out])
       forgetgate = GF(z[:,2 * n_out:3 * n_out])
       outgate = GO(z[:,3 * n_out:])
       input = CI(z[:,:n_out])
       s_i = input * ingate + s_p * forgetgate
-      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      s_t = s_i #if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
-      return theano.gradient.grad_clip(s_i * i + s_p * (1-i), -50, 50), h_t * j + h_p * (1-j)
+      return theano.gradient.grad_clip(s_i * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
@@ -246,10 +248,10 @@ class OptimizedLstmLayer(RecurrentLayer):
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
-        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3 + n_re)
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
-                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
+                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
       [state, act], _ = theano.scan(step,
                                     #strict = True,
                                     name = "scan_%s"%self.name,
@@ -271,6 +273,8 @@ class OptimizedLstmLayer(RecurrentLayer):
       self.output = T.argmax(self.act, axis=-1, keepdims=True)
     else:
       self.output = totact[::-(2 * self.attrs['reverse'] - 1)]
+    if self.attrs['projection']:
+      self.output = T.dot(self.output, self.W_proj)
 
   def get_branching(self):
     return sum([W.get_value().shape[0] for W in self.W_in]) + 1 + self.attrs['n_out']

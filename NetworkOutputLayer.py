@@ -156,7 +156,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors(self.y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = 'hard', n_dec = 0, **kwargs):
+  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = -1, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -166,12 +166,11 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
     self.set_attr('n_classes', n_out)
-    if loop == True:
-      loop = 'hard' if self.train_flag else 'soft'
+    #if loop == True:
+    #  loop = 'hard' if self.train_flag else 'soft'
     self.set_attr('loop', loop)
     if n_dec: self.set_attr('n_dec', n_dec)
     self.y = y
-    if not y: loop = False
     if encoder:
       self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
@@ -182,27 +181,32 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('sharpgates', sharpgates)
     CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     n_in = sum([s.attrs['n_out'] for s in self.sources])
-    n_re = projection if projection is not None else n_units
+    n_re = n_units
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
+    self.loop = loop
     self.b.set_value(numpy.zeros((n_units * 3 + n_re,), dtype = theano.config.floatX))
     if projection:
-      W_proj = self.create_random_uniform_weights(n_units, n_re, n_in + n_units + n_re, name="W_proj_%s" % self.name)
+      n_re = projection
+      W_proj = self.create_random_uniform_weights(n_units, projection, projection + n_units, name="W_proj_%s" % self.name)
       self.W_proj.set_value(W_proj.get_value())
-    W_re = self.create_random_uniform_weights(n_re, n_units * 3 + n_re, n_in + n_re + n_units * 3 + n_re,
+    W_re = self.create_random_uniform_weights(n_re, n_units * 4, n_in + n_units * 4,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_units * 3 + n_re,
-                                                     s.attrs['n_out'] + n_units + n_units * 3 + n_re,
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_units * 4,
+                                                     s.attrs['n_out'] + n_units + n_units * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
 
-    self.W_cls = self.add_param(self.create_forward_weights(self.attrs['n_units'], self.attrs['n_classes'],
-                                                            name="W_cls_%s_%s" % (self.name, self.name)),
+    self.W_cls = self.add_param(self.create_random_uniform_weights(n_re, self.attrs['n_classes'], n_re + self.attrs['n_classes'], name="W_cls_%s_%s" % (self.name, self.name)),
                                 "W_cls_%s_%s" % (self.name, self.name))
-    self.W_rec = self.add_param(self.create_random_uniform_weights(self.attrs['n_classes'], self.attrs['n_units'] * 3 + n_re, n_in + n_re + self.attrs['n_units'] * 3 + n_re,
-                                              name="W_rec_%s" % self.name),
-                                "W_rec_%s" % (self.name))
+
+    if self.attrs['loop'] != 0:
+      if self.attrs['loop'] != -1:
+        self.W_loop = self.add_param(self.create_random_uniform_weights(loop, self.attrs['n_units'] * 4, self.attrs['n_units'] * 4 + loop + n_in, name="W_loop_%s" % self.name))
+      else:
+        loop = self.attrs['n_units'] * 4
+      self.W_rec = self.add_param(self.create_random_uniform_weights(self.attrs['n_classes'], loop, loop + n_in, name="W_rec_%s" % self.name), "W_rec_%s" % (self.name))
 
     self.o.set_value(numpy.ones((n_units,), dtype='int8'))
     self.sharpness = theano.shared(value = numpy.zeros((3,), dtype=theano.config.floatX), borrow=True, name='lambda')
@@ -227,31 +231,35 @@ class LstmOutputLayer(RecurrentLayer):
       z = z_batch[j_t]
       z += T.dot(h_p, self.W_re)
       if self.attrs['loop'] == 'soft' or (self.attrs['loop'] != 'none' and not self.train_flag):
-        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
+        z += self.W_rec[T.argmax(T.dot(h_p if not projection else T.dot(self.W_proj, h_p), self.W_cls), axis = -1)]
       ingate = GI(z[:,n_units: 2 * n_units])
       forgetgate = GF(z[:,2 * n_units:3 * n_units])
       outgate = GO(z[:,3 * n_units:])
       input = CI(z[:,:n_units])
       s_i = input * ingate + s_p * forgetgate
-      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      s_t = s_i #if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
       s_out = T.set_subtensor(s_batch[j_t], s_i)
       h_out = T.set_subtensor(h_batch[j_t], h_t)
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p):
-      z += T.dot(h_p, self.W_re)
+      h_q = h_p if not self.attrs['projection'] else T.dot(h_p, self.W_proj)
+      z += T.dot(h_q, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
-      if self.attrs['loop'] == 'soft' or (self.attrs['loop'] != 'none' and not self.train_flag):
-        z += self.W_rec[T.argmax(T.dot(h_p, self.W_cls), axis = -1)]
+      if self.attrs['loop'] != 0 and not self.train_flag:
+        if self.attrs['loop'] == -1: # direct loop
+          z += self.W_rec[T.argmax(T.dot(h_q, self.W_cls), axis = -1)]
+        else: # projected loop:
+          z += T.dot(self.W_rec[T.argmax(T.dot(h_q, self.W_cls), axis = -1)], self.W_loop)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
-      j = i if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
+      j = i #if not self.attrs['projection'] else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])
       forgetgate = GF(z[:,2 * n_units:3 * n_units])
       outgate = GO(z[:,3 * n_units:])
       input = CI(z[:,:n_units])
       s_i = input * ingate + s_p * forgetgate
-      s_t = s_i if not self.W_proj else T.dot(s_i, self.W_proj)
+      s_t = s_i #if not self.W_proj else T.dot(s_i, self.W_proj)
       h_t = CO(s_t) * outgate
       return theano.gradient.grad_clip(s_i * i + s_p * (1-i), -50, 50), h_t * j + h_p * (1-j)
 
@@ -268,12 +276,15 @@ class LstmOutputLayer(RecurrentLayer):
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
-        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 3 + n_re) + self.b
-        if self.attrs['loop'] == 'hard' and self.train_flag:
-          sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_units * 4) + self.b
+        if self.attrs['loop'] != 0 and self.train_flag:
+          if self.attrs['loop'] == -1:
+            sequences = T.inc_subtensor(sequences[1:], self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)][:-1])
+          else:
+            sequences = T.inc_subtensor(sequences[1:], T.dot(self.W_rec[self.y.reshape((n_dec, encoder.output.shape[1]), ndim=2)], self.W_loop)[:-1])
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units),
-                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_re) ]
+                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_units) ]
       [state, act], _ = theano.scan(step,
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
@@ -290,10 +301,11 @@ class LstmOutputLayer(RecurrentLayer):
     self.state = state
     self.act = totact[::-(2 * self.attrs['reverse'] - 1)]
     self.lstm_output = totact[::-(2 * self.attrs['reverse'] - 1)]
+    self.softmax_input = self.lstm_output if not projection else T.dot(self.lstm_output, self.W_proj)
 
-    self.y_m = T.dot(self.lstm_output, self.W_cls).dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
+    self.y_m = T.dot(self.softmax_input, self.W_cls).dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     self.y_pred = T.argmax(self.y_m, axis=-1)
-    self.output = T.argmax(self.lstm_output, axis=-1, keepdims=True) #T.argmax(self.y_m, axis=-1, keepdims=True).dimshuffle(1,0).reshape(self.lstm_output.shape, ndim = 3).dimshuffle(1,2,0) #.argmax(self.p_y_given_x, axis=-1, keepdim)
+    self.output = T.argmax(T.dot(self.softmax_input, self.W_cls), axis=-1, keepdims=True) #T.argmax(self.y_m, axis=-1, keepdims=True).dimshuffle(1,0).reshape(self.lstm_output.shape, ndim = 3).dimshuffle(1,2,0) #.argmax(self.p_y_given_x, axis=-1, keepdim)
     self.attrs['sparse'] = True
     self.j = (self.index.flatten() > 0).nonzero()
 
