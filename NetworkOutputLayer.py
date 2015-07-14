@@ -156,7 +156,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors(self.y)
 
 class LstmOutputLayer(RecurrentLayer):
-  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = -1, n_dec = 0, **kwargs):
+  def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = -1, n_dec = 0, n_proto = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_softmax")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -166,6 +166,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('n_units', n_units)
     self.set_attr('n_classes', n_out)
+    self.set_attr('n_proto', n_proto)
     #if loop == True:
     #  loop = 'hard' if self.train_flag else 'soft'
     self.set_attr('loop', loop)
@@ -198,8 +199,14 @@ class LstmOutputLayer(RecurrentLayer):
                                                      s.attrs['n_out'] + n_units + n_units * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(borrow=True, return_internal_type=True), borrow = True)
 
-    self.W_cls = self.add_param(self.create_random_uniform_weights(n_re, self.attrs['n_classes'], n_re + self.attrs['n_classes'], name="W_cls_%s_%s" % (self.name, self.name)),
-                                "W_cls_%s_%s" % (self.name, self.name))
+    if self.attrs['n_proto']:
+      self.W_pro = self.add_param(self.create_random_uniform_weights(self.attrs['n_units'], self.attrs['n_proto'], n_units + self.attrs['n_proto'], name="W_cls_%s_%s" % (self.name, self.name)),
+                                  "W_pro_%s_%s" % (self.name, self.name))
+      self.W_cls = self.add_param(self.create_random_uniform_weights(self.attrs['n_proto'], self.attrs['n_classes'], self.attrs['n_proto'] + self.attrs['n_classes'], name="W_cls_%s_%s" % (self.name, self.name)),
+                                  "W_cls_%s_%s" % (self.name, self.name))
+    else:
+      self.W_cls = self.add_param(self.create_random_uniform_weights(self.attrs['n_units'], self.attrs['n_classes'], self.attrs['n_units'] + self.attrs['n_classes'], name="W_cls_%s_%s" % (self.name, self.name)),
+                                  "W_cls_%s_%s" % (self.name, self.name))
 
     if self.attrs['loop'] != 0:
       if self.attrs['loop'] != -1:
@@ -245,13 +252,14 @@ class LstmOutputLayer(RecurrentLayer):
 
     def step(z, i_t, s_p, h_p):
       h_q = h_p if not self.attrs['projection'] else T.dot(h_p, self.W_proj)
+      h_r = h_q if not self.attrs['n_proto'] else T.dot(h_q, self.W_pro)
       z += T.dot(h_q, self.W_re)
       #z += T.dot(T.nnet.softmax(T.dot(h_p, self.W_cls)), self.W_rec) + T.dot(h_p, self.W_re)
       if self.attrs['loop'] != 0 and not self.train_flag:
         if self.attrs['loop'] == -1: # direct loop
-          z += self.W_rec[T.argmax(T.dot(h_q, self.W_cls), axis = -1)]
+          z += self.W_rec[T.argmax(T.dot(h_r, self.W_cls), axis = -1)]
         else: # projected loop:
-          z += T.dot(self.W_rec[T.argmax(T.dot(h_q, self.W_cls), axis = -1)], self.W_loop)
+          z += T.dot(self.W_rec[T.argmax(T.dot(h_r, self.W_cls), axis = -1)], self.W_loop)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_units))
       j = i #if not self.attrs['projection'] else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))
       ingate = GI(z[:,n_units: 2 * n_units])
@@ -301,7 +309,7 @@ class LstmOutputLayer(RecurrentLayer):
     self.state = state
     self.act = totact[::-(2 * self.attrs['reverse'] - 1)]
     self.lstm_output = totact[::-(2 * self.attrs['reverse'] - 1)]
-    self.softmax_input = self.lstm_output if not projection else T.dot(self.lstm_output, self.W_proj)
+    self.softmax_input = self.lstm_output if self.attrs['n_proto'] <= 0 else T.dot(self.lstm_output, self.W_pro)
 
     self.y_m = T.dot(self.softmax_input, self.W_cls).dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     self.y_pred = T.argmax(self.y_m, axis=-1)

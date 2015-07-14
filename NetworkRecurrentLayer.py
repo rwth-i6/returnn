@@ -8,14 +8,14 @@ from NetworkHiddenLayer import HiddenLayer
 class RecurrentLayer(HiddenLayer):
   recurrent = True
 
-  def __init__(self, index, reverse=False, truncation=-1, compile=True, projection=None, sampling=1, **kwargs):
+  def __init__(self, index, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
     kwargs.setdefault("layer_class", "recurrent")
     kwargs.setdefault("activation", "tanh")
     super(RecurrentLayer, self).__init__(**kwargs)
     self.set_attr('reverse', reverse)
     self.set_attr('truncation', truncation)
     self.set_attr('sampling', sampling)
-    if projection: self.set_attr('projection', projection)
+    self.set_attr('projection', projection)
     n_in = sum([s.attrs['n_out'] for s in self.sources])
     n_out = self.attrs['n_out']
     self.act = self.create_bias(n_out)

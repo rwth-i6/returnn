@@ -162,6 +162,7 @@ class OptimizedLstmLayer(RecurrentLayer):
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
     self.b.set_value(numpy.zeros((n_out * 4,), dtype = theano.config.floatX))
+    n_re = n_out
     if projection:
       n_re = projection
       W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
@@ -248,7 +249,8 @@ class OptimizedLstmLayer(RecurrentLayer):
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
         outputs_info = [ encoder.state[-1],
                          encoder.act[-1] ]
-        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4)
+        if len(self.W_in) == 0:
+          sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
                          T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
@@ -273,8 +275,6 @@ class OptimizedLstmLayer(RecurrentLayer):
       self.output = T.argmax(self.act, axis=-1, keepdims=True)
     else:
       self.output = totact[::-(2 * self.attrs['reverse'] - 1)]
-    if self.attrs['projection']:
-      self.output = T.dot(self.output, self.W_proj)
 
   def get_branching(self):
     return sum([W.get_value().shape[0] for W in self.W_in]) + 1 + self.attrs['n_out']

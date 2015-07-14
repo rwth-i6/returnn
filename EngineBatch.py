@@ -93,7 +93,7 @@ class Batch:
     return self.data_shape[1]
 
   def get_total_num_frames(self):
-    return sum([s.frame_length[0] for s in self.seqs])
+    return sum([s.frame_length[1] for s in self.seqs])
 
   @property
   def start_seq(self):
