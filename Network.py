@@ -431,7 +431,7 @@ class LayerNetwork(object):
       out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
-    return str(out)
+    return json.dumps(out)
 
   def load_hdf(self, model):
     """
