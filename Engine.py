@@ -189,10 +189,11 @@ class Engine:
       old_network.load_hdf(last_model_hdf)
       last_model_hdf.close()
       # Copy params to new network.
+      from NetworkCopyUtils import intelli_copy_layer
       # network.hidden are the input + all hidden layers.
       for layer_name, layer in sorted(old_network.hidden.items()):
-        print >> log.v3, "Copied layer %s" % layer_name
-        network.hidden[layer_name].set_params_by_dict(layer.get_params_dict())
+        print >> log.v3, "Copy layer %s" % layer_name
+        intelli_copy_layer(layer, network.hidden[layer_name])
       print >> log.v3, "Not copied: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys()))
 
     # Maybe load existing model parameters.
