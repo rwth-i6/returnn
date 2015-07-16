@@ -222,7 +222,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p, W_re):
-      h_q = h_p if not self.attrs['projection'] else T.dot(h_p, self.W_proj)
+      h_q = h_p if not self.attrs['projection'] else GO(T.dot(h_p, self.W_proj))
       z += T.dot(h_q, self.W_re)
       i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
       j = i # if not self.W_proj else T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_re))

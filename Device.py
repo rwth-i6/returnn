@@ -327,6 +327,7 @@ class Device():
       self.extractor = theano.function(inputs = [],
                                        outputs = [T.concatenate(source, axis=1)],
                                        givens = givens,
+                                       on_unused_input='warn',
                                        name = "extractor")
 
     elif self.network_task == 'classify':
@@ -510,6 +511,8 @@ class Device():
         cmd = input_queue.recv()
       except EOFError:
         print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
+        if log.v[4]:
+          sys.excepthook(*sys.exc_info())
         break  # Just exit.
       if cmd == "stop":  # via self.terminate()
         output_queue.send("done")

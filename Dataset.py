@@ -11,6 +11,7 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 from threading import RLock
 from random import Random
 
+import sys
 import numpy
 import theano
 
@@ -282,6 +283,7 @@ class Dataset(object):
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
     """
+    if batch_size == 0: batch_size = sys.maxint
     assert batch_size > 0
     if max_seqs == -1: max_seqs = float('inf')
     assert max_seqs > 0
@@ -294,14 +296,12 @@ class Dataset(object):
         length = t_end - t_start
         if max(length) > batch_size:
           print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (max(length), batch_size)
-
         dt, ds = batch.try_sequence_as_slice(length)
         if ds > 1 and (dt * ds > batch_size or ds > max_seqs):
           yield batch
           batch = Batch()
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
-
         while t_start[0] < t_end[0]:
           length = t_end[0] - t_start[0]
           num_frames = min(length[0], batch_size - batch.get_all_slices_num_frames())

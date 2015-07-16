@@ -132,7 +132,7 @@ def getDevicesInitArgs(config):
       utype = info[0:3]
       uid = info[3:]
       if uid == '*': uid = "[0-9]*"
-      if uid == 'X': device_tags[info] = num_batches
+      if uid == 'X': device_tags[info] = [num_batches, True]
       else:
         if utype == 'cpu':
           np = ncpus

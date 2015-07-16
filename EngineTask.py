@@ -12,7 +12,7 @@ from Device import Device
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size = 0, start_batch=0, pad_batches=False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -24,7 +24,7 @@ class TaskThread(threading.Thread):
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
-      if len(devices) == 1 or eval_batch_size == 0:
+      if eval_batch_size == 0:
         eval_batch_size = sys.maxint
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
@@ -128,13 +128,15 @@ class TaskThread(threading.Thread):
         self.parent = parent
         self.run_start_batch_idx = parent.batches.get_current_batch_idx()
         self.eval_info = None; " :type: dict[str] | None "
-        self.num_frames = 0
         self.finished = False
         self.crashed = False
-        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
+        self.num_frames = 0
         if not self.alloc_devices:
           self.finished = True
           return
+        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
+        for batches in self.devices_batches:
+          self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
         self.start()
 
       def finish(self):
@@ -221,7 +223,6 @@ class TaskThread(threading.Thread):
           else:
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
-          self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
           device.run(self.parent.task)
           batch_idx += device.num_batches
 
@@ -314,7 +315,7 @@ class TaskThread(threading.Thread):
         # trigger KeyboardInterrupt in the main thread only.
         try:
           print >> log.v1, "%s failed" % self.name
-          if self.log.v[3]:
+          if self.log.v[4]:
             sys.excepthook(*sys.exc_info())
             print ""
         finally:
@@ -376,7 +377,7 @@ class TaskThread(threading.Thread):
               deviceRuns[i] = None
               #print self.devices[i].name, "tot", time.time() - self.devices[i].se
 
-        if results['num_frames'] > self.eval_batch_size:
+        if run_frames >= self.eval_batch_size:
           if all(dev == None for dev in deviceRuns):
             #print "train:", time.time() - se
             #se = time.time()
@@ -396,7 +397,7 @@ class TaskThread(threading.Thread):
             continue
 
         match = True
-        while self.batches.has_more() and run_frames <= self.eval_batch_size and match:
+        while self.batches.has_more() and run_frames < self.eval_batch_size and match:
           self.batch_idx = self.batches.get_current_batch_idx()
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
@@ -686,7 +687,7 @@ class SprintCacheForwardTaskThread(TaskThread):
 
 class HDFForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, merge={}):
-      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches)
+      super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
       self.tags = []
       self.merge = merge
       self.cache = cache
