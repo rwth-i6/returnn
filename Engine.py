@@ -162,6 +162,9 @@ class Engine:
 
     last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
 
+    if not last_model_epoch_filename and self.start_epoch == 1:
+      last_model_epoch_filename = config.value('load', '')
+
     if last_model_epoch_filename:
       print >> log.v1, "loading weights from", last_model_epoch_filename
       last_model_hdf = h5py.File(last_model_epoch_filename, "r")
