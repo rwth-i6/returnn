@@ -132,10 +132,21 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
-          else:
+          elif s:
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
+          else:
+            # Fix for models via NetworkDescription.
+            s = Layer.guess_source_layer_name(layer_name)
+            if not s:
+              # Fix for data input. Just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
+            else:
+              if not network.hidden.has_key(s):
+                traverse(model, s, network)
+              # Add just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
         x_in = [ SourceLayer(network.n_in, network.x, name = 'data') ]
       if layer_name != model.attrs['output']:
