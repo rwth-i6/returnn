@@ -183,8 +183,20 @@ class Engine:
         network = LayerNetwork.from_config_topology(config)
 
     # We have the parameters randomly initialized at this point.
+    if config.bool('copy_from_initial_loaded_model', False) and self.start_epoch == 1:
+      assert last_model_hdf, "need 'load' in config for copy_from_initial_loaded_model"
+      old_network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
+      old_network.load_hdf(last_model_hdf)
+      last_model_hdf.close()
+      # Copy params to new network.
+      # network.hidden are the input + all hidden layers.
+      for layer_name, layer in sorted(old_network.hidden.items()):
+        print >> log.v3, "Copied layer %s" % layer_name
+        network.hidden[layer_name].set_params_by_dict(layer.get_params_dict())
+      print >> log.v3, "Not copied: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys()))
+
     # Maybe load existing model parameters.
-    if last_model_hdf:
+    elif last_model_hdf:
       network.load_hdf(last_model_hdf)
       last_model_hdf.close()
       EngineUtil.maybe_subtract_priors(network, self.train_data, config)
