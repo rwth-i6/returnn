@@ -374,7 +374,7 @@ def prepareForwarding(epoch):
     else:
       config.set('load', fns_existing[0])
 
-  lastEpoch, _, _ = engine.get_last_epoch_batch_model(config)
+  lastEpoch, _ = engine.get_last_epoch_model(config)
   assert lastEpoch == epoch
 
   # Load network and copy over net params.

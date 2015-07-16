@@ -23,7 +23,7 @@ import time
 
 class Engine:
 
-  _last_epoch_batch_model = None; """ :type: (int,int|None,str|None) """  # See get_last_epoch_batch().
+  _last_epoch_model = None; """ :type: (int|None,str|None) """  # See get_last_epoch_model().
 
   def __init__(self, devices):
     """
@@ -43,15 +43,30 @@ class Engine:
     return config.int('num_epochs', 5)
 
   @classmethod
-  def get_last_epoch_batch_model(cls, config):
+  def get_existing_models(cls, config):
+    model_filename = config.value('model', '')
+    assert model_filename, "need 'model' in config"
+    # Automatically search the filesystem for existing models.
+    file_list = []
+    for epoch in range(1, cls.config_get_final_epoch(config) + 1):
+      for is_pretrain in [False, True]:
+        fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
+        if os.path.exists(fn):
+          file_list += [(epoch, fn)]  # epoch, fn
+          break
+    file_list.sort()
+    return file_list
+
+  @classmethod
+  def get_last_epoch_model(cls, config):
     """
     :type config: Config.Config
-    :returns (epoch,batch,modelFilename)
-    :rtype: (int, int|None, str|None)
+    :returns (epoch, modelFilename)
+    :rtype: (int|None, str|None)
     """
     # XXX: We cache it, although this is wrong if we have changed the config.
-    if cls._last_epoch_batch_model:
-      return cls._last_epoch_batch_model
+    if cls._last_epoch_model:
+      return cls._last_epoch_model
 
     model_filename = config.value('model', '')
     assert model_filename, "need 'model' in config"
@@ -63,47 +78,26 @@ class Engine:
       start_epoch = int(start_epoch_mode)
       assert start_epoch >= 1
 
-    if start_epoch == 1:
-      # That is an explicit request to start with the first epoch.
-      # Thus, there is no previous epoch.
-      # XXX: last batch?
-      lastEpochBatchModel = (None, None, None)
+    existing_models = cls.get_existing_models(config)
 
-    elif start_epoch > 1:
-      # If we start with a higher epoch, we must have a previous existing model.
-      # Check for it.
-      last_epoch = start_epoch - 1
-      fns = [cls.epoch_model_filename(model_filename, last_epoch, is_pretrain) for is_pretrain in [False, True]]
-      fns_existing = [fn for fn in fns if os.path.exists(fn)]
-      assert fns_existing, "start_epoch = %i but model of last epoch not found: %s" % \
-                           (start_epoch, cls.epoch_model_filename(model_filename, last_epoch, False))
-      # XXX: last batch?
-      lastEpochBatchModel = (last_epoch, None, fns_existing[0])
+    if existing_models:
+      last = existing_models[-1]
 
     elif load_model_epoch_filename:
       assert os.path.exists(load_model_epoch_filename)
       last_epoch = LayerNetwork.epoch_from_hdf_model_filename(load_model_epoch_filename)
-      # XXX: last batch?
-      lastEpochBatchModel = (last_epoch, None, load_model_epoch_filename)
+      last = (last_epoch, load_model_epoch_filename)
 
     else:
-      # Automatically search the filesystem for existing models.
-      file_list = []
-      for epoch in range(1, cls.config_get_final_epoch(config) + 1):
-        for is_pretrain in [False, True]:
-          fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
-          # XXX: batches, e.g. fn.* ...
-          if os.path.exists(fn):
-            file_list += [(epoch, None, fn)]
-            break
-      if len(file_list) == 0:
-        lastEpochBatchModel = (None, None, None)
-      else:
-        file_list.sort()
-        lastEpochBatchModel = file_list[-1]
+      last = (None, None)
 
-    cls._last_epoch_batch_model = lastEpochBatchModel
-    return lastEpochBatchModel
+    if start_epoch == 1:
+      assert last[0] is None, "There is an existing model: %s" % (last,)
+    elif start_epoch > 1:
+      assert last[0] == start_epoch - 1, "start_epoch %i but there is %s" % (start_epoch, last)
+
+    cls._last_epoch_model = last
+    return last
 
   @classmethod
   def get_train_start_epoch_batch(cls, config):
@@ -122,7 +116,7 @@ class Engine:
       start_batch_config = None
     else:
       start_batch_config = int(start_batch_mode)
-    last_epoch, last_batch, _ = cls.get_last_epoch_batch_model(config)
+    last_epoch, _ = cls.get_last_epoch_model(config)
     if last_epoch is None:
       start_epoch = 1
       start_batch = start_batch_config or 0
@@ -130,14 +124,10 @@ class Engine:
       # We specified a start batch. Stay in the same epoch, use that start batch.
       start_epoch = last_epoch
       start_batch = start_batch_config
-    elif last_batch is None:
-      # No batch -> start with next epoch.
+    else:
+      # Start with next epoch.
       start_epoch = last_epoch + 1
       start_batch = 0
-    else:
-      # Stay in last epoch and start with next batch.
-      start_epoch = last_epoch
-      start_batch = last_batch + 1
     return start_epoch, start_batch
 
   def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
@@ -171,7 +161,7 @@ class Engine:
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
 
-    last_epoch, _, last_model_epoch_filename = self.get_last_epoch_batch_model(config)
+    last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
 
     if last_model_epoch_filename:
       print >> log.v1, "loading weights from", last_model_epoch_filename
