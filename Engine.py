@@ -185,8 +185,7 @@ class Engine:
     # We have the parameters randomly initialized at this point.
     # Maybe load existing model parameters.
     if last_model_hdf:
-      _last_epoch = network.load_hdf(last_model_hdf)
-      assert last_epoch == _last_epoch
+      network.load_hdf(last_model_hdf)
       last_model_hdf.close()
       EngineUtil.maybe_subtract_priors(network, self.train_data, config)
 
