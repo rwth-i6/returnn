@@ -220,9 +220,9 @@ class Engine:
       print json.dumps(json_data, indent = 2)
       print "---------------"
       print >> fout, json.dumps(json_data, indent = 2)
-    except ValueError:
+    except ValueError as e:
       print >> log.v5, self.network.to_json()
-      assert False, "JSON parsing failed"
+      assert False, "JSON parsing failed: %s" % e
     fout.close()
 
   def print_network_info(self):
