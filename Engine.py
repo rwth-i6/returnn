@@ -83,8 +83,7 @@ class Engine:
 
     elif load_model_epoch_filename:
       assert os.path.exists(load_model_epoch_filename)
-      last_epoch = LayerNetwork.epoch_from_hdf_model_filename(load_model_epoch_filename)
-      last = (last_epoch, load_model_epoch_filename)
+      last = (None, None)
 
     else:
       last = (None, None)
