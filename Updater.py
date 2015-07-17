@@ -155,7 +155,7 @@ class Updater:
     for target in self.net_train_param_deltas:
       eps = 1e-7
       if self.adasecant:
-        grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (T.unbroadcast(self.net_train_param_deltas[target][p], -1).norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
+        grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (self.net_train_param_deltas[target][p].norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
         step = self.var(0, "adasecant_step")
       else:
         grads = self.net_train_param_deltas[target]

@@ -158,7 +158,7 @@ class OptimizedLstmLayer(RecurrentLayer):
     else:
       assert len(self.activation) == 5, "lstm activations have to be specified as 5 tuple (input, ingate, forgetgate, outgate, output)"
     self.set_attr('sharpgates', sharpgates)
-    CI, GI, GF, GO, CO = self.activation #T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
+    CI, GI, GF, GO, CO = self.activation # T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh
     n_in = sum([s.attrs['n_out'] for s in self.sources])
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
@@ -234,13 +234,13 @@ class OptimizedLstmLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p, W_re):
-      h_r = h_p if self.depth == 1 else T.sum(h_p, axis = 1) # bdm -> bm
+      h_r = h_p if self.depth == 1 else T.max(h_p, axis = 1) # bdm -> bm
       h_q = h_r if not self.attrs['projection'] else GO(self.dot(h_r, self.W_proj))
-      h_x = h_q if self.depth == 1 or not self.attrs['projection'] else T.sum(h_q, axis = 1)
+      h_x = h_q if self.depth == 1 or not self.attrs['projection'] else T.max(h_q, axis = 1)
         #T.max(GO(T.dot(T.sum(h_p, axis = -1), self.W_proj))) #T.max(GO(T.tensordot(h_p, self.W_proj, [[2], [2]])), axis = -1)
       z += self.dot(h_x, W_re) # bm x dm4m -> bd4m
       if self.depth > 1:
-        i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), self.depth, n_out))
+        i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
         ingate = GI(z[:,:,n_out: 2 * n_out]) # bdm
         forgetgate = GF(z[:,:,2 * n_out:3 * n_out]) # bdm
         outgate = GO(z[:,:,3 * n_out:]) # bdm
@@ -256,9 +256,9 @@ class OptimizedLstmLayer(RecurrentLayer):
       s_t = input * ingate + s_p * forgetgate # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
-      return s_t, h_t
+      #return s_t, h_t
 
-      return theano.gradient.grad_clip(s_t * i_t + s_p * (1-i_t), -50, 50), h_t * i_t + h_p * (1-i_t)
+      return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:

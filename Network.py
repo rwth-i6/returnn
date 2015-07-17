@@ -120,7 +120,9 @@ class LayerNetwork(object):
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
       else:
         for prev in obj['from']:
-          if prev != "null":
+          if prev == 'data':
+            source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+          elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
               traverse(content, prev, network)
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
@@ -173,6 +175,7 @@ class LayerNetwork(object):
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
+            print network.n_in
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
           elif s != "null" and s != "":
             if not network.hidden.has_key(s):

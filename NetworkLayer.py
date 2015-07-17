@@ -236,11 +236,11 @@ class Layer(Container):
     return self.constraints
 
   def make_output(self, output, collapse = True):
-    if collapse and self.depth > 1:
-      output = T.max(output, axis=2)
-    if self.attrs['sparse']:
-      output = T.argmax(output, axis=-1, keepdims=True)
     self.output = output
+    if collapse and self.depth > 1:
+      self.output = T.max(self.output, axis=2)
+    if self.attrs['sparse']:
+      self.output = T.argmax(self.output, axis=-1, keepdims=True)
 
   def to_json(self):
     attrs = super(Layer, self).to_json()
@@ -254,3 +254,5 @@ class SourceLayer(Container):
     self.output = x_out #x_out.dimshuffle('x',0,1,2)
     self.set_attr('n_out', n_out)
     self.set_attr('sparse', sparse)
+
+
