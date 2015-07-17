@@ -28,9 +28,9 @@ class RecurrentLayer(HiddenLayer):
       self.W_re = self.create_random_normal_weights(n_out, n_out, n_in,
                                                     "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
       self.W_proj = None
-    for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_normal_weights(s.attrs['n_out'], n_out, n_in,
-                                                    "W_in_%s_%s" % (s.name, self.name)).get_value())
+    #for s, W in zip(self.sources, self.W_in):
+    #  W.set_value(self.create_random_normal_weights(s.attrs['n_out'], n_out, n_in,
+    #                                                "W_in_%s_%s" % (s.name, self.name)).get_value())
     self.add_param(self.W_re, 'W_re_%s' % self.name)
     self.index = index
     self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)

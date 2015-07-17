@@ -22,10 +22,20 @@ class OutputLayer(Layer):
                                                             name="W_in_%s_%s" % (source.name, self.name)),
                                 "W_in_%s_%s" % (source.name, self.name))
                  for source in self.sources]
+
+    #self.W_fak = [self.add_param(self.create_forward_weights(self.attrs['n_out'], self.attrs['n_out'],
+    #                                                        name="W_fak_%s_%s" % (source.name, self.name)),
+    #                            "W_in_%s_%s" % (source.name, self.name))
+    #             for source in self.sources]
+
+
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for source, m, W in zip(self.sources, self.masks, self.W_in):
       if m is None:
-        self.z += T.tensordot(source.output, W, [[2],[1]])
+        #self.z += T.dot(W[:,:,0], source.output)
+        #self.z += T.dot(source.output, W)
+        #self.z += T.tensordot(T.sum(T.tensordot(source.output, W, 1), axis=2), Q, 1)
+        self.z += T.tensordot(source.output, W, 1) # [[2],[0]])
       else:
         self.z += self.dot(self.mass * m * source.output, W)
     self.set_attr('from', ",".join([s.name for s in self.sources]))
@@ -35,8 +45,8 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
       self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
-    self.make_output(self.z, collapse = False)
-    self.output = T.sum(self.output, axis=2)
+    #self.make_output(self.z, collapse = False)
+    self.output = T.sum(self.z, axis=2)
 
   def create_bias(self, n, prefix='b'):
     name = "%s_%s" % (prefix, self.name)

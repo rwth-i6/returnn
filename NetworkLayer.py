@@ -102,7 +102,7 @@ class Container(object):
 
   def create_bias(self, n, prefix = 'b'):
     name = "%s_%s" % (prefix, self.name)
-    return theano.shared(value=numpy.zeros((self.depth, n), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+    return theano.shared(value=numpy.zeros((n, self.depth), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
@@ -110,7 +110,7 @@ class Container(object):
       scale =  numpy.sqrt((n + m) / 12.)
     else:
       scale = numpy.sqrt(scale / 12.)
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(self.depth, n, m)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
@@ -118,7 +118,7 @@ class Container(object):
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.depth, n, m)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, self.depth, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
 
   def create_forward_weights(self, n, m, name=None):
@@ -226,7 +226,7 @@ class Layer(Container):
 
   def make_output(self, output, collapse = True):
     if collapse:
-      output = T.max(output, axis=0, keepdims=False)
+      output = T.max(output, axis=2)
     if self.attrs['sparse']:
       output = T.argmax(output, axis=-1, keepdims=True)
     self.output = output

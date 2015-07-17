@@ -176,7 +176,6 @@ class OptimizedLstmLayer(RecurrentLayer):
                                                      s.attrs['n_out'] + n_out + n_out * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
-    self.o.set_value(numpy.ones((n_out,), dtype='int8'))
     if sharpgates == 'global':
       self.sharpness = self.create_random_uniform_weights(3, n_out)
     elif sharpgates == 'shared':
@@ -195,23 +194,23 @@ class OptimizedLstmLayer(RecurrentLayer):
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
       self.add_param(self.sharpness, 'gate_scaling')
 
-    self.output = self.sources[0].output # T.sum(self.output, axis=-1)
-    return
-
-    z = 0 #self.b
+    z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
         z += W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         #z += T.tensordot(source.output, W, [[2],[0]])
-        z += T.tensordot(x_t.output, W, [[2],[1]])
+        #z += T.dot(x_t.output.dimshuffle(0,1,'x',2), W)
+        z += T.tensordot(x_t.output, W, 1) #, [[2],[0]]) #.reshape((x_t.output.shape[0], x_t.output.shape[1], self.depth, 4 * n_out), ndim = 4) # tbd4m
         #z += T.tensordot(x_t.output, W, [[0], [0]])
       else:
         z += self.dot(self.mass * m * x_t.output, W)
 
-    self.make_output(z, collapse = False)
-    self.output = T.sum(self.output, axis=-1)
-    return
+    #self.set_attr('n_out', self.attrs['n_out'] * 4)
+    #self.output = T.sum(z, axis=2) #.reshape((x_t.output.shape[0], x_t.output.shape[1], 4 * n_out), ndim = 3)
+    #self.output = self.sources[0].output
+    #return
+
 
     def index_step(z_batch, i_t, s_batch, h_batch): # why is this slower :(
       q_t = i_t #T.switch(T.any(i_t), i_t, T.ones_like(i_t))
@@ -232,21 +231,22 @@ class OptimizedLstmLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p, W_re):
-      h_r = T.max(h_p, axis = -1)
-      h_q = h_r if not self.attrs['projection'] else T.max(GO(T.tensordot(h_p, self.W_proj, [[1],[1]])), axis = -1)
+      h_r = T.sum(h_p, axis = 1) # bdm -> bm
+      h_q = h_r if not self.attrs['projection'] else T.sum(GO(T.tensordot(h_r, self.W_proj, 1)), axis = 1)
         #T.max(GO(T.dot(T.sum(h_p, axis = -1), self.W_proj))) #T.max(GO(T.tensordot(h_p, self.W_proj, [[2], [2]])), axis = -1)
-      z += T.tensordot(h_q, W_re, [[1],[1]])
-      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out, self.depth))
+      z += T.tensordot(h_q, W_re, 1) # bm x dm4m -> bd4m
+      i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), self.depth, n_out))
       j = i #T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
-      ingate = GI(z[:,n_out: 2 * n_out])
-      forgetgate = GF(z[:,2 * n_out:3 * n_out])
-      outgate = GO(z[:,3 * n_out:])
-      input = CI(z[:,:n_out])
+      ingate = GI(z[:,:,n_out: 2 * n_out]) # bdm
+      forgetgate = GF(z[:,:,2 * n_out:3 * n_out]) # bdm
+      outgate = GO(z[:,:,3 * n_out:]) # bdm
+      input = CI(z[:,:,:n_out]) # bdm
       #s_i = input * ingate + s_p * forgetgate
-      s_t = input * ingate + s_p * forgetgate #if not self.W_proj else T.dot(s_i, self.W_proj)
+      s_t = input * ingate + s_p * forgetgate # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
-      return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * j + h_p * (1-j)
+      return s_t, h_t
+      #return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * j + h_p * (1-j)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
@@ -260,13 +260,13 @@ class OptimizedLstmLayer(RecurrentLayer):
           n_dec = self.attrs['n_dec']
           #index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1]) #index[:n_dec] #T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ T.unbroadcast(encoder.state[-1], 3),
-                         T.unbroadcast(encoder.act[-1], 3) ]
+        outputs_info = [ T.unbroadcast(encoder.state[-1], 2),
+                         T.unbroadcast(encoder.act[-1], 2) ]
         if len(self.W_in) == 0:
-          sequences = T.unbroadcast(T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4, self.depth), 2)
+          sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 4)
       else:
-        outputs_info = [ T.unbroadcast(T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out, self.depth), 1),
-                         T.unbroadcast(T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out, self.depth), 1) ]
+        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out),
+                         T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
 
       print self.name
       [state, act], _ = theano.scan(step,
@@ -284,10 +284,10 @@ class OptimizedLstmLayer(RecurrentLayer):
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:
         totact = act
-    totact = z
     self.state = state
-    self.act = totact[::-(2 * self.attrs['reverse'] - 1)]
+    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
     self.make_output(totact)
+    #self.output = T.sum(self.act, axis=2)
     #self.output = self.sources[0].output
 
   def get_branching(self):
