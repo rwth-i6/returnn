@@ -32,6 +32,7 @@ class Engine:
     self.devices = devices
     self.train_data = None; " :type: Dataset.Dataset "
     self.is_training = False
+    self.start_epoch = None
     self.training_finished = False
     self.stop_train_after_epoch_request = False
     self.pretrain = None; " :type: Pretrain.Pretrain "
@@ -161,6 +162,7 @@ class Engine:
     self.pretrain = pretrainFromConfig(config)
 
     last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
+    assert last_epoch or self.start_epoch
 
     if not last_model_epoch_filename and self.start_epoch == 1:
       last_model_epoch_filename = config.value('load', '')
