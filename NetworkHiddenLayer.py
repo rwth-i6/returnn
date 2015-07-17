@@ -27,15 +27,15 @@ class ForwardLayer(HiddenLayer):
   def __init__(self, **kwargs):
     kwargs.setdefault("layer_class", "hidden")
     super(ForwardLayer, self).__init__(**kwargs)
-    z = 0 #self.b
+    z = self.b
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(self.sources, self.masks, self.W_in):
       if s.attrs['sparse']:
         z += W_in[T.cast(s.output[:,:,0], 'int32')]
       elif m is None:
-        z += T.tensordot(s.output, W_in, 1)
+        z += self.dot(s.output, W_in)
       else:
-        z += T.dot(self.mass * m * s.output, W_in)
+        z += self.dot(self.mass * m * s.output, W_in)
     self.make_output(z if self.activation is None else self.activation(z))
 
 

@@ -11,7 +11,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=2, forward_weights_init=None):
+  def __init__(self, layer_class, name="", train_flag=False, depth=1, forward_weights_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -25,6 +25,12 @@ class Container(object):
     self.depth = depth
     self.set_attr('depth', depth)
     self.forward_weights_init = forward_weights_init or "random_normal()"
+
+  def dot(self, vec, mat):
+    if self.depth == 1:
+      return T.dot(vec, mat)
+    else:
+      return T.tensordot(vec, mat, 1)
 
   def save(self, head):
     """
@@ -102,7 +108,10 @@ class Container(object):
 
   def create_bias(self, n, prefix = 'b'):
     name = "%s_%s" % (prefix, self.name)
-    return theano.shared(value=numpy.zeros((n, self.depth), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+    if self.depth > 1:
+      return theano.shared(value=numpy.zeros((self.depth, n), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+    else:
+      return theano.shared(value=numpy.zeros((n, ), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
@@ -110,7 +119,10 @@ class Container(object):
       scale =  numpy.sqrt((n + m) / 12.)
     else:
       scale = numpy.sqrt(scale / 12.)
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=theano.config.floatX)
+    if self.depth > 1:
+      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=theano.config.floatX)
+    else:
+      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
@@ -118,7 +130,10 @@ class Container(object):
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, self.depth, m)), dtype=theano.config.floatX)
+    if self.depth > 1:
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, self.depth, m)), dtype=theano.config.floatX)
+    else:
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
 
   def create_forward_weights(self, n, m, name=None):
@@ -208,10 +223,6 @@ class Layer(Container):
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
 
-  def dot(self, a, b):
-    return T.dot(a,b)
-    #return T.tensordot(a, b) #, axes=[[0],[0,1]])
-
   def get_branching(self):
     return sum([W.get_value().shape[0] for W in self.W_in]) + 1
 
@@ -225,7 +236,7 @@ class Layer(Container):
     return self.constraints
 
   def make_output(self, output, collapse = True):
-    if collapse:
+    if collapse and self.depth > 1:
       output = T.max(output, axis=2)
     if self.attrs['sparse']:
       output = T.argmax(output, axis=-1, keepdims=True)

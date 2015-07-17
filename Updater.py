@@ -399,20 +399,6 @@ class Updater:
 
           upd[param] += delta_x_t
 
-          print "--------->", param, param.get_value().shape, ":",
-          print mean_square_dx.get_value().shape,
-          print mean_dx.get_value().shape,
-          print gamma_nume_sqr.get_value().shape,
-          print gamma_deno_sqr.get_value().shape,
-          print taus_x_t.get_value().shape,
-          print cov_num_t.get_value().shape,
-          print mean_grad.get_value().shape,
-          print old_plain_grad.get_value().shape,
-          print mean_curvature.get_value().shape,
-          print mean_curvature_sqr.get_value().shape,
-          print sum_square_grad.get_value().shape
-
-
           # Apply updates
           updates.append((mean_square_grad, new_mean_squared_grad))
           updates.append((mean_square_dx, new_mean_square_dx))
