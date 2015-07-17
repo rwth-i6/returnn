@@ -369,10 +369,7 @@ def prepareForwarding(epoch):
     fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fns_existing = [fn for fn in fns if os.path.exists(fn)]
     assert len(fns_existing) == 1, "%s not found" % fns
-    if config.value('load', None) is not None:
-      assert config.value('load', '') == fns_existing[0], "'load' = %r" % config.value('load', None)
-    else:
-      config.set('load', fns_existing[0])
+    config.set('load', fns_existing[0])
 
   lastEpoch, _ = engine.get_last_epoch_model(config)
   assert lastEpoch == epoch
