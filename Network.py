@@ -50,7 +50,11 @@ class LayerNetwork(object):
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'), train_flag)
+      return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs,
+                           mask=mask,
+                           sparse_input=config.bool("sparse_input", False),
+                           target=config.value('target', 'classes'),
+                           train_flag=train_flag)
 
     description = LayerNetworkDescription.from_config(config)
     return cls.from_description(description, mask, train_flag)
@@ -67,7 +71,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
+  def from_json(cls, json_content, n_in, n_out, mask="unity", sparse_input = False, target = 'classes', train_flag = False):
     """
     :type json_content: str
     :type n_in: int
@@ -122,7 +126,7 @@ class LayerNetwork(object):
         network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': act, 'name': layer_name})
+        params.update({'activation': act, 'name': layer_name, 'mask': mask})
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
