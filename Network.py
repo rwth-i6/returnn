@@ -44,7 +44,7 @@ class LayerNetwork(object):
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs)
+      return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs, mask=mask)
 
     description = LayerNetworkDescription.from_config(config)
     return cls.from_description(description, mask)
@@ -61,7 +61,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None):
+  def from_json(cls, json_content, n_in, n_out, mask="unity"):
     """
     :type json_content: str
     :type n_in: int
@@ -101,7 +101,7 @@ class LayerNetwork(object):
                                 dropout=params['dropout'], mask=mask, network=network)
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': act, 'name': layer_name})
+        params.update({'activation': act, 'name': layer_name, 'mask': mask})
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
