@@ -16,11 +16,10 @@ from Log import log
 
 
 class LayerNetwork(object):
-  def __init__(self, n_in, n_out, mask="unity"):
+  def __init__(self, n_in, n_out):
     """
     :param int n_in: input dim of the network
     :param int n_out: output dim of the network
-    :param str mask: e.g. "unity"
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = T.ivector('y'); """ :type: theano.Variable """
@@ -29,17 +28,16 @@ class LayerNetwork(object):
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
-    self.mask = mask
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
     self.train_param_args = None; """ :type: dict[str] """
 
   @classmethod
-  def from_config_topology(cls, config, mask="unity"):
+  def from_config_topology(cls, config, mask=None):
     """
     :type config: Config.Config
-    :param str mask: e.g. "unity" or "dropout"
+    :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
     if config.network_topology_json is not None:
@@ -47,29 +45,32 @@ class LayerNetwork(object):
       return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs, mask=mask)
 
     description = LayerNetworkDescription.from_config(config)
-    return cls.from_description(description, mask)
+    if not mask:
+      if sum(config.float_list('dropout', [0])) > 0.0:
+        mask = "dropout"
+    return cls.from_description(description, mask=mask)
 
   @classmethod
-  def from_description(cls, description, mask="unity"):
+  def from_description(cls, description, mask=None):
     """
     :type description: NetworkDescription.LayerNetworkDescription
-    :param str mask: e.g. "unity" or "dropout"
+    :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(description.num_inputs, description.num_outputs, mask)
-    network.initialize(description)
+    network = cls(description.num_inputs, description.num_outputs)
+    network.initialize(description, mask=mask)
     return network
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask="unity"):
+  def from_json(cls, json_content, n_in, n_out, mask=None):
     """
     :type json_content: str
     :type n_in: int
     :type n_out: int
-    :type mask: str
+    :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(n_in, n_out, mask)
+    network = cls(n_in, n_out)
     try:
       topology = json.loads(json_content)
     except ValueError:
@@ -96,12 +97,16 @@ class LayerNetwork(object):
       obj.pop('from', None)
       params = { 'sources': source, 'network': network }
       params.update(obj)
+      if mask:
+        params["mask"] = mask  # overwrite
       if cl == 'softmax':
-        network.make_classifier(sources=params['sources'], loss=params['loss'],
-                                dropout=params['dropout'], mask=mask, network=network)
+        if params.has_key("n_out"):
+          assert params["n_out"] == n_out
+          params.pop("n_out")
+        network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': act, 'name': layer_name, 'mask': mask})
+        params.update({'activation': act, 'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
@@ -110,20 +115,18 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity"):
+  def from_hdf_model_topology(cls, model, mask=None):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
-    grp = model['training']
-    if mask is None: mask = grp.attrs['mask']
     n_in = model.attrs['n_in']
     try:
       n_out = model.attrs['n_out']
     except KeyError:
       n_out = model['n_out'].attrs['classes']  # try new version with multiple output classes
-    network = cls(n_in, n_out, mask)
+    network = cls(n_in, n_out)
     network.param_regularization_objective = T.constant(0)
     network.recurrent = False
     def traverse(model, layer_name, network):
@@ -157,7 +160,7 @@ class LayerNetwork(object):
                    'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
-                   'mask': mask,
+                   'mask': mask or model[layer_name].attrs['mask'],
                    'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
@@ -172,7 +175,7 @@ class LayerNetwork(object):
     sources = [ network.hidden[s] for s in model[output].attrs['from'].split(',') ]
     loss = 'ce' if not 'loss' in model[output].attrs else model[output].attrs['loss']
     network.make_classifier(sources=sources, loss=loss,
-                            dropout=model[output].attrs['dropout'], mask=mask,
+                            dropout=model[output].attrs['dropout'], mask=mask or model[output].attrs['mask'],
                             network=network)
     return network
 
@@ -252,18 +255,19 @@ class LayerNetwork(object):
     self.train_param_args = kwargs
     self.train_params_vars = self.get_params_vars(**kwargs)
 
-  def _make_layer(self, description, info, sources, reverse=False):
+  def _make_layer(self, description, info, sources, mask, reverse=False):
     """
     :type description: LayerNetworkDescription
     :type info: dict[str]
     :type sources: list[SourceLayer]
     :type reverse: bool
+    :type mask: str
     :rtype: NetworkHiddenLayer.ForwardLayer | NetworkRecurrentLayer.RecurrentLayer
     """
     params = dict(description.default_layer_info)
     params.update(info)
     params["sources"] = sources
-    params["mask"] = self.mask
+    params["mask"] = mask
     params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
     if layer_class.recurrent:
@@ -282,21 +286,23 @@ class LayerNetwork(object):
     self.add_layer(layer=layer)
     return layer
 
-  def _make_output(self, description, sources):
+  def _make_output(self, description, sources, mask):
     """
     :type description: LayerNetworkDescription
     :type sources: list[SourceLayer]
+    :type mask: str
     """
     params = dict(description.default_layer_info)
     params.pop("layer_class", None)  # Makes no sense to use this default.
     params.update(description.output_info)
     params["sources"] = sources
-    params["mask"] = self.mask
+    params["mask"] = mask
     self.make_classifier(**params)
 
-  def initialize(self, description):
+  def initialize(self, description, mask=None):
     """
     :type description: LayerNetworkDescription
+    :param str mask: e.g. "unity" or None ("dropout")
 
     Initializes the network based the description.
     """
@@ -314,7 +320,7 @@ class LayerNetwork(object):
     last_layer = None
     # create forward layers
     for info in description.hidden_info:
-      last_layer = self._make_layer(description=description, info=info,
+      last_layer = self._make_layer(description=description, info=info, mask=mask,
                                     sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')])
       n_in = last_layer.attrs['n_out']
       x_in = last_layer.output
@@ -327,13 +333,13 @@ class LayerNetwork(object):
       n_in = self.n_in
       x_in = self.x
       for info in description.hidden_info:
-        last_layer = self._make_layer(description=description, info=info,
+        last_layer = self._make_layer(description=description, info=info, mask=mask,
                                       sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')],
                                       reverse=True)
         n_in = last_layer.attrs['n_out']
         x_in = last_layer.output
       sources += [last_layer]
-    self._make_output(description=description, sources=sources)
+    self._make_output(description=description, sources=sources, mask=mask)
 
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + self.output.num_params()

@@ -183,20 +183,17 @@ class Device():
     import theano.tensor as T
     import h5py
     self.network_task = config.value('task', 'train')
-    mask = "unity"
-    if sum(config.float_list('dropout', [0])) > 0.0:
-      mask = "dropout"
     if network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, mask)
-      self.testnet = LayerNetwork.from_description(network_description, "unity")
+      self.trainnet = LayerNetwork.from_description(network_description)
+      self.testnet = LayerNetwork.from_description(network_description, mask="unity")
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = LayerNetwork.from_hdf_model_topology(model, mask)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, "unity")
+      self.trainnet = LayerNetwork.from_hdf_model_topology(model)
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, mask="unity")
       model.close()
     else:
-      self.trainnet = LayerNetwork.from_config_topology(config, mask)
-      self.testnet = LayerNetwork.from_config_topology(config, "unity")
+      self.trainnet = LayerNetwork.from_config_topology(config)
+      self.testnet = LayerNetwork.from_config_topology(config, mask="unity")
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
