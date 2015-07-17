@@ -220,9 +220,9 @@ class Engine:
       json_data = json.loads(json_content)
       print json_data
       print "---------------"
-      print json.dumps(json_data, indent = 2)
+      print json.dumps(json_data, indent=2, sort_keys=True)
       print "---------------"
-      print >> fout, json.dumps(json_data, indent = 2)
+      print >> fout, json.dumps(json_data, indent=2, sort_keys=True)
     except ValueError as e:
       print >> log.v5, self.network.to_json()
       assert False, "JSON parsing failed: %s" % e
