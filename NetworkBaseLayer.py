@@ -202,11 +202,13 @@ class Container(object):
   @classmethod
   def guess_source_layer_name(cls, layer_name):
     # Any model created via NetworkDescription has SourceLayer with empty name as a source.
-    # Guess the real source layer name from our name, if it matches the scheme.
-    if layer_name.startswith("hidden_"):
-      nr = int(layer_name[len("hidden_"):])
+    # Guess the real source layer name from our name, if it matches the scheme, e.g. "hidden_N_fw".
+    import re
+    m = re.search("^.*?([0-9]+)[^0-9]*$", layer_name)
+    if m:
+      nr = int(m.group(1))
       if nr > 0:
-        return "hidden_%i" % (nr - 1)
+        return "%s%i%s" % (layer_name[:m.start(1)], nr - 1, layer_name[m.end(1):])
     return None
 
   def to_json(self):
