@@ -199,6 +199,16 @@ class Container(object):
     }
     return eval(self.forward_weights_init, eval_locals)
 
+  @classmethod
+  def guess_source_layer_name(cls, layer_name):
+    # Any model created via NetworkDescription has SourceLayer with empty name as a source.
+    # Guess the real source layer name from our name, if it matches the scheme.
+    if layer_name.startswith("hidden_"):
+      nr = int(layer_name[len("hidden_"):])
+      if nr > 0:
+        return "hidden_%i" % (nr - 1)
+    return None
+
   def to_json(self):
     attrs = self.attrs.copy()
     for k in attrs.keys():
@@ -207,6 +217,12 @@ class Container(object):
     if 'from' in attrs:
       if attrs['from'] == 'data':
         attrs.pop('from', None)
+      elif attrs['from'] == '':
+        guessed = self.guess_source_layer_name(self.name)
+        if guessed:
+          attrs['from'] = guessed
+        else:
+          attrs.pop('from', None)
       else:
         attrs['from'] = attrs['from'].split(',')
     return attrs
