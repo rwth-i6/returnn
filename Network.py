@@ -157,7 +157,7 @@ class LayerNetwork(object):
                    'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
-                   'mask': model[layer_name].attrs['mask'],
+                   'mask': mask,
                    'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
