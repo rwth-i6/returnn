@@ -27,21 +27,30 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     rnn.train_data.init_seq_order(parser_args.epoch)
 
     seq_idx = parser_args.start_seq
-    print seq_idx
-    print parser_args.end_seq
     num_seqs = 0
-    data = np.array([])
-    targets = np.array([])
+
+    data = np.array([[], []])
+    data.resize((0, dataset.num_inputs))
+    targets = np.array([], dtype=int)
+
     while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= parser_args.end_seq:
         dataset.load_seqs(seq_idx, seq_idx)
-        data = np.concatenate((data, dataset.get_data(seq_idx)))
-        targets = np.concatenate((targets, dataset.get_targets(seq_idx)))
+        nd_data = dataset.get_data(seq_idx)
+        nd_targets = dataset.get_targets(seq_idx)
+
+        data = np.concatenate((data, nd_data), axis=0)
+
+        targets = np.concatenate((targets, nd_targets), axis=0)
+
         seq_idx += 1
         num_seqs += 1
 
-    hdf_dataset.create_dataset("inputs", data=data)
-    hdf_dataset.create_dataset("targets", data=targets)
+    hdf_dataset["inputs"] = data
+    hdf_dataset["outputs"] = targets
 
+    hdf_dataset.attrs["inputPattSize"] = dataset.num_inputs
+    hdf_dataset.attrs["numLabels"] = dataset.num_outputs
+    hdf_dataset.attrs["seqLengths"] = num_seqs
 
 def hdf_close(hdf_dataset):
     '''
@@ -83,6 +92,7 @@ def main(argv):
     hdf_dataset = hdf_dataset_init(args.hdf_filename)
     hdf_dump_from_dataset(rnn.train_data, hdf_dataset, args)
     hdf_close(hdf_dataset)
+
     rnn.finalize()
 
 
