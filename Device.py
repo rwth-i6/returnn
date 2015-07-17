@@ -205,6 +205,7 @@ class Device():
           gparam = 0
         else:
           try:
+            print "<<<", param
             gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
           except theano.gradient.DisconnectedInputError:
             gparam = 0

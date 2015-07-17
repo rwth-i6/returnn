@@ -14,7 +14,7 @@ class Container(object):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class, name="", network=None,
-               forward_weights_init=None, bias_init=None,
+               forward_weights_init=None, bias_init=None, depth=1,
                substitute_param_expr=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
@@ -27,6 +27,8 @@ class Container(object):
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
+    self.depth = depth
+    self.set_attr('depth', depth)
     self.network = network
     self.forward_weights_init = forward_weights_init or "random_normal()"
     self.bias_init = bias_init or "zeros()"
@@ -134,13 +136,13 @@ class Container(object):
     }
     values = eval(self.bias_init, eval_locals)
     values = numpy.asarray(values, dtype=theano.config.floatX)
-    assert values.shape == (n,)
+    assert values.shape == (n,self.depth)
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
     if not scale: scale = numpy.sqrt(12. / (n + m))
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=(n, m)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=(n, m, self.depth)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
@@ -148,7 +150,7 @@ class Container(object):
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6) / sqrt(p)  # 1 / sqrt(p)
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m, self.depth)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_forward_weights(self, n, m, name=None):
@@ -244,6 +246,12 @@ class Layer(Container):
       if l2 > 0.0:
         o += l2c * (param ** 2).sum()
     return o
+
+  def make_output(self, output):
+    output = T.max(output, axis=-1, keepdims=False)
+    if self.attrs['sparse']:
+      output = T.argmax(output, axis=-2, keepdims=True)
+    self.output = output
 
 
 class SourceLayer(Container):

@@ -25,9 +25,9 @@ class OutputLayer(Layer):
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for source, m, W in zip(self.sources, self.masks, self.W_in):
       if m is None:
-        self.z += T.dot(source.output, W)
+        self.z += T.tensordot(source.output, W, [[2],[1]])
       else:
-        self.z += T.dot(self.mass * m * source.output, W)
+        self.z += self.dot(self.mass * m * source.output, W)
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.index = index
     self.i = (index.flatten() > 0).nonzero()
@@ -35,7 +35,8 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
       self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
-    self.output = self.z
+    self.make_output(self.z, collapse = False)
+    self.output = T.sum(self.output, axis=2)
 
   def create_bias(self, n, prefix='b'):
     name = "%s_%s" % (prefix, self.name)
@@ -71,7 +72,7 @@ class FramewiseOutputLayer(OutputLayer):
 
   def initialize(self):
     #self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    self.y_m = self.z.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
+    self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     #T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':

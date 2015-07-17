@@ -33,10 +33,10 @@ class ForwardLayer(HiddenLayer):
       if s.attrs['sparse']:
         z += W_in[T.cast(s.output[:,:,0], 'int32')]
       elif m is None:
-        z += T.dot(s.output, W_in)
+        z += T.tensordot(s.output, W_in, [[2],[1]])
       else:
         z += T.dot(self.mass * m * s.output, W_in)
-    self.output = z if self.activation is None else self.activation(z)
+    self.make_output(z if self.activation is None else self.activation(z))
 
 
 class ConvPoolLayer(ForwardLayer):

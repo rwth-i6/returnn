@@ -11,7 +11,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag = False, forward_weights_init=None):
+  def __init__(self, layer_class, name="", train_flag=False, depth=2, forward_weights_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -22,6 +22,8 @@ class Container(object):
     self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
     self.train_flag = train_flag
+    self.depth = depth
+    self.set_attr('depth', depth)
     self.forward_weights_init = forward_weights_init or "random_normal()"
 
   def save(self, head):
@@ -100,7 +102,7 @@ class Container(object):
 
   def create_bias(self, n, prefix = 'b'):
     name = "%s_%s" % (prefix, self.name)
-    return theano.shared(value=numpy.zeros((n,), dtype=theano.config.floatX), borrow=True, name=name)
+    return theano.shared(value=numpy.zeros((self.depth, n), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
@@ -108,16 +110,16 @@ class Container(object):
       scale =  numpy.sqrt((n + m) / 12.)
     else:
       scale = numpy.sqrt(scale / 12.)
-    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name)
+    values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(self.depth, n, m)), dtype=theano.config.floatX)
+    return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.depth, n, m)), dtype=theano.config.floatX)
+    return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
 
   def create_forward_weights(self, n, m, name=None):
     eval_locals = {
@@ -176,8 +178,7 @@ class Layer(Container):
       # so mass has to be 1 / (1 - dropout).
       self.mass = T.constant(1.0 / (1.0 - dropout))
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
-
+      self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
     else:
@@ -207,6 +208,10 @@ class Layer(Container):
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
 
+  def dot(self, a, b):
+    return T.dot(a,b)
+    #return T.tensordot(a, b) #, axes=[[0],[0,1]])
+
   def get_branching(self):
     return sum([W.get_value().shape[0] for W in self.W_in]) + 1
 
@@ -219,6 +224,13 @@ class Layer(Container):
   def make_constraints(self):
     return self.constraints
 
+  def make_output(self, output, collapse = True):
+    if collapse:
+      output = T.max(output, axis=0, keepdims=False)
+    if self.attrs['sparse']:
+      output = T.argmax(output, axis=-1, keepdims=True)
+    self.output = output
+
   def to_json(self):
     attrs = super(Layer, self).to_json()
     attrs['class'] = self.layer_class
@@ -228,6 +240,6 @@ class Layer(Container):
 class SourceLayer(Container):
   def __init__(self, n_out, x_out, sparse = False, name=""):
     super(SourceLayer, self).__init__(layer_class='source', name=name)
-    self.output = x_out
+    self.output = x_out #x_out.dimshuffle('x',0,1,2)
     self.set_attr('n_out', n_out)
     self.set_attr('sparse', sparse)

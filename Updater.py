@@ -142,7 +142,9 @@ class Updater:
     return constrained_output
 
   @staticmethod
-  def var(value, name = ""):
+  def var(value, name = "", broadcastable = None):
+    if broadcastable:
+      return theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
     return theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
 
   def getUpdateList(self):
@@ -153,7 +155,7 @@ class Updater:
     for target in self.net_train_param_deltas:
       eps = 1e-7
       if self.adasecant:
-        grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (self.net_train_param_deltas[target][p].norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
+        grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (T.unbroadcast(self.net_train_param_deltas[target][p], -1).norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
         step = self.var(0, "adasecant_step")
       else:
         grads = self.net_train_param_deltas[target]
@@ -190,50 +192,52 @@ class Updater:
           #self.outlier_detection = True #False
           #self.gamma_clip = 1.8 #None #1.8
 
+          grads[param] = T.unbroadcast(grads[param], -1)
+
           grads[param].name = "grad_%s" % param.name
-          mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name)
+          mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
           slow_constant = 2.1
           #mean_corrected_grad = self.var(param.get_value() * 0 + eps, name="mean_corrected_grad_%s" % param.name)
           if self.use_adagrad:
             # sum_square_grad := \sum_i g_i^2
-            sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name)
+            sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name, broadcastable=param.broadcastable)
           if self.use_adadelta:
-            eg2 = self.var(param.get_value(borrow=True) * 0., name= "eg2_%s" % param.name)
-            edx2 = self.var(param.get_value(borrow=True) * 0., name= "edx2_%s" % param.name)
+            eg2 = self.var(param.get_value(borrow=True) * 0., name= "eg2_%s" % param.name, broadcastable=param.broadcastable)
+            edx2 = self.var(param.get_value(borrow=True) * 0., name= "edx2_%s" % param.name, broadcastable=param.broadcastable)
             #dx = self.var(param.get_value(borrow=True) * 0., name= "dx_%s" % param.name)
           taus_x_t = self.var((numpy.ones_like(param.get_value()) + eps) * slow_constant,
-                             name="taus_x_t_" + param.name)
+                             name="taus_x_t_" + param.name, broadcastable=param.broadcastable)
           self.taus_x_t = taus_x_t
 
           #Variance reduction parameters
           #Numerator of the gamma:
           gamma_nume_sqr = self.var(numpy.zeros_like(param.get_value()) + eps,
-                                    name="gamma_nume_sqr_" + param.name)
+                                    name="gamma_nume_sqr_" + param.name, broadcastable=param.broadcastable)
 
           #Denominator of the gamma:
           gamma_deno_sqr = self.var(numpy.zeros_like(param.get_value()) + eps,
-                                    name="gamma_deno_sqr_" + param.name)
+                                    name="gamma_deno_sqr_" + param.name, broadcastable=param.broadcastable)
 
           #For the covariance parameter := E[\gamma \alpha]_{t-1}
           cov_num_t = self.var(numpy.zeros_like(param.get_value()) + eps,
-                               name="cov_num_t_" + param.name)
+                               name="cov_num_t_" + param.name, broadcastable=param.broadcastable)
 
           # mean_squared_grad := E[g^2]_{t-1}
           mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps,
-                                      name="msg_" + param.name)
+                                      name="msg_" + param.name, broadcastable=param.broadcastable)
 
           # mean_square_dx := E[(\Delta x)^2]_{t-1}
-          mean_square_dx = self.var(value = param.get_value() * 0., name="msd_" + param.name)
+          mean_square_dx = self.var(value = param.get_value() * 0., name="msd_" + param.name, broadcastable=param.broadcastable)
           if self.use_corrected_grad:
-              old_grad = self.var(value = param.get_value() * 0. + eps)
+              old_grad = self.var(value = param.get_value() * 0. + eps, broadcastable=param.broadcastable)
 
           #The uncorrected gradient of previous of the previous update:
-          old_plain_grad = self.var(param.get_value() * 0 + eps)
-          mean_curvature = self.var(param.get_value() * 0 + eps)
-          mean_curvature_sqr = self.var(param.get_value() * 0 + eps)
+          old_plain_grad = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
+          mean_curvature = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
+          mean_curvature_sqr = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
 
           # Initialize the E[\Delta]_{t-1}
-          mean_dx = self.var(param.get_value() * 0.)
+          mean_dx = self.var(param.get_value() * 0., broadcastable=param.broadcastable)
 
           # Block-wise normalize the gradient:
           norm_grad = grads[param]
@@ -380,7 +384,7 @@ class Updater:
             self.lower_bound_tau = 1.5
             new_taus_t = T.switch(T.or_(abs(norm_grad - mg) > (2 * T.sqrt(mgsq  - mg**2)),
                                         abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave**2))),
-                                        self.var(value=2.2), new_taus_t)
+                                        self.var(2.2), new_taus_t)
 
             #Apply the bound constraints on tau:
             new_taus_t = T.maximum(self.lower_bound_tau, new_taus_t)
@@ -394,6 +398,20 @@ class Updater:
           )
 
           upd[param] += delta_x_t
+
+          print "--------->", param, param.get_value().shape, ":",
+          print mean_square_dx.get_value().shape,
+          print mean_dx.get_value().shape,
+          print gamma_nume_sqr.get_value().shape,
+          print gamma_deno_sqr.get_value().shape,
+          print taus_x_t.get_value().shape,
+          print cov_num_t.get_value().shape,
+          print mean_grad.get_value().shape,
+          print old_plain_grad.get_value().shape,
+          print mean_curvature.get_value().shape,
+          print mean_curvature_sqr.get_value().shape,
+          print sum_square_grad.get_value().shape
+
 
           # Apply updates
           updates.append((mean_square_grad, new_mean_squared_grad))
