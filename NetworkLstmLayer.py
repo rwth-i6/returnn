@@ -395,7 +395,6 @@ class GRULayer(RecurrentLayer):
       z_t = GU(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
       h_cand = CI(z[:,2*n_out:] + h_r)
       h_t = z_t * h_i + (1 - z_t) * h_cand
-
       return h_t * i + h_i * (1-i)
 
 
@@ -493,9 +492,9 @@ class SRULayer(RecurrentLayer):
       h_x = self.dot(h_i, W_re)
       z_t = GU(z[:,:n_out] + h_x[:,:n_out])
       r_t = GR(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
-      h_c = (1 - r_t) * CI(z[:,2*n_out:]) + r_t * CI(h_x[:,2*n_out:])
-      return z_t * i * h_i + (1 - z_t) * (1 - i) * h_c
-
+      h_c = CI(z[:,2*n_out:] + r_t * h_x[:,2*n_out:])
+      h_t = z_t * h_i + (1 - z_t) * h_c
+      return h_t * i + h_i * (1 - i)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
