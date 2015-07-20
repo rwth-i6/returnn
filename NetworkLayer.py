@@ -137,6 +137,14 @@ class Container(object):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
 
+  def create_random_uniform_weights1(self, n, m, p=None, l=None, name=None):
+    if name is None: name = 'W_' + self.name
+    assert not (p and l)
+    if not p: p = n + m
+    if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
+
   def create_forward_weights(self, n, m, name=None):
     eval_locals = {
       "n": n,
@@ -246,9 +254,10 @@ class Layer(Container):
       return T.mean(networks, axis=axis)
     elif cns == 'flat':
       if axis == 2:
-        return T.reshape(networks, (networks.shape[0], networks.shape[1], T.prod(networks.shape[2:]) ))
+        return networks.flatten(ndim=3)
+        #return T.reshape(networks, (networks.shape[0], networks.shape[1], T.prod(networks.shape[2:]) ))
       else:
-        return T.reshape(networks, (networks.shape[0], T.prod(networks.shape[1:]) ))
+        return networks.flatten(ndim=2) # T.reshape(networks, (networks.shape[0], T.prod(networks.shape[1:]) ))
     elif cns == 'sum':
       return T.sum(networks, axis=axis, acc_dtype=theano.config.floatX)
     elif cns == 'prod':
@@ -272,6 +281,8 @@ class Layer(Container):
     self.output = output
     if collapse and self.depth > 1:
       self.output = self.make_consensus(self.output)
+      if self.attrs['consensus'] == 'flat':
+        self.attrs['n_out'] *= self.depth
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
 

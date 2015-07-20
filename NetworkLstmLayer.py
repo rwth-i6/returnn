@@ -453,33 +453,52 @@ class SRULayer(RecurrentLayer):
     if encoder:
       self.set_attr('encoder', encoder.name)
     projection = kwargs.get("projection", None)
-    if self.depth > 1:
+    if False and self.depth > 1:
       value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
       value[:,n_out:2*n_out] = 1
     else:
       value = numpy.zeros((n_out * 3, ), dtype = theano.config.floatX)
       value[n_out:2*n_out] = 1
-    self.b.set_value(value)
+    #self.b.set_value(value)
+    self.b = theano.shared(value=numpy.zeros((n_out * 3,), dtype=theano.config.floatX), borrow=True, name="b_%s"%self.name) #self.create_bias()
+    self.params["b_%s"%self.name] = self.b
     n_re = n_out
     if projection:
       n_re = projection
       W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
       self.W_proj.set_value(W_proj.get_value())
+    if self.attrs['consensus'] == 'flat':
+      n_re *= self.depth
     W_re = self.create_random_uniform_weights(n_re, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
+    #self.params["W_re_%s" % self.name] = W_re
+    #self.W_re = W_re
     self.W_re.set_value(W_re.get_value())
     for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
-                                                     s.attrs['n_out'] + n_out * 3,
-                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+      #W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
+      #                                               s.attrs['n_out'] + n_out * 3,
+      #                                               name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+      W = self.create_random_uniform_weights1(s.attrs['n_out'], n_out * 3,
+                                              s.attrs['n_out'] + n_out * 3,
+                                              name="W_in_%s_%s" % (s.name, self.name))
+      self.params["W_in_%s_%s" % (s.name, self.name)] = W
+    self.W_in = []
+    for s in self.sources:
+      W = self.create_random_uniform_weights1(s.attrs['n_out'], n_out * 3,
+                                              s.attrs['n_out'] + n_out * 3,
+                                              name="W_in_%s_%s" % (s.name, self.name))
+      self.W_in.append(W)
+      self.params["W_in_%s_%s" % (s.name, self.name)] = W
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
         z += W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
-        z += self.dot(x_t.output, W)
+        z += T.dot(x_t.output, W)
       else:
         z += self.dot(self.mass * m * x_t.output, W)
 
+    if self.W_in and self.depth > 1:
+      z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
     #if self.mode == 'cho':
     #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     #else:
