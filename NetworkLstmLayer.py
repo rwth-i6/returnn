@@ -243,7 +243,7 @@ class OptimizedLstmLayer(RecurrentLayer):
         h_x = self.dot(GO(self.dot(h_r, self.W_proj)), W_re)
         #h_x = W_re[idx,:]
       else:
-        h_x = self.dot(h_r, W_re) if self.depth == 1 else self.make_consensus(h_r, axis = 1)
+        h_x = self.dot(h_r, W_re) if self.depth == 1 else self.make_consensus(self.dot(h_r, W_re), axis = 1)
         #T.max(GO(T.dot(T.sum(h_p, axis = -1), self.W_proj))) #T.max(GO(T.tensordot(h_p, self.W_proj, [[2], [2]])), axis = -1)
       z += h_x
       if len(self.W_in) == 0:
@@ -301,7 +301,7 @@ class OptimizedLstmLayer(RecurrentLayer):
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
+                                    sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
                                     outputs_info = outputs_info,
                                     non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
@@ -389,7 +389,7 @@ class GRULayer(RecurrentLayer):
       i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
       if len(self.W_in) == 0:
         z += self.b
-      h_x = self.dot(h_i, W_re)
+      h_x = self.dot(h_i, W_re) if self.depth == 1 else self.make_consensus(self.dot(h_i, W_re), axis = 1)
       r_t = GR(z[:,:n_out] + h_x[:,:n_out])
       h_r = self.dot(r_t * h_i, W_reset)
       z_t = GU(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
@@ -426,7 +426,7 @@ class GRULayer(RecurrentLayer):
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
+                                    sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
                                     outputs_info = outputs_info,
                                     non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
@@ -487,14 +487,20 @@ class SRULayer(RecurrentLayer):
 
     def step(z, i_t, h_p, W_re):
       h_i = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1)
-      i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
+      i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)) if self.depth == 1 else T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
       if len(self.W_in) == 0: z += self.b
-      h_x = self.dot(h_i, W_re)
-      z_t = GU(z[:,:n_out] + h_x[:,:n_out])
-      r_t = GR(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
-      h_c = CI(z[:,2*n_out:] + r_t * h_x[:,2*n_out:])
-      h_t = z_t * h_i + (1 - z_t) * h_c
-      return h_t * i + h_i * (1 - i)
+      h_q = self.dot(h_i, W_re) if not projection else self.dot(self.dot(h_i, W_proj), W_re)
+      h_x = h_q # if self.depth == 1 else self.make_consensus(h_q, axis = 1)
+      if self.depth == 1:
+        z_t = GU(z[:,:n_out] + h_x[:,:n_out])
+        r_t = GR(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
+        h_c = CI(z[:,2*n_out:] + r_t * h_x[:,2*n_out:])
+      else:
+        z_t = GU(z[:,:,:n_out] + h_x[:,:,:n_out])
+        r_t = GR(z[:,:,n_out:2*n_out] + h_x[:,:,n_out:2*n_out])
+        h_c = CI(z[:,:,2*n_out:] + r_t * h_x[:,:,2*n_out:])
+      h_t = z_t * h_p + (1 - z_t) * h_c
+      return h_t * i + h_p * (1 - i)
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
@@ -524,7 +530,7 @@ class SRULayer(RecurrentLayer):
                                     name = "scan_%s"%self.name,
                                     truncate_gradient = self.attrs['truncation'],
                                     go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
+                                    sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
                                     outputs_info = outputs_info,
                                     non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim

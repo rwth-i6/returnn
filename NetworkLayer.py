@@ -244,8 +244,13 @@ class Layer(Container):
       return T.min(networks, axis=axis)
     elif cns == 'mean':
       return T.mean(networks, axis=axis)
+    elif cns == 'flat':
+      if axis == 2:
+        return T.reshape(networks, (networks.shape[0], networks.shape[1], T.prod(networks.shape[2:]) ))
+      else:
+        return T.reshape(networks, (networks.shape[0], T.prod(networks.shape[1:]) ))
     elif cns == 'sum':
-      return T.sum(networks, axis=axis)
+      return T.sum(networks, axis=axis, acc_dtype=theano.config.floatX)
     elif cns == 'prod':
       return T.prod(networks, axis=axis)
     elif cns == 'var':
