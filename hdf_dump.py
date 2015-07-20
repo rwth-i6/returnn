@@ -6,6 +6,7 @@ from Log import log
 import rnn
 import argparse
 import sys
+import HDFDataset
 
 
 def hdf_dataset_init(file_name):
@@ -48,9 +49,9 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     hdf_dataset["inputs"] = data
     hdf_dataset["outputs"] = targets
 
-    hdf_dataset.attrs["inputPattSize"] = dataset.num_inputs
-    hdf_dataset.attrs["numLabels"] = dataset.num_outputs
-    hdf_dataset.attrs["seqLengths"] = num_seqs
+    hdf_dataset.attrs[HDFDataset.attr_inputPattSize] = dataset.num_inputs
+    hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.num_outputs
+    hdf_dataset.attrs[HDFDataset.attr_seqLengths] = num_seqs
 
 def hdf_close(hdf_dataset):
     '''
@@ -84,7 +85,7 @@ def main(argv):
     parser.add_argument('hdf_filename', type=str, help="File name of the HDF dataset, which will be created")
     parser.add_argument('start_seq', type=int, help="Start sequence index of the dataset to dump")
     parser.add_argument('end_seq', type=int, help="End sequence index of the dataset to dump")
-    parser.add_argument('epoch', type=int, help="Start epoch for initialization")
+    parser.add_argument('--epoch', type=int, default=1, help="Optional start epoch for initialization")
     parser.add_argument('crnn_config', type=str, help="Global config file for CRNN")
 
     args = parser.parse_args(argv[1:])
