@@ -5,6 +5,12 @@ import numpy
 from CachedDataset import CachedDataset
 from Log import log
 
+# Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
+attr_seqLengths = 'seqLengths'
+attr_inputPattSize = 'inputPattSize'
+attr_numLabels = 'numLabels'
+attr_times = 'times'
+attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
 class HDFDataset(CachedDataset):
 
@@ -34,9 +40,9 @@ class HDFDataset(CachedDataset):
     tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     seq_start = [0]
-    if 'times' in fin:
-      self.timestamps.extend(fin['times'][...].tolist())
-    for l,t in zip(fin['seqLengths'][...].tolist(), tags):
+    if attr_times in fin:
+      self.timestamps.extend(fin[attr_times][...].tolist())
+    for l,t in zip(fin[attr_seqLengths][...].tolist(), tags):
       self._seq_lengths.append(l)
       seq_start.append(seq_start[-1] + l)
       self.tags.append(t)
@@ -49,11 +55,11 @@ class HDFDataset(CachedDataset):
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
-      self.num_inputs = fin.attrs['inputPattSize']
-    assert self.num_inputs == fin.attrs['inputPattSize'], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs['inputPattSize']) + ")"
+      self.num_inputs = fin.attrs[attr_inputPattSize]
+    assert self.num_inputs == fin.attrs[attr_inputPattSize], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
     if self.num_outputs == 0:
-      self.num_outputs = fin.attrs['numLabels']
-    assert self.num_outputs == fin.attrs['numLabels'], "wrong number of labels in file " + filename  + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs['numLabels']) + ")"
+      self.num_outputs = fin.attrs[attr_numLabels]
+    assert self.num_outputs == fin.attrs[attr_numLabels], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs) + " got " + str(fin.attrs[attr_numLabels]) + ")"
     if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
         self.ctc_targets = fin['ctcIndexTranscription'][...]
