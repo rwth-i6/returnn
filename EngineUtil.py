@@ -33,7 +33,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   offset_slice = 0
   for batch in batches:
     dataset.load_seqs(batch.start_seq, batch.end_seq)
-
+    device.num_frames += batch.get_total_num_frames()
     for seq in batch.seqs:
       o = seq.batch_frame_offset
       q = seq.batch_slice + offset_slice

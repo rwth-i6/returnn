@@ -10,7 +10,7 @@ import h5py
 from NetworkDescription import LayerNetworkDescription
 from NetworkHiddenLayer import ForwardLayer
 from NetworkLayer import Layer, SourceLayer
-from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer
+from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, GRULayer, SRULayer
 from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer
 from NetworkRecurrentLayer import RecurrentLayer
 from Log import log
@@ -21,6 +21,8 @@ LayerClasses = {
   'hidden': ForwardLayer,  # used in JSON format
   'recurrent': RecurrentLayer,
   'lstm': LstmLayer,
+  'gru': GRULayer,
+  'sru': SRULayer,
   'lstm_opt': OptimizedLstmLayer,
 }
 

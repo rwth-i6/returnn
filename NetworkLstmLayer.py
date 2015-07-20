@@ -163,14 +163,18 @@ class OptimizedLstmLayer(RecurrentLayer):
     #self.state = self.create_bias(n_out, 'state')
     #self.act = self.create_bias(n_re, 'act')
     if self.depth > 1:
-      self.b.set_value(numpy.zeros((self.depth, n_out * 4), dtype = theano.config.floatX))
+      value = numpy.zeros((self.depth, n_out * 4), dtype = theano.config.floatX)
+      value[:,2 * n_out:3 * n_out] = 1
     else:
-      self.b.set_value(numpy.zeros((n_out * 4, ), dtype = theano.config.floatX))
+      value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
+      value[2 * n_out:3 * n_out] = 1
+    self.b.set_value(value)
     n_re = n_out
     if projection:
       n_re = projection
       W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
       self.W_proj.set_value(W_proj.get_value())
+      #self.set_attr('n_out', projection)
     W_re = self.create_random_uniform_weights(n_re, n_out * 4, n_in + n_out * 4,
                                               name="W_re_%s" % self.name)
     self.W_re.set_value(W_re.get_value())
@@ -214,7 +218,6 @@ class OptimizedLstmLayer(RecurrentLayer):
     #self.output = self.sources[0].output
     #return
 
-
     def index_step(z_batch, i_t, s_batch, h_batch): # why is this slower :(
       q_t = i_t #T.switch(T.any(i_t), i_t, T.ones_like(i_t))
       j_t = (q_t > 0).nonzero()
@@ -234,31 +237,38 @@ class OptimizedLstmLayer(RecurrentLayer):
       return theano.gradient.grad_clip(s_out, -50, 50), h_out
 
     def step(z, i_t, s_p, h_p, W_re):
-      h_r = h_p if self.depth == 1 else T.max(h_p, axis = 1) # bdm -> bm
-      h_q = h_r if not self.attrs['projection'] else GO(self.dot(h_r, self.W_proj))
-      h_x = h_q if self.depth == 1 or not self.attrs['projection'] else T.max(h_q, axis = 1)
+      h_r = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1) # bdm -> bm
+      if self.attrs['projection']:
+        idx = T.argmax(GO(self.dot(h_r, self.W_proj)), -1)
+        h_x = self.dot(GO(self.dot(h_r, self.W_proj)), W_re)
+        #h_x = W_re[idx,:]
+      else:
+        h_x = self.dot(h_r, W_re) if self.depth == 1 else self.make_consensus(h_r, axis = 1)
         #T.max(GO(T.dot(T.sum(h_p, axis = -1), self.W_proj))) #T.max(GO(T.tensordot(h_p, self.W_proj, [[2], [2]])), axis = -1)
-      z += self.dot(h_x, W_re) # bm x dm4m -> bd4m
+      z += h_x
+      if len(self.W_in) == 0:
+        z += self.b
       if self.depth > 1:
-        i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
+        i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
         ingate = GI(z[:,:,n_out: 2 * n_out]) # bdm
         forgetgate = GF(z[:,:,2 * n_out:3 * n_out]) # bdm
         outgate = GO(z[:,:,3 * n_out:]) # bdm
         input = CI(z[:,:,:n_out]) # bdm
       else:
-        i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
+        i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
         ingate = GI(z[:,n_out: 2 * n_out])
         forgetgate = GF(z[:,2 * n_out:3 * n_out])
         outgate = GO(z[:,3 * n_out:])
         input = CI(z[:,:n_out]) # bdm
 
       #s_i = input * ingate + s_p * forgetgate
-      s_t = input * ingate + s_p * forgetgate # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
+      s_t = (input * ingate + s_p * forgetgate) # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
       #return s_t, h_t
 
       return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
+
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder.attrs:
@@ -272,7 +282,7 @@ class OptimizedLstmLayer(RecurrentLayer):
           n_dec = self.attrs['n_dec']
           #index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1]) #index[:n_dec] #T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ encoder.state[-1], encoder.act[-1] ]
+        outputs_info = [ encoder.state[0], encoder.act[0] ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4)
@@ -301,9 +311,9 @@ class OptimizedLstmLayer(RecurrentLayer):
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:
         totact = act
-    self.state = state
+    self.state = state[::-(2 * self.attrs['reverse'] - 1)]
     self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
-    self.make_output(self.act)
+    self.make_output(self.act) # if not self.attrs['projection'] else GO(self.dot(self.act, self.W_proj)))
     #self.output = T.sum(self.act, axis=2)
     #self.output = self.sources[0].output
 
@@ -325,3 +335,205 @@ class OptimizedLstmLayer(RecurrentLayer):
       self.constraints =  self.attrs['varreg'] * (T.mean(energy) - T.sqrt(6.)) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
 
     return super(OptimizedLstmLayer, self).make_constraints()
+
+
+class GRULayer(RecurrentLayer):
+  def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):
+    kwargs.setdefault("layer_class", "gru")
+    kwargs.setdefault("activation", "sigmoid")
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_out * 3
+    super(GRULayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('mode', mode)
+    self.mode = mode
+    if n_dec: self.set_attr('n_dec', n_dec)
+    if encoder:
+      self.set_attr('encoder', encoder.name)
+    projection = kwargs.get("projection", None)
+    if self.depth > 1:
+      value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
+    else:
+      value = numpy.zeros((n_out * 3, ), dtype = theano.config.floatX)
+    self.b.set_value(value)
+    n_re = n_out
+    if projection:
+      n_re = projection
+      W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
+      self.W_proj.set_value(W_proj.get_value())
+      #self.set_attr('n_out', projection)
+    W_reset = self.create_random_uniform_weights(n_re, n_out, n_re + n_out * 3, name="W_re_%s" % self.name)
+    self.W_reset = self.add_param(W_reset, "W_reset_%s" % self.name)
+    W_re = self.create_random_uniform_weights(n_re, n_out * 2, n_re + n_out * 3, name="W_re_%s" % self.name)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
+                                                     s.attrs['n_out'] + n_out + n_out * 3,
+                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+    z = self.b
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+      if x_t.attrs['sparse']:
+        z += W[T.cast(x_t.output[:,:,0], 'int32')]
+      elif m is None:
+        z += self.dot(x_t.output, W)
+      else:
+        z += self.dot(self.mass * m * x_t.output, W)
+
+    #if self.mode == 'cho':
+    #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
+    #else:
+    CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
+
+    def step(z, i_t, h_p, W_re):
+      h_i = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1)
+      i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
+      if len(self.W_in) == 0:
+        z += self.b
+      h_x = self.dot(h_i, W_re)
+      r_t = GR(z[:,:n_out] + h_x[:,:n_out])
+      h_r = self.dot(r_t * h_i, W_reset)
+      z_t = GU(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
+      h_cand = CI(z[:,2*n_out:] + h_r)
+      h_t = z_t * h_i + (1 - z_t) * h_cand
+
+      return h_t * i + h_i * (1-i)
+
+
+    self.out_dec = self.index.shape[0]
+    if encoder and 'n_dec' in encoder.attrs:
+      self.out_dec = encoder.out_dec
+    for s in xrange(self.attrs['sampling']):
+      index = self.index[s::self.attrs['sampling']]
+      sequences = z #T.unbroadcast(z, 3)
+      if encoder:
+        n_dec = self.out_dec
+        if 'n_dec' in self.attrs:
+          n_dec = self.attrs['n_dec']
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
+        outputs_info = [ encoder.act[0] ]
+        if len(self.W_in) == 0:
+          if self.depth == 1:
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3)
+          else:
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 3)
+      else:
+        if self.depth > 1:
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
+        else:
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
+
+      act, _ = theano.scan(step,
+                                    #strict = True,
+                                    name = "scan_%s"%self.name,
+                                    truncate_gradient = self.attrs['truncation'],
+                                    go_backwards = self.attrs['reverse'],
+                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
+                                    outputs_info = outputs_info,
+                                    non_sequences = [self.W_re])
+      if self.attrs['sampling'] > 1: # time batch dim
+        if s == 0:
+          totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
+        else:
+          totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
+      else:
+        totact = act
+    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
+    self.make_output(self.act)
+
+class SRULayer(RecurrentLayer):
+  def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):
+    kwargs.setdefault("layer_class", "mut")
+    kwargs.setdefault("activation", "sigmoid")
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_out * 3
+    super(SRULayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('mode', mode)
+    self.mode = mode
+    if n_dec: self.set_attr('n_dec', n_dec)
+    if encoder:
+      self.set_attr('encoder', encoder.name)
+    projection = kwargs.get("projection", None)
+    if self.depth > 1:
+      value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
+      value[:,n_out:2*n_out] = 1
+    else:
+      value = numpy.zeros((n_out * 3, ), dtype = theano.config.floatX)
+      value[n_out:2*n_out] = 1
+    self.b.set_value(value)
+    n_re = n_out
+    if projection:
+      n_re = projection
+      W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
+      self.W_proj.set_value(W_proj.get_value())
+    W_re = self.create_random_uniform_weights(n_re, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
+                                                     s.attrs['n_out'] + n_out * 3,
+                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+    z = self.b
+    for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+      if x_t.attrs['sparse']:
+        z += W[T.cast(x_t.output[:,:,0], 'int32')]
+      elif m is None:
+        z += self.dot(x_t.output, W)
+      else:
+        z += self.dot(self.mass * m * x_t.output, W)
+
+    #if self.mode == 'cho':
+    #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
+    #else:
+    CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
+
+    def step(z, i_t, h_p, W_re):
+      h_i = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1)
+      i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
+      if len(self.W_in) == 0: z += self.b
+      h_x = self.dot(h_i, W_re)
+      z_t = GU(z[:,:n_out] + h_x[:,:n_out])
+      r_t = GR(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])
+      h_c = (1 - r_t) * CI(z[:,2*n_out:]) + r_t * CI(h_x[:,2*n_out:])
+      return z_t * i * h_i + (1 - z_t) * (1 - i) * h_c
+
+
+    self.out_dec = self.index.shape[0]
+    if encoder and 'n_dec' in encoder.attrs:
+      self.out_dec = encoder.out_dec
+    for s in xrange(self.attrs['sampling']):
+      index = self.index[s::self.attrs['sampling']]
+      sequences = z #T.unbroadcast(z, 3)
+      if encoder:
+        n_dec = self.out_dec
+        if 'n_dec' in self.attrs:
+          n_dec = self.attrs['n_dec']
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
+        outputs_info = [ encoder.act[0] ]
+        if len(self.W_in) == 0:
+          if self.depth == 1:
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3)
+          else:
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 3)
+      else:
+        if self.depth > 1:
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
+        else:
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
+
+      act, _ = theano.scan(step,
+                                    #strict = True,
+                                    name = "scan_%s"%self.name,
+                                    truncate_gradient = self.attrs['truncation'],
+                                    go_backwards = self.attrs['reverse'],
+                                    sequences = [ sequences[s::self.attrs['sampling']], index ],
+                                    outputs_info = outputs_info,
+                                    non_sequences = [self.W_re])
+      if self.attrs['sampling'] > 1: # time batch dim
+        if s == 0:
+          totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
+        else:
+          totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
+      else:
+        totact = act
+    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
+    self.make_output(self.act)

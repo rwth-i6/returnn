@@ -194,6 +194,8 @@ class Updater:
 
           grads[param] = T.unbroadcast(grads[param], -1)
 
+          #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
+
           grads[param].name = "grad_%s" % param.name
           mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
           slow_constant = 2.1

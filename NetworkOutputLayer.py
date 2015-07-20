@@ -40,7 +40,7 @@ class OutputLayer(Layer):
     if self.loss == 'priori':
       self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
     #self.make_output(self.z, collapse = False)
-    self.output = T.max(self.z, axis=2) if self.depth > 1 else self.z
+    self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
 
   def create_bias(self, n, prefix='b'):
     name = "%s_%s" % (prefix, self.name)

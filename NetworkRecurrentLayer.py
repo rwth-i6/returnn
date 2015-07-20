@@ -22,7 +22,7 @@ class RecurrentLayer(HiddenLayer):
     if projection:
       self.W_re = self.create_random_normal_weights(projection, n_out, n_in,
                                                     "W_re_%s" % self.name)  #self.create_recurrent_weights(self.attrs['n_in'], n_out)
-      self.W_proj = self.create_forward_weights(n_out, projection)
+      self.W_proj = self.create_forward_weights(n_out, projection, name = 'W_proj_%s'%self.name)
       self.add_param(self.W_proj, 'W_proj_%s'%self.name)
     else:
       self.W_re = self.create_random_normal_weights(n_out, n_out, n_in,

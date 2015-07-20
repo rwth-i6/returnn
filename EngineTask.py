@@ -341,6 +341,7 @@ class TaskThread(threading.Thread):
       for device in self.devices:
         device.eval_batch_idx = -1
         device.start_epoch_stats()
+        device.num_frames = 0
         device.tot = 0
         device.se = 0
         device.fe = 0
@@ -392,6 +393,8 @@ class TaskThread(threading.Thread):
             results['batchess'] = []
             results['results'] = []
             results['num_frames'] = 0
+            for device in self.devices:
+              device.num_frames = 0
           else:
             time.sleep(0.01)
             continue
@@ -543,32 +546,35 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
 
-  def create_consensus(self, cost):
+  def create_consensus(self, cost, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
-    basenet = self.network.train_params_vars
-    consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
-    hypnets = []
-    nparams = len(basenet)
-    encoded = []
-    #pipe = self.CopyManager(self.devices)
-    #hypnets = pipe.copy_from_device()
-    for device in self.devices:
-      hypnets.append(device.get_net_train_params(self.network))
-    if len(hypnets) == 0:
-      consnet = basenet
-    elif len(hypnets) == 1:
-      consnet = hypnets[0]
-    else:
-      # consensus via average
-      for i in xrange(nparams):
-        consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) / len(hypnets)
-    for p, q in zip(self.network.train_params_vars, consnet):
-      p.set_value(q)
-      encoded.append(q.tostring())
-    if len(hypnets) > 1:
+    try:
+      basenet = self.network.train_params_vars
+      consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
+      hypnets = []
+      nparams = len(basenet)
+      encoded = []
+      #pipe = self.CopyManager(self.devices)
+      #hypnets = pipe.copy_from_device()
       for device in self.devices:
-        device.set_net_encoded_params(encoded)
+        hypnets.append([ p * float(device.num_frames) / float(num_frames) for p in device.get_net_train_params(self.network) ])
+      if len(hypnets) == 0:
+        consnet = basenet
+      elif len(hypnets) == 1:
+        consnet = hypnets[0]
+      else:
+        # consensus via average
+        for i in xrange(nparams):
+          consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) # / len(hypnets)
+      for p, q in zip(self.network.train_params_vars, consnet):
+        p.set_value(q)
+        encoded.append(q.tostring())
+      if len(hypnets) > 1:
+        for device in self.devices:
+          device.set_net_encoded_params(encoded)
+    except:
+      print >> log.v3, "network synchronization failed"
     #pipe.copy_to_device(self.network)
 
   def evaluate(self, batchess, results, result_format, num_frames):
@@ -593,7 +599,7 @@ class TrainTaskThread(TaskThread):
       for res in results:
         self.ctc_priors += res["ctc_priors"]
     self.score += score
-    self.create_consensus(cost)
+    self.create_consensus(cost, num_frames)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().

@@ -11,7 +11,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=1, forward_weights_init=None):
+  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "sum", forward_weights_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -24,6 +24,7 @@ class Container(object):
     self.train_flag = train_flag
     self.depth = depth
     self.set_attr('depth', depth)
+    self.set_attr('consensus', consensus)
     self.forward_weights_init = forward_weights_init or "random_normal()"
 
   def dot(self, vec, mat):
@@ -235,10 +236,37 @@ class Layer(Container):
   def make_constraints(self):
     return self.constraints
 
+  def make_consensus(self, networks, axis=2):
+    cns = self.attrs['consensus']
+    if cns == 'max':
+      return T.max(networks, axis=axis)
+    elif cns == 'min':
+      return T.min(networks, axis=axis)
+    elif cns == 'mean':
+      return T.mean(networks, axis=axis)
+    elif cns == 'sum':
+      return T.sum(networks, axis=axis)
+    elif cns == 'prod':
+      return T.prod(networks, axis=axis)
+    elif cns == 'var':
+      return T.var(networks, axis=axis)
+    elif cns == 'project':
+      p = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], 1, self.attrs['n_out'] + self.depth + 1))
+      return T.tensordot(p, networks, [[1], [axis]])
+    elif cns == 'random':
+      idx = self.rng.random_integers(size=(1,), low=0, high=self.depth)
+      if axis == 0: return networks[idx]
+      if axis == 1: return networks[:,idx]
+      if axis == 2: return networks[:,:,idx]
+      if axis == 3: return networks[:,:,:,idx]
+      assert False, "axis too large"
+    else:
+      assert False, "consensus method unknown: " + cns
+
   def make_output(self, output, collapse = True):
     self.output = output
     if collapse and self.depth > 1:
-      self.output = T.max(self.output, axis=2)
+      self.output = self.make_consensus(self.output)
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
 
