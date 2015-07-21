@@ -3,7 +3,7 @@ import numpy
 from theano import tensor as T
 import theano
 from NetworkRecurrentLayer import RecurrentLayer
-
+from ActivationFunctions import strtoact
 
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
@@ -440,19 +440,20 @@ class GRULayer(RecurrentLayer):
     self.make_output(self.act)
 
 class SRULayer(RecurrentLayer):
-  def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):
+  def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "mut")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 3
     super(SRULayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
-    self.set_attr('mode', mode)
-    self.mode = mode
+    self.set_attr('psize', psize)
+    self.set_attr('pact', pact)
+    self.set_attr('pdepth', pdepth)
+    pact = strtoact(pact)
     if n_dec: self.set_attr('n_dec', n_dec)
     if encoder:
       self.set_attr('encoder', encoder.name)
-    projection = kwargs.get("projection", None)
     if False and self.depth > 1:
       value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
       value[:,n_out:2*n_out] = 1
@@ -462,30 +463,25 @@ class SRULayer(RecurrentLayer):
     #self.b.set_value(value)
     self.b = theano.shared(value=numpy.zeros((n_out * 3,), dtype=theano.config.floatX), borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
-    n_re = n_out
-    if projection:
-      n_re = projection
-      W_proj = self.create_random_uniform_weights(n_out, projection, projection + n_out, name="W_proj_%s" % self.name)
-      self.W_proj.set_value(W_proj.get_value())
+    n_re = n_out #psize if psize else n_out
     if self.attrs['consensus'] == 'flat':
       n_re *= self.depth
-    W_re = self.create_random_uniform_weights(n_re, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
+    self.Wp = []
+    if psize:
+      self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name), name = "Wp_0_%s"%self.name) ]
+      for i in xrange(1, pdepth):
+        self.Wp.append(self.add_param(self.create_random_uniform_weights(psize * self.depth, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name)), name = "Wp_%d_%s"%(i, self.name)))
+      W_re = self.create_random_uniform_weights(psize * self.depth, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
+    else:
+      W_re = self.create_random_uniform_weights(n_re, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
     #self.params["W_re_%s" % self.name] = W_re
     #self.W_re = W_re
     self.W_re.set_value(W_re.get_value())
-    for s, W in zip(self.sources, self.W_in):
-      #W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
-      #                                               s.attrs['n_out'] + n_out * 3,
-      #                                               name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
-      W = self.create_random_uniform_weights1(s.attrs['n_out'], n_out * 3,
-                                              s.attrs['n_out'] + n_out * 3,
-                                              name="W_in_%s_%s" % (s.name, self.name))
-      self.params["W_in_%s_%s" % (s.name, self.name)] = W
     self.W_in = []
     for s in self.sources:
-      W = self.create_random_uniform_weights1(s.attrs['n_out'], n_out * 3,
-                                              s.attrs['n_out'] + n_out * 3,
-                                              name="W_in_%s_%s" % (s.name, self.name))
+      W = self.create_random_uniform_weights(s.attrs['n_out'], n_out * 3,
+                                             s.attrs['n_out'] + n_out * 3,
+                                             name="W_in_%s_%s" % (s.name, self.name), depth = 1)
       self.W_in.append(W)
       self.params["W_in_%s_%s" % (s.name, self.name)] = W
     z = self.b
@@ -507,9 +503,12 @@ class SRULayer(RecurrentLayer):
     def step(z, i_t, h_p, W_re):
       h_i = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1)
       i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)) if self.depth == 1 else T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
-      if len(self.W_in) == 0: z += self.b
-      h_q = self.dot(h_i, W_re) if not projection else self.dot(self.dot(h_i, W_proj), W_re)
-      h_x = h_q # if self.depth == 1 else self.make_consensus(h_q, axis = 1)
+      if not self.W_in:
+        z += self.b
+      for W in self.Wp:
+        h_i = self.make_consensus(pact(self.dot(h_i, W)), axis = 1)
+      h_x = self.dot(h_i, W_re)
+      #h_x = h_q # if self.depth == 1 else self.make_consensus(h_q, axis = 1)
       if self.depth == 1:
         z_t = GU(z[:,:n_out] + h_x[:,:n_out])
         r_t = GR(z[:,n_out:2*n_out] + h_x[:,n_out:2*n_out])

@@ -81,6 +81,7 @@ class Device():
     self.compute_total_time = 0
     self.update_total_time = 0
     self.num_frames = 0
+    self.tot_cost = 0
     self.device_update = device_update
     self.data = None
     self.main_pid = os.getpid()

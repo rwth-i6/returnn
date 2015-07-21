@@ -11,7 +11,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(1234)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "sum", forward_weights_init=None):
+  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "flat", forward_weights_init=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
@@ -126,13 +126,14 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
-  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None):
+  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth = None):
+    if not depth: depth = self.depth
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
-    if self.depth > 1:
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, self.depth, m)), dtype=theano.config.floatX)
+    if depth > 1:
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=theano.config.floatX)
     else:
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
@@ -253,6 +254,8 @@ class Layer(Container):
     elif cns == 'mean':
       return T.mean(networks, axis=axis)
     elif cns == 'flat':
+      if self.depth == 1:
+        return networks
       if axis == 2:
         return networks.flatten(ndim=3)
         #return T.reshape(networks, (networks.shape[0], networks.shape[1], T.prod(networks.shape[2:]) ))

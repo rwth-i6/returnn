@@ -242,6 +242,7 @@ class TaskThread(threading.Thread):
             assert outputs_format == outputs_format_new, "We expect to always get the same output format."
           outputs_format = outputs_format_new
           device_results.append(result)
+          device.tot_cost += result[0]
         return device_results, outputs_format
 
       def device_mem_usage_str(self, devices):
@@ -342,6 +343,7 @@ class TaskThread(threading.Thread):
         device.eval_batch_idx = -1
         device.start_epoch_stats()
         device.num_frames = 0
+        device.tot_cost = 0
         device.tot = 0
         device.se = 0
         device.fe = 0
@@ -395,6 +397,7 @@ class TaskThread(threading.Thread):
             results['num_frames'] = 0
             for device in self.devices:
               device.num_frames = 0
+              device.tot_cost = 0
           else:
             time.sleep(0.01)
             continue
@@ -558,7 +561,7 @@ class TrainTaskThread(TaskThread):
       #pipe = self.CopyManager(self.devices)
       #hypnets = pipe.copy_from_device()
       for device in self.devices:
-        hypnets.append([ p * float(device.num_frames) / float(num_frames) for p in device.get_net_train_params(self.network) ])
+        hypnets.append([ p for p in device.get_net_train_params(self.network) ])
       if len(hypnets) == 0:
         consnet = basenet
       elif len(hypnets) == 1:
@@ -566,15 +569,15 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          consnet[i] = numpy.sum([net[i] for net in hypnets], axis = 0) # / len(hypnets)
+          consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices)], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
         encoded.append(q.tostring())
       if len(hypnets) > 1:
         for device in self.devices:
           device.set_net_encoded_params(encoded)
-    except:
-      print >> log.v3, "network synchronization failed"
+    except Exception as e:
+      print >> log.v3, "network synchronization failed: ", e.message
     #pipe.copy_to_device(self.network)
 
   def evaluate(self, batchess, results, result_format, num_frames):
