@@ -25,7 +25,9 @@ class OutputLayer(Layer):
 
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for source, m, W in zip(self.sources, self.masks, self.W_in):
-      if m is None:
+      if source.attrs['sparse']:
+        self.z += W[T.cast(source.output[:,:,0], 'int32')]
+      elif m is None:
         #self.z += T.dot(W[:,:,0], source.output)
         #self.z += T.dot(source.output, W)
         #self.z += T.tensordot(T.sum(T.tensordot(source.output, W, 1), axis=2), Q, 1)
