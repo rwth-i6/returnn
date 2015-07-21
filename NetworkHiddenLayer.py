@@ -1,6 +1,6 @@
 
 from theano import tensor as T
-from NetworkLayer import Layer
+from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact
 
 
