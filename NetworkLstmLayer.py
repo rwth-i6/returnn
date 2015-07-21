@@ -151,7 +151,7 @@ class OptimizedLstmLayer(RecurrentLayer):
     self.set_attr('n_out', n_out)
     if n_dec: self.set_attr('n_dec', n_dec)
     if encoder:
-      self.set_attr('encoder', encoder.name)
+      self.set_attr('encoder', ",".join([e.name for e in encoder]))
     projection = kwargs.get("projection", None)
     if not isinstance(self.activation, (list, tuple)):
       self.activation = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
@@ -266,13 +266,12 @@ class OptimizedLstmLayer(RecurrentLayer):
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
       #return s_t, h_t
-
       return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
 
 
     self.out_dec = self.index.shape[0]
-    if encoder and 'n_dec' in encoder.attrs:
-      self.out_dec = encoder.out_dec
+    if encoder and 'n_dec' in encoder[0].attrs:
+      self.out_dec = encoder[0].out_dec
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
@@ -282,12 +281,12 @@ class OptimizedLstmLayer(RecurrentLayer):
           n_dec = self.attrs['n_dec']
           #index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1]) #index[:n_dec] #T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.output.shape[1])
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ encoder.state[0], encoder.act[0] ]
+        outputs_info = [ T.concatenate([e.state[-1] for e in encoder], axis = -1), T.concatenate([e.act[-1] for e in encoder], axis = -1) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 4)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], n_out * 4)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 4)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], self.depth, n_out * 4)
       else:
         if self.depth > 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out),
@@ -311,9 +310,9 @@ class OptimizedLstmLayer(RecurrentLayer):
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:
         totact = act
-    self.state = state[::-(2 * self.attrs['reverse'] - 1)]
-    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
-    self.make_output(self.act) # if not self.attrs['projection'] else GO(self.dot(self.act, self.W_proj)))
+    self.state = state #[::-(2 * self.attrs['reverse'] - 1)]
+    self.act = totact #[::-(2 * self.attrs['reverse'] - 1)] # tbdm
+    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)]) # if not self.attrs['projection'] else GO(self.dot(self.act, self.W_proj)))
     #self.output = T.sum(self.act, axis=2)
     #self.output = self.sources[0].output
 
@@ -349,7 +348,7 @@ class GRULayer(RecurrentLayer):
     self.mode = mode
     if n_dec: self.set_attr('n_dec', n_dec)
     if encoder:
-      self.set_attr('encoder', encoder.name)
+      self.set_attr('encoder', ",".join([e.name for e in encoder]))
     projection = kwargs.get("projection", None)
     if self.depth > 1:
       value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
@@ -399,8 +398,8 @@ class GRULayer(RecurrentLayer):
 
 
     self.out_dec = self.index.shape[0]
-    if encoder and 'n_dec' in encoder.attrs:
-      self.out_dec = encoder.out_dec
+    if encoder and 'n_dec' in encoder[0].attrs:
+      self.out_dec = encoder[0].out_dec
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
@@ -408,13 +407,13 @@ class GRULayer(RecurrentLayer):
         n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ encoder.act[0] ]
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder[0].index.shape[1])
+        outputs_info = [ T.concatenate([e.act[-1] for e in encoder], axis = -1) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], n_out * 3)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 3)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], self.depth, n_out * 3)
       else:
         if self.depth > 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
@@ -422,13 +421,13 @@ class GRULayer(RecurrentLayer):
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
 
       act, _ = theano.scan(step,
-                                    #strict = True,
-                                    name = "scan_%s"%self.name,
-                                    truncate_gradient = self.attrs['truncation'],
-                                    go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
-                                    outputs_info = outputs_info,
-                                    non_sequences = [self.W_re])
+                            #strict = True,
+                            name = "scan_%s"%self.name,
+                            truncate_gradient = self.attrs['truncation'],
+                            go_backwards = self.attrs['reverse'],
+                            sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
+                            outputs_info = outputs_info,
+                            non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
           totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
@@ -436,8 +435,8 @@ class GRULayer(RecurrentLayer):
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:
         totact = act
-    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
-    self.make_output(self.act)
+    self.act = totact #[::-(2 * self.attrs['reverse'] - 1)] # tbdm
+    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class SRULayer(RecurrentLayer):
   def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, n_dec = 0, **kwargs):
@@ -450,10 +449,10 @@ class SRULayer(RecurrentLayer):
     self.set_attr('psize', psize)
     self.set_attr('pact', pact)
     self.set_attr('pdepth', pdepth)
+    if encoder:
+      self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)
     if n_dec: self.set_attr('n_dec', n_dec)
-    if encoder:
-      self.set_attr('encoder', encoder.name)
     if False and self.depth > 1:
       value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
       value[:,n_out:2*n_out] = 1
@@ -521,8 +520,8 @@ class SRULayer(RecurrentLayer):
       return h_t * i + h_p * (1 - i)
 
     self.out_dec = self.index.shape[0]
-    if encoder and 'n_dec' in encoder.attrs:
-      self.out_dec = encoder.out_dec
+    if encoder and 'n_dec' in encoder[0].attrs:
+      self.out_dec = encoder[0].out_dec
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
@@ -531,12 +530,12 @@ class SRULayer(RecurrentLayer):
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ encoder.act[0] ]
+        outputs_info = [ T.concatenate([e.act[-1] for e in encoder], axis = -1) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], n_out * 3)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], n_out * 3)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder.output.shape[1], self.depth, n_out * 3)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], self.depth, n_out * 3)
       else:
         if self.depth > 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
@@ -544,13 +543,13 @@ class SRULayer(RecurrentLayer):
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
 
       act, _ = theano.scan(step,
-                                    #strict = True,
-                                    name = "scan_%s"%self.name,
-                                    truncate_gradient = self.attrs['truncation'],
-                                    go_backwards = self.attrs['reverse'],
-                                    sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
-                                    outputs_info = outputs_info,
-                                    non_sequences = [self.W_re])
+                          #strict = True,
+                          name = "scan_%s"%self.name,
+                          truncate_gradient = self.attrs['truncation'],
+                          go_backwards = self.attrs['reverse'],
+                          sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
+                          outputs_info = outputs_info,
+                          non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
           totact = T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]]
@@ -558,5 +557,5 @@ class SRULayer(RecurrentLayer):
           totact = T.set_subtensor(totact[s::self.attrs['sampling']], act)
       else:
         totact = act
-    self.act = totact[::-(2 * self.attrs['reverse'] - 1)] # tbdm
-    self.make_output(self.act)
+    self.act = totact #[::-(2 * self.attrs['reverse'] - 1)] # tbdm
+    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
