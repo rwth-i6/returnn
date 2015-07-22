@@ -102,7 +102,7 @@ class LearningRateControl(object):
     :type error: dict[str,float]
     """
     if epoch not in self.epochData:
-      print >> log.v3, "Learning rate not set for epoch %i. Assuming default." % epoch
+      print >> log.v4, "Learning rate not set for epoch %i. Assuming default." % epoch
       self.getLearningRateForEpoch(epoch)  # This will set it.
     assert isinstance(error, dict)
     self.epochData[epoch].error.update(error)

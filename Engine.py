@@ -252,7 +252,7 @@ class Engine:
       if self.dev_data:
         if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
-          print >> log.v3, "Last epoch model not yet evaluated on dev. Doing that now."
+          print >> log.v4, "Last epoch model not yet evaluated on dev. Doing that now."
           self.eval_model()
 
   def train(self):
@@ -379,7 +379,7 @@ class Engine:
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
                               learning_rate=self.learning_rate, updater=self.updater,
-                              update_batch_size=self.update_batch_size,
+                              eval_batch_size=self.update_batch_size,
                               start_batch=start_batch, pad_batches=self.pad_batches,
                               exclude=self.exclude,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
@@ -399,8 +399,9 @@ class Engine:
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
-    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", hms(trainer.elapsed)
+    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", hms(trainer.elapsed),
     self.eval_model()
+    print >> log.v1, ""
 
   def eval_model(self):
     eval_dump_str = []
@@ -414,14 +415,14 @@ class Engine:
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print >> log.v1, "\n".join(eval_dump_str)
+    print >> log.v1, " ".join(eval_dump_str).strip()
 
   def save_model(self, filename, epoch):
     """
     :param str filename: full filename for model
     :param int epoch: save epoch idx
     """
-    print >> log.v3, "Save model from epoch %i under %s" % (epoch, filename)
+    print >> log.v4, "Save model from epoch %i under %s" % (epoch, filename)
     # We add some extra logic to try again for DiskQuota and other errors.
     # This could save us multiple hours of computation.
     try_again_wait_time = 10
