@@ -410,7 +410,7 @@ def main(argv):
     init(configFilename=argv[1], commandLineOptions=argv[2:])
     executeMainTask()
   except KeyboardInterrupt:
-    print >> log.v1, "KeyboardInterrupt"
+    print >> getattr(log, "v3", sys.stderr), "KeyboardInterrupt"
   finalize()
 
 
