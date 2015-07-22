@@ -295,7 +295,7 @@ def printTaskProperties(devices=None):
       print >> log.v3, "(units:", device.get_device_shaders(), \
                        "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
                        "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
-      print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+      print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch",
       print >> log.v3, "(update on device)" if device.device_update else "(update on host)"
 
 
