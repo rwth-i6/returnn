@@ -164,6 +164,7 @@ class Device():
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
     except EOFError:
       interrupt_main()
+      sys.exit(1)
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
