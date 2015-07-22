@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms
+from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -161,7 +161,7 @@ class Device():
       self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
-    except EOFError:"
+    except EOFError:
       raise KeyboardInterrupt
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
@@ -497,9 +497,7 @@ class Device():
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
-      if log.v[4]:
-        print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
-        sys.excepthook(*sys.exc_info())
+      print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
       sys.exit(1)
     except Exception as e:
       print >> log.v2, "Device %s proc exception: %s" % (device, e)

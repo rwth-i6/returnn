@@ -351,7 +351,7 @@ class ExecingProcess:
     self.pipe_p2c = pipeOpen()
     self.parent_pid = os.getpid()
     pid = os.fork()
-    flags = { p : v for p,v in [x.split('=') for x in os.environ.get("THEANO_FLAGS", "").split(',')]}
+    flags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
     if 'base_compiledir' in flags:
       offset = flags['base_compiledir'].find("_-_", 1)
       if offset > 1:
@@ -679,7 +679,10 @@ if __name__ == "__main__":
   try:
     ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
   except KeyboardInterrupt:
-    pass
-  else:
-    print "You are not expected to call this. This is for ExecingProcess."
+    # Normally we would catch SIGINT already in an inner function.
+    # However, at very early stage, we would land here.
+    print "KeyboardInterrupt in subproc %i" % os.getpid()
     sys.exit(1)
+
+  print "You are not expected to call this. This is for ExecingProcess."
+  sys.exit(1)
