@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread
+from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -10,6 +10,7 @@ import os
 import errno
 import time
 import pickle
+
 
 def get_num_devices():
   if os.name == 'nt':
@@ -161,7 +162,7 @@ class Device():
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
     except EOFError:
-      raise KeyboardInterrupt
+      interrupt_main()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True

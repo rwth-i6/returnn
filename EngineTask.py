@@ -1,13 +1,12 @@
 import atexit
 import numpy
 import sys
-import thread
 import threading
 import time
 import theano
 from EngineUtil import assign_dev_data
 from Log import log
-from Util import hms, progress_bar, terminal_size, hdf5_strings
+from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
 from Device import Device
 
 
@@ -306,9 +305,7 @@ class TaskThread(threading.Thread):
         print >> log.v4, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
       except KeyboardInterrupt:
-        for dev in self.devices:
-            dev.terminate()
-        sys.exit(1)
+        interrupt_main()
       except Exception:
         # Catch all standard exceptions.
         # These are not device errors. We should have caught them in the code
@@ -318,15 +315,12 @@ class TaskThread(threading.Thread):
         # trigger KeyboardInterrupt in the main thread only.
         try:
           print >> log.v1, "%s failed" % self.name
-          if self.log.v[4]:
+          if log.v[4]:
             sys.excepthook(*sys.exc_info())
             print ""
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-          thread.interrupt_main()
-          for dev in self.devices:
-            dev.terminate()
-          sys.exit(1)
+          interrupt_main()
 
     def run_inner(self):
       self.start_time = time.time()

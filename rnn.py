@@ -32,6 +32,7 @@ engine = None; """ :type: Engine """
 train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
+quit = False
 
 
 def initConfig(configFilename, commandLineOptions):
@@ -355,6 +356,7 @@ def init(configFilename, commandLineOptions):
 
 
 def finalize():
+  quit = True
   if engine:
     for device in engine.devices:
       device.terminate()

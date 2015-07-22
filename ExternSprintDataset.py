@@ -7,7 +7,7 @@ import signal
 from threading import Thread
 from SprintDataset import SprintDataset
 from TaskSystem import Pickler, Unpickler
-from Util import eval_shell_str
+from Util import eval_shell_str, interrupt_main
 from Log import log
 
 
@@ -194,7 +194,7 @@ class ExternSprintDataset(SprintDataset):
         print ""
       finally:
         # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-        thread.interrupt_main()
+        interrupt_main()
 
   def exit_handler(self):
     assert os.getpid() == self.parent_pid

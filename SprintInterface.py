@@ -7,7 +7,6 @@ import os
 import sys
 import time
 from threading import Event, Thread
-import thread
 
 import numpy
 import theano
@@ -20,6 +19,7 @@ import rnn
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
 import Debug
+from Util import interrupt_main
 
 DefaultSprintCrnnConfig = "config/crnn.config"
 
@@ -347,7 +347,7 @@ def startTrainThread(epoch=None):
         sys.excepthook(*sys.exc_info())
       finally:
         # Exceptions are fatal. Stop now.
-        thread.interrupt_main()
+        interrupt_main()
 
   global trainThread
   trainThread = Thread(target=trainThreadFunc, name="Sprint CRNN train thread")

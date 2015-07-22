@@ -260,6 +260,13 @@ def start_daemon_thread(target, args=()):
   t.daemon = True
   t.start()
 
+def interrupt_main():
+  import thread
+  import rnn
+  if rnn.quit:  # ignore if we are already quitting
+    return
+  thread.interrupt_main()
+
 
 def class_idx_seq_to_features(seq, num_classes):
   num_frames = len(seq)
