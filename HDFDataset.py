@@ -34,7 +34,7 @@ class HDFDataset(CachedDataset):
     if not self.labels:
       labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
       self.labels = { 'classes' : labels }
-      assert len(self.labels) == len(labels), "expected " + str(len(self.labels)) + " got " + str(len(labels))
+      assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
     tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     seq_start = [numpy.array([0,0])]

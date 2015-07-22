@@ -322,6 +322,8 @@ class TaskThread(threading.Thread):
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           thread.interrupt_main()
+          for dev in self.devices:
+            dev.terminate()
           sys.exit(1)
 
     def run_inner(self):
