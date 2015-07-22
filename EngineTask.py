@@ -1,13 +1,12 @@
 import atexit
 import numpy
 import sys
-import thread
 import threading
 import time
 import theano
 from EngineUtil import assign_dev_data
 from Log import log
-from Util import hms, progress_bar, terminal_size, hdf5_strings
+from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
 from Device import Device
 
 
@@ -45,14 +44,7 @@ class TaskThread(threading.Thread):
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
       self.lock = threading.Lock()
-      # There is no generic way to see whether Python is exiting.
-      # This is our workaround. We check for it in self.run_inner().
-      self.stopped = False
-      atexit.register(self.stop)
       self.start()
-
-    def stop(self):
-      self.stopped = True
 
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches, self.exclude)
@@ -146,15 +138,10 @@ class TaskThread(threading.Thread):
         if not self.alloc_devices:
           # We skipped segments. That's fine.
           return True
-
-        try:
-          device_results, outputs_format = self.device_collect_results()
-        except KeyboardInterrupt:
-          return False
-        except Exception:
-          return False
+        device_results, outputs_format = self.device_collect_results()
         if device_results is None:
-          print >> log.v3, "device crashed on batch", self.run_start_batch_idx
+          if not getattr(sys, "exited", False):
+            print >> log.v3, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
           self.crashed = True
           return False
@@ -310,8 +297,8 @@ class TaskThread(threading.Thread):
       except KeyboardInterrupt:
         for dev in self.devices:
             dev.terminate()
-      except Exception as e:
-        print e
+        interrupt_main()
+      except Exception:
         # Catch all standard exceptions.
         # These are not device errors. We should have caught them in the code
         # and we would leave self.finalized == False.
@@ -320,15 +307,12 @@ class TaskThread(threading.Thread):
         # trigger KeyboardInterrupt in the main thread only.
         try:
           print >> log.v1, "%s failed" % self.name
-          if self.log.v[4]:
+          if log.v[4]:
             sys.excepthook(*sys.exc_info())
             print ""
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-          thread.interrupt_main()
-          for dev in self.devices:
-            dev.terminate()
-          sys.exit(1)
+          interrupt_main()
 
     def run_inner(self):
       self.start_time = time.time()
@@ -363,7 +347,7 @@ class TaskThread(threading.Thread):
       crashed = False
 
       while True:
-        if self.stopped:
+        if getattr(sys, "exited", False):
           # This happens when we exit Python.
           # Without this check, this thread would keep running until all exit handlers of Python are done.
           print >> log.v5, "%s stopped" % self

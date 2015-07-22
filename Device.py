@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread
+from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -11,6 +11,7 @@ import errno
 import time
 import pickle
 from thread import start_new_thread
+
 
 def get_num_devices():
   if os.name == 'nt':
@@ -162,7 +163,7 @@ class Device():
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
     except EOFError:
-      raise KeyboardInterrupt
+      interrupt_main()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
@@ -817,7 +818,7 @@ class Device():
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
       if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, network_description, train_param_args)
+        self.initialize(self.config, self.device_update, network_description, train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
@@ -904,7 +905,7 @@ class Device():
         try:
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
-            if r == "error": return None
+            if r == "error": return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
