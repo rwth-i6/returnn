@@ -676,7 +676,13 @@ class ReadWriteLock(object):
 
 
 if __name__ == "__main__":
-  ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
+  try:
+    ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
+  except KeyboardInterrupt:
+    # Normally we would catch SIGINT already in an inner function.
+    # However, at very early stage, we would land here.
+    print "KeyboardInterrupt in subproc %i" % os.getpid()
+    sys.exit(1)
 
   print "You are not expected to call this. This is for ExecingProcess."
   sys.exit(1)
