@@ -47,6 +47,8 @@ def initBetterExchook():
 
   def excepthook(exc_type, exc_obj, exc_tb):
     print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
+    if exc_type is KeyboardInterrupt:
+      return
     better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
 
     if isinstance(threading.currentThread(), threading._MainThread):
