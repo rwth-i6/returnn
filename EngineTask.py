@@ -146,10 +146,7 @@ class TaskThread(threading.Thread):
           # We skipped segments. That's fine.
           return True
 
-        try:
-          device_results, outputs_format = self.device_collect_results()
-        except:
-          device_results = None
+        device_results, outputs_format = self.device_collect_results()
         if device_results is None:
           print >> log.v3, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
