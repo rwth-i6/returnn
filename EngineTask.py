@@ -123,6 +123,7 @@ class TaskThread(threading.Thread):
         self.finished = False
         self.crashed = False
         self.num_frames = 0
+        self.daemon = True
         if not self.alloc_devices:
           self.finished = True
           return
@@ -297,6 +298,8 @@ class TaskThread(threading.Thread):
       except KeyboardInterrupt:
         for dev in self.devices:
             dev.terminate()
+        interrupt_main()
+      except EOFError:
         interrupt_main()
       except Exception:
         # Catch all standard exceptions.

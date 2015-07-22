@@ -476,9 +476,12 @@ class ExecingProcess_ConnectionWrapper(object):
 
   def __getattr__(self, attr): return getattr(self.conn, attr)
 
-  def _check_closed(self): assert not self.conn.closed
-  def _check_writable(self): assert self.conn.writable
-  def _check_readable(self): assert self.conn.readable
+  def _check_closed(self):
+    if self.conn.closed: raise EOFError
+  def _check_writable(self):
+    if not self.conn.writable: raise EOFError
+  def _check_readable(self):
+    if not self.conn.readable: raise EOFError
 
   def send(self, value):
     self._check_closed()
@@ -677,13 +680,6 @@ class ReadWriteLock(object):
 
 
 if __name__ == "__main__":
-  try:
-    ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
-  except KeyboardInterrupt:
-    # Normally we would catch SIGINT already in an inner function.
-    # However, at very early stage, we would land here.
-    print "KeyboardInterrupt in subproc %i" % os.getpid()
-    sys.exit(1)
-
+  ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
   print "You are not expected to call this. This is for ExecingProcess."
   sys.exit(1)
