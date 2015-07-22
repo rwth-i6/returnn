@@ -489,7 +489,7 @@ class Device():
       rnn.config = config
       rnn.initLog()
       print >> log.v3, "Device %s proc starting up" % device
-      print >> log.v3, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
+      print >> log.v4, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJson()
       #rnn.maybeInitSprintCommunicator(device_proc=True)

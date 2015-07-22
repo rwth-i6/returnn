@@ -306,6 +306,8 @@ class TaskThread(threading.Thread):
         print >> log.v4, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
         # Just pass on. We have self.finalized == False which indicates the problem.
       except KeyboardInterrupt:
+        for dev in self.devices:
+            dev.terminate()
         sys.exit(1)
       except Exception:
         # Catch all standard exceptions.

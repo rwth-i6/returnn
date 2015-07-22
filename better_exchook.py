@@ -295,9 +295,9 @@ def print_traceback(tb=None, allLocals=None, allGlobals=None):
 		output("simple traceback:")
 		if isframe(tb): traceback.print_stack(tb)
 		else: traceback.print_tb(tb)
-	
 
 def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True):
+	if etype == KeyboardInterrupt: return
 	output("EXCEPTION")
 	allLocals,allGlobals = {},{}
 	if tb is not None:

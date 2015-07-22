@@ -78,9 +78,6 @@ def initFaulthandler(sigusr1_chain=False):
     if os.name != 'nt':
       import signal
       faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
-      print "faulthandler enabled and registered for SIGUSR1."
-    else:
-      print "faulthandler enabled."
 
 
 @auto_exclude_all_new_threads
@@ -148,8 +145,8 @@ def initIPythonKernel():
                           shell_port=shell_port, iopub_port=iopub_port, control_port=control_port, hb_port=hb_port,
                           ip=ip)
 
-    print "To connect another client to this IPython kernel, use:", \
-          "ipython console --existing %s" % connection_file
+    #print "To connect another client to this IPython kernel, use:", \
+    #      "ipython console --existing %s" % connection_file
   except Exception, e:
     print "Exception while initializing IPython ZMQ kernel. %s" % e
     return
