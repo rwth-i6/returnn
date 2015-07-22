@@ -6,6 +6,8 @@ from Log import log
 
 class LearningRateControl(object):
 
+  need_error_info = True
+
   class EpochData:
     def __init__(self, learningRate, error=None):
       """
@@ -150,6 +152,8 @@ class LearningRateControl(object):
 
 
 class ConstantLearningRate(LearningRateControl):
+
+  need_error_info = False
 
   def calcLearningRateForEpoch(self, epoch):
     """
