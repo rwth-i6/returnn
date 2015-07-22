@@ -676,7 +676,10 @@ class ReadWriteLock(object):
 
 
 if __name__ == "__main__":
-  ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
-
-  print "You are not expected to call this. This is for ExecingProcess."
-  sys.exit(1)
+  try:
+    ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
+  except KeyboardInterrupt:
+    pass
+  else:
+    print "You are not expected to call this. This is for ExecingProcess."
+    sys.exit(1)
