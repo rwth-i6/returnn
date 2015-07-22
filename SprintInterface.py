@@ -150,7 +150,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   if action == "train":
     pass
   elif action == "forward":
-    assert targetMode == "criterion-by-sprint"  # Hack in Sprint to just pass us the features.
+    assert targetMode in ["criterion-by-sprint", "forward-only"]
     targetMode = "forward"
   else:
     assert False, "unknown action: %r" % action
@@ -163,6 +163,9 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
     startTrainThread(epoch)
   elif Task == "forward":
     prepareForwarding(epoch)
+
+  global startTime
+  startTime = time.time()
 
 
 def exit():
@@ -223,6 +226,10 @@ def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, seg
 def feedInputUnsupervised(features, weights=None, segmentName=None):
   assert features.shape[0] == InputDim
   train(segmentName, features)
+
+def feedInputForwarding(features, weights=None, segmentName=None):
+  assert Task == "forward"
+  return feedInput(features, weights=weights, segmentName=segmentName)
 
 # End Sprint PythonTrainer interface. }
 
@@ -347,8 +354,6 @@ def startTrainThread(epoch=None):
   trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
-  global startTime
-  startTime = time.time()
   isTrainThreadStarted = True
 
 
@@ -360,14 +365,13 @@ def prepareForwarding(epoch):
                                                    "You have: %s" % config.list('extract')
 
   if epoch:
-    assert config.value('load', None) is None, "'load' = %r" % config.value('load', None)
     model_filename = config.value('model', '')
     fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fns_existing = [fn for fn in fns if os.path.exists(fn)]
     assert len(fns_existing) == 1, "%s not found" % fns
     config.set('load', fns_existing[0])
 
-  lastEpoch, _, _ = engine.get_last_epoch_batch_model(config)
+  lastEpoch, _ = engine.get_last_epoch_model(config)
   assert lastEpoch == epoch
 
   # Load network and copy over net params.
@@ -388,9 +392,8 @@ def getFinalEpoch():
   assert engine
   assert config
   config_num_epochs = engine.config_get_final_epoch(config)
-  with engine.lock:
-    if engine.is_training:
-      assert engine.final_epoch == config_num_epochs
+  if engine.is_training:
+    assert engine.final_epoch == config_num_epochs
   return config_num_epochs
 
 

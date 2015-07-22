@@ -1,24 +1,10 @@
-
 import thread
 from threading import Condition, currentThread
-from Dataset import Dataset
-from Log import log
 import math
 import time
 
-
-class DataCache:
-  def __init__(self, seq_idx, features, targets):
-    self.seq_idx = seq_idx
-    self.features = features
-    self.targets = targets
-
-  @property
-  def num_frames(self):
-    return self.features.shape[0]
-
-  def __repr__(self):
-    return "<SprintDataset DataCache seq_idx=%i>" % self.seq_idx
+from Dataset import Dataset, DatasetSeq
+from Log import log
 
 
 class SprintDataset(Dataset):
@@ -81,7 +67,7 @@ class SprintDataset(Dataset):
     self.next_seq_to_be_added = 0
     self.reached_final_seq = False
     self._num_timesteps = 0
-    self.added_data = []; " :type: list[DataCache] "
+    self.added_data = []; " :type: list[DatasetSeq] "
     self.ready_for_data = True
 
   def initSprintEpoch(self, epoch):
@@ -210,9 +196,8 @@ class SprintDataset(Dataset):
     """
     Adds a new seq.
     This is called via the Sprint main thread.
-    :type segmentName: str
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param targets: format (time) (idx of output-feature)
+    :param numpy.ndarray targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -247,7 +232,7 @@ class SprintDataset(Dataset):
           assert seq_idx + 1 == self.next_seq_to_be_added
           self.cond.wait()
 
-      self.added_data += [DataCache(seq_idx, features, targets)]
+      self.added_data += [DatasetSeq(seq_idx, features, targets)]
       self.cond.notify_all()
       return seq_idx
 
@@ -263,7 +248,7 @@ class SprintDataset(Dataset):
       self.ready_for_data = False
       self.cond.notify_all()
 
-  def _shuffle_seqs(self, start, end):
+  def _shuffle_frames_in_seqs(self, start, end):
     assert False, "Shuffling in SprintDataset only via Sprint at the moment."
 
   def get_num_timesteps(self):
@@ -276,6 +261,13 @@ class SprintDataset(Dataset):
     with self.lock:
       assert self.reached_final_seq
       return self.next_seq_to_be_added
+
+  def have_seqs(self):
+    with self.lock:
+      if self.next_seq_to_be_added > 0:
+        return True
+      self._waitForSeq(0)
+      return self.next_seq_to_be_added > 0
 
   def len_info(self):
     return "Sprint dataset, no len info"

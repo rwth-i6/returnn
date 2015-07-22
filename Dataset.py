@@ -109,8 +109,8 @@ class Dataset(object):
   def load_seqs(self, start, end):
     """
     Load data sequences, such that self.get_data() & friends can return the data.
-    :param int start: start sorted seq idx
-    :param int end: end sorted seq idx
+    :param int start: start sorted seq idx, inclusive
+    :param int end: end sorted seq idx, exclusive
     """
     assert start >= 0
     assert start <= end
@@ -118,15 +118,15 @@ class Dataset(object):
 
     if self.shuffle_frames_of_nseqs > 0:
       # We always load N seqs at once and shuffle all their frames.
-      start, end = self._load_seqs_superset(start, end)
+      start, end = self._get_load_seqs_superset(start, end)
       self._load_seqs(start, end)
       while start < end:
-        self._shuffle_seqs(start, start + self.shuffle_frames_of_nseqs)
+        self._shuffle_frames_in_seqs(start, start + self.shuffle_frames_of_nseqs)
         start += self.shuffle_frames_of_nseqs
     else:
       self._load_seqs(start, end)
 
-  def _load_seqs_superset(self, start, end):
+  def _get_load_seqs_superset(self, start, end):
     """
     :type start: int
     :type end: int
@@ -143,7 +143,7 @@ class Dataset(object):
       end += (m - (end % m)) % m
     return start, end
 
-  def _shuffle_seqs(self, start, end):
+  def _shuffle_frames_in_seqs(self, start, end):
     raise NotImplementedError
 
   def _load_seqs(self, start, end):
@@ -211,7 +211,20 @@ class Dataset(object):
   def get_times(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def get_data(self, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: numpy.ndarray
+    :returns features: format 2d (time,feature) (float)
+    """
+    raise NotImplementedError
+
   def get_targets(self, target, sorted_seq_idx):
+    """
+    :type sorted_seq_idx: int
+    :rtype: numpy.ndarray
+    :returns targets: format 1d (time) (int: idx of output-feature)
+    """
     raise NotImplementedError
 
   def get_ctc_targets(self, sorted_seq_idx):
@@ -242,15 +255,24 @@ class Dataset(object):
   def get_target_dim(self, target):
     raise NotImplementedError
 
+  def have_seqs(self):
+    return self.num_seqs > 0
+
   def len_info(self):
     """
     :rtype: str
-    Returns list of strings to present the user as information about our len.
+    :returns a string to present the user as information about our len.
     Depending on our implementation, we can give some more or some less information.
     """
     return None
 
   def is_less_than_num_seqs(self, n):
+    """
+    :type n: int
+    :rtype: bool
+    :returns whether n < num_seqs. In case num_seqs is not known in advance, it will wait
+    until it knows that n is behind the end or that we have the seq.
+    """
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.
     return n < self.num_seqs
@@ -265,23 +287,25 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
 
-  def iterate_seqs(self):
+  def _iterate_seqs(self, chunk_size, chunk_step):
     """
     Takes chunking into consideration.
+    :type chunk_size: int
+    :type chunk_step: int
     :return: index, and seq start, seq end
     :rtype: list[(int,int,int)]
     """
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
-      if self.chunk_size == 0:
+      if chunk_size == 0:
         yield (s, numpy.array([0,0]), length)
       else:
         t = 0
         while t < length[0]:
-          l = min(t + self.chunk_size, length[0])
+          l = min(t + chunk_size, length[0])
           yield (s, numpy.array([t,t]), numpy.array([l,l]))
-          t += self.chunk_step
+          t += chunk_step
       s += 1
 
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
@@ -295,11 +319,15 @@ class Dataset(object):
     assert batch_size > 0
     if max_seqs == -1: max_seqs = float('inf')
     assert max_seqs > 0
+    chunk_size = self.chunk_size
+    chunk_step = self.chunk_step
     if not recurrent_net:
-      assert self.chunk_size == 0, "Chunking not supported for non-recurrent net"
+      if chunk_size != 0:
+        print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
+        chunk_size = 0
 
     batch = Batch()
-    for seq_idx, t_start, t_end in self.iterate_seqs():
+    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
         if max(length) > batch_size:
@@ -332,3 +360,22 @@ class Dataset(object):
     return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs))
 
 
+class DatasetSeq:
+  def __init__(self, seq_idx, features, targets, ctc_targets=None):
+    """
+    :param int seq_idx: sorted seq idx in the Dataset
+    :param numpy.ndarray features: format 2d (time,feature) (float)
+    :param numpy.ndarray targets: format 1d (time) (idx of output-feature)
+    :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
+    """
+    self.seq_idx = seq_idx
+    self.features = features
+    self.targets = targets
+    self.ctc_targets = ctc_targets
+
+  @property
+  def num_frames(self):
+    return self.features.shape[0]
+
+  def __repr__(self):
+    return "<DataCache seq_idx=%i>" % self.seq_idx

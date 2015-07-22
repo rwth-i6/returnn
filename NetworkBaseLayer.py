@@ -8,15 +8,22 @@ __author__ = 'az'
 
 
 class Container(object):
+  rng_seed = 1234
+
   @classmethod
   def initialize_rng(cls):
-    cls.rng = numpy.random.RandomState(1234)
+    cls.rng = numpy.random.RandomState(cls.rng_seed)
 
-  def __init__(self, layer_class, name="", train_flag=False, depth=1, consensus = "flat", forward_weights_init=None):
+  def __init__(self, layer_class, name="", network=None,
+               train_flag=False, depth=1, consensus = "flat",
+               forward_weights_init=None, bias_init=None,
+               substitute_param_expr=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
-    :param str forward_weights_init: see self.create_forward_weights
+    :param Network.LayerNetwork network: the network which we will be part of
+    :param str forward_weights_init: see self.create_forward_weights()
+    :param str bias_init: see self.create_bias()
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
@@ -26,7 +33,10 @@ class Container(object):
     self.depth = depth
     self.set_attr('depth', depth)
     self.set_attr('consensus', consensus)
+    self.network = network
     self.forward_weights_init = forward_weights_init or "random_normal()"
+    self.bias_init = bias_init or "zeros()"
+    self.substitute_param_expr = substitute_param_expr
 
   def dot(self, vec, mat):
     if self.depth == 1:
@@ -100,20 +110,46 @@ class Container(object):
     :type name: str
     :rtype: T
     """
-    if name == "": name = "param_%d" % len(self.params)
-    param.layer = self
+    if not name:
+      name = getattr(param, "name", None)
+    if not name:
+      name = "param_%d" % len(self.params)
+    if self.substitute_param_expr:
+      substitute = eval(self.substitute_param_expr, {"self": self, "name": name, "value": param})
+      if substitute:
+        return substitute
     self.params[name] = param
     return param
 
   def set_attr(self, name, value):
     self.attrs[name] = value
 
-  def create_bias(self, n, prefix = 'b'):
+  def create_bias(self, n, prefix='b'):
+    """
+    :param int n: output dimension
+    :rtype: theano.shared
+    """
     name = "%s_%s" % (prefix, self.name)
     if self.depth > 1:
-      return theano.shared(value=numpy.zeros((self.depth, n), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+      size = (self.depth, n)
     else:
-      return theano.shared(value=numpy.zeros((n, ), dtype=theano.config.floatX), borrow=True, name=name) # broadcastable=(True, False))
+      size = (n,)
+    def random_normal(scale, loc=0.0):
+      return self.rng.normal(loc=loc, scale=scale, size=size)
+    def random_uniform(l, loc=0.0):
+      return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
+    eval_locals = {
+      "n": n,
+      "sqrt": numpy.sqrt,
+      "log": numpy.log,
+      "zeros": (lambda: numpy.zeros(size, dtype=theano.config.floatX)),
+      "random_normal": random_normal,
+      "random_uniform": random_uniform
+    }
+    values = eval(self.bias_init, eval_locals)
+    values = numpy.asarray(values, dtype=theano.config.floatX)
+    assert values.shape == (n,)
+    return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
@@ -148,13 +184,32 @@ class Container(object):
     return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
 
   def create_forward_weights(self, n, m, name=None):
+    """
+    :param int n: input dimension
+    :param int m: output dimension
+    :param str|None name: layer name
+    :rtype: theano.shared
+    """
     eval_locals = {
       "n": n,
       "m": m,
+      "sqrt": numpy.sqrt,
       "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
       "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
     }
     return eval(self.forward_weights_init, eval_locals)
+
+  @classmethod
+  def guess_source_layer_name(cls, layer_name):
+    # Any model created via NetworkDescription has SourceLayer with empty name as a source.
+    # Guess the real source layer name from our name, if it matches the scheme, e.g. "hidden_N_fw".
+    import re
+    m = re.search("^.*?([0-9]+)[^0-9]*$", layer_name)
+    if m:
+      nr = int(m.group(1))
+      if nr > 0:
+        return "%s%i%s" % (layer_name[:m.start(1)], nr - 1, layer_name[m.end(1):])
+    return None
 
   def to_json(self):
     attrs = self.attrs.copy()
@@ -164,6 +219,12 @@ class Container(object):
     if 'from' in attrs:
       if attrs['from'] == 'data':
         attrs.pop('from', None)
+      elif attrs['from'] == '':
+        guessed = self.guess_source_layer_name(self.name)
+        if guessed:
+          attrs['from'] = guessed
+        else:
+          attrs.pop('from', None)
       else:
         attrs['from'] = attrs['from'].split(',')
     return attrs
@@ -235,7 +296,7 @@ class Layer(Container):
     super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints +=  self.attrs['L1'] * abs(param.sum())
+        self.constraints +=  self.attrs['L1'] * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
         self.constraints +=  self.attrs['L2'] * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:

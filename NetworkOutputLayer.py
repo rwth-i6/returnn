@@ -95,12 +95,16 @@ class FramewiseOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       if self.y.type == T.ivector().type:
-        logpcx, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i]) #T.log(self.p_y_given_x[self.i, y[self.i]])
-        #pcx = T.log(T.clip(pcx, 1.e-20, 1.e20))  # For pcx near zero, the gradient will likely explode.
+        # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
+        # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
       else:
-        logpcx = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-20, 1.e20)), self.y[self.i].T)
-      #pcx = self.p_y_given_x[:, y[self.i]]
-      return T.sum(logpcx), known_grads
+        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
+      return T.sum(nll), known_grads
+    elif self.loss == 'priori':
+      pcx = self.p_y_given_x[self.i, self.y[self.i]]
+      pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
+      return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
       y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
       y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
@@ -118,13 +122,17 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
   def cost(self, y):
+    """
+    :param y: shape (time*batch,) -> label
+    :return: error scalar, known_grads dict
+    """
     y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
@@ -155,6 +163,16 @@ class SequenceOutputLayer(OutputLayer):
       pcx = p_y_given_x[self.i, y[self.i]]
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
+    elif self.loss == 'ctc2':
+      from NetworkCtcLayer import ctc_cost, uniq_with_lengths, log_sum
+      max_time = self.z.shape[0]
+      num_batches = self.z.shape[1]
+      time_mask = self.index.reshape((max_time, num_batches))
+      y_batches = y.reshape((max_time, num_batches))
+      targets, seq_lens = uniq_with_lengths(y_batches, time_mask)
+      log_pcx = self.z - log_sum(self.z, axis=0, keepdims=True)
+      err = ctc_cost(log_pcx, time_mask, targets, seq_lens)
+      return err, known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):

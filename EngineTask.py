@@ -464,7 +464,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, eval_batch_size, start_batch, pad_batches, report_prefix, exclude):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, **kwargs):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -472,16 +472,12 @@ class TrainTaskThread(TaskThread):
     :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
-    :type start_batch: int
-    :type pad_batches: bool
-    :type report_prefix: str
     """
     self.updater = updater
     self.learning_rate = learning_rate
     self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
-    super(TrainTaskThread, self).__init__("train", network, devices, data, batches, eval_batch_size, start_batch, pad_batches,
-                                          report_prefix, exclude)
+    super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
     self.score = 0
@@ -597,7 +593,7 @@ class TrainTaskThread(TaskThread):
     score = sum(cost)
     #if numpy.isinf(score) or numpy.isnan(score):
     #  for i, res in enumerate(results):
-    #    if numpy.isinf(res[0]) or numpy.isnan(res[0]):
+    #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
     #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
     #  assert False  # Should not get here.
     if self.do_ctc_priors:
@@ -622,8 +618,8 @@ class TrainTaskThread(TaskThread):
 
 
 class EvalTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, pad_batches=False):
-      super(EvalTaskThread, self).__init__('eval', network, devices, data, batches, pad_batches=pad_batches)
+    def __init__(self, network, devices, data, batches, **kwargs):
+      super(EvalTaskThread, self).__init__('eval', network, devices, data=data, batches=batches, **kwargs)
 
     def initialize(self):
       self.score = 0
@@ -640,9 +636,10 @@ class EvalTaskThread(TaskThread):
       assert results
       assert num_frames > 0
       score = sum([res[0] for res in results])
+      error = sum([res[1] for res in results])
       self.score += score
-      self.error += sum([res[1] for res in results])
-      return {"score": score / num_frames}
+      self.error += error
+      return {"score": score / num_frames, "error": error / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0

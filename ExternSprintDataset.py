@@ -38,21 +38,26 @@ class ExternSprintDataset(SprintDataset):
     atexit.register(self.exit_handler)
     self.init_epoch()
 
-  def _exit_child(self, wait_thread=True, wait_proc=True):
+  def _exit_child(self, wait_thread=True):
     if self.child_pid:
       interrupt = False
       if self._join_child(wait=False, expected_exit_status=0) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq
         if interrupt:
           print >> log.v5, "ExternSprintDataset: interrupt child proc %i" % self.child_pid
-          os.kill(self.child_pid, signal.SIGINT)
+          os.kill(self.child_pid, signal.SIGKILL)
       else:
         self.child_pid = None
-      self.pipe_p2c[1].close()
-      self.pipe_c2p[0].close()
       if wait_thread:
+        # Load all remaining data so that the reader thread is not waiting in self.addNewData().
+        while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
+          self.load_seqs(self.expected_load_seq_start + 1, self.expected_load_seq_start + 2)
         self.reader_thread.join()
-      if wait_proc and self.child_pid:
+      try: self.pipe_p2c[1].close()
+      except IOError: pass
+      try: self.pipe_c2p[0].close()
+      except IOError: pass
+      if self.child_pid:
         self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
         self.child_pid = None
 
@@ -61,6 +66,7 @@ class ExternSprintDataset(SprintDataset):
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
+    print >>log.v5, "ExternSprintDataset: epoch", epoch, "exec", args
 
     pid = os.fork()
     if pid == 0:  # child
@@ -108,7 +114,7 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
-    return [self.sprintTrainerExecPath] + self.sprintConfig + [
+    return [self.sprintTrainerExecPath] + [
       "--*.seed=%i" % (self.crnnEpoch or 1),
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
@@ -118,7 +124,8 @@ class ExternSprintDataset(SprintDataset):
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=SprintExternInterface",
       "--*.pymod-config=action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (self.pipe_c2p[1].fileno(),
-                                                                           self.pipe_p2c[0].fileno())]
+                                                                           self.pipe_p2c[0].fileno())] + \
+      self.sprintConfig
 
   def _read_next_raw(self):
     dataType, args = Unpickler(self.pipe_c2p[0]).load()
@@ -140,6 +147,7 @@ class ExternSprintDataset(SprintDataset):
       self.add_data_thread_id = thread.get_ident()
 
       self.initSprintEpoch(epoch)
+      haveSeenTheWhole = False
 
       while not self.python_exit:
         try:
@@ -163,6 +171,7 @@ class ExternSprintDataset(SprintDataset):
             features, targets = args
             self.addNewData(features, targets)
           elif dataType == "exit":
+            haveSeenTheWhole = True
             break
           else:
             assert False, "not handled: (%r, %r)" % (dataType, args)
@@ -170,7 +179,8 @@ class ExternSprintDataset(SprintDataset):
       if not self.python_exit:
         with self.lock:
           self.finishSprintEpoch()
-          self._num_seqs = self.next_seq_to_be_added
+          if haveSeenTheWhole:
+            self._num_seqs = self.next_seq_to_be_added
       print >> log.v5, "ExternSprintDataset finished reading epoch %i" % epoch
 
     except Exception:

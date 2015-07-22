@@ -15,11 +15,10 @@ from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOu
 from Log import log
 
 class LayerNetwork(object):
-  def __init__(self, n_in, n_out, mask="unity"):
+  def __init__(self, n_in, n_out):
     """
     :param int n_in: input dim of the network
     :param int n_out: output dim of the network
-    :param str mask: e.g. "unity"
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = {} #T.ivector('y'); """ :type: theano.Variable """
@@ -31,7 +30,6 @@ class LayerNetwork(object):
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
-    self.mask = mask
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
@@ -42,28 +40,35 @@ class LayerNetwork(object):
     self.errors = {}
 
   @classmethod
-  def from_config_topology(cls, config, mask="unity", train_flag = False):
+  def from_config_topology(cls, config, mask=None, train_flag = False):
     """
     :type config: Config.Config
-    :param str mask: e.g. "unity" or "dropout"
+    :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
     if config.network_topology_json is not None:
       num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, num_inputs, num_outputs, mask, config.bool("sparse_input", False), config.value('target', 'classes'), train_flag)
+      return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs,
+                           mask=mask,
+                           sparse_input=config.bool("sparse_input", False),
+                           target=config.value('target', 'classes'),
+                           train_flag=train_flag)
 
     description = LayerNetworkDescription.from_config(config)
-    return cls.from_description(description, mask, train_flag)
+    if not mask:
+      if sum(config.float_list('dropout', [0])) > 0.0:
+        mask = "dropout"
+    return cls.from_description(description, mask=mask)
 
   @classmethod
-  def from_description(cls, description, mask="unity", train_flag = False):
+  def from_description(cls, description, mask=None, train_flag = False):
     """
     :type description: NetworkDescription.LayerNetworkDescription
-    :param str mask: e.g. "unity" or "dropout"
+    :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(description.num_inputs, description.num_outputs, mask)
-    network.initialize(description)
+    network = cls(description.num_inputs, description.num_outputs)
+    network.initialize(description, mask=mask)
     return network
 
   @classmethod
@@ -72,10 +77,10 @@ class LayerNetwork(object):
     :type json_content: str
     :type n_in: int
     :type n_out: int
-    :type mask: str
+    :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(n_in, n_out, mask)
+    network = cls(n_in, n_out)
     if mask is None: mask = "none"
     try:
       topology = json.loads(json_content)
@@ -86,8 +91,6 @@ class LayerNetwork(object):
       assert False, "invalid json content"
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
     network.recurrent = False
     def traverse(content, layer_name, network):
       source = []
@@ -113,8 +116,13 @@ class LayerNetwork(object):
             encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       obj.pop('from', None)
-      params = { 'sources': source, 'dropout' : 0.0, 'name' : layer_name, 'mask' : mask, "train_flag": train_flag }
+      params = { 'sources': source, 'dropout' : 0.0,
+                 'name' : layer_name, 'mask' : mask,
+                 "train_flag": train_flag,
+                 'network': network }
       params.update(obj)
+      if mask:
+        params["mask"] = mask  # overwrite
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
@@ -132,14 +140,13 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask="unity", sparse_input = False, target = 'classes', train_flag = False):
+  def from_hdf_model_topology(cls, model, mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
     grp = model['training']
-    if mask is None: mask = grp.attrs['mask']
 
     n_out = {}
     try:
@@ -148,9 +155,7 @@ class LayerNetwork(object):
         n_out[k] = [model['n_out'].attrs[k], 1]
     except:
       n_out = {'classes':[model.attrs['n_out'],1]}
-    network = cls(model.attrs['n_in'], n_out, mask)
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
+    network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
     def traverse(model, layer_name, network):
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
@@ -163,6 +168,18 @@ class LayerNetwork(object):
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
+          else:
+            assert not s
+            # Fix for models via NetworkDescription.
+            s = Layer.guess_source_layer_name(layer_name)
+            if not s:
+              # Fix for data input. Just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
+            else:
+              if not network.hidden.has_key(s):
+                traverse(model, s, network)
+              # Add just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
         x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
@@ -174,7 +191,10 @@ class LayerNetwork(object):
             encoder.append(network.hidden[s])
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
-        params = { 'dropout' : 0.0, 'name' : 'output', 'mask' : mask, 'train_flag' : train_flag }
+        params = { 'dropout' : 0.0,
+                   'name' : 'output',
+                   'mask' : mask or model[layer_name].attrs['mask'],
+                   'train_flag' : train_flag }
         params.update(model[layer_name].attrs)
         if 'encoder' in model[layer_name].attrs:
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
@@ -191,8 +211,9 @@ class LayerNetwork(object):
                    'activation': act,
                    'dropout': model[layer_name].attrs['dropout'],
                    'name': layer_name,
-                   'mask': model[layer_name].attrs['mask'],
-                   'train_flag' : train_flag }
+                   'mask': mask or model[layer_name].attrs['mask'],
+                   'train_flag' : train_flag,
+                   'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
@@ -223,7 +244,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'sprint', 'sprint_smoothed'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
     elif self.loss == 'cedec':
       layer_class = LstmOutputLayer
@@ -300,18 +321,20 @@ class LayerNetwork(object):
     self.train_param_args = kwargs
     self.train_params_vars = self.get_params_vars(**kwargs)
 
-  def _make_layer(self, description, info, sources, reverse=False):
+  def _make_layer(self, description, info, sources, mask, reverse=False):
     """
     :type description: LayerNetworkDescription
     :type info: dict[str]
     :type sources: list[SourceLayer]
     :type reverse: bool
+    :type mask: str
     :rtype: NetworkHiddenLayer.ForwardLayer | NetworkRecurrentLayer.RecurrentLayer
     """
     params = dict(description.default_layer_info)
     params.update(info)
     params["sources"] = sources
-    params["mask"] = self.mask
+    params["mask"] = mask
+    params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
     if layer_class.recurrent:
       self.recurrent = True
@@ -329,21 +352,23 @@ class LayerNetwork(object):
     self.add_layer(layer=layer)
     return layer
 
-  def _make_output(self, description, sources):
+  def _make_output(self, description, sources, mask):
     """
     :type description: LayerNetworkDescription
     :type sources: list[SourceLayer]
+    :type mask: str
     """
     params = dict(description.default_layer_info)
     params.pop("layer_class", None)  # Makes no sense to use this default.
     params.update(description.output_info)
     params["sources"] = sources
-    params["mask"] = self.mask
+    params["mask"] = mask
     self.make_classifier(**params)
 
-  def initialize(self, description):
+  def initialize(self, description, mask=None):
     """
     :type description: LayerNetworkDescription
+    :param str mask: e.g. "unity" or None ("dropout")
 
     Initializes the network based the description.
     """
@@ -360,25 +385,26 @@ class LayerNetwork(object):
     last_layer = None
     # create forward layers
     for info in description.hidden_info:
-      last_layer = self._make_layer(description=description, info=info,
+      last_layer = self._make_layer(description=description, info=info, mask=mask,
                                     sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')])
       n_in = last_layer.attrs['n_out']
       x_in = last_layer.output
     sources = [last_layer]
-    # create backward layers
-    assert self.recurrent or not self.bidirectional, "non-recurrent networks can not be bidirectional"
     if self.bidirectional:
+      # create backward layers
+      if not self.recurrent:
+        print >>log.v2, "warning: non-recurrent network is bidirectional"
       last_layer = None
       n_in = self.n_in
       x_in = self.x
       for info in description.hidden_info:
-        last_layer = self._make_layer(description=description, info=info,
+        last_layer = self._make_layer(description=description, info=info, mask=mask,
                                       sources=[SourceLayer(n_out=n_in, x_out=x_in, name='')],
                                       reverse=True)
         n_in = last_layer.attrs['n_out']
         x_in = last_layer.output
       sources += [last_layer]
-    self._make_output(description=description, sources=sources)
+    self._make_output(description=description, sources=sources, mask=mask)
 
   def num_params(self):
     return sum([self.hidden[h].num_params() for h in self.hidden]) + sum([self.output[k].num_params() for k in self.output])
@@ -426,10 +452,11 @@ class LayerNetwork(object):
     for name in self.output:
       outattrs = self.output[name].attrs.copy()
       outattrs['from'] = outattrs['from'].split(',')
+      outattrs['class'] = 'softmax'
       out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
-    return str(out)
+    return json.dumps(out, sort_keys=True)
 
   def load_hdf(self, model):
     """

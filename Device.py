@@ -15,6 +15,10 @@ from thread import start_new_thread
 def get_num_devices():
   if os.name == 'nt':
     return 1, 1 #TODO
+  elif sys.platform == 'darwin':
+      #TODO parse via xml output
+      return int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),\
+               len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA'"))
   else:
     return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
 
@@ -22,32 +26,47 @@ def get_num_devices():
 def get_gpu_names():
   if os.name == 'nt':
     return "GeForce GTX 770" #TODO
+  elif sys.platform == 'darwin':
+    #TODO parse via xml output
+    return cmd("system_profiler SPDisplaysDataType | "
+               "grep 'Chipset Model: NVIDIA' | "
+               "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
   else:
     return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
 
 
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
-  attributes = { "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
-                 "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
+  attributes = {
+                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
-                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
-                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
-                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
-                 "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
                  }
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
   cpu = 0
   #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
+  # Why is memory in bytes hard coded to 2GB for all cpus?
   if os.name != 'nt':
-    for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
-      attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
-      cpu += 1
-    attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024)
+    if sys.platform == 'darwin':
+      mhz = int(float(cmd("system_profiler  SPHardwareDataType | "
+                          "grep 'Processor Speed' | awk '{print $3}'")[0]) * 1024)
+      for i in range(get_num_devices()[0]):
+        attributes["cpu" + str(cpu)] = (1, mhz, 2 * 1024 * 1024 * 1024)
+        cpu += 1
+    else:
+      for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
+        attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
+        cpu += 1
+    attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024) # what does this line do? Why add a cpu with 32GB?
   if not cpu:
     attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
   return attributes
@@ -87,8 +106,6 @@ class Device():
     self.main_pid = os.getpid()
 
     if blocking:
-      self.initialize(config)
-      self.num_train_params = len(self.trainnet.train_params_vars)
       if device[0:3] == 'gpu':
         import theano.sandbox.cuda as theano_cuda
         assert theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
@@ -106,6 +123,9 @@ class Device():
         self.device_name = 'cpu' + str(self.id)
       self.attributes = get_device_attributes()[self.device_name]
       self.name = device[0:3] + str(self.id)
+      self.initialize(config)
+      self.num_train_params = len(self.trainnet.train_params_vars)
+      self._checkGpuFuncs(self.device_name, self.id)
       self.initialized = True
     else:
       self.name = device
@@ -117,10 +137,23 @@ class Device():
     # Note that we want a really new separate process, i.e. fork+exec, not just a fork.
     # This is to avoid many potential bugs, e.g. in Numpy or Theano.
     # See also the comment in TaskSystem.ExecingProcess.
+    theano_flags = {key: value for (key, value)
+                    in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+    # First set some sane default for compile dir.
+    theano_flags.setdefault("compiledir_format",
+                            "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
+    # Extend compile dir for this device.
+    theano_flags["compiledir_format"] += "--dev-%s" % self.name
+    # Set device via flags.
+    theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
+    if self.name.startswith("gpu"):
+      theano_flags["force_device"] = True
+    env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
       func=self.process,
       name="Device %s proc" % self.name,
-      mustExec=True)
+      mustExec=True,
+      env_update=env_update)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 
@@ -133,11 +166,6 @@ class Device():
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
-
-  def restart(self):
-    self.proc.terminate()
-    #os.kill(self.proc.pid, signal.SIGKILL)
-    self.startProc()
 
   def detect_nan(self, i, node, fn):
     for output in fn.outputs:
@@ -162,20 +190,21 @@ class Device():
     import theano.tensor as T
     import h5py
     self.network_task = config.value('task', 'train')
-    mask = "unity"
-    if sum(config.float_list('dropout', [0])) > 0.0:
-      mask = "dropout"
     if network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, mask, True)
-      self.testnet = LayerNetwork.from_description(network_description, "unity", False)
+      self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
+      self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = LayerNetwork.from_hdf_model_topology(model, mask, config.bool("sparse_input", False), target, True)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, "unity", config.bool("sparse_input", False), target, False)
+      self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
+                                                           sparse_input=config.bool("sparse_input", False),
+                                                           target=target)
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, mask="unity", train_flag=False,
+                                                          sparse_input=config.bool("sparse_input", False),
+                                                          target=target)
       model.close()
     else:
-      self.trainnet = LayerNetwork.from_config_topology(config, mask, True)
-      self.testnet = LayerNetwork.from_config_topology(config, "unity", False)
+      self.trainnet = LayerNetwork.from_config_topology(config, train_flag=True)
+      self.testnet = LayerNetwork.from_config_topology(config, mask="unity", train_flag=False)
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
@@ -349,7 +378,7 @@ class Device():
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    if task == "train":
+    if task == "train" or task == "theano_graph":
       output = self.trainer()
     elif task == "eval":
       output = self.tester()
@@ -460,6 +489,7 @@ class Device():
       rnn.config = config
       rnn.initLog()
       print >> log.v3, "Device %s proc starting up" % device
+      print >> log.v3, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJson()
       #rnn.maybeInitSprintCommunicator(device_proc=True)
@@ -486,14 +516,18 @@ class Device():
     output_queue = input_queue = asyncTask.conn
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
-      import cuda_ndarray.cuda_ndarray as cuda
       if device == 'gpuX': device = 'gpu'
       #print "Use CUDA in device proc %s" % device
-      assert not theano.sandbox.cuda.cuda_enabled, "Must not yet be enabled. Otherwise sth is screwed."
-      theano.sandbox.cuda.use(device, force = True)
-      #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
-      device_id = cuda.active_device_number()
-      device_name = cuda.active_device_name()
+      assert theano.sandbox.cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
+      if not theano.sandbox.cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
+        theano.sandbox.cuda.use(device=device, force=True)
+        #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
+      try:
+        import cuda_ndarray.cuda_ndarray as theano_cuda_ndarray
+      except ImportError as exc:
+        raise Exception("Theano CUDA support seems broken: %s" % exc)
+      device_id = theano_cuda_ndarray.active_device_number()
+      device_name = theano_cuda_ndarray.active_device_name()
       device = "gpu%i" % device_id
     else:
       try:

@@ -4,6 +4,7 @@ from collections import deque
 import inspect
 import os
 import shlex
+import numpy as np
 
 
 def cmd(cmd):
@@ -11,7 +12,8 @@ def cmd(cmd):
   :type cmd: list[str] | str
   :rtype: list[str]
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True)
+  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
+                       env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
   return result
@@ -128,10 +130,15 @@ def betterRepr(o):
   if isinstance(o, deque):
     return "deque([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   if isinstance(o, tuple):
-    if len(o) == 1: return "(%s,)" % o[0]
+    if len(o) == 1:
+      return "(%s,)" % o[0]
     return "(%s)" % ", ".join(map(betterRepr, o))
   if isinstance(o, dict):
-    return "{\n%s}" % "".join(map(lambda (k,v): betterRepr(k) + ": " + betterRepr(v) + ",\n", sorted(o.iteritems())))
+    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.iteritems())]
+    if sum([len(v) for v in l]) >= 40:
+      return "{\n%s}" % "".join([v + ",\n" for v in l])
+    else:
+      return "{%s}" % ", ".join(l)
   if isinstance(o, set):
     return "set([\n%s])" % "".join(map(lambda v: betterRepr(v) + ",\n", o))
   # fallback
@@ -159,6 +166,12 @@ class ObjAsDict:
 
 
 def obj_diff_str(self, other):
+  if self is None and other is None:
+    return "No diff."
+  if self is None and other is not None:
+    return "self is None and other is %r" % other
+  if self is not None and other is None:
+    return "other is None and self is %r" % self
   s = []
   for attrib in sorted(set(other.__dict__).union(other.__dict__.keys())):
     if attrib not in self.__dict__ or attrib not in other.__dict__:
@@ -240,3 +253,25 @@ def initThreadJoinHack():
     else:
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
+
+
+def class_idx_seq_to_features(seq, num_classes):
+  num_frames = len(seq)
+  m = np.zeros((num_frames, num_classes))
+  m[np.arange(num_frames), seq] = 1
+  return m
+
+
+def uniq(seq):
+  """
+  Like Unix tool uniq. Removes repeated entries.
+  :param seq: numpy.array
+  :return: seq
+  """
+  diffs = np.ones_like(seq)
+  diffs[1:] = seq[1:] - seq[:-1]
+  idx = diffs.nonzero()
+  return seq[idx]
+
+def test_uniq():
+  assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
