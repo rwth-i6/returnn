@@ -167,11 +167,6 @@ class Device():
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
 
-  def restart(self):
-    self.proc.terminate()
-    #os.kill(self.proc.pid, signal.SIGKILL)
-    self.startProc()
-
   def detect_nan(self, i, node, fn):
     for output in fn.outputs:
       if numpy.isnan(output[0]).any():
