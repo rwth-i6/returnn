@@ -18,7 +18,7 @@ class LayerNetwork(object):
   def __init__(self, n_in, n_out):
     """
     :param int n_in: input dim of the network
-    :param dict[str,int] n_out: output dim of the network
+    :param dict[str,(int,int)] n_out: output dim of the network
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = {} #T.ivector('y'); """ :type: theano.Variable """
@@ -76,7 +76,7 @@ class LayerNetwork(object):
     """
     :type json_content: str
     :type n_in: int
-    :type n_out: dict[str,int]
+    :type n_out: dict[str,(int,int)]
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """

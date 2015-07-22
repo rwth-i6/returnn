@@ -132,18 +132,18 @@ class LayerNetworkDescription:
   def num_inputs_outputs_from_config(cls, config):
     """
     :type config: Config.Config
-    :rtype: (int,dict[str,int])
+    :rtype: (int,dict[str,(int,int)])
     """
     num_inputs = config.int('num_inputs', 0)
     target = config.value('target', 'classes')
-    num_outputs = {target: config.int('num_outputs', 0)} if config.has('num_outputs') else None
+    num_outputs = {target: [config.int('num_outputs', 0), 1]} if config.has('num_outputs') else None
     if config.list('train') and ":" not in config.value('train', ''):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
       except Exception:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       try:
-        _num_outputs = {target: [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
+        _num_outputs = {target: [hdf5_dimension(config.list('train')[0], 'numLabels'), 1]}
       except Exception:
         _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
         for k in _num_outputs:
