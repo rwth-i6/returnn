@@ -223,9 +223,9 @@ class TaskThread(threading.Thread):
           try:
             result, outputs_format_new = device.result()
           except RuntimeError:
-            return None
+            return None, None
           if result is None:
-            return None
+            return None, None
           assert isinstance(result, list)
           assert len(result) > 0  # we always expect to get some result
           if i >= 1:
