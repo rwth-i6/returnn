@@ -248,7 +248,7 @@ class Engine:
     if self.start_epoch == 1:
       return
     self.epoch = self.start_epoch - 1
-    if False: # self.learning_rate_control: TODO(Albert): This is never None. Please make sure that you only do this if you need it
+    if self.learning_rate_control.need_error_info:
       if self.dev_data and log.v[4]:
         if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
