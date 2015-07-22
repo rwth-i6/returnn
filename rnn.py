@@ -356,6 +356,7 @@ def init(configFilename, commandLineOptions):
 
 
 def finalize():
+  global quit
   quit = True
   if engine:
     for device in engine.devices:
