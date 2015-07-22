@@ -351,7 +351,7 @@ class ExecingProcess:
     self.pipe_p2c = pipeOpen()
     self.parent_pid = os.getpid()
     pid = os.fork()
-    flags = { p : v for p,v in [x.split('=') for x in os.environ.get("THEANO_FLAGS", "").split(',')]}
+    flags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
     if 'base_compiledir' in flags:
       offset = flags['base_compiledir'].find("_-_", 1)
       if offset > 1:
