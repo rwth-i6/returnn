@@ -149,8 +149,10 @@ class TaskThread(threading.Thread):
 
         try:
           device_results, outputs_format = self.device_collect_results()
-        except:
-          device_results = None
+        except KeyboardInterrupt:
+          return False
+        except Exception:
+          return False
         if device_results is None:
           print >> log.v3, "device crashed on batch", self.run_start_batch_idx
           self.parent.device_crash_batch = self.run_start_batch_idx
@@ -308,8 +310,8 @@ class TaskThread(threading.Thread):
       except KeyboardInterrupt:
         for dev in self.devices:
             dev.terminate()
-        sys.exit(1)
-      except Exception:
+      except Exception as e:
+        print e
         # Catch all standard exceptions.
         # These are not device errors. We should have caught them in the code
         # and we would leave self.finalized == False.

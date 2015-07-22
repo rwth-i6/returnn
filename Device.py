@@ -928,7 +928,10 @@ class Device():
   def terminate(self):
     if not self.blocking and self.proc.is_alive():
       assert self.main_pid == os.getpid()
-      self.input_queue.send('stop')
+      try:
+        self.input_queue.send('stop')
+      except IOError:
+        return
       self.proc.join()
       self.proc.terminate()
 
