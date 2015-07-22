@@ -407,10 +407,12 @@ def executeMainTask():
 def main(argv):
   assert len(argv) >= 2, "usage: %s <config>" % argv[0]
   init(configFilename=argv[1], commandLineOptions=argv[2:])
-  executeMainTask()
+  try:
+    executeMainTask()
+  except KeyboardInterrupt:
+    print >> log.v1, "KeyboardInterrupt"
   finalize()
 
 
 if __name__ == '__main__':
-  try: main(sys.argv)
-  except KeyboardInterrupt: pass
+  main(sys.argv)
