@@ -372,11 +372,10 @@ class Engine:
       self.learning_rate_control.save()
 
     eval_dump_str = []
-    testing_device = self.devices[-1]
     for name in self.eval_datasets.keys():
       dataset = self.eval_datasets[name]
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
-      tester = EvalTaskThread(self.network, [testing_device], data=dataset, batches=batches,
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
+      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               pad_batches=self.pad_batches)
       tester.join()
       trainer.elapsed += tester.elapsed
@@ -384,8 +383,7 @@ class Engine:
       if name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, tester.score)
         self.learning_rate_control.save()
-    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed
-    print >> log.v1, "\n".join(eval_dump_str)
+    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed, " ".join(eval_dump_str)
 
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
