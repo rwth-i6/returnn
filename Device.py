@@ -157,8 +157,8 @@ class Device():
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 
-    self.id = self.output_queue.recv(); """ :type: int """
     try:
+      self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
     except EOFError:
