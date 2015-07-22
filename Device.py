@@ -818,7 +818,7 @@ class Device():
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
       if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, network_description, train_param_args)
+        self.initialize(self.config, self.device_update, network_description, train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
