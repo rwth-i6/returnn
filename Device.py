@@ -497,9 +497,7 @@ class Device():
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except KeyboardInterrupt:
       # Killed by parent.
-      if log.v[4]:
-        print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
-        sys.excepthook(*sys.exc_info())
+      print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
       sys.exit(1)
     except Exception as e:
       print >> log.v2, "Device %s proc exception: %s" % (device, e)
