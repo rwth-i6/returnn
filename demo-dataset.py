@@ -37,8 +37,8 @@ def iterateEpochs():
 
   for epoch in range(start_epoch, final_epoch + 1):
     print >> log.v3, "Epoch %i." % epoch
-    rnn.train_data.init_seq_order(epoch)
-    iterateDataset(rnn.train_data, recurrent_net=recurrent_net, batch_size=batch_size, max_seqs=max_seqs)
+    rnn.train.init_seq_order(epoch)
+    iterateDataset(rnn.train, recurrent_net=recurrent_net, batch_size=batch_size, max_seqs=max_seqs)
 
   print >> log.v3, "Finished all epochs."
 

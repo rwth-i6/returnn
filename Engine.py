@@ -260,8 +260,9 @@ class Engine:
       self.cond.notify_all()
 
     assert self.start_epoch >= 1, "Epochs start at 1."
-    assert self.start_epoch <= self.final_epoch, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
-                                                 (self.start_epoch, self.final_epoch)
+    if self.start_epoch > self.final_epoch:
+      print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
+                       (self.start_epoch, self.final_epoch)
 
     for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
       # In case of random seq ordering, we want to reorder each epoch.
@@ -271,6 +272,9 @@ class Engine:
         self.epoch = epoch
         self.cond.notify_all()
 
+      for dataset in self.eval_datasets.values():
+        dataset.init_seq_order(self.epoch)
+
       self.init_train_epoch()
       self.train_epoch()
 
@@ -278,12 +282,13 @@ class Engine:
         self.stop_train_after_epoch_request = False
         break
 
-    # Save last model, in case it was not saved yet (depends on save_model_epoch_interval).
-    if self.model_filename:
-      self.save_model(self.model_filename + ".%03d" % self.epoch, self.epoch)
+    if self.epoch:  # We did train at least one epoch.
+      # Save last model, in case it was not saved yet (depends on save_model_epoch_interval).
+      if self.model_filename:
+        self.save_model(self.model_filename + ".%03d" % self.epoch, self.epoch)
 
-    if self.epoch != self.final_epoch:
-      print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
+      if self.epoch != self.final_epoch:
+        print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
 
     with self.lock:
       self.is_training = False
@@ -362,23 +367,28 @@ class Engine:
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
-    self.learning_rate_control.setEpochError(self.epoch, trainer.score)
-    self.learning_rate_control.save()
+    if "dev" not in self.eval_datasets:
+      self.learning_rate_control.setEpochError(self.epoch, trainer.score)
+      self.learning_rate_control.save()
 
-    if log.verbose[1]:
-      eval_dump_str = []
-      testing_device = self.devices[0]
-      for name in self.eval_datasets.keys():
-        dataset = self.eval_datasets[name]
-        batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
-        tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
-                                pad_batches=self.pad_batches)
-        tester.join()
-        trainer.elapsed += tester.elapsed
-        eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
-      print >> log.v1, self.get_epoch_str(), "score: %.5f elapsed: %.3f%s" % (trainer.score, trainer.elapsed, " ".join(eval_dump_str))
-      if self.ctc_prior_file is not None:
-        trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
+    eval_dump_str = []
+    testing_device = self.devices[-1]
+    for name in self.eval_datasets.keys():
+      dataset = self.eval_datasets[name]
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
+      tester = EvalTaskThread(self.network, [testing_device], data=dataset, batches=batches,
+                              pad_batches=self.pad_batches)
+      tester.join()
+      trainer.elapsed += tester.elapsed
+      eval_dump_str += ["  %s: score %s error %s" % (name, tester.score, tester.error)]
+      if name == "dev":
+        self.learning_rate_control.setEpochError(self.epoch, tester.score)
+        self.learning_rate_control.save()
+    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", trainer.elapsed
+    print >> log.v1, "\n".join(eval_dump_str)
+
+    if self.ctc_prior_file is not None:
+      trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
   def save_model(self, filename, epoch):
     """

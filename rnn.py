@@ -19,6 +19,7 @@ from Config import Config
 from Engine import Engine
 from Dataset import Dataset
 from HDFDataset import HDFDataset
+from ExternSprintDataset import ExternSprintDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
 from SprintCommunicator import SprintCommunicator
@@ -219,6 +220,37 @@ def getCacheByteSizes():
   return cache_sizes
 
 
+def load_data(config, cache_byte_size, files_config_key, **kwargs):
+  """
+  :type config: Config.Config
+  :type cache_byte_size: int
+  :type chunking: str
+  :type seq_ordering: str
+  :rtype: (Dataset,int)
+  :returns the dataset, and the cache byte size left over if we cache the whole dataset.
+  """
+  if not config.has(files_config_key):
+    return None, 0
+  if config.value(files_config_key, "").startswith("sprint:"):
+    kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
+    sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
+    assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
+    kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
+    cls = ExternSprintDataset
+  else:
+    kwargs["cache_byte_size"] = cache_byte_size
+    cls = HDFDataset
+  data = cls.from_config(config, **kwargs)
+  if isinstance(data, HDFDataset):
+    for f in config.list(files_config_key):
+      data.add_file(f)
+  data.initialize()
+  cache_leftover = 0
+  if isinstance(data, HDFDataset):
+    cache_leftover = data.definite_cache_leftover
+  return data, cache_leftover
+
+
 def initData():
   """
   Initializes the globals train,dev,eval of type Dataset.
@@ -228,18 +260,18 @@ def initData():
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
   global train, dev, eval
-  dev, extra_cache_bytes_dev = HDFDataset.load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
-                                                    seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval, extra_cache_bytes_eval = HDFDataset.load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
-                                                      seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  dev, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
+                                         seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  eval, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
+                                           seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
     train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
-  train, extra_train = HDFDataset.load_data(config, train_cache_bytes, 'train')
+  train, extra_train = load_data(config, train_cache_bytes, 'train')
 
 
-def printTaskProperties(devices):
+def printTaskProperties(devices=None):
   """
   :type devices: list[Device]
   """
@@ -248,25 +280,23 @@ def printTaskProperties(devices):
     print >> log.v2, "Train data:"
     print >> log.v2, "  input:", train.num_inputs, "x", train.window
     print >> log.v2, "  output:", train.num_outputs
-    print >> log.v2, "  sequences:", train.num_seqs
-    print >> log.v2, "  frames:", train.get_num_timesteps()
+    print >> log.v2, " ", train.len_info() or "no info"
   if dev:
     print >> log.v2, "Dev data:"
-    print >> log.v2, "  sequences:", dev.num_seqs
-    print >> log.v2, "  frames:", dev.get_num_timesteps()
+    print >> log.v2, " ", dev.len_info() or "no info"
   if eval:
     print >> log.v2, "Eval data:"
-    print >> log.v2, "  sequences:", eval.num_seqs
-    print >> log.v2, "  frames:", eval.get_num_timesteps()
+    print >> log.v2, " ", eval.len_info() or "no info"
 
-  print >> log.v3, "Devices:"
-  for device in devices:
-    print >> log.v3, "  %s: %s" % (device.name, device.device_name),
-    print >> log.v3, "(units:", device.get_device_shaders(), \
-                     "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
-                     "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
-    print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch",
-    print >> log.v3, "(update on device)" if device.device_update else "(update on host)"
+  if devices:
+    print >> log.v3, "Devices:"
+    for device in devices:
+      print >> log.v3, "  %s: %s" % (device.name, device.device_name),
+      print >> log.v3, "(units:", device.get_device_shaders(), \
+                       "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
+                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
+      print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch"
+      print >> log.v3, "(update on device)" if device.device_update else "(update on host)"
 
 
 def initEngine(devices):
@@ -295,8 +325,9 @@ def init(configFilename, commandLineOptions):
 
 
 def finalize():
-  for device in engine.devices:
-    device.terminate()
+  if engine:
+    for device in engine.devices:
+      device.terminate()
   maybeFinalizeSprintCommunicator(device_proc=False)
 
 
