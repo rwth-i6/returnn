@@ -132,18 +132,18 @@ class LayerNetworkDescription:
   def num_inputs_outputs_from_config(cls, config):
     """
     :type config: Config.Config
-    :rtype: (int,int)
+    :rtype: (int,dict[str,int])
     """
     num_inputs = config.int('num_inputs', 0)
-    num_outputs = config.int('num_outputs', 0)
     target = config.value('target', 'classes')
+    num_outputs = {target: config.int('num_outputs', 0)} if config.has('num_outputs') else None
     if config.list('train') and ":" not in config.value('train', ''):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
       except Exception:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
       try:
-        _num_outputs = { 'classes' : [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
+        _num_outputs = {target: [hdf5_dimension(config.list('train')[0], 'numLabels'),1] }
       except Exception:
         _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
         for k in _num_outputs:
@@ -155,5 +155,6 @@ class LayerNetworkDescription:
     assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     loss = cls.loss_from_config(config)
     if loss in ('ctc', 'ce_ctc') or config.bool('add_blank', False):
-      num_outputs += 1  # add blank
+      for k in num_outputs:
+        num_outputs[k] += 1  # add blank
     return num_inputs, num_outputs
