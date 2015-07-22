@@ -2,7 +2,6 @@
 import os
 import sys
 
-_debug = False
 
 def dumpAllThreadTracebacks(exclude_thread_ids=set()):
   import better_exchook
@@ -52,7 +51,6 @@ def initFaulthandler(sigusr1_chain=False):
   """
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
-  if not _debug: return
   try:
     import faulthandler
   except ImportError, e:
@@ -70,7 +68,6 @@ def initFaulthandler(sigusr1_chain=False):
 
 
 def initIPythonKernel():
-  if not _debug: return
   # You can remotely connect to this kernel. See the output on stdout.
   try:
     import IPython.kernel.zmq.ipkernel
