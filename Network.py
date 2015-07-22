@@ -237,7 +237,7 @@ class LayerNetwork(object):
     self.hidden[layer.name] = layer
     self.constraints += layer.make_constraints()
 
-  def make_classifier(self, name, target, **kwargs):
+  def make_classifier(self, name='output', target='classes', **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: source layers
     :param str loss: loss type, "ce", "ctc" etc
