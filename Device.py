@@ -10,6 +10,7 @@ import os
 import errno
 import time
 import pickle
+from thread import start_new_thread
 
 
 def get_num_devices():
@@ -130,7 +131,7 @@ class Device():
     else:
       self.name = device
       self.initialized = False
-      start_daemon_thread(target=self.startProc, args=(device,))
+      start_new_thread(self.startProc, (device,))
 
   def startProc(self, device_tag):
     assert not self.blocking

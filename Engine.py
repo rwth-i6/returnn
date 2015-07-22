@@ -248,8 +248,8 @@ class Engine:
     if self.start_epoch == 1:
       return
     self.epoch = self.start_epoch - 1
-    if self.learning_rate_control:
-      if self.dev_data:
+    if False: # self.learning_rate_control: TODO(Albert): This is never None. Please make sure that you only do this if you need it
+      if self.dev_data and log.v[4]:
         if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
           print >> log.v4, "Last epoch model not yet evaluated on dev. Doing that now."
@@ -415,7 +415,7 @@ class Engine:
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print >> log.v1, " ".join(eval_dump_str).strip()
+    print >> log.v1, " ".join(eval_dump_str).strip(),
 
   def save_model(self, filename, epoch):
     """
