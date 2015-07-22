@@ -86,8 +86,6 @@ class LayerNetwork(object):
       assert False, "invalid json content"
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
     network.recurrent = False
     def traverse(content, layer_name, network):
       source = []
@@ -152,8 +150,6 @@ class LayerNetwork(object):
     except:
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out, mask)
-    network.L1 = T.constant(0)
-    network.L2 = T.constant(0)
     network.recurrent = False
     def traverse(model, layer_name, network):
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
