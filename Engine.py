@@ -249,7 +249,7 @@ class Engine:
       return
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
-      if self.dev_data and log.v[4]:
+      if self.dev_data:
         if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
           print >> log.v4, "Last epoch model not yet evaluated on dev. Doing that now."
