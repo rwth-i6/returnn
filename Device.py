@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms
+from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -10,7 +10,6 @@ import os
 import errno
 import time
 import pickle
-from thread import start_new_thread
 
 def get_num_devices():
   if os.name == 'nt':
@@ -130,7 +129,7 @@ class Device():
     else:
       self.name = device
       self.initialized = False
-      start_new_thread(self.startProc, (device,))
+      start_daemon_thread(target=self.startProc, args=(device,))
 
   def startProc(self, device_tag):
     assert not self.blocking

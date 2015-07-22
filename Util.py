@@ -254,6 +254,12 @@ def initThreadJoinHack():
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
 
+def start_daemon_thread(target, args=()):
+  from threading import Thread
+  t = Thread(target=target, args=args)
+  t.daemon = True
+  t.start()
+
 
 def class_idx_seq_to_features(seq, num_classes):
   num_frames = len(seq)
