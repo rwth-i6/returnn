@@ -405,9 +405,9 @@ def executeMainTask():
 
 
 def main(argv):
-  assert len(argv) >= 2, "usage: %s <config>" % argv[0]
-  init(configFilename=argv[1], commandLineOptions=argv[2:])
   try:
+    assert len(argv) >= 2, "usage: %s <config>" % argv[0]
+    init(configFilename=argv[1], commandLineOptions=argv[2:])
     executeMainTask()
   except KeyboardInterrupt:
     print >> log.v1, "KeyboardInterrupt"
