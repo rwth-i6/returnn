@@ -44,14 +44,7 @@ class TaskThread(threading.Thread):
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
       self.lock = threading.Lock()
-      # There is no generic way to see whether Python is exiting.
-      # This is our workaround. We check for it in self.run_inner().
-      self.stopped = False
-      atexit.register(self.stop)
       self.start()
-
-    def stop(self):
-      self.stopped = True
 
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches, self.exclude)
@@ -352,7 +345,7 @@ class TaskThread(threading.Thread):
       crashed = False
 
       while True:
-        if self.stopped:
+        if getattr(sys, "exited", False):
           # This happens when we exit Python.
           # Without this check, this thread would keep running until all exit handlers of Python are done.
           print >> log.v5, "%s stopped" % self
