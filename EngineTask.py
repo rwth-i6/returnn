@@ -564,6 +564,9 @@ class TrainTaskThread(TaskThread):
           device.set_net_encoded_params(encoded)
     except Exception as e:
       print >> log.v3, "network synchronization failed: ", e.message
+      if log.v4:
+        sys.excepthook(*sys.exc_info())
+
     #pipe.copy_to_device(self.network)
 
   def evaluate(self, batchess, results, result_format, num_frames):
