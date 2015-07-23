@@ -105,7 +105,7 @@ class HDFDataset(CachedDataset):
     assert end <= self.num_seqs
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
-    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[(int,int)] """
+    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[list[int]] """
     # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
       ids = self._seq_index[idc]
