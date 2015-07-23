@@ -660,7 +660,7 @@ class Device():
 
   def set_net_encoded_params(self, network_params):
     """
-    :type network: Network.LayerNetwork
+    :type network_params: list[str]
     This updates *all* params, not just the train params.
     """
     assert not self.blocking
