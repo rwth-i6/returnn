@@ -241,7 +241,7 @@ class SourceLayer(Container):
     self.set_attr('delay', delay)
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):
+  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
     :param list[NetworkBaseLayer.SourceLayer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -256,6 +256,7 @@ class Layer(Container):
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
+    self.set_attr('carry', carry)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
@@ -361,6 +362,14 @@ class Layer(Container):
       self.output = self.make_consensus(self.output)
       if self.attrs['consensus'] == 'flat':
         self.attrs['n_out'] *= self.depth
+    if self.attrs['carry']:
+      assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
+      name = 'W_T_%s'%self.name
+      if not name in self.params:
+        self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
+      x = T.concatenate([s.output for s in self.sources], axis = -1)
+      Tr = T.nnet.sigmoid(self.dot(x, self.params[name]))
+      self.output = Tr * self.output + (1 - Tr) * x
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
 
