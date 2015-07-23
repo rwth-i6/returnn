@@ -933,7 +933,7 @@ class Device():
       try:
         self.input_queue.send('stop')
       except IOError:
-        return
+        pass
       self.proc.join()
       self.proc.terminate()
 
