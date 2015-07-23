@@ -81,7 +81,6 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    if mask is None: mask = "none"
     try:
       topology = json.loads(json_content)
     except ValueError:
@@ -117,7 +116,7 @@ class LayerNetwork(object):
         obj['encoder'] = encoder
       obj.pop('from', None)
       params = { 'sources': source, 'dropout' : 0.0,
-                 'name' : layer_name, 'mask' : mask,
+                 'name' : layer_name,
                  "train_flag": train_flag,
                  'network': network }
       params.update(obj)
@@ -333,7 +332,8 @@ class LayerNetwork(object):
     params = dict(description.default_layer_info)
     params.update(info)
     params["sources"] = sources
-    params["mask"] = mask
+    if mask:
+      params["mask"] = mask
     params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
     if layer_class.recurrent:
@@ -362,7 +362,8 @@ class LayerNetwork(object):
     params.pop("layer_class", None)  # Makes no sense to use this default.
     params.update(description.output_info)
     params["sources"] = sources
-    params["mask"] = mask
+    if mask:
+      params["mask"] = mask
     self.make_classifier(**params)
 
   def initialize(self, description, mask=None):
