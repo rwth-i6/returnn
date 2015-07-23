@@ -495,6 +495,9 @@ class Device():
       #rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, device_update, asyncTask)
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
+    except ProcConnectionDied:
+      print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
+      sys.exit(1)
     except KeyboardInterrupt:
       # Killed by parent.
       print >> log.v4, "Device %s proc got KeyboardInterrupt" % device
@@ -541,15 +544,7 @@ class Device():
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
     network_params = []
     while True:
-      try:
-        cmd = input_queue.recv()
-      except ProcConnectionDied:
-        # Normally, the parent should in all cases correctly terminate us, even if the parent
-        # is terminated via SIGINT, so this is an unexpected case.
-        print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
-        if log.v[4]:
-          sys.excepthook(*sys.exc_info())
-        break  # Just exit.
+      cmd = input_queue.recv()
       if cmd == "stop":  # via self.terminate()
         output_queue.send("done")
         break
