@@ -102,8 +102,7 @@ class GeneratingDataset(Dataset):
     return self._get_seq(sorted_seq_idx).features
 
   def get_targets(self, target, sorted_seq_idx):
-    assert target == "classes"
-    return self._get_seq(sorted_seq_idx).targets
+    return self._get_seq(sorted_seq_idx).targets[target]
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert self._get_seq(sorted_seq_idx).ctc_targets
