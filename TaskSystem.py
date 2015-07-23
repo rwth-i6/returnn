@@ -503,7 +503,7 @@ class ExecingProcess_ConnectionWrapper(object):
 
   def send_bytes(self, value):
     try:
-      self.conn.send_bytes()
+      self.conn.send_bytes(value)
     except (EOFError, IOError):
       raise ProcConnectionDied
 
