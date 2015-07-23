@@ -22,7 +22,6 @@ class HDFDataset(CachedDataset):
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
     self.tags = []; """ :type: list[str] """
-    self.targets = {}
 
   def add_file(self, filename):
     """

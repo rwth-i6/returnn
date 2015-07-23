@@ -8,6 +8,7 @@ from EngineUtil import assign_dev_data
 from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
 from Device import Device
+from TaskSystem import ProcConnectionDied
 
 
 class TaskThread(threading.Thread):
@@ -292,15 +293,11 @@ class TaskThread(threading.Thread):
       # Thread.__bootstrap_inner() ignores sys.excepthook.
       try:
         self.run_inner()
-      except IOError, e:  # Such as broken pipe.
-        print >> log.v4, "%s. Some device proc crashed unexpectedly. Maybe just SIGINT." % e
+      except ProcConnectionDied:
+        if not getattr(sys, "exited", False):
+          # Normally we should have caught that in run_inner(), so somewhat unexpected.
+          print >> log.v4, "%s. Some device proc crashed unexpectedly." % self
         # Just pass on. We have self.finalized == False which indicates the problem.
-      except KeyboardInterrupt:
-        for dev in self.devices:
-            dev.terminate()
-        interrupt_main()
-      except EOFError:
-        interrupt_main()
       except Exception:
         # Catch all standard exceptions.
         # These are not device errors. We should have caught them in the code

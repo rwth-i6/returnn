@@ -51,6 +51,7 @@ class Dataset(object):
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
     self._num_timesteps = 0
+    self._num_codesteps = None; " :type: int "  # Num output frames, could be different from input, seq2seq, ctc.
     self._num_seqs = 0
     self.chunk_size = int(chunking.split(':')[0])
     if ':' in chunking:
@@ -94,7 +95,7 @@ class Dataset(object):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: int
+    :rtype: (int,int)
     """
     raise NotImplementedError
 
@@ -103,6 +104,8 @@ class Dataset(object):
     return self._num_timesteps
 
   def get_num_codesteps(self):
+    if self._num_codesteps is None:
+      return self.get_num_timesteps()
     assert self._num_codesteps > 0
     return self._num_codesteps
 

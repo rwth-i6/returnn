@@ -1,4 +1,4 @@
-from TaskSystem import AsyncTask
+from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
@@ -7,7 +7,7 @@ from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
-import errno
+import atexit
 import time
 import pickle
 from thread import start_new_thread
@@ -155,6 +155,8 @@ class Device():
       name="Device %s proc" % self.name,
       mustExec=True,
       env_update=env_update)
+    # We should terminate it normally ourselves. However, if we fail, do it via atexit so it is not confused.
+    atexit.register(self.terminate)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 
@@ -162,9 +164,8 @@ class Device():
       self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
-    except EOFError:
+    except ProcConnectionDied:
       interrupt_main()
-      sys.exit(1)
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
@@ -490,7 +491,7 @@ class Device():
       rnn.initBetterExchook()
       rnn.config = config
       rnn.initLog()
-      print >> log.v3, "Device %s proc starting up" % device
+      print >> log.v3, "Device %s proc starting up, pid %i" % (device, os.getpid())
       print >> log.v4, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJson()
@@ -545,7 +546,9 @@ class Device():
     while True:
       try:
         cmd = input_queue.recv()
-      except EOFError:
+      except ProcConnectionDied:
+        # Normally, the parent should in all cases correctly terminate us, even if the parent
+        # is terminated via SIGINT, so this is an unexpected case.
         print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
         if log.v[4]:
           sys.excepthook(*sys.exc_info())
@@ -592,17 +595,17 @@ class Device():
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
-        params = []
-        for p in our_params_trainnet:
-          params.append(input_queue.recv_bytes())
-        assert isinstance(params, list)
+        params_len = input_queue.recv()
+        params = [input_queue.recv_bytes() for i in range(params_len)]
+        assert input_queue.recv() == "end-set-net-params"
         our_params_testnet = self.testnet.get_all_params_vars()
         assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
-        for param, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+        for param_str, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+          param = numpy.fromstring(param_str, dtype='float32')
           our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
-          #assert our_param_shape == param.shape
+          assert numpy.prod(our_param_shape) == numpy.prod(param.shape)
           #assert numpy.isfinite(param).all()
-          converted = numpy.fromstring(param, dtype='float32').reshape(our_p_train.get_value().shape)
+          converted = param.reshape(our_param_shape)
           our_p_train.set_value(converted)
           our_p_test.set_value(converted)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
@@ -656,13 +659,15 @@ class Device():
 
   def set_net_encoded_params(self, network_params):
     """
-    :type network: Network.LayerNetwork
+    :type network_params: list[str]
     This updates *all* params, not just the train params.
     """
     assert not self.blocking
     self.input_queue.send("set-net-params")
+    self.input_queue.send(len(network_params))
     for p in network_params:
       self.input_queue.send_bytes(p)
+    self.input_queue.send("end-set-net-params")
 
   def set_net_params(self, network):
     """
@@ -674,10 +679,8 @@ class Device():
       self.testnet.set_params_by_dict(network.get_params_dict())
     else:
       assert self.main_pid == os.getpid()
-      self.input_queue.send("set-net-params")
-      p = [numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()]
-      for x in p:
-        self.input_queue.send_bytes(x)
+      self.set_net_encoded_params([
+        numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()])
 
   def is_device_proc(self):
     if self.blocking:
@@ -911,31 +914,28 @@ class Device():
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
             return output, outputs_format
-        except EOFError:
+        except ProcConnectionDied:
           # The process is dying or died.
           return None, None
-        except IOError, e:
-          if e.errno == errno.EINTR:
-            # http://stackoverflow.com/questions/14136195
-            # We can just keep trying.
-            print >> log.v3, "Device proc %s gave us an EINTR." % self.name
-            time.sleep(1)
-          else:
-            # The process is dying or died.
-            return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
       return None, None
 
   def terminate(self):
-    if not self.blocking and self.proc.is_alive():
-      assert self.main_pid == os.getpid()
-      try:
-        self.input_queue.send('stop')
-      except IOError:
-        return
-      self.proc.join()
-      self.proc.terminate()
+    if self.blocking:
+      return
+    if not self.proc:
+      return
+    if not self.proc.is_alive():
+      return
+    assert self.main_pid == os.getpid()
+    try:
+      self.input_queue.send('stop')
+    except ProcConnectionDied:
+      pass
+    self.proc.join(timeout=10)
+    self.proc.terminate()
+    self.proc = None
 
   # device properties
   def get_device_shaders(self): return self.attributes[0]

@@ -46,9 +46,19 @@ def initBetterExchook():
   import pdb
 
   def excepthook(exc_type, exc_obj, exc_tb):
+    try:
+      is_main_thread = isinstance(threading.currentThread(), threading._MainThread)
+    except Exception:  # Can happen at a very late state while quitting.
+      if exc_type is KeyboardInterrupt:
+        return
+    else:
+      if is_main_thread:
+        if exc_type is KeyboardInterrupt and getattr(sys, "exited", False):
+          # Got SIGINT twice. Can happen.
+          return
+        # An unhandled exception in the main thread. This means that we are going to quit now.
+        sys.exited = True
     print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
-    if isinstance(threading.currentThread(), threading._MainThread):
-      sys.exited = True
     if exc_type is KeyboardInterrupt:
       return
     better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
