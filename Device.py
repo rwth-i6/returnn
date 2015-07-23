@@ -7,7 +7,6 @@ from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
-import atexit
 import time
 import pickle
 from thread import start_new_thread
@@ -155,8 +154,6 @@ class Device():
       name="Device %s proc" % self.name,
       mustExec=True,
       env_update=env_update)
-    # We should terminate it normally ourselves. However, if we fail, do it via atexit so it is not confused.
-    #atexit.register(self.terminate)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 
