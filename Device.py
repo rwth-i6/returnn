@@ -678,10 +678,8 @@ class Device():
       self.testnet.set_params_by_dict(network.get_params_dict())
     else:
       assert self.main_pid == os.getpid()
-      self.input_queue.send("set-net-params")
-      p = [numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()]
-      for x in p:
-        self.input_queue.send_bytes(x)
+      self.set_net_encoded_params([
+        numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()])
 
   def is_device_proc(self):
     if self.blocking:
