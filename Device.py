@@ -601,11 +601,12 @@ class Device():
         assert isinstance(params, list)
         our_params_testnet = self.testnet.get_all_params_vars()
         assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
-        for param, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+        for param_str, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+          param = numpy.fromstring(param_str, dtype='float32')
           our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
-          #assert our_param_shape == param.shape
+          assert numpy.prod(our_param_shape) == numpy.prod(param.shape)
           #assert numpy.isfinite(param).all()
-          converted = numpy.fromstring(param, dtype='float32').reshape(our_p_train.get_value().shape)
+          converted = param.reshape(our_param_shape)
           our_p_train.set_value(converted)
           our_p_test.set_value(converted)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
