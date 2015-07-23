@@ -23,7 +23,7 @@ class CachedDataset(Dataset):
     self.alloc_intervals = None
     self._seq_start = [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
-    self._seq_lengths = []; """ :type: list[int] """  # uses real seq idx
+    self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
 
   def initialize(self):
     # Init with invalid values (-1).
