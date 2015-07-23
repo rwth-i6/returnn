@@ -64,12 +64,12 @@ class HDFDataset(CachedDataset):
     if self.num_inputs == 0:
       self.num_inputs = fin.attrs[attr_inputPattSize]
     assert self.num_inputs == fin.attrs[attr_inputPattSize], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
-    if self.num_outputs == 0:
-      if attr_numLabels in fin.attrs:
+    if not self.num_outputs:
+      if 'targets/size' in  fin:
+        self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
+      else:
         self.num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
         assert self.num_outputs['classes'] == fin.attrs[attr_numLabels], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs['classes']) + " got " + str(fin.attrs[attr_numLabels]) + ")"
-      else:
-        self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
     if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
         self.ctc_targets = fin['ctcIndexTranscription'][...]

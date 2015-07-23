@@ -440,7 +440,7 @@ class GRULayer(RecurrentLayer):
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class SRULayer(RecurrentLayer):
-  def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, n_dec = 0, **kwargs):
+  def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, carry_time = False, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "sru")
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
@@ -450,6 +450,7 @@ class SRULayer(RecurrentLayer):
     self.set_attr('psize', psize)
     self.set_attr('pact', pact)
     self.set_attr('pdepth', pdepth)
+    self.set_attr('carry_time', carry_time)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)
@@ -493,12 +494,18 @@ class SRULayer(RecurrentLayer):
       else:
         z += self.dot(self.mass * m * x_t.output, W)
 
-    #if not self.W_in and self.depth > 1:
     if self.depth > 1:
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
-    #if self.mode == 'cho':
-    #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
-    #else:
+
+    #if carry_time:
+    #  assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
+    #  name = 'W_T_%s'%self.name
+    #  if not name in self.params:
+    #    self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
+    #  x = T.concatenate([s.output for s in self.sources], axis = -1)
+    #  Tr = T.nnet.sigmoid(self.dot(x, self.params[name]))
+    #  self.output = Tr * self.output + (1 - Tr) * x
+
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
 
     def step(z, i_t, h_p, W_re):
