@@ -497,18 +497,15 @@ class SRULayer(RecurrentLayer):
     if self.depth > 1:
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
 
-    #if carry_time:
-    #  assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
-    #  name = 'W_T_%s'%self.name
-    #  if not name in self.params:
-    #    self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
-    #  x = T.concatenate([s.output for s in self.sources], axis = -1)
-    #  Tr = T.nnet.sigmoid(self.dot(x, self.params[name]))
-    #  self.output = Tr * self.output + (1 - Tr) * x
+    x = T.concatenate([s.output for s in self.sources], axis = -1)
+    if carry_time:
+      assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
+      name = 'W_RT_%s'%self.name
+      W_rt = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
 
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
 
-    def step(z, i_t, h_p, W_re):
+    def step(x, z, i_t, h_p, W_re):
       h_i = h_p if self.depth == 1 else self.make_consensus(h_p, axis = 1)
       i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)) if self.depth == 1 else T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
       if not self.W_in:
@@ -528,6 +525,9 @@ class SRULayer(RecurrentLayer):
         r_t = GR(z[:,:,n_out:2*n_out] + h_x[:,:,n_out:2*n_out])
         h_c = CI(z[:,:,2*n_out:] + r_t * h_x[:,:,2*n_out:])
       h_t = z_t * h_p + (1 - z_t) * h_c
+      if carry_time:
+        Tr = T.nnet.sigmoid(self.dot(x, W_rt))
+        h_t = Tr * h_t + (1 - Tr) * x
       return h_t * i + h_p * (1 - i)
 
     self.out_dec = self.index.shape[0]
@@ -558,7 +558,7 @@ class SRULayer(RecurrentLayer):
                           name = "scan_%s"%self.name,
                           truncate_gradient = self.attrs['truncation'],
                           go_backwards = self.attrs['reverse'],
-                          sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
+                          sequences = [ x[s::self.attrs['sampling']], sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
                           outputs_info = outputs_info,
                           non_sequences = [self.W_re])
       if self.attrs['sampling'] > 1: # time batch dim
