@@ -95,7 +95,7 @@ class Dataset(object):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: (int,int)
+    :rtype: numpy.array[int,int]
     """
     raise NotImplementedError
 
@@ -296,7 +296,7 @@ class Dataset(object):
     :type chunk_size: int
     :type chunk_step: int
     :return: index, and seq start, seq end
-    :rtype: list[(int,int,int)]
+    :rtype: list[(int,numpy.array[int,int],numpy.array[int,int])]
     """
     s = 0
     while self.is_less_than_num_seqs(s):
