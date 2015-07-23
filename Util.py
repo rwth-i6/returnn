@@ -3,6 +3,7 @@ import h5py
 from collections import deque
 import inspect
 import os
+import sys
 import shlex
 import numpy as np
 
@@ -260,15 +261,28 @@ def start_daemon_thread(target, args=()):
   t.daemon = True
   t.start()
 
-def interrupt_main():
-  import sys
-  import thread
+def is_quitting():
   import rnn
-  if rnn.quit:  # ignore if we are already quitting
-    return
-  if getattr(sys, "exited", False):  # set via Debug module
-    return
-  thread.interrupt_main()
+  if rnn.quit:  # via rnn.finalize()
+    return True
+  if getattr(sys, "exited", False):  # set via Debug module when an unexpected SIGINT occurs, or here
+    return True
+  return False
+
+def interrupt_main():
+  import thread
+  import threading
+  is_main_thread = isinstance(threading.currentThread(), threading._MainThread)
+  if is_quitting():  # ignore if we are already quitting
+    if is_main_thread:  # strange to get again in main thread
+      raise Exception("interrupt_main() from main thread while already quitting")
+    # Not main thread. This will just exit the thread.
+    sys.exit(1)
+  sys.exited = True  # Don't do it twice.
+  if is_main_thread:
+    raise KeyboardInterrupt
+  else:
+    thread.interrupt_main()
 
 
 def class_idx_seq_to_features(seq, num_classes):

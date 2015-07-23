@@ -1,4 +1,4 @@
-from TaskSystem import AsyncTask
+from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
 from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
@@ -162,9 +162,8 @@ class Device():
       self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
-    except EOFError:
+    except ProcConnectionDied:
       interrupt_main()
-      sys.exit(1)
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
@@ -545,7 +544,9 @@ class Device():
     while True:
       try:
         cmd = input_queue.recv()
-      except EOFError:
+      except ProcConnectionDied:
+        # Normally, the parent should in all cases correctly terminate us, even if the parent
+        # is terminated via SIGINT, so this is an unexpected case.
         print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
         if log.v[4]:
           sys.excepthook(*sys.exc_info())
@@ -911,18 +912,9 @@ class Device():
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
             return output, outputs_format
-        except EOFError:
+        except ProcConnectionDied:
           # The process is dying or died.
           return None, None
-        except IOError, e:
-          if e.errno == errno.EINTR:
-            # http://stackoverflow.com/questions/14136195
-            # We can just keep trying.
-            print >> log.v3, "Device proc %s gave us an EINTR." % self.name
-            time.sleep(1)
-          else:
-            # The process is dying or died.
-            return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
       return None, None
@@ -932,9 +924,10 @@ class Device():
       assert self.main_pid == os.getpid()
       try:
         self.input_queue.send('stop')
-      except IOError:
+      except ProcConnectionDied:
         pass
-      self.proc.join()
+      else:
+        self.proc.join()
       self.proc.terminate()
 
   # device properties

@@ -13,6 +13,7 @@ import pickle
 import types
 import marshal
 from importlib import import_module
+import errno
 
 
 def execInMainProc(func):
@@ -459,6 +460,10 @@ class ExecingProcess:
       raise SystemExit
 
 
+class ProcConnectionDied(Exception):
+  pass
+
+
 class ExecingProcess_ConnectionWrapper(object):
   """
   Wrapper around _multiprocessing.Connection.
@@ -477,23 +482,55 @@ class ExecingProcess_ConnectionWrapper(object):
   def __getattr__(self, attr): return getattr(self.conn, attr)
 
   def _check_closed(self):
-    if self.conn.closed: raise EOFError
+    if self.conn.closed: raise ProcConnectionDied
   def _check_writable(self):
-    if not self.conn.writable: raise EOFError
+    if not self.conn.writable: raise ProcConnectionDied
   def _check_readable(self):
-    if not self.conn.readable: raise EOFError
+    if not self.conn.readable: raise ProcConnectionDied
+
+  def poll(self, *args, **kwargs):
+    while True:
+      try:
+        return self.conn.poll(*args, **kwargs)
+      except IOError as e:
+        if e.errno == errno.EINTR:
+          # http://stackoverflow.com/questions/14136195
+          # We can just keep trying.
+          pass
+        raise ProcConnectionDied
+      except EOFError:
+        raise ProcConnectionDied
+
+  def send_bytes(self, value):
+    try:
+      self.conn.send_bytes()
+    except (EOFError, IOError):
+      raise ProcConnectionDied
 
   def send(self, value):
     self._check_closed()
     self._check_writable()
     buf = StringIO()
     Pickler(buf).dump(value)
-    self.conn.send_bytes(buf.getvalue())
+    self.send_bytes(buf.getvalue())
+
+  def recv_bytes(self):
+    while True:
+      try:
+        return self.conn.recv_bytes()
+      except IOError as e:
+        if e.errno == errno.EINTR:
+          # http://stackoverflow.com/questions/14136195
+          # We can just keep trying.
+          pass
+        raise ProcConnectionDied
+      except EOFError:
+        raise ProcConnectionDied
 
   def recv(self):
     self._check_closed()
     self._check_readable()
-    buf = self.conn.recv_bytes()
+    buf = self.recv_bytes()
     f = StringIO(buf)
     res = Unpickler(f).load()
     return res
