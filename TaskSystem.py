@@ -14,6 +14,7 @@ import types
 import marshal
 from importlib import import_module
 import errno
+import time
 
 
 def execInMainProc(func):
@@ -419,7 +420,17 @@ class ExecingProcess:
     if not self.is_alive():
       return
     if timeout:
-      raise NotImplementedError
+      # Simple and stupid implementation.
+      while self.is_alive():
+        if timeout < 0:
+          break
+        if timeout < 1.0:
+          time.sleep(timeout)
+          break
+        else:
+          time.sleep(1)
+          timeout -= 1
+      return
     self._wait()
 
   Verbose = False

@@ -7,7 +7,7 @@ from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
-import errno
+import atexit
 import time
 import pickle
 from thread import start_new_thread
@@ -155,6 +155,8 @@ class Device():
       name="Device %s proc" % self.name,
       mustExec=True,
       env_update=env_update)
+    # We should terminate it normally ourselves. However, if we fail, do it via atexit so it is not confused.
+    atexit.register(self.terminate)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 
@@ -920,15 +922,20 @@ class Device():
       return None, None
 
   def terminate(self):
-    if not self.blocking and self.proc.is_alive():
-      assert self.main_pid == os.getpid()
-      try:
-        self.input_queue.send('stop')
-      except ProcConnectionDied:
-        pass
-      else:
-        self.proc.join()
-      self.proc.terminate()
+    if self.blocking:
+      return
+    if not self.proc:
+      return
+    if not self.proc.is_alive():
+      return
+    assert self.main_pid == os.getpid()
+    try:
+      self.input_queue.send('stop')
+    except ProcConnectionDied:
+      pass
+    self.proc.join(timeout=10)
+    self.proc.terminate()
+    self.proc = None
 
   # device properties
   def get_device_shaders(self): return self.attributes[0]

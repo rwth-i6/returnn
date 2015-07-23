@@ -343,7 +343,7 @@ def init(configFilename, commandLineOptions):
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
-  print >> log.v3, "CRNN starting up"
+  print >> log.v3, "CRNN starting up, pid %i" % os.getpid()
   initFaulthandler()
   initIPythonKernel()
   initConfigJson()
