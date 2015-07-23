@@ -267,7 +267,7 @@ class Layer(Container):
     self.mass = T.constant(1., name = "mass_%s" % self.name)
     if mask == "unity" or dropout == 0:
       self.masks = [None] * len(self.sources)
-    elif mask == "dropout":
+    elif mask == "dropout" or (mask == "none" and dropout > 0):
       assert 0.0 < dropout < 1.0
       # If we apply this mass during training then we don't need any mask or mass for testing.
       # The expected weight should be 1 in
