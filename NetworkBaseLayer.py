@@ -275,7 +275,10 @@ class Layer(Container):
       # so mass has to be 1 / (1 - dropout).
       self.mass = T.constant(1.0 / (1.0 - dropout))
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
+      if self.depth > 1:
+        self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
+      else:
+        self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
     else:
