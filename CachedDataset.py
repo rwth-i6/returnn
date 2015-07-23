@@ -27,9 +27,6 @@ class CachedDataset(Dataset):
     self.targets = {}
 
   def initialize(self):
-    # Init with invalid values (-1).
-    #self.targets = {}# numpy.zeros((self.get_num_timesteps(),), dtype=theano.config.floatX) - 1
-
     super(CachedDataset, self).initialize()
 
     # Calculate cache sizes.
