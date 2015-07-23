@@ -88,6 +88,8 @@ class HDFDataset(CachedDataset):
           self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
         else:
           self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
+    else:
+      self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
     fin.close()
 
   def _load_seqs(self, start, end):
