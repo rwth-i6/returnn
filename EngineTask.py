@@ -558,7 +558,7 @@ class TrainTaskThread(TaskThread):
           consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices)], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
-        encoded.append(q.tostring())
+        encoded.append(q)
       if len(hypnets) > 1:
         for device in self.devices:
           device.set_net_encoded_params(encoded)
