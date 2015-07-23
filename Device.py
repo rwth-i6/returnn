@@ -659,14 +659,14 @@ class Device():
 
   def set_net_encoded_params(self, network_params):
     """
-    :type network_params: list[str]
+    :type network_params: list[numpy.ndarray]
     This updates *all* params, not just the train params.
     """
     assert not self.blocking
     self.input_queue.send("set-net-params")
     self.input_queue.send(len(network_params))
     for p in network_params:
-      self.input_queue.send_bytes(p)
+      self.input_queue.send_bytes(p.astype(dtype='float32').tostring())
     self.input_queue.send("end-set-net-params")
 
   def set_net_params(self, network):
@@ -680,7 +680,7 @@ class Device():
     else:
       assert self.main_pid == os.getpid()
       self.set_net_encoded_params([
-        numpy.asarray(p.get_value()).tostring() for p in network.get_all_params_vars()])
+        numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
 
   def is_device_proc(self):
     if self.blocking:
