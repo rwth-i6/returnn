@@ -602,12 +602,14 @@ class Device():
           our_p_test.set_value(converted)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
+        output_queue.send(len(network_params))
         for p in network_params:
           output_queue.send_bytes(p)
+        output_queue.send("end-get-net-train-params")
       elif cmd == "sync-net-train-params":
         network_params = []
         for p in self.trainnet.get_all_params_vars():
-          network_params.append(numpy.asarray(p.get_value()).tostring())
+          network_params.append(numpy.asarray(p.get_value(), dtype='float32').tostring())
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -640,12 +642,13 @@ class Device():
       self.input_queue.send("get-net-train-params")
       r = self.output_queue.recv()
       assert r == "net-train-params"
-      res = []
-      raw = []
+      param_count = self.output_queue.recv()
+      assert param_count == len(network.get_all_params_vars())
+      raw = [self.output_queue.recv_bytes() for i in range(param_count)]
+      assert self.output_queue.recv() == "end-get-net-train-params"
       vars = network.get_all_params_vars()
-      for p in vars:
-        raw.append(self.output_queue.recv_bytes())
-      for p,q in zip(vars,raw):
+      res = []
+      for p,q in zip(vars, raw):
         res.append(numpy.fromstring(q, dtype='float32').reshape(p.get_value().shape))
       return res
 
