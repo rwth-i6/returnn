@@ -345,7 +345,8 @@ def init(configFilename, commandLineOptions):
   initLog()
   print >> log.v3, "CRNN starting up, pid %i" % os.getpid()
   initFaulthandler()
-  initIPythonKernel()
+  if config.bool('ipython', False):
+    initIPythonKernel()
   initConfigJson()
   maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
