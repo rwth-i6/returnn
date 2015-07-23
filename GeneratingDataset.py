@@ -15,6 +15,8 @@ class GeneratingDataset(Dataset):
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
+    if isinstance(output_dim, int):
+      output_dim = {"classes": output_dim}
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
 
@@ -99,7 +101,8 @@ class GeneratingDataset(Dataset):
   def get_data(self, sorted_seq_idx):
     return self._get_seq(sorted_seq_idx).features
 
-  def get_targets(self, sorted_seq_idx):
+  def get_targets(self, target, sorted_seq_idx):
+    assert target == "classes"
     return self._get_seq(sorted_seq_idx).targets
 
   def get_ctc_targets(self, sorted_seq_idx):

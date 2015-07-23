@@ -35,7 +35,7 @@ class ExternSprintDataset(SprintDataset):
     # There is no generic way to see whether Python is exiting.
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
-    #atexit.register(self.exit_handler)
+    atexit.register(self.exit_handler)
     self.init_epoch()
 
   def _exit_child(self, wait_thread=True):

@@ -1,4 +1,4 @@
-import atexit
+
 import numpy
 import sys
 import threading

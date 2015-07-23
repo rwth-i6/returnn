@@ -43,7 +43,7 @@ class Dataset(object):
   def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0):
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
-    self.num_outputs = 0
+    self.num_outputs = None; " :type: dict[str,int] "
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.timestamps = []
@@ -95,7 +95,10 @@ class Dataset(object):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: (int,int)
+    :rtype: numpy.array[int,int]
+    :returns the len of the input features and the len of the target sequence.
+    For multiple target seqs, it is expected that they all have the same len.
+    We support different input/target len for seq2seq/ctc and other models.
     """
     raise NotImplementedError
 
@@ -296,7 +299,7 @@ class Dataset(object):
     :type chunk_size: int
     :type chunk_step: int
     :return: index, and seq start, seq end
-    :rtype: list[(int,int,int)]
+    :rtype: list[(int,numpy.array[int,int],numpy.array[int,int])]
     """
     s = 0
     while self.is_less_than_num_seqs(s):
@@ -368,17 +371,28 @@ class DatasetSeq:
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param numpy.ndarray targets: format 1d (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] targets: name -> format 1d (time) (idx of output-feature)
     :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
     """
+    assert isinstance(seq_idx, int)
+    assert isinstance(features, numpy.ndarray)
+    if isinstance(targets, numpy.ndarray):  # old format
+      targets = {"classes": targets}
+    assert isinstance(targets, dict)
+    assert "classes" in targets
+    assert isinstance(targets["classes"], numpy.ndarray)
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
     self.ctc_targets = ctc_targets
 
   @property
+  def default_target(self):
+    return self.targets["classes"]
+
+  @property
   def num_frames(self):
-    return self.features.shape[0]
+    return numpy.array([self.features.shape[0], self.default_target.shape[0]])
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx
