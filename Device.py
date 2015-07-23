@@ -708,7 +708,8 @@ class Device():
 
   def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0, pad=False):
     """
-    :param list[int] shape: format (time,batch,features)
+    :param list[int] input_shape: format (time,batch,features)
+    :type targets: list[str]
     :type max_ctc_length: int
     """
     assert len(input_shape) == 3

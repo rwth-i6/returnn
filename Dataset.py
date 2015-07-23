@@ -258,8 +258,15 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def get_target_list(self):
+    return ["classes"]
+
   def get_target_dim(self, target):
-    raise NotImplementedError
+    """
+    :type target: str
+    :return: 1 for hard labels, num_outputs[target] for soft labels
+    """
+    return 1
 
   def have_seqs(self):
     return self.num_seqs > 0
