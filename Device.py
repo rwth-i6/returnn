@@ -595,10 +595,9 @@ class Device():
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
-        params = []
-        for p in our_params_trainnet:
-          params.append(input_queue.recv_bytes())
-        assert isinstance(params, list)
+        params_len = input_queue.recv()
+        params = [input_queue.recv_bytes() for i in range(params_len)]
+        assert input_queue.recv() == "end-set-net-params"
         our_params_testnet = self.testnet.get_all_params_vars()
         assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
         for param_str, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
@@ -665,8 +664,10 @@ class Device():
     """
     assert not self.blocking
     self.input_queue.send("set-net-params")
+    self.input_queue.send(len(network_params))
     for p in network_params:
       self.input_queue.send_bytes(p)
+    self.input_queue.send("end-set-net-params")
 
   def set_net_params(self, network):
     """
