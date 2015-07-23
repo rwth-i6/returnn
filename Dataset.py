@@ -95,7 +95,7 @@ class Dataset(object):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: int
+    :rtype: (int,int)
     """
     raise NotImplementedError
 

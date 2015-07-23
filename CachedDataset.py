@@ -393,7 +393,7 @@ class CachedDataset(Dataset):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: int
+    :rtype: (int,int)
     """
     real_seq_idx = self._seq_index[sorted_seq_idx]
     return self._seq_lengths[real_seq_idx]
@@ -401,7 +401,7 @@ class CachedDataset(Dataset):
   def get_seq_start(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: int
+    :rtype: (int,int)
     """
     return self._seq_start[sorted_seq_idx]
 
