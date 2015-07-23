@@ -491,7 +491,7 @@ class Device():
       rnn.initBetterExchook()
       rnn.config = config
       rnn.initLog()
-      print >> log.v3, "Device %s proc starting up" % device
+      print >> log.v3, "Device %s proc starting up, pid %i" % (device, os.getpid())
       print >> log.v4, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJson()
