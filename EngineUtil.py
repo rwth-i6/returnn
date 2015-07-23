@@ -23,12 +23,16 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
     return False, len(batches)
   assert shape[0] * shape[1] > 0
 
-  output_shape = { k : shape[:] for k in dataset.num_outputs }
+  output_shape = { k : shape[:] for k in dataset.get_target_list() }
   for k in output_shape:
     if dataset.get_target_dim(k) > 1:
       output_shape[k] += [dataset.get_target_dim(k)]
 
-  device.alloc_data(shape + [dataset.num_inputs * dataset.window], output_shape, dataset.targets, dataset.get_max_ctc_length(), pad=pad_batches)
+  device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window],
+                    output_shape=output_shape,
+                    targets=dataset.get_target_list(),
+                    max_ctc_length=dataset.get_max_ctc_length(),
+                    pad=pad_batches)
 
   offset_slice = 0
   for batch in batches:
@@ -46,7 +50,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
         device.data[o:o + l[0], q] = data[seq.seq_start_frame[0]:seq.seq_end_frame[0]]
-        for target in dataset.targets:
+        for target in dataset.get_target_list():
           targets = dataset.get_targets(target, seq.seq_idx)
           if targets is not None:
             device.targets[target][o:o + l[1], q] = targets[seq.seq_start_frame[1]:seq.seq_end_frame[1]]
