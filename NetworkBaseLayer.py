@@ -148,7 +148,6 @@ class Container(object):
     }
     values = eval(self.bias_init, eval_locals)
     values = numpy.asarray(values, dtype=theano.config.floatX)
-    assert values.shape == (n,)
     return theano.shared(value=values, borrow=True, name=name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
@@ -231,12 +230,15 @@ class Container(object):
 
 
 class SourceLayer(Container):
-  def __init__(self, n_out, x_out, sparse = False, name=""):
+  def __init__(self, n_out, x_out, delay = 0, sparse = False, name=""):
     super(SourceLayer, self).__init__(layer_class='source', name=name)
-    self.output = x_out #x_out.dimshuffle('x',0,1,2)
+    if not delay:
+      self.output = x_out
+    else:
+      self.output = T.inc_subtensor(T.zeros_like(x_out)[delay:], x_out[:-delay])
     self.set_attr('n_out', n_out)
     self.set_attr('sparse', sparse)
-
+    self.set_attr('delay', delay)
 
 class Layer(Container):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, **kwargs):

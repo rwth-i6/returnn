@@ -454,7 +454,7 @@ class SRULayer(RecurrentLayer):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)
     if n_dec: self.set_attr('n_dec', n_dec)
-    if False and self.depth > 1:
+    if self.depth > 1:
       value = numpy.zeros((self.depth, n_out * 3), dtype = theano.config.floatX)
       value[:,n_out:2*n_out] = 1
     else:
@@ -468,10 +468,10 @@ class SRULayer(RecurrentLayer):
       n_re *= self.depth
     self.Wp = []
     if psize:
-      self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name), name = "Wp_0_%s"%self.name) ]
+      self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1), name = "Wp_0_%s"%self.name) ]
       for i in xrange(1, pdepth):
-        self.Wp.append(self.add_param(self.create_random_uniform_weights(psize * self.depth, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name)), name = "Wp_%d_%s"%(i, self.name)))
-      W_re = self.create_random_uniform_weights(psize * self.depth, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
+        self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
+      W_re = self.create_random_uniform_weights(psize, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
     else:
       W_re = self.create_random_uniform_weights(n_re, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
     #self.params["W_re_%s" % self.name] = W_re
@@ -493,7 +493,8 @@ class SRULayer(RecurrentLayer):
       else:
         z += self.dot(self.mass * m * x_t.output, W)
 
-    if not self.W_in and self.depth > 1:
+    #if not self.W_in and self.depth > 1:
+    if self.depth > 1:
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
     #if self.mode == 'cho':
     #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
@@ -506,8 +507,10 @@ class SRULayer(RecurrentLayer):
       if not self.W_in:
         z += self.b
       for W in self.Wp:
-        h_i = self.make_consensus(pact(self.dot(h_i, W)), axis = 1)
+        h_i = pact(T.dot(h_i, W))
       h_x = self.dot(h_i, W_re)
+      #if self.depth > 1:
+      #  h_x = self.make_consensus(h_x, axis = 1)
       #h_x = h_q # if self.depth == 1 else self.make_consensus(h_q, axis = 1)
       if self.depth == 1:
         z_t = GU(z[:,:n_out] + h_x[:,:n_out])
@@ -571,7 +574,7 @@ class SRALayer(RecurrentLayer):
     self.set_attr('psize', psize)
     self.set_attr('pact', pact)
     self.set_attr('pdepth', pdepth)
-    self.set_attr('n_out', n_out * 2)
+    self.set_attr('n_out', n_out)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)
@@ -585,7 +588,7 @@ class SRALayer(RecurrentLayer):
     #self.b.set_value(value)
     self.b = theano.shared(value=numpy.zeros((n_out,), dtype=theano.config.floatX), borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
-    n_re = n_out * 2 #psize if psize else n_out
+    n_re = n_out #psize if psize else n_out
     if self.attrs['consensus'] == 'flat':
       n_re *= self.depth
     self.Wp = []
@@ -620,10 +623,13 @@ class SRALayer(RecurrentLayer):
     #if self.mode == 'cho':
     #  CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     #else:
-    CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
+    #CI, GR, GU = [T.tanh, T.tanh, T.nnet.sigmoid]
+    CI, GR, GU = [T.tanh, T.tanh, T.nnet.sigmoid]
+
+    self.sp = self.add_param(theano.shared(value=numpy.asarray(self.rng.uniform(low=-1.0, high=1.0, size=(n_out,)), dtype=theano.config.floatX), borrow=True, name="sp_%s"%self.name), name="sp_%s"%self.name)
 
     def step(z, i_t, s_p, h_p):
-      h_q = T.concatenate([s_p, h_p], axis = -1)
+      h_q = h_p #T.concatenate([CI(s_p), h_p], axis = -1)
       h_i = h_q if self.depth == 1 else self.make_consensus(h_q, axis = 1)
       i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)) if self.depth == 1 else T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
       if not self.W_in:
@@ -638,8 +644,8 @@ class SRALayer(RecurrentLayer):
       else:
         u_t = GU(h_x[:,:,:n_out])
         r_t = GR(h_x[:,:,n_out:])
-      s_t = r_t * s_p
-      h_t = u_t * z
+      s_t = r_t * s_p + r_t * self.sp #s_p  #+ 1 - u_t
+      h_t = CI(u_t * z + s_t)
       return s_t * i + s_p * (1 - i), h_t * i + h_p * (1 - i)
 
     self.out_dec = self.index.shape[0]
@@ -662,7 +668,9 @@ class SRALayer(RecurrentLayer):
       else:
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out), T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
+          #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out), T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
         else:
+          #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](1), self.sources[0].output.shape[1], self.depth, n_out), T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out), T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
 
       [state, act], _ = theano.scan(step,
@@ -670,7 +678,7 @@ class SRALayer(RecurrentLayer):
                           name = "scan_%s"%self.name,
                           truncate_gradient = self.attrs['truncation'],
                           go_backwards = self.attrs['reverse'],
-                          sequences = [ CI(sequences[s::self.attrs['sampling']]), T.cast(index, theano.config.floatX) ],
+                          sequences = [ sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
                           outputs_info = outputs_info)
       if self.attrs['sampling'] > 1: # time batch dim
         if s == 0:
@@ -681,4 +689,5 @@ class SRALayer(RecurrentLayer):
         totact = act
     self.state = state
     self.act = totact #[::-(2 * self.attrs['reverse'] - 1)] # tbdm
-    self.make_output(T.concatenate([self.state[::-(2 * self.attrs['reverse'] - 1)], self.act[::-(2 * self.attrs['reverse'] - 1)]], axis = -1))
+    self.make_output(self.act)
+    #self.make_output(T.concatenate([CI(self.state[::-(2 * self.attrs['reverse'] - 1)]), self.act[::-(2 * self.attrs['reverse'] - 1)]], axis = -1))

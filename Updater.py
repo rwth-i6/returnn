@@ -173,7 +173,7 @@ class Updater:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = True #False #True #False #True
+          self.use_adagrad = False #True #False #True #False #True
           self.use_adadelta = False #True #True
           self.skip_nan_inf = False
           self.start_var_reduction = 0
