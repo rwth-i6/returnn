@@ -557,7 +557,7 @@ class Device():
         network_description = input_queue.recv()
         train_param_args = input_queue.recv()
         if self.need_reinit(network_description, train_param_args):
-          self.initialize(config, network_description, train_param_args)
+          self.initialize(config, device_update, network_description, train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
