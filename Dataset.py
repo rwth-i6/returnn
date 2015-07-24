@@ -402,6 +402,10 @@ class DatasetSeq:
 
   @property
   def num_frames(self):
+    """
+    :rtype: numpy.array[int,int]
+    :returns the features frame len, and the target frame len
+    """
     return numpy.array([self.features.shape[0], self.default_target.shape[0]])
 
   def __repr__(self):
