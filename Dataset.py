@@ -293,12 +293,12 @@ class Dataset(object):
     # in advance can handle this somehow.
     return n < self.num_seqs
 
-  def calculate_priori(self):
+  def calculate_priori(self, target="classes"):
     priori = numpy.zeros((self.num_outputs,), dtype=theano.config.floatX)
     i = 0
     while self.is_less_than_num_seqs(i):
       self.load_seqs(i, i + 1)
-      for t in self.get_targets(i):
+      for t in self.get_targets(target, i):
         priori[t] += 1
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
