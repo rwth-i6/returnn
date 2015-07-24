@@ -1,8 +1,5 @@
 
 from Dataset import Dataset, DatasetSeq
-from random import randint
-from random import random as rnd01
-import random
 from Util import class_idx_seq_to_features
 import numpy
 
@@ -19,6 +16,7 @@ class GeneratingDataset(Dataset):
       output_dim = {"classes": output_dim}
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
+    self.random = numpy.random.RandomState(0)
 
   def init_seq_order(self, epoch=None):
     """
@@ -26,6 +24,7 @@ class GeneratingDataset(Dataset):
     This is called when we start a new epoch, or at initialization.
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
+    self.random.seed(epoch or 1)
     self._num_timesteps = 0
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
@@ -124,26 +123,24 @@ class Task12AXDataset(GeneratingDataset):
       output_dim=len(self._output_classes),
       **kwargs)
 
-  @classmethod
-  def get_random_seq_len(cls):
-    return randint(10, 100)
+  def get_random_seq_len(self):
+    return self.random.randint(10, 100)
 
-  @classmethod
-  def generate_input_seq(cls, seq_len):
+  def generate_input_seq(self, seq_len):
     """
     Somewhat made up probability distribution.
     Try to make in a way that at least some "R" will occur in the output seq.
     Otherwise, "R"s are really rare.
     """
-    seq = random.choice(["", "1", "2"])
+    seq = self.random.choice(["", "1", "2"])
     while len(seq) < seq_len:
-      if rnd01() < 0.5:
-        seq += random.choice("12")
-      if rnd01() < 0.9:
-        seq += random.choice(["AX", "BY"])
-      while rnd01() < 0.5:
-        seq += random.choice(cls._input_classes)
-    return list(map(cls._input_classes.index, seq[:seq_len]))
+      if self.random.uniform() < 0.5:
+        seq += self.random.choice(list("12"))
+      if self.random.uniform() < 0.9:
+        seq += self.random.choice(["AX", "BY"])
+      while self.random.uniform() < 0.5:
+        seq += self.random.choice(list(self._input_classes))
+    return list(map(self._input_classes.index, seq[:seq_len]))
 
   @classmethod
   def make_output_seq(cls, input_seq):
@@ -170,25 +167,23 @@ class Task12AXDataset(GeneratingDataset):
       output_seq_str += o
     return list(map(cls._output_classes.index, output_seq_str))
 
-  @classmethod
-  def estimate_output_class_priors(cls, num_trials, seq_len=10):
+  def estimate_output_class_priors(self, num_trials, seq_len=10):
     """
     :type num_trials: int
     :rtype: (float, float)
     """
     count_l, count_r = 0, 0
     for i in range(num_trials):
-      input_seq = cls.generate_input_seq(seq_len)
-      output_seq = cls.make_output_seq(input_seq)
+      input_seq = self.generate_input_seq(seq_len)
+      output_seq = self.make_output_seq(input_seq)
       count_l += output_seq.count(0)
       count_r += output_seq.count(1)
     return float(count_l) / (num_trials * seq_len), float(count_r) / (num_trials * seq_len)
 
-  @classmethod
-  def generate_seq(cls, seq_idx):
-    seq_len = cls.get_random_seq_len()
-    input_seq = cls.generate_input_seq(seq_len)
-    output_seq = cls.make_output_seq(input_seq)
-    features = class_idx_seq_to_features(input_seq, num_classes=len(cls._input_classes))
+  def generate_seq(self, seq_idx):
+    seq_len = self.get_random_seq_len()
+    input_seq = self.generate_input_seq(seq_len)
+    output_seq = self.make_output_seq(input_seq)
+    features = class_idx_seq_to_features(input_seq, num_classes=len(self._input_classes))
     targets = numpy.array(output_seq)
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
