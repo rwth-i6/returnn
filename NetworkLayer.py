@@ -1,6 +1,6 @@
 
 from NetworkHiddenLayer import ForwardLayer
-from NetworkRecurrentLayer import RecurrentLayer
+from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
 from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, GRULayer, SRULayer, SRALayer
 
 
@@ -12,6 +12,7 @@ LayerClasses = {
   'gru': GRULayer,
   'sru': SRULayer,
   'sra': SRALayer,
+  'rec' : RecurrentUnitLayer,
   'lstm_opt': OptimizedLstmLayer,
 }
 
