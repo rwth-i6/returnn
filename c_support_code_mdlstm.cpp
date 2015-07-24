@@ -134,7 +134,8 @@ __global__ void tanh_kernel(float * dst, int len)
 	}
 }
 
-__global__ void lstm_kernel(float * data, const float * old_state, float * output, int n_cells, int n_batch)
+__global__ void lstm_kernel(float * data, const float * old_state, bool old_state_strided,
+ float * output, int n_cells, int n_batch)
 {
 	//layout: 
 	//data[0*n_cells..1*n_cells-1] : input gate
@@ -154,9 +155,13 @@ __global__ void lstm_kernel(float * data, const float * old_state, float * outpu
 		float fgtGate = 1.f / (1.f + expf(-data[start + n_cells]));
 		float outGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
 		float state = inpGate * (4.f / (1.f + expf(-data[start + 3 * n_cells])) - 2.f);
-		if (old_state)
+		if(old_state_strided)
 		{
-			state += fgtGate * old_state[start];
+		    state += fgtGate * old_state[start];
+		}
+		else
+		{
+		    state += fgtGate * old_state[idx];
 		}
 
 		//cell output
@@ -171,7 +176,8 @@ __global__ void lstm_kernel(float * data, const float * old_state, float * outpu
 	}
 }
 
-__global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * last_state, const float * Y, int n_cells, int n_batch)
+__global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * last_state,
+  const float * Y, int n_cells, int n_batch)
 {
 	//layout: 
 	//delta[0*n_cells..1*n_cells-1] : input gate
@@ -253,7 +259,7 @@ void do_tanh(CudaNdarray * a, int y, int x)
 	tanh_kernel<<<64, 512>>>(data_a, size);
 }
 
-void do_lstm(CudaNdarray * H, CudaNdarray * out, CudaNdarray * prev, int y, int x)
+void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, int y, int x)
 {		
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
@@ -263,10 +269,11 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, CudaNdarray * prev, int y, int 
 	int n_batch = dims[0];
 	
 	float * data_H = data_ptr(H, y, x);
-	float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : prev;
+	const float * data_prev = CudaNdarray_DEV_DATA(prev);
+	const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
 	float * data_out = data_ptr(out, y, x);	
 	//TODO tune launch configuration
-	lstm_kernel<<<64, 512>>>(data_H, data_old_state, data_out, n_cells, n_batch);
+	lstm_kernel<<<64, 512>>>(data_H, data_old_state, x > 0, data_out, n_cells, n_batch);
 }
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
