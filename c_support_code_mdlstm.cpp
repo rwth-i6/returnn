@@ -154,7 +154,7 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 		float inpGate = 1.f / (1.f + expf(-data[start]));
 		float fgtGate = 1.f / (1.f + expf(-data[start + n_cells]));
 		float outGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
-		float state = inpGate * (4.f / (1.f + expf(-data[start + 3 * n_cells])) - 2.f);
+		float state = inpGate * tanhf(data[start + 3 * n_cells]);
 		if(old_state_strided)
 		{
 		    state += fgtGate * old_state[start];
@@ -165,7 +165,7 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 		}
 
 		//cell output
-		output[idx] = outGate * (4.f / (1.f + expf(-state)) - 2.f);
+		output[idx] = outGate * tanhf(state);
 
 		data[start] = inpGate;
 		data[start + n_cells] = fgtGate;
@@ -219,7 +219,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		delta[start + 2 * n_cells] = outGate * (1.f - outGate) * gc * eps;
 		
 		//epsilon_c
-		float epsilon_c = (gc + 2.f) * (1.f - (gc + 2.f) / 4.f) * outGate * eps;
+		float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
 		if (next_epsilon)
 		{
 			epsilon_c += next_epsilon[idx];
@@ -227,7 +227,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		epsilon[idx] = epsilon_c * fgtGate;
 
 		//delta_cell
-		delta[start + 3 * n_cells] = inpGate * (gzc + 2.f) * (1.f - (gzc + 2.f) / 4.f) * epsilon_c;
+		delta[start + 3 * n_cells] = inpGate * (1.f - (gzc * gzc)) * epsilon_c;
 
 		//delta_forget
 		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * lastState * epsilon_c;
