@@ -370,6 +370,9 @@ class TaskThread(threading.Thread):
               deviceRuns[i] = None
               #print self.devices[i].name, "tot", time.time() - self.devices[i].se
 
+        if crashed:
+          break
+
         if run_frames >= self.eval_batch_size:
           if all(dev == None for dev in deviceRuns):
             #print "train:", time.time() - se
