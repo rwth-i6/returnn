@@ -369,7 +369,7 @@ class FastLstmLayer(RecurrentLayer):
                                                      s.attrs['n_out'] + n_out + n_out * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
-    self.act = LSTMOpInstance(self.sources[0].output, self.W_in[0], self.W_re,  self.b)[0]
+    self.act = LSTMOpInstance(self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)], self.W_in[0], self.W_re,  self.b)[0]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
