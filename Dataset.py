@@ -378,7 +378,7 @@ class DatasetSeq:
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param dict[str,numpy.ndarray] targets: name -> format 1d (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] | numpy.ndarray targets: name -> format 1d (time) (idx of output-feature)
     :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
     """
     assert isinstance(seq_idx, int)
