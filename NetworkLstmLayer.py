@@ -4,6 +4,7 @@ from theano import tensor as T
 import theano
 from NetworkRecurrentLayer import RecurrentLayer
 from ActivationFunctions import strtoact
+from FastLSTM import LSTMOpInstance
 
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
@@ -54,6 +55,9 @@ class LstmLayer(RecurrentLayer):
     if sharpgates != 'none' and sharpgates != "shared" and sharpgates != "single":
       self.sharpness = self.add_param(self.sharpness, 'gate_scaling')
 
+    #set default value if not set
+    if not 'optimization' in self.attrs:
+      self.attrs['optimization'] = 'speed'
     assert self.attrs['optimization'] in ['memory', 'speed']
     if self.attrs['optimization'] == 'speed':
       z = self.b
@@ -335,6 +339,38 @@ class OptimizedLstmLayer(RecurrentLayer):
       #self.constraints = self.attrs['varreg'] * (2.0 * T.sqrt(T.var(energy)) - 6.0)**2
       self.constraints =  self.attrs['varreg'] * (T.mean(energy) - T.sqrt(6.)) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
     return super(OptimizedLstmLayer, self).make_constraints()
+
+#warning: highly experimental (not recommended for productive use yet)
+#showed a speedup from 81 sec/epoch to 11 sec/epoch on demo dataset
+#TODO:
+# 1) !! use index vector for different sequence lengths
+# 2) change activation functions to be consistent with the other implementations
+# 3) make sure implementations are compatible
+# 4) support multiple sources, dropout, sharpgates, ...
+# 5) use two CUDA streams for concurrent bidirectional execution
+class FastLstmLayer(RecurrentLayer):
+  def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
+    kwargs.setdefault("layer_class", "lstm_fast")
+    kwargs.setdefault("activation", "sigmoid")
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_out * 4
+    super(FastLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
+    self.b.set_value(value)
+    n_re = n_out
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    assert len(self.sources) == 1
+    W_re = self.create_random_uniform_weights(n_re, n_out * 4, n_in + n_out * 4,
+                                              name="W_re_%s" % self.name)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4,
+                                                     s.attrs['n_out'] + n_out + n_out * 4,
+                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+
+    self.act = LSTMOpInstance(self.sources[0].output, self.W_in[0], self.W_re, self.b)[0]
+    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
 class GRULayer(RecurrentLayer):
