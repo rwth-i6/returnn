@@ -72,7 +72,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     inplace = "true" if self.inplace else "false"
     return """
 
-    std::cout << "LSTMOpGrad called" << std::endl;
+    // std::cout << "LSTMOpGrad called" << std::endl;
     if(!%(inplace)s)
     {
       std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
@@ -88,8 +88,8 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(%(Db)s);
     }
 
-    CudaNdarray * epsilon = nullptr;
-    CudaNdarray * delta = nullptr;
+    CudaNdarray * epsilon = 0;
+    CudaNdarray * delta = 0;
     if(%(inplace)s)
     {
       epsilon = %(DZ)s;
@@ -192,7 +192,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(%(H)s);
     }
 
-    std::cout << "LSTMOp called" << std::endl;
+    //std::cout << "LSTMOp called" << std::endl;
 
     const int * X_dim = CudaNdarray_HOST_DIMS(%(X)s);
     const int * W_dim = CudaNdarray_HOST_DIMS(%(W)s);
