@@ -130,8 +130,10 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     //Db = (1 ... 1) * delta
     %(Db)s = sumOverAllButLastDimensions(delta);
 
-    //TODO: calculate gradient w.r.t. c!
-    %(Dc)s = CudaNdarray_zeros_like(%(c)s);
+    %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
+    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
+    cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
+      Z_dim[1]*Z_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
     if(!%(inplace)s)
     {
@@ -267,12 +269,14 @@ if __name__ == '__main__':
   W = T.fmatrix('W')
   V_h = T.fmatrix('V_h')
   b = T.fvector('b')
-  Z, H = LSTMOpInstance(X, W, V_h, b)
+  c = T.fmatrix('c') #initial state
+  Z, H = LSTMOpInstance(X, W, V_h, c, b)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
   Db = T.grad(Z.sum(), b)
-  f = theano.function(inputs=[X, W, V_h, b], outputs=[Z, DX, DW, DV_h, Db])
+  Dc = T.grad(Z.sum(), c)
+  f = theano.function(inputs=[X, W, V_h, c, b], outputs=[Z, DX, DW, DV_h, Dc, Db])
   #g = theano.function(inputs=[X, W, V_h, b], outputs=[Z,H])
 
   X_val_mat0 = 0.1 * numpy.array([[1,2,3], [4,5,6]], dtype='float32')
@@ -292,6 +296,7 @@ if __name__ == '__main__':
                                [-3,7,-7], [2,-2,-3], [-5,2,1], [-4,-5,-4]],
                               dtype='float32').T
   b_val = 0.1 * numpy.array([1,2,3,4,5,6,7,8,9,10,11,12], dtype='float32')
+  c_val = numpy.zeros((2,3), dtype='float32')
 
   #print "calling g"
   #Z_val, H_val = g(X_val, W_val, V_h_val, b_val)
@@ -299,9 +304,9 @@ if __name__ == '__main__':
   #print "done calling g"
 
   print "calling f"
-  Z_val, DX_val, DW_val, DV_h_val, Db_val = f(X_val, W_val, V_h_val, b_val)
+  Z_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(X_val, W_val, V_h_val, c_val, b_val)
   print numpy.asarray(Z_val), '\n', numpy.asarray(DX_val), '\n', \
-    numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Db_val)
+    numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
   print "done calling f"
 
   print "verifying grad..."
@@ -310,9 +315,9 @@ if __name__ == '__main__':
   #  return TestOp()(X_val, W_val, V_h_val, b)[0]
   #theano.tests.unittest_tools.verify_grad(testOp_only_b, [b_val])
 
-  def LSTMOp_Z(X, W, V_h, b):
-    return LSTMOpInstance(X, W, V_h, b)[0]
+  def LSTMOp_Z(X, W, V_h, c, b):
+    return LSTMOpInstance(X, W, V_h, c, b)[0]
 
-  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [X_val, W_val, V_h_val, b_val])
+  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [X_val, W_val, V_h_val, c_val, b_val])
 
   print "success"
