@@ -1,10 +1,17 @@
 #!/usr/bin/env python
 
 import sys
+import os
+
+# Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
+my_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.normpath(my_dir + "/..")
+if parent_dir not in sys.path:
+  sys.path += [parent_dir]
+
 import rnn
 from Engine import Engine
 from Log import log
-
 
 dev_num_batches = 1
 
