@@ -88,8 +88,8 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(%(Db)s);
     }
 
-    CudaNdarray * epsilon = nullptr;
-    CudaNdarray * delta = nullptr;
+    CudaNdarray * epsilon = 0;
+    CudaNdarray * delta = 0;
     if(%(inplace)s)
     {
       epsilon = %(DZ)s;
