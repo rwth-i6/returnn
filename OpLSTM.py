@@ -116,7 +116,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     //DV_h = Z[0..end-1]^T * delta[1..end]
     affine_global(%(Z)s, delta, %(DV_h)s, true, false, 1, 0.0f);
     //DX = delta * W^T
-    DX = (CudaNdarray *) CudaNdarray_Copy(delta);
+    %(DX)s = (CudaNdarray *) CudaNdarray_Copy(delta);
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
     const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
@@ -191,7 +191,8 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     const int dims_H[] = {X_dim[0], X_dim[1], X_dim[2]};
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
-    %(H)s = %(X)s //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+    %(H)s = (CudaNdarray *) CudaNdarray_Copy(%(X)s); //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+    //%(H)s = %(X)s;
 
     int y = 0;
     for(int x = 0; x < X_dim[0]; ++x)
