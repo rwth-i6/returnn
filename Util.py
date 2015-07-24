@@ -255,6 +255,7 @@ def initThreadJoinHack():
       cond_wait_orig(cond, timeout=timeout)
   threading._Condition.wait = cond_wait_hacked
 
+
 def start_daemon_thread(target, args=()):
   from threading import Thread
   t = Thread(target=target, args=args)
@@ -283,6 +284,13 @@ def interrupt_main():
     raise KeyboardInterrupt
   else:
     thread.interrupt_main()
+
+
+def try_run(func, args=(), catch_exc=Exception, default=None):
+  try:
+    return func(*args)
+  except catch_exc:
+    return default
 
 
 def class_idx_seq_to_features(seq, num_classes):

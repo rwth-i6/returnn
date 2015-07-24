@@ -48,4 +48,5 @@ class TestHDFDataset(object):
     This method tests self.addfile function
     """
     toy_dataset = self.test_init()
-    toy_dataset.add_file("/u/kulikov/develop/crnn/tests/toy_set.hdf")
+    # TODO: auto-generate file, then use here
+    #toy_dataset.add_file("/u/kulikov/develop/crnn/tests/toy_set.hdf")

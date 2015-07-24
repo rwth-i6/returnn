@@ -46,7 +46,8 @@ class Engine:
   @classmethod
   def get_existing_models(cls, config):
     model_filename = config.value('model', '')
-    assert model_filename, "need 'model' in config"
+    if not model_filename:
+      return []
     # Automatically search the filesystem for existing models.
     file_list = []
     for epoch in range(1, cls.config_get_final_epoch(config) + 1):
@@ -162,10 +163,10 @@ class Engine:
     self.pretrain = pretrainFromConfig(config)
 
     last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
-    assert last_epoch or self.start_epoch
 
-    if not last_model_epoch_filename and self.start_epoch == 1:
+    if not last_model_epoch_filename and self.start_epoch in (1, None):
       last_model_epoch_filename = config.value('load', '')
+    assert last_model_epoch_filename or self.start_epoch
 
     if last_model_epoch_filename:
       print >> log.v1, "loading weights from", last_model_epoch_filename

@@ -17,6 +17,7 @@ import theano
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
+from Util import try_run
 
 
 class Dataset(object):
@@ -277,7 +278,9 @@ class Dataset(object):
     :returns a string to present the user as information about our len.
     Depending on our implementation, we can give some more or some less information.
     """
-    return None
+    return ", ".join([self.__class__.__name__,
+                      "sequences: %s" % try_run(lambda: self.num_seqs, default="unknown"),
+                      "frames: %s" % try_run(self.get_num_timesteps, default="unknown")])
 
   def is_less_than_num_seqs(self, n):
     """
@@ -378,7 +381,7 @@ class DatasetSeq:
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param dict[str,numpy.ndarray] targets: name -> format 1d (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] | numpy.ndarray targets: name -> format 1d (time) (idx of output-feature)
     :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
     """
     assert isinstance(seq_idx, int)
