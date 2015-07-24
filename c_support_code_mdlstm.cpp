@@ -263,7 +263,7 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, int y, int x)
 	int n_batch = dims[0];
 	
 	float * data_H = data_ptr(H, y, x);
-	float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : nullptr;
+	float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : 0;
 	float * data_out = data_ptr(out, y, x);	
 	//TODO tune launch configuration
 	lstm_kernel<<<64, 512>>>(data_H, data_old_state, data_out, n_cells, n_batch);
@@ -281,8 +281,8 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 
 	float * data_delta = data_ptr(delta, y, x);	
 	float * data_epsilon = data_ptr(epsilon, y, x);
-	const float * data_next_epsilon = rightBorder ? nullptr : data_ptr(epsilon, y, x + 1);
-	const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : nullptr;
+	const float * data_next_epsilon = rightBorder ? 0 : data_ptr(epsilon, y, x + 1);
+	const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : 0;
 	const float * data_Y = data_ptr(Y, y, x);
 	//TODO tune launch configuration
 	lstm_bwd_kernel<<<64, 512>>>(data_delta, data_epsilon, data_next_epsilon, data_last_state, data_Y, n_cells, n_batch);
