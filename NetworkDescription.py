@@ -156,5 +156,5 @@ class LayerNetworkDescription:
     loss = cls.loss_from_config(config)
     if loss in ('ctc', 'ce_ctc') or config.bool('add_blank', False):
       for k in num_outputs:
-        num_outputs[k] += 1  # add blank
+        num_outputs[k][0] += 1  # add blank
     return num_inputs, num_outputs
