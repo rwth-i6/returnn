@@ -68,7 +68,8 @@ class Batch:
     """
     Adds frames to all data-batches.
     Will add one data-batch if we don't have one yet.
-    :param int length: number of (time) frames
+    :type seq_start_frame: numpy.array[int,int]
+    :param numpy.array[int,int] length: number of (time) frames
     """
     self.data_shape = [self.data_shape[0] + max(length), max(self.data_shape[1], 1)]
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
