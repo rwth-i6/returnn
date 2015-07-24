@@ -18,7 +18,7 @@ class LayerNetworkDescription:
                truncation=-1, entropy=0):
     """
     :type num_inputs: int
-    :type num_outputs: dict[str,int]
+    :type num_outputs: dict[str,(int,int)]
     :param list[dict[str]] hidden_info: list of
       (layer_type, size, activation, name)
     :type output_info: dict[str]
@@ -156,5 +156,5 @@ class LayerNetworkDescription:
     loss = cls.loss_from_config(config)
     if loss in ('ctc', 'ce_ctc') or config.bool('add_blank', False):
       for k in num_outputs:
-        num_outputs[k] += 1  # add blank
+        num_outputs[k][0] += 1  # add blank
     return num_inputs, num_outputs

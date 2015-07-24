@@ -4,7 +4,6 @@ import numpy
 import sys
 import os
 from collections import OrderedDict
-import threading
 import h5py
 import json
 from Network import LayerNetwork
@@ -135,7 +134,6 @@ class Engine:
     :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
-    :type start_epoch: int | None
     """
     self.train_data = train_data
     self.dev_data = dev_data

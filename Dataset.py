@@ -77,7 +77,7 @@ class Dataset(object):
 
   def preprocess(self, seq):
     """
-    :type xr: numpy.ndarray
+    :type seq: numpy.ndarray
     :rtype: numpy.ndarray
     """
     return seq
@@ -293,12 +293,12 @@ class Dataset(object):
     # in advance can handle this somehow.
     return n < self.num_seqs
 
-  def calculate_priori(self):
+  def calculate_priori(self, target="classes"):
     priori = numpy.zeros((self.num_outputs,), dtype=theano.config.floatX)
     i = 0
     while self.is_less_than_num_seqs(i):
       self.load_seqs(i, i + 1)
-      for t in self.get_targets(i):
+      for t in self.get_targets(target, i):
         priori[t] += 1
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
@@ -356,8 +356,8 @@ class Dataset(object):
       else:  # Not recurrent.
         while t_start[0] < t_end[0]:
           length = t_end[0] - t_start[0]
-          num_frames = min(max(length), batch_size - batch.get_all_slices_num_frames())
-          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
+          num_frames = min(length, batch_size - batch.get_all_slices_num_frames())
+          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=numpy.array([num_frames, num_frames]))
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch
             batch = Batch()
@@ -402,6 +402,10 @@ class DatasetSeq:
 
   @property
   def num_frames(self):
+    """
+    :rtype: numpy.array[int,int]
+    :returns the features frame len, and the target frame len
+    """
     return numpy.array([self.features.shape[0], self.default_target.shape[0]])
 
   def __repr__(self):

@@ -410,13 +410,17 @@ def executeMainTask():
 
 
 def main(argv):
+  return_code = 0
   try:
     assert len(argv) >= 2, "usage: %s <config>" % argv[0]
     init(configFilename=argv[1], commandLineOptions=argv[2:])
     executeMainTask()
   except KeyboardInterrupt:
+    return_code = 1
     print >> getattr(log, "v3", sys.stderr), "KeyboardInterrupt"
   finalize()
+  if return_code:
+    sys.exit(return_code)
 
 
 if __name__ == '__main__':

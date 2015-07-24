@@ -253,7 +253,7 @@ void do_tanh(CudaNdarray * a, int y, int x)
 	tanh_kernel<<<64, 512>>>(data_a, size);
 }
 
-void do_lstm(CudaNdarray * H, CudaNdarray * out, int y, int x)
+void do_lstm(CudaNdarray * H, CudaNdarray * out, CudaNdarray * prev, int y, int x)
 {		
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
@@ -263,7 +263,7 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, int y, int x)
 	int n_batch = dims[0];
 	
 	float * data_H = data_ptr(H, y, x);
-	float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : 0;
+	float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : prev;
 	float * data_out = data_ptr(out, y, x);	
 	//TODO tune launch configuration
 	lstm_kernel<<<64, 512>>>(data_H, data_old_state, data_out, n_cells, n_batch);

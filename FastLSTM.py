@@ -157,22 +157,25 @@ if not hasattr(optdb, 'LSTMOpInlaceOpt_registered'):
 class LSTMOp(theano.sandbox.cuda.GpuOp):
   __props__ = ()
 
-  def make_node(self, X, W, V_h, b):
+  def make_node(self, X, W, V_h, C, b):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     W = gpu_contiguous(as_cuda_ndarray_variable(W))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     b = gpu_contiguous(as_cuda_ndarray_variable(b))
+    c = gpu_contiguous(as_cuda_ndarray_variable(C))
     assert X.dtype == "float32"
     assert W.dtype == "float32"
     assert V_h.dtype == "float32"
     assert b.dtype == 'float32'
+    assert c.dtype == 'float32'
+    assert c.ndim == 2
     assert X.ndim == 3
     assert W.ndim == 2
     assert V_h.ndim == 2
     assert b.ndim == 1
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [X, W, V_h, b], [X.type(), X.type()])
+    return theano.Apply(self, [X, W, V_h, c, b], [X.type(), X.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -180,7 +183,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, W, V_h, b = input_names
+    X, W, V_h, c, b = input_names
     Z, H = output_names
     fail = sub['fail']
     return """
@@ -216,12 +219,12 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
         //H += Z[x-1]*V_h
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
-      do_lstm(%(H)s, %(Z)s, y, x);
+      do_lstm(%(H)s, %(Z)s, %(C)s, y, x);
     }
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    X, W, V_h, b = inputs
+    X, W, V_h, C, b = inputs
     #TODO here we get a gradient w.r.t. H as input which will never be used...
     DZ, DH = output_grads
 
@@ -229,11 +232,12 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     #TODO!!!
     W_raw = W.owner.inputs[0]
     V_h_raw = V_h.owner.inputs[0]
+    C_raw = C.owner.inputs[0].owner.inputs[0]
     b_raw = b.owner.inputs[0]
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H = LSTMOpInstance(X_raw, W_raw, V_h_raw, b_raw)
+    Z, H = LSTMOpInstance(X_raw, W_raw, V_h_raw, C_raw, b_raw)
 
     DX, DW, DV_h, Db = LSTMOpGradNoInplaceInstance(X, W, V_h, b, DZ, Z, H)
 
