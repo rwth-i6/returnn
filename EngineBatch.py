@@ -15,8 +15,9 @@ class BatchSeqCopyPart:
                batch_slice, batch_frame_offset):
     """
     :type seq_idx: int
-    :type seq_start_frame: int
-    :type seq_end_frame: int
+    :type seq_start_frame: numpy.array[int,int]
+    :type seq_end_frame: numpy.array[int,int]
+      Frame idx are input seq, output seq.
     :type batch_slice: int
     :type batch_frame_offset: int
     """
@@ -46,7 +47,7 @@ class Batch:
 
   def try_sequence_as_slice(self, length):
     """
-    :param int length: number of (time) frames
+    :param numpy.array[int,int] length: number of (time) frames
     :return: new shape which covers the old shape and one more data-batch, format (time,batch)
     :rtype: (int,int)
     """
@@ -55,7 +56,7 @@ class Batch:
   def add_sequence_as_slice(self, seq_idx, seq_start_frame, length):
     """
     Adds one data-batch in an additional slice.
-    :param int length: number of (time) frames
+    :param numpy.array[int,int] length: number of (time) frames
     """
     self.data_shape = self.try_sequence_as_slice(length)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
