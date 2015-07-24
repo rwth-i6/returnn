@@ -357,7 +357,7 @@ class Dataset(object):
         while t_start[0] < t_end[0]:
           length = t_end[0] - t_start[0]
           num_frames = min(length, batch_size - batch.get_all_slices_num_frames())
-          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
+          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=numpy.array([num_frames, 1]))
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch
             batch = Batch()
