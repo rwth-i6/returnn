@@ -344,10 +344,9 @@ class OptimizedLstmLayer(RecurrentLayer):
 #showed a speedup from 81 sec/epoch to 11 sec/epoch on demo dataset
 #TODO:
 # 1) !! use index vector for different sequence lengths
-# 2) change activation functions to be consistent with the other implementations
-# 3) make sure implementations are compatible
-# 4) support multiple sources, dropout, sharpgates, ...
-# 5) use two CUDA streams for concurrent bidirectional execution
+# 2) make sure implementations are compatible
+# 3) support multiple sources, dropout, sharpgates, ...
+# 4) use two CUDA streams for concurrent bidirectional execution
 class FastLstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_fast")
@@ -370,7 +369,7 @@ class FastLstmLayer(RecurrentLayer):
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
     initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
-    self.act = LSTMOpInstance(self.sources[0].output, self.W_in[0], self.W_re, initial_state, self.b)[0]
+    self.act = LSTMOpInstance(self.sources[0].output, self.W_in[0], self.W_re, initial_state, self.b, self.index)[0]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
