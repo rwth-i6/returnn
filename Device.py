@@ -948,9 +948,10 @@ class Device():
       import pynvml
     except ImportError as exc:
       return None
-    hmap = [2, 3, 1, 0]
-    handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
-    return pynvml.nvmlDeviceGetMemoryInfo(handle)
+    return None
+    #hmap = [2, 3, 1, 0]
+    #handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
+    #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
     return [(network.x, self.x), (network.i, self.i), (network.j, self.j)] + [ (network.y[k], self.y[k]) for k in self.y ]
