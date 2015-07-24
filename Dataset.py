@@ -77,7 +77,7 @@ class Dataset(object):
 
   def preprocess(self, seq):
     """
-    :type xr: numpy.ndarray
+    :type seq: numpy.ndarray
     :rtype: numpy.ndarray
     """
     return seq
