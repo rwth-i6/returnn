@@ -18,7 +18,7 @@ class LayerNetworkDescription:
                truncation=-1, entropy=0):
     """
     :type num_inputs: int
-    :type num_outputs: dict[str,int]
+    :type num_outputs: dict[str,(int,int)]
     :param list[dict[str]] hidden_info: list of
       (layer_type, size, activation, name)
     :type output_info: dict[str]
