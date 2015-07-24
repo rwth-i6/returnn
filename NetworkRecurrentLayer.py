@@ -107,6 +107,7 @@ class LSTMF(Unit):
     super(LSTMF, self).__init__(n_units, depth, n_units * 4, n_units, 0, 1)
 
   def scan(self, step, x, z, i, outputs_info, go_backwards = False, truncate_gradient = -1):
+    from FastLSTM import LSTMOpInstance
     return [ LSTMOpInstance(self.sources[0].output[::-(2 * go_backwards - 1)], self.W_in[0], self.W_re, outputs_info, self.b)[0] ]
 
 

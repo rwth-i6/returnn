@@ -272,7 +272,8 @@ class OptimizedLstmLayer(RecurrentLayer):
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
       #return s_t, h_t
-      return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
+      return theano.gradient.grad_clip(s_t, -50, 50), h_t
+      #return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
 
 
     self.out_dec = self.index.shape[0]
