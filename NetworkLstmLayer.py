@@ -262,10 +262,14 @@ class OptimizedLstmLayer(RecurrentLayer):
         input = CI(z[:,:,:n_out]) # bdm
       else:
         i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
-        ingate = GI(z[:,n_out: 2 * n_out])
-        forgetgate = GF(z[:,2 * n_out:3 * n_out])
-        outgate = GO(z[:,3 * n_out:])
-        input = CI(z[:,:n_out]) # bdm
+        #ingate = GI(z[:,n_out: 2 * n_out])
+        #forgetgate = GF(z[:,2 * n_out:3 * n_out])
+        #outgate = GO(z[:,3 * n_out:])
+        #input = CI(z[:,:n_out]) # bdm
+        ingate = GI(z[:,: n_out])
+        forgetgate = GF(z[:,1 * n_out:2 * n_out])
+        outgate = GO(z[:,2 * n_out:3 * n_out])
+        input = CI(z[:,3 * n_out:]) # bdm
 
       #s_i = input * ingate + s_p * forgetgate
       s_t = (input * ingate + s_p * forgetgate) # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
@@ -371,7 +375,7 @@ class FastLstmLayer(RecurrentLayer):
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
     initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
-    self.act = LSTMOpInstance(self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)], self.W_in[0], self.W_re, initial_state, self.b)[0]
+    self.act = LSTMOpInstance(self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)], self.W_in[0], self.W_re, self.b, initial_state)[0]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 

@@ -93,10 +93,10 @@ class LSTM(Unit):
   def step(self, x_t, z_t, z_p, h_p, s_p):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     z = z_t + z_p
-    u_t = GI(z[:,self.slice: 2 * self.slice])
-    r_t = GF(z[:,2 * self.slice:3 * self.slice])
-    b_t = GO(z[:,3 * self.slice:])
-    a_t = CI(z[:,:self.slice])
+    u_t = GI(z[:,0 * self.slice:1 * self.slice])
+    r_t = GF(z[:,1 * self.slice:2 * self.slice])
+    b_t = GO(z[:,2 * self.slice:3 * self.slice])
+    a_t = CI(z[:,3 * self.slice:])
     s_t = (a_t * u_t + s_p * r_t)
     h_t = CO(s_t) * b_t
     return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
@@ -107,7 +107,7 @@ class LSTMF(Unit):
     super(LSTMF, self).__init__(n_units, depth, n_units * 4, n_units, 0, 1)
 
   def scan(self, step, x, z, i, outputs_info, go_backwards = False, truncate_gradient = -1):
-    from FastLSTM import LSTMOpInstance
+    from OpLSTM import LSTMOpInstance
     return [ LSTMOpInstance(self.sources[0].output[::-(2 * go_backwards - 1)], self.W_in[0], self.W_re, outputs_info, self.b)[0] ]
 
 
