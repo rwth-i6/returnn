@@ -19,7 +19,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       #so we only mark that output 0 destroys inputs 4 and 6
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK
       #TODO
-      self.destroy_map = {0: [4], 1: [6]}
+      self.destroy_map = {0: [3], 1: [5]}
 
   def __eq__(self, other):
     return type(self) == type(other) and self.inplace == other.inplace
@@ -116,7 +116,11 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     //DV_h = Z[0..end-1]^T * delta[1..end]
     affine_global(%(Z)s, delta, %(DV_h)s, true, false, 1, 0.0f);
     //DX = delta * W^T
-    %(DX)s = (CudaNdarray *) CudaNdarray_Copy(delta);
+    //%(DX)s = (CudaNdarray *) CudaNdarray_Copy(delta);
+
+    //const int * X_dim = CudaNdarray_HOST_DIMS(%(X)s);
+    cudaMemcpy(CudaNdarray_DEV_DATA(%(DX)s), CudaNdarray_DEV_DATA(delta),
+      X_dim[0]*X_dim[1]*X_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
     const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
@@ -191,7 +195,10 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     const int dims_H[] = {X_dim[0], X_dim[1], X_dim[2]};
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
-    %(H)s = (CudaNdarray *) CudaNdarray_Copy(%(X)s); //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+    %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H); //CudaNdarray_uninitialized_like(%(X)s);
+    cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(X)s),
+      dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    //%(H)s = (CudaNdarray *) CudaNdarray_Copy(%(X)s); //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //%(H)s = %(X)s;
 
     int y = 0;

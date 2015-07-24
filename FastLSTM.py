@@ -33,7 +33,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, X, W, V_h, b, DZ, Z, H, c, i):
+  def make_node(self, X, W, V_h, b, DZ, Z, H, c):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     W = gpu_contiguous(as_cuda_ndarray_variable(W))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
@@ -55,12 +55,11 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     assert Z.ndim == 3
     assert H.ndim == 3
     assert c.ndim == 2
-    assert i.ndim == 2
 
-    return theano.Apply(self, [X, W, V_h, b, DZ, Z, H, c, i], [X.type(), W.type(), V_h.type(), c.type(), b.type()])
+    return theano.Apply(self, [X, W, V_h, b, DZ, Z, H, c], [X.type(), W.type(), V_h.type(), c.type(), b.type()])
 
   def infer_shape(self, node, input_shapes):
-    Xs, Ws, V_hs, bs, DZs, Zs, Hs, cs, i_s = input_shapes
+    Xs, Ws, V_hs, bs, DZs, Zs, Hs, cs = input_shapes
     return [Xs, Ws, V_hs, cs, bs]
 
   def c_support_code(self):
@@ -69,7 +68,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, W, V_h, b, DZ, Z, H, c, i = input_names
+    X, W, V_h, b, DZ, Z, H, c = input_names
     DX, DW, DV_h, Dc, Db = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -166,13 +165,12 @@ if not hasattr(optdb, 'LSTMOpInlaceOpt_registered'):
 class LSTMOp(theano.sandbox.cuda.GpuOp):
   __props__ = ()
 
-  def make_node(self, X, W, V_h, c, b, i):
+  def make_node(self, X, W, V_h, c, b):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     W = gpu_contiguous(as_cuda_ndarray_variable(W))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     b = gpu_contiguous(as_cuda_ndarray_variable(b))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
-    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     assert X.dtype == "float32"
     assert W.dtype == "float32"
     assert V_h.dtype == "float32"
@@ -183,19 +181,17 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     assert W.ndim == 2
     assert V_h.ndim == 2
     assert b.ndim == 1
-    assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [X, W, V_h, c, b, i], [X.type(), X.type()])
+    return theano.Apply(self, [X, W, V_h, c, b], [X.type(), X.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return f.read()
 
-  #TODO: use i (also in grad!)
   def c_code(self, node, name, input_names, output_names, sub):
-    X, W, V_h, c, b, i = input_names
+    X, W, V_h, c, b = input_names
     Z, H = output_names
     fail = sub['fail']
     return """
@@ -236,7 +232,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    X, W, V_h, c, b, i = inputs
+    X, W, V_h, c, b = inputs
     DZ, DH = output_grads
 
     X_raw = X.owner.inputs[0].owner.inputs[0]
@@ -248,14 +244,14 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H = LSTMOpInstance(X_raw, W_raw, V_h_raw, c_raw, b_raw, i)
+    Z, H = LSTMOpInstance(X_raw, W_raw, V_h_raw, c_raw, b_raw)
 
-    DX, DW, DV_h, Dc, Db = LSTMOpGradNoInplaceInstance(X, W, V_h, b, DZ, Z, H, c, i)
-    Di = theano.gradient.grad_undefined(self, 5, inputs[5], 'cannot diff w.r.t. index')
-    return [DX, DW, DV_h, Dc, Db, Di]
+    DX, DW, DV_h, Dc, Db = LSTMOpGradNoInplaceInstance(X, W, V_h, b, DZ, Z, H, c)
+
+    return [DX, DW, DV_h, Dc, Db]
 
   def infer_shape(self, node, input_shapes):
-    Xs, Ws, V_hs, cs, bs, bi = input_shapes
+    Xs, Ws, V_hs, cs, bs = input_shapes
     Z_shape = (Xs[0], Xs[1], Ws[1] / 4)
     H_shape = (Xs[0], Xs[1], Ws[1])
     return [Z_shape, H_shape]
@@ -274,8 +270,7 @@ if __name__ == '__main__':
   V_h = T.fmatrix('V_h')
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
-  i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOpInstance(X, W, V_h, c, b, i)
+  Z, H = LSTMOpInstance(X, W, V_h, c, b)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
