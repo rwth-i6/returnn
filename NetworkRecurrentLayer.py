@@ -85,7 +85,7 @@ class LSTM(Unit):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     z = z_t + z_p
     u_t = GI(z[:,self.slice: 2 * self.slice])
-    r_t = GF(z[:,2 * self.slice:3 * self.slice] - 1)
+    r_t = GF(z[:,2 * self.slice:3 * self.slice])
     b_t = GO(z[:,3 * self.slice:])
     a_t = CI(z[:,:self.slice])
     s_t = (a_t * u_t + s_p * r_t)
