@@ -661,7 +661,7 @@ class Device():
     self.input_queue.send("set-net-params")
     self.input_queue.send(len(network_params))
     for p in network_params:
-      self.input_queue.send_bytes(p.astype(dtype='float32').tostring())
+      self.input_queue.send_bytes(p.astype('float32').tostring())
     self.input_queue.send("end-set-net-params")
 
   def set_net_params(self, network):
