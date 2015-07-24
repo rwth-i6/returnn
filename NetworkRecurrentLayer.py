@@ -68,6 +68,15 @@ class Unit(Container):
     self.slice = T.constant(self.n_units)
     self.params = {}
 
+  def scan(self, step, x, z, i, outputs_info, go_backwards = False, truncate_gradient = -1):
+    outputs, _ = theano.scan(step,
+                             #strict = True,
+                             truncate_gradient = truncate_gradient,
+                             go_backwards = go_backwards,
+                             sequences = [x,z,i],
+                             outputs_info = outputs_info)
+    return outputs
+
 
 class VANILLA(Unit):
   def __init__(self, n_units, depth):
@@ -91,6 +100,14 @@ class LSTM(Unit):
     s_t = (a_t * u_t + s_p * r_t)
     h_t = CO(s_t) * b_t
     return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
+
+
+class LSTMF(Unit):
+  def __init__(self, n_units, depth):
+    super(LSTMF, self).__init__(n_units, depth, n_units * 4, n_units, 0, 1)
+
+  def scan(self, step, x, z, i, outputs_info, go_backwards = False, truncate_gradient = -1):
+    return [ LSTMOpInstance(self.sources[0].output[::-(2 * go_backwards - 1)], self.W_in[0], self.W_re, outputs_info, self.b)[0] ]
 
 
 class GRU(Unit):
@@ -163,18 +180,19 @@ class RecurrentUnitLayer(Layer):
     if n_dec:
       self.set_attr('n_dec', n_dec)
     # initialize recurrent weights
-    n_re = unit.n_out
-    if self.attrs['consensus'] == 'flat':
-      n_re *= self.depth
-    self.Wp = []
-    if psize:
-      self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1), name = "Wp_0_%s"%self.name) ]
-      for i in xrange(1, pdepth):
-        self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
-      W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
-    else:
-      W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
-    self.add_param(W_re, W_re.name)
+    if unit.n_re > 0:
+      n_re = unit.n_out
+      if self.attrs['consensus'] == 'flat':
+        n_re *= self.depth
+      self.Wp = []
+      if psize:
+        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1), name = "Wp_0_%s"%self.name) ]
+        for i in xrange(1, pdepth):
+          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
+        W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
+      else:
+        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
+      self.add_param(W_re, W_re.name)
     # initialize forward weights
     if self.depth > 1:
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
@@ -251,13 +269,12 @@ class RecurrentUnitLayer(Layer):
             act[j] = c_t * act[j] + (1 - c_t) * x_t
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
 
-      outputs, _ = theano.scan(step,
-                          #strict = True,
-                          name = "scan_%s"%self.name,
-                          truncate_gradient = self.attrs['truncation'],
-                          go_backwards = (direction == -1),
-                          sequences = [ x[s::self.attrs['sampling']], sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
-                          outputs_info = outputs_info)
+      outputs = unit.scan(step,
+                          x[s::self.attrs['sampling']], sequences[s::self.attrs['sampling']],T.cast(index, theano.config.floatX),
+                          outputs_info,
+                          direction == -1,
+                          self.attrs['truncation'])
+
       if not isinstance(outputs, list):
         outputs = [outputs]
       if self.attrs['sampling'] > 1:
