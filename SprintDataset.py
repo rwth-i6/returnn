@@ -55,7 +55,7 @@ class SprintDataset(Dataset):
     """
     assert inputDim > 0 and outputDim > 0
     self.num_inputs = inputDim
-    self.num_outputs = outputDim
+    self.num_outputs = {"classes": outputDim}
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
     if not self.multiple_epochs:
@@ -303,10 +303,10 @@ class SprintDataset(Dataset):
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).features
 
-  def get_targets(self, sorted_seq_idx):
+  def get_targets(self, target, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).targets
+      return self._getSeq(sorted_seq_idx).targets[target]
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."
