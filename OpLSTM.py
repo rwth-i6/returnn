@@ -19,7 +19,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       #so we only mark that output 0 destroys inputs 4 and 6
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK
       #TODO
-      self.destroy_map = {0: [3], 1: [5]}
+      self.destroy_map = {0: [4], 1: [6]}
 
   def __eq__(self, other):
     return type(self) == type(other) and self.inplace == other.inplace
