@@ -4,7 +4,7 @@ from theano import tensor as T
 import theano
 from NetworkRecurrentLayer import RecurrentLayer
 from ActivationFunctions import strtoact
-#from FastLSTM import LSTMOpInstance
+from FastLSTM import LSTMOp2Instance
 
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
