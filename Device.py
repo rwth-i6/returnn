@@ -186,6 +186,11 @@ class Device():
     :type network_description: NetworkDescription.LayerNetworkDescription | None
     :type train_param_args: dict | None
     """
+    if not update_specs: update_specs = {}
+    update_specs.setdefault('update_rule', 'global')
+    update_specs.setdefault('update_params', {})
+    update_specs.setdefault('layers', [])
+    self.update_specs = update_specs
     target = config.value('target', 'classes')
     if self.blocking:
       assert os.getpid() == self.main_pid
