@@ -1,5 +1,8 @@
 #include <thrust/device_vector.h>
 
+#define DIM_GRID 64
+#define DIM_BLOCK 512
+
 static const char *_cudaGetErrorEnum(cublasStatus_t error)
 {
 	switch (error)
@@ -256,7 +259,7 @@ void do_tanh(CudaNdarray * a, int y, int x)
 	float * data_a = data_ptr(a, y, x);
 	int size = lastTwoDimsStride(a);
 	//TODO tune launch configuration
-	tanh_kernel<<<64, 512>>>(data_a, size);
+	tanh_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_a, size);
 }
 
 void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, int y, int x)
@@ -273,7 +276,7 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, int y
 	const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
 	float * data_out = data_ptr(out, y, x);	
 	//TODO tune launch configuration
-	lstm_kernel<<<64, 512>>>(data_H, data_old_state, x > 0, data_out, n_cells, n_batch);
+	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, n_cells, n_batch);
 }
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
@@ -292,7 +295,7 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 	const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : 0;
 	const float * data_Y = data_ptr(Y, y, x);
 	//TODO tune launch configuration
-	lstm_bwd_kernel<<<64, 512>>>(data_delta, data_epsilon, data_next_epsilon, data_last_state, data_Y, n_cells, n_batch);
+	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_delta, data_epsilon, data_next_epsilon, data_last_state, data_Y, n_cells, n_batch);
 }
 
 void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y, int x)
@@ -301,7 +304,7 @@ void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y,
 	const float * data_tanhVals = data_ptr(tanhVals, y, x);
 	int size = lastTwoDimsStride(dst);
 	//TODO tune launch configuration
-	mul_with_tanh_deriv_kernel<<<64, 512>>>(data_dst, data_tanhVals, size);
+	mul_with_tanh_deriv_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_dst, data_tanhVals, size);
 }
 
 __global__ void repvec(const float * v, int vlen, int nCopies, float * dest)
@@ -324,7 +327,7 @@ void fillmat(const CudaNdarray * b, CudaNdarray * dst)
 	lastTwoDims(dst, dims_dst);
 	assert(dims_b[0] == dims_dst[1]);
 	//TODO tune launch configuration
-	repvec<<<64, 512>>>(data_b, dims_dst[1], CudaNdarray_SIZE(dst)/dims_dst[1], data_dst);
+	repvec<<<DIM_GRID, DIM_BLOCK>>>(data_b, dims_dst[1], CudaNdarray_SIZE(dst)/dims_dst[1], data_dst);
 }
 
 //C[y,x] += A[y,x]*B[y,x]

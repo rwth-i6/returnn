@@ -12,6 +12,7 @@ import re
 import os
 import sys
 import time
+import json
 from importlib import import_module
 from optparse import OptionParser
 from Log import log
@@ -121,51 +122,58 @@ def getDevicesInitArgs(config):
   if config.value('task', 'train') == "theano_graph":
     multiproc = False
   device_info = config.list('device', ['cpu0'])
-  device_tags = {}
-  ncpus, ngpus = get_num_devices()
-  if "all" in device_info:
-    device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
+  if len(device_info) == 1 and device_info[0] == 'json':
+    try:
+      specs = json.loads(open(config.value('initialize_from_json', '')).read())['worker']
+    except:
+      raise Exception('Unable to parse worker information from json content')
+    devices = [ { 'device' : key, 'config' : config, 'blocking' : False, 'num_batches' : specs[key]['num_batches'], "update_specs" : specs[key]['update_specs'] } for key in specs ]
   else:
-    for info in device_info:
-      device_update = True
-      num_batches = 1
-      if info[0] == '_':
-        device_update = False
-        info = info[1:]
-      if ':' in info:
-        num_batches = int(info.split(':')[1])
-        info = info.split(':')[0]
-      if len(info) == 3: info += "X"
-      assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
-      utype = info[0:3]
-      uid = info[3:]
-      if uid == '*': uid = "[0-9]*"
-      if uid == 'X': device_tags[info] = [num_batches, True]
-      else:
-        if utype == 'cpu':
-          np = ncpus
-        elif utype == 'gpu':
-          np = ngpus
+    device_tags = {}
+    ncpus, ngpus = get_num_devices()
+    if "all" in device_info:
+      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
+    else:
+      for info in device_info:
+        device_update = True
+        num_batches = 1
+        if info[0] == '_':
+          device_update = False
+          info = info[1:]
+        if ':' in info:
+          num_batches = int(info.split(':')[1])
+          info = info.split(':')[0]
+        if len(info) == 3: info += "X"
+        assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
+        utype = info[0:3]
+        uid = info[3:]
+        if uid == '*': uid = "[0-9]*"
+        if uid == 'X': device_tags[info] = [num_batches, True]
         else:
-          np = 0
-        match = False
-        for p in xrange(np):
-          if re.match(uid, str(p)):
-            device_tags[utype + str(p)] = [num_batches, device_update]
-            match = True
-        assert match, "invalid device specified: " + info
-  tags = sorted(device_tags.keys())
-  if multiproc:
-    assert len(tags) > 0
-    devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "device_update" : device_tags[tag][1]} for tag in tags ]
-    import TaskSystem
-    if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-      assert not TheanoFlags.get("device", "").startswith("gpu"), \
-          "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
-  else:
-    devices = [ {"device": tags[0], "config": config, "blocking": True} ]
-  #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
-  #  devices.append({"device": "cpu127", "config": config})
+          if utype == 'cpu':
+            np = ncpus
+          elif utype == 'gpu':
+            np = ngpus
+          else:
+            np = 0
+          match = False
+          for p in xrange(np):
+            if re.match(uid, str(p)):
+              device_tags[utype + str(p)] = [num_batches, device_update]
+              match = True
+          assert match, "invalid device specified: " + info
+    tags = sorted(device_tags.keys())
+    if multiproc:
+      assert len(tags) > 0
+      devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
+      import TaskSystem
+      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+        assert not TheanoFlags.get("device", "").startswith("gpu"), \
+            "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+    else:
+      devices = [ {"device": tags[0], "config": config, "blocking": True} ]
+    #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
+    #  devices.append({"device": "cpu127", "config": config})
   return devices
 
 
@@ -326,7 +334,7 @@ def printTaskProperties(devices=None):
                        "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
                        "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
       print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch",
-      print >> log.v3, "(update on device)" if device.device_update else "(update on host)"
+      print >> log.v3, "(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)"
 
 
 def initEngine(devices):

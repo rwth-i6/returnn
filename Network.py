@@ -83,6 +83,7 @@ class LayerNetwork(object):
     network = cls(n_in, n_out)
     try:
       topology = json.loads(json_content)
+      if 'network' in topology: topology = topology['network']
     except ValueError:
       print >> log.v4, "----- BEGIN JSON CONTENT -----"
       print >> log.v4, json_content

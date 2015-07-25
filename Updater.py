@@ -23,6 +23,20 @@ class Updater:
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
+  @classmethod
+  def initRule(cls, rule, **kwargs):
+    kwargs.setdefault('momentum', 0)
+    kwargs.setdefault('gradient_clip', -1)
+    kwargs.setdefault('adadelta_decay', 0.90)
+    kwargs.setdefault('adadelta_offset', 1e-6)
+    kwargs.setdefault('adagrad', False)
+    kwargs.setdefault('adadelta', False)
+    kwargs.setdefault('adasecant', False)
+    kwargs.setdefault('varreg', False)
+    if rule != "default":
+      kwargs[rule] = True
+    return cls(**kwargs)
+
   def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, varreg, adasecant):
     """
     :type momentum: float

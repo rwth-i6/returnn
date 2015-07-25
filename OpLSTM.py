@@ -19,7 +19,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       #so we only mark that output 0 destroys inputs 4 and 6
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK
       #TODO
-      self.destroy_map = {0: [3], 1: [5]}
+      self.destroy_map = {0: [4], 1: [6]}
 
   def __eq__(self, other):
     return type(self) == type(other) and self.inplace == other.inplace
@@ -33,11 +33,12 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, X, V_h, c, DZ, Z, H):
+  def make_node(self, X, V_h, c, idx, DZ, Z, H):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     DZ = gpu_contiguous(as_cuda_ndarray_variable(DZ))
+    idx = gpu_contiguous(as_cuda_ndarray_variable(idx))
     assert X.dtype == "float32"
     assert V_h.dtype == "float32"
     assert DZ.dtype == 'float32'
@@ -50,11 +51,12 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     assert Z.ndim == 3
     assert H.ndim == 3
     assert c.ndim == 2
+    assert idx.ndim == 2
 
-    return theano.Apply(self, [X, V_h, c, DZ, Z, H], [X.type(), V_h.type(), c.type()])
+    return theano.Apply(self, [X, V_h, c, idx, DZ, Z, H], [X.type(), V_h.type(), c.type()])
 
   def infer_shape(self, node, input_shapes):
-    Xs, V_hs, cs, DZs, Zs, Hs = input_shapes
+    Xs, V_hs, cs, idxs, DZs, Zs, Hs = input_shapes
     return [Xs, V_hs, cs]
 
   def c_support_code(self):
@@ -63,7 +65,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, V_h, c, DZ, Z, H = input_names
+    X, V_h, c, i, DZ, Z, H = input_names
     DX, DV_h, Dc = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -98,6 +100,10 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     const int * X_dim = CudaNdarray_HOST_DIMS(%(X)s);
+    //float *index = new float[X_dim[0] * X_dim[1]];
+    //cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
+    //  X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
+
     int y = 0;
     for(int x = X_dim[0]-1; x >= 0; --x)
     {
@@ -157,19 +163,21 @@ if not hasattr(optdb, 'LSTMOpInlaceOpt_registered'):
 class LSTMOp(theano.sandbox.cuda.GpuOp):
   __props__ = ()
 
-  def make_node(self, Z, V_h, c):
+  def make_node(self, Z, V_h, c, i):
     Z = gpu_contiguous(as_cuda_ndarray_variable(Z))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
+    i = gpu_contiguous(as_cuda_ndarray_variable(i))
     assert Z.dtype == "float32"
     assert V_h.dtype == "float32"
     assert c.dtype == 'float32'
     assert c.ndim == 2
     assert Z.ndim == 3
+    assert i.ndim == 2
     assert V_h.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [Z, V_h, c], [Z.type(), Z.type()])
+    return theano.Apply(self, [Z, V_h, c, i], [Z.type(), Z.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -177,7 +185,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, V_h, c = input_names
+    X, V_h, c, i = input_names
     Z, H = output_names
     fail = sub['fail']
     return """
@@ -201,6 +209,10 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     //%(H)s = (CudaNdarray *) CudaNdarray_Copy(%(X)s); //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //%(H)s = %(X)s;
 
+    //float *index = new float[X_dim[0] * X_dim[1]];
+    //cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
+    //  X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
+
     int y = 0;
     for(int x = 0; x < X_dim[0]; ++x)
     {
@@ -214,26 +226,29 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    X, V_h, c = inputs
+    X, V_h, c, i = inputs
     DZ, DH = output_grads
 
     X_raw = X.owner.inputs[0].owner.inputs[0]
     #TODO!!!
     V_h_raw = V_h.owner.inputs[0]
     c_raw = c.owner.inputs[0].owner.inputs[0]
+    i_raw = i.owner.inputs[0].owner.inputs[0]
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H = LSTMOpInstance(X_raw, V_h_raw, c_raw)
+    Z, H = LSTMOpInstance(X_raw, V_h_raw, c_raw, i_raw)
 
-    DX, DV_h, Dc = LSTMOpGradNoInplaceInstance(X, V_h, c, DZ, Z, H)
+    DX, DV_h, Dc = LSTMOpGradNoInplaceInstance(X, V_h, c, i, DZ, Z, H)
+    Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
-    return [DX, DV_h, Dc]
+    return [DX, DV_h, Dc, Di]
 
   def infer_shape(self, node, input_shapes):
-    Xs, V_hs, cs = input_shapes
+    Xs, V_hs, cs, idxs = input_shapes
     Z_shape = (Xs[0], Xs[1], Xs[2] / 4)
     H_shape = (Xs[0], Xs[1], Xs[2])
+
     return [Z_shape, H_shape]
 
   #!!! change this when changing the code!
