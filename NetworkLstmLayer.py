@@ -375,7 +375,7 @@ class FastLstmLayer(RecurrentLayer):
 
     initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
     XS = [S.output[::-(2 * self.attrs['reverse'] - 1)] for S in self.sources]
-    self.act = LSTMOp2Instance(self.W_re, initial_state, self.b, self.index, XS, self.W_in)[0]
+    self.act = LSTMOp2Instance(*([self.W_re, initial_state, self.b, self.index] + XS + self.W_in))[0]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class SimpleLstmLayer(RecurrentLayer):
