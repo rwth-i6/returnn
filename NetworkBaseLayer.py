@@ -102,7 +102,11 @@ class Container(object):
     """
     :returns list of shared vars in a well-defined order
     """
-    return [v for (k, v) in sorted(self.params.items())]
+    res = []
+    for (k, v) in sorted(self.params.items()):
+      v.layer = self
+      res.append(v)
+    return res
 
   def add_param(self, param, name=""):
     """

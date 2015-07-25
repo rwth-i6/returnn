@@ -51,7 +51,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     assert Z.ndim == 3
     assert H.ndim == 3
     assert c.ndim == 2
-    assert idx.ndim == 1
+    assert idx.ndim == 2
 
     return theano.Apply(self, [X, V_h, c, idx, DZ, Z, H], [X.type(), V_h.type(), c.type()])
 
@@ -173,7 +173,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     assert c.dtype == 'float32'
     assert c.ndim == 2
     assert Z.ndim == 3
-    assert i.ndim == 1
+    assert i.ndim == 2
     assert V_h.ndim == 2
 
     #results: output Y, (gates and cell state) H

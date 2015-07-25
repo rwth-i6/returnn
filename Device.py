@@ -73,12 +73,13 @@ def get_device_attributes():
 
 
 class Device():
-  def __init__(self, device, config, blocking=False, num_batches=1, device_update = True):
+  def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
     :param str device: name, "gpu*" or "cpu*"
     :param Config.Config config: config
     :param bool blocking: False -> multiprocessing, otherwise its blocking
     :param int num_batches: num batches to train on this device
+    :param dict update_specs
     """
     try:
       import pynvml
@@ -101,7 +102,11 @@ class Device():
     self.update_total_time = 0
     self.num_frames = 0
     self.tot_cost = 0
-    self.device_update = device_update
+    if not update_specs: update_specs = {}
+    update_specs.setdefault('update_rule', 'global')
+    update_specs.setdefault('update_params', {})
+    update_specs.setdefault('layers', [])
+    self.update_specs = update_specs
     self.data = None
     self.main_pid = os.getpid()
 
@@ -175,7 +180,7 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, device_update = True, network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs = None, network_description=None, train_param_args=None):
     """
     :type config: Config.Config
     :type network_description: NetworkDescription.LayerNetworkDescription | None
@@ -232,7 +237,7 @@ class Device():
     for target in self.y:
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if False: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
+        if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
           gparam = 0
         else:
           try:
@@ -241,9 +246,10 @@ class Device():
             gparam = 0
         if gparam == 0:
           exclude.append(param)
-          print "exclude:", param.name
+          print >> log.v4, "exclude:", self.name, param.name
           gparams.append(T.constant(0))
           continue
+        update_specs['layers'].append(param.layer.name)
         self.gradients[target][param] = gparam
         gparams.append(theano.Out(gparam, borrow = True))
         if self.gradient_norm is not None:
@@ -252,7 +258,8 @@ class Device():
 
     # initialize functions
     self.updater = None
-    self.device_update = device_update
+    update_specs['layers'] = list(set(update_specs['layers']))
+    self.update_specs = update_specs
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -268,8 +275,10 @@ class Device():
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
 
-      if self.device_update:
-        self.updater = Updater.initFromConfig(config)
+      if self.update_specs['update_rule'] == 'global':
+        self.updater = Updater.initFromConfig(self.config)
+      elif self.update_specs['update_rule'] != 'none':
+        self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost"]
@@ -281,7 +290,7 @@ class Device():
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
 
-      if self.device_update:
+      if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[],
@@ -480,7 +489,6 @@ class Device():
     """
     device = self.name
     config = self.config
-    device_update = self.device_update
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
@@ -493,7 +501,7 @@ class Device():
       rnn.initFaulthandler()
       rnn.initConfigJson()
       #rnn.maybeInitSprintCommunicator(device_proc=True)
-      self.process_inner(device, config, device_update, asyncTask)
+      self.process_inner(device, config, self.update_specs, asyncTask)
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except ProcConnectionDied:
       print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
@@ -507,7 +515,7 @@ class Device():
       sys.excepthook(*sys.exc_info())
       sys.exit(1)
 
-  def process_inner(self, device, config, device_update, asyncTask):
+  def process_inner(self, device, config, update_specs, asyncTask):
     """
     :type device: str
     :type config: Config.Config
@@ -538,7 +546,7 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config, device_update)
+    self.initialize(config, update_specs)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
@@ -557,7 +565,7 @@ class Device():
         network_description = input_queue.recv()
         train_param_args = input_queue.recv()
         if self.need_reinit(network_description, train_param_args):
-          self.initialize(config, device_update, network_description, train_param_args)
+          self.initialize(config, update_specs, network_description, train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
@@ -583,7 +591,7 @@ class Device():
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
-        if self.device_update:
+        if self.updater:
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
@@ -761,7 +769,7 @@ class Device():
     :type learning_rate: float
     """
     if self.blocking:
-      if self.device_update:
+      if self.updater:
         self.updater.setLearningRate(learning_rate)
     else:
       assert self.main_pid == os.getpid()
@@ -818,7 +826,7 @@ class Device():
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
       if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, self.device_update, network_description, train_param_args)
+        self.initialize(self.config, self.device_specs, network_description, train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
