@@ -10,7 +10,9 @@ from theano.gof.opt import OpSub
 from theano.compile import optdb
 import os
 
-class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
+#renmaed this to LSTMOp2 because there is almost the same in OpLSTM.py (without the 2)
+
+class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
   def __init__(self, inplace):
     self.inplace = inplace
     if inplace:
@@ -33,7 +35,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, X, W, V_h, b, DZ, Z, H, c):
+  def make_node(self, X, W, V_h, b, DZ, Z, H, c, i):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     W = gpu_contiguous(as_cuda_ndarray_variable(W))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
@@ -55,11 +57,12 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     assert Z.ndim == 3
     assert H.ndim == 3
     assert c.ndim == 2
+    assert i.ndim == 2
 
-    return theano.Apply(self, [X, W, V_h, b, DZ, Z, H, c], [X.type(), W.type(), V_h.type(), c.type(), b.type()])
+    return theano.Apply(self, [X, W, V_h, b, DZ, Z, H, c, i], [X.type(), W.type(), V_h.type(), c.type(), b.type()])
 
   def infer_shape(self, node, input_shapes):
-    Xs, Ws, V_hs, bs, DZs, Zs, Hs, cs = input_shapes
+    Xs, Ws, V_hs, bs, DZs, Zs, Hs, cs, i_s = input_shapes
     return [Xs, Ws, V_hs, cs, bs]
 
   def c_support_code(self):
@@ -68,7 +71,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, W, V_h, b, DZ, Z, H, c = input_names
+    X, W, V_h, b, DZ, Z, H, c, i = input_names
     DX, DW, DV_h, Dc, Db = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -147,30 +150,31 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   #def c_code_cache_version(self):
   #  return 1, 1
 
-LSTMOpGradNoInplaceInstance = LSTMOpGrad(inplace=False)
-LSTMOpGradInplaceInstance = LSTMOpGrad(inplace=True)
+LSTMOpGradNoInplaceInstance = LSTMOp2Grad(inplace=False)
+LSTMOpGradInplaceInstance = LSTMOp2Grad(inplace=True)
 
-LSTMOpInlaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
+LSTMOp2InlaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
 
 #TODO: why is this called twice??
 #hack to avoid this
-if not hasattr(optdb, 'LSTMOpInlaceOpt_registered'):
-  optdb.register('LSTMOpInlaceOpt', theano.gof.TopoOptimizer(LSTMOpInlaceOpt),
+if not hasattr(optdb, 'LSTMOp2InlaceOpt_registered'):
+  optdb.register('LSTMOp2InlaceOpt', theano.gof.TopoOptimizer(LSTMOp2InlaceOpt),
                  50.0, 'fast_run', 'inplace', 'gpuarray')
-  optdb.LSTMOpInlaceOpt_registered = True
+  optdb.LSTMOp2InlaceOpt_registered = True
 
 
 #------------------------
 
-class LSTMOp(theano.sandbox.cuda.GpuOp):
+class LSTMOp2(theano.sandbox.cuda.GpuOp):
   __props__ = ()
 
-  def make_node(self, X, W, V_h, c, b):
+  def make_node(self, X, W, V_h, c, b, i):
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     W = gpu_contiguous(as_cuda_ndarray_variable(W))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     b = gpu_contiguous(as_cuda_ndarray_variable(b))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
+    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     assert X.dtype == "float32"
     assert W.dtype == "float32"
     assert V_h.dtype == "float32"
@@ -181,17 +185,19 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     assert W.ndim == 2
     assert V_h.ndim == 2
     assert b.ndim == 1
+    assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [X, W, V_h, c, b], [X.type(), X.type()])
+    return theano.Apply(self, [X, W, V_h, c, b, i], [X.type(), X.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return f.read()
 
+  #TODO: use i (also in grad!)
   def c_code(self, node, name, input_names, output_names, sub):
-    X, W, V_h, c, b = input_names
+    X, W, V_h, c, b, i = input_names
     Z, H = output_names
     fail = sub['fail']
     return """
@@ -232,7 +238,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    X, W, V_h, c, b = inputs
+    X, W, V_h, c, b, i = inputs
     DZ, DH = output_grads
 
     X_raw = X.owner.inputs[0].owner.inputs[0]
@@ -244,14 +250,14 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H = LSTMOpInstance(X_raw, W_raw, V_h_raw, c_raw, b_raw)
+    Z, H = LSTMOp2Instance(X_raw, W_raw, V_h_raw, c_raw, b_raw, i)
 
-    DX, DW, DV_h, Dc, Db = LSTMOpGradNoInplaceInstance(X, W, V_h, b, DZ, Z, H, c)
-
-    return [DX, DW, DV_h, Dc, Db]
+    DX, DW, DV_h, Dc, Db = LSTMOpGradNoInplaceInstance(X, W, V_h, b, DZ, Z, H, c, i)
+    Di = theano.gradient.grad_undefined(self, 5, inputs[5], 'cannot diff w.r.t. index')
+    return [DX, DW, DV_h, Dc, Db, Di]
 
   def infer_shape(self, node, input_shapes):
-    Xs, Ws, V_hs, cs, bs = input_shapes
+    Xs, Ws, V_hs, cs, bs, bi = input_shapes
     Z_shape = (Xs[0], Xs[1], Ws[1] / 4)
     H_shape = (Xs[0], Xs[1], Ws[1])
     return [Z_shape, H_shape]
@@ -260,7 +266,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
   #def c_code_cache_version(self):
   #  return 1, 1
 
-LSTMOpInstance = LSTMOp()
+LSTMOp2Instance = LSTMOp2()
 
 if __name__ == '__main__':
   #this is a test for the implementation
@@ -270,7 +276,8 @@ if __name__ == '__main__':
   V_h = T.fmatrix('V_h')
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
-  Z, H = LSTMOpInstance(X, W, V_h, c, b)
+  i = T.matrix('i',dtype='int8')
+  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
@@ -315,9 +322,9 @@ if __name__ == '__main__':
   #  return TestOp()(X_val, W_val, V_h_val, b)[0]
   #theano.tests.unittest_tools.verify_grad(testOp_only_b, [b_val])
 
-  def LSTMOp_Z(X, W, V_h, c, b):
-    return LSTMOpInstance(X, W, V_h, c, b)[0]
+  def LSTMOp2_Z(X, W, V_h, c, b):
+    return LSTMOp2Instance(X, W, V_h, c, b)[0]
 
-  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [X_val, W_val, V_h_val, c_val, b_val])
+  theano.tests.unittest_tools.verify_grad(LSTMOp2_Z, [X_val, W_val, V_h_val, c_val, b_val])
 
   print "success"

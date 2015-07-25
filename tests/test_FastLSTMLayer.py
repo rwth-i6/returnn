@@ -2,8 +2,7 @@
 import numpy
 import theano
 import theano.tensor as T
-from NetworkLstmLayer import LSTMOpInstance, SimpleLstmLayer
-
+from FastLSTM import LSTMOp2Instance
 
 def test_grad():
   X = T.ftensor3('X')
@@ -12,7 +11,7 @@ def test_grad():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOpInstance(X, W, V_h, c, b, i)
+  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
@@ -58,7 +57,7 @@ def test_grad():
   #theano.tests.unittest_tools.verify_grad(testOp_only_b, [b_val])
 
   def LSTMOp_Z(X, W, V_h, c, b):
-    return LSTMOpInstance(X, W, V_h, c, b)[0]
+    return LSTMOp2Instance(X, W, V_h, c, b)[0]
 
   theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [X_val, W_val, V_h_val, c_val, b_val])
 
@@ -71,7 +70,7 @@ def test_compatible_with_other_implementation():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOpInstance(X, W, V_h, c, b, i)
+  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
@@ -125,8 +124,9 @@ def test_compatible_with_other_implementation():
 
   for f, s in zip(vals_fast, vals_simple):
     assert numpy.allclose(f, s)
-  print numpy.asrray(Z_val, 'float32')
+  print numpy.asarray(Z_val, 'float32')
   print Z2_val
+  print "sucess"
 
 if __name__ == '__main__':
   test_compatible_with_other_implementation()
