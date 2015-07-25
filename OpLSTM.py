@@ -119,6 +119,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
         do_lstm_bwd(delta, epsilon, %(Z)s, y, x, rightBorder);
       }
     }
+    delete index;
 
     %(DX)s = CudaNdarray_uninitialized_like(%(X)s);
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
