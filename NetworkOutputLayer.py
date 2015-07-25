@@ -77,9 +77,8 @@ class FramewiseOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    #self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
-    #T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+    #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
+    self.y_m = self.output.reshape((self.output.shape[0]*self.output.shape[1],self.output.shape[2]))
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':
     #  y_mmax = self.y_m.max(axis = 1, keepdims = True)

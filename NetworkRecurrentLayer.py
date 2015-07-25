@@ -108,7 +108,7 @@ class LSTM(Unit):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
 
   def scan(self, step, x, z, i, outputs_info, W_re, go_backwards = False, truncate_gradient = -1):
-    return [ LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[0])[0] ]
+    return [ LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[0], i.flatten())[0] ]
 
 
 class GRU(Unit):
