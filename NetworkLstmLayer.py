@@ -4,7 +4,7 @@ from theano import tensor as T
 import theano
 from NetworkRecurrentLayer import RecurrentLayer
 from ActivationFunctions import strtoact
-#from FastLSTM import LSTMOpInstance
+from FastLSTM import LSTMOpInstance
 
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
@@ -374,7 +374,7 @@ class FastLstmLayer(RecurrentLayer):
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
     initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
-    self.act = LSTMOpInstance(self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)], self.W_in[0], self.W_re, initial_state, self.b, self.index)[0]
+    self.act = LSTMOpInstance(self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)], self.W_in[0], self.W_re, initial_state, self.b)[0]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class SimpleLstmLayer(RecurrentLayer):
