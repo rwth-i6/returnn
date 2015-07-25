@@ -310,10 +310,9 @@ void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y,
 __global__ void repvec(const float * v, int vlen, int nCopies, float * dest)
 {
 	int idx = threadIdx.x + blockDim.x * blockIdx.x;
-	float val = v[idx % vlen];
 	while (idx < vlen * nCopies)
 	{
-		dest[idx] = val;
+		dest[idx] = v[idx % vlen];
 		idx += gridDim.x * blockDim.x;
 	}
 }
