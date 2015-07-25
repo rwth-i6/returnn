@@ -7,6 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
+from FastLSTM import LSTMOp2Instance
 
 class RecurrentLayer(HiddenLayer):
   recurrent = True
@@ -69,12 +70,13 @@ class Unit(Container):
     self.slice = T.constant(self.n_units)
     self.params = {}
 
-  def scan(self, step, x, z, i, outputs_info, W_re, go_backwards = False, truncate_gradient = -1):
+  def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    xc = T.concatenate([s.output for s in x], axis = -1)
     outputs, _ = theano.scan(step,
                              #strict = True,
                              truncate_gradient = truncate_gradient,
                              go_backwards = go_backwards,
-                             sequences = [x,z,i],
+                             sequences = [xc,z,i],
                              outputs_info = outputs_info)
     return outputs
 
@@ -102,12 +104,20 @@ class LSTME(Unit):
     h_t = CO(s_t) * b_t
     return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
 
-
 class LSTM(Unit):
   def __init__(self, n_units, depth):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
 
-  def scan(self, step, x, z, i, outputs_info, W_re, go_backwards = False, truncate_gradient = -1):
+  def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
+    return [ LSTMOp2Instance(*([W_re, outputs_info[0], b, i] + XS + W_in))[0] ]
+
+
+class LSTMP(Unit):
+  def __init__(self, n_units, depth):
+    super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
+
+  def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     return [ LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[0], i)[0] ]
 
 
@@ -237,7 +247,6 @@ class RecurrentUnitLayer(Layer):
       assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
       name = 'W_carry_%s'%self.name
       W_cr = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
-    x = T.concatenate([s.output for s in self.sources], axis = -1)
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
@@ -286,11 +295,13 @@ class RecurrentUnitLayer(Layer):
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
 
       outputs = unit.scan(step,
-                          x[s::self.attrs['sampling']],
+                          self.sources,
                           sequences[s::self.attrs['sampling']],
                           T.cast(index, theano.config.floatX),
                           outputs_info,
                           W_re,
+                          self.W_in,
+                          self.b,
                           direction == -1,
                           self.attrs['truncation'])
 
