@@ -100,26 +100,22 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     const int * X_dim = CudaNdarray_HOST_DIMS(%(X)s);
-    float *index = new float[X_dim[0] * X_dim[1]];
-    cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
-      X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
+    //float *index = new float[X_dim[0] * X_dim[1]];
+    //cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
+    //  X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
 
     int y = 0;
     for(int x = X_dim[0]-1; x >= 0; --x)
     {
-      if (index[x] > 0)
+      //add recurrent
+      bool rightBorder = (x == X_dim[0]-1);
+      if(!rightBorder)
       {
-        //add recurrent
-        bool rightBorder = (x == X_dim[0]-1);
-        if(!rightBorder)
-        {
-          affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
-        }
-
-        do_lstm_bwd(delta, epsilon, %(Z)s, y, x, rightBorder);
+        affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
+
+      do_lstm_bwd(delta, epsilon, %(Z)s, y, x, rightBorder);
     }
-    delete index;
 
     %(DX)s = CudaNdarray_uninitialized_like(%(X)s);
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
@@ -213,24 +209,20 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     //%(H)s = (CudaNdarray *) CudaNdarray_Copy(%(X)s); //(CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //%(H)s = %(X)s;
 
-    float *index = new float[X_dim[0] * X_dim[1]];
-    cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
-      X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
+    //float *index = new float[X_dim[0] * X_dim[1]];
+    //cudaMemcpy(index, CudaNdarray_DEV_DATA(%(i)s),
+    //  X_dim[0]*X_dim[1]*sizeof(float), cudaMemcpyDeviceToHost);
 
     int y = 0;
     for(int x = 0; x < X_dim[0]; ++x)
     {
-      if (index[x] > 0)
+      if(x > 0)
       {
-        if(x > 0)
-        {
-          //H += Z[x-1]*V_h
-          affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
-        }
-        do_lstm(%(H)s, %(Z)s, %(c)s, y, x);
+        //H += Z[x-1]*V_h
+        affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
+      do_lstm(%(H)s, %(Z)s, %(c)s, y, x);
     }
-    delete index;
     """ % locals()
 
   def grad(self, inputs, output_grads):
