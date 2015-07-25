@@ -249,7 +249,7 @@ class Device():
           print >> log.v4, "exclude:", self.name, param.name
           gparams.append(T.constant(0))
           continue
-        update_specs['layers'].append(param.layer.name)
+        #update_specs['layers'].append(param.layer.name)
         self.gradients[target][param] = gparam
         gparams.append(theano.Out(gparam, borrow = True))
         if self.gradient_norm is not None:
@@ -258,7 +258,7 @@ class Device():
 
     # initialize functions
     self.updater = None
-    update_specs['layers'] = list(set(update_specs['layers']))
+    #update_specs['layers'] = list(set(update_specs['layers']))
     self.update_specs = update_specs
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
