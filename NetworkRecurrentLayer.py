@@ -180,6 +180,8 @@ class RecurrentUnitLayer(Layer):
     pact = strtoact(pact)
     if n_dec:
       self.set_attr('n_dec', n_dec)
+    if direction == 0:
+      self.depth *= 2
     # initialize recurrent weights
     W_re = None
     if unit.n_re > 0:
@@ -221,6 +223,16 @@ class RecurrentUnitLayer(Layer):
         z += self.dot(self.mass * m * x_t.output, W)
     if self.depth > 1:
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
+    num_batches = self.index.shape[1]
+    if direction == 0:
+      z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
+      #q = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], num_batches*2, z.shape[2])
+      #z = z.repeat(2, axis = 1)
+      #q = T.set_subtensor(q[:,:num_batches,:], z)
+      #q = T.set_subtensor(q[:,num_batches:,:], z)
+      #z = T.set_subtensor(z[:,num_batches:,:], z[::-1,:num_batches,:])
+      #num_batches *= 2
+      #z = q
     if carry_time:
       assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
       name = 'W_carry_%s'%self.name
@@ -241,14 +253,14 @@ class RecurrentUnitLayer(Layer):
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], unit.n_in)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, encoder[0].output.shape[1], self.depth, unit.n_in)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in)
       else:
         if self.depth == 1:
-          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], unit.n_out) ] * unit.n_act
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) ] * unit.n_act
         else:
-          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, unit.n_out) ] * unit.n_act
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) ] * unit.n_act
 
       def step(x_t, z_t, i_t, *args):
         h_p = args[0]
@@ -262,8 +274,9 @@ class RecurrentUnitLayer(Layer):
         for W in self.Wp:
           h_p = pact(T.dot(h_p, W))
         z_p = self.dot(h_p, W_re)
-        if self.depth > 1:
-          act = unit.step(x_t.dimshuffle(0,2,1), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1)).dimshuffle(0,2,1)
+        if self.depth > 1: # this is broken
+          sargs = [arg.dimshuffle(0,1,2) for arg in args]
+          act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           act = unit.step(x_t, z_t, z_p, *args)
         if carry_time:

@@ -15,7 +15,7 @@ class Container(object):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class, name="", network=None,
-               train_flag=False, depth=1, consensus = "flat",
+               train_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                substitute_param_expr=None):
     """
