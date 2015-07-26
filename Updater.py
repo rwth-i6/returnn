@@ -187,16 +187,16 @@ class Updater:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = False #True #False #True #False #True
+          self.use_adagrad = True #True #False #True #False #True
           self.use_adadelta = False #True #True
-          self.skip_nan_inf = False
+          self.skip_nan_inf = True
           self.start_var_reduction = 0
           self.use_corrected_grad = True
           self.decay = 0.95
           ### default
-          self.delta_clip = None
+          self.delta_clip = 50.0
           self.outlier_detection = True
-          self.gamma_clip = 2.45
+          self.gamma_clip = 1.8
           ### aggressive
           #self.delta_clip = None
           #self.outlier_detection = False
@@ -205,6 +205,11 @@ class Updater:
           #self.delta_clip = 50.0 #None
           #self.outlier_detection = True #False
           #self.gamma_clip = 1.8 #None #1.8
+
+          if self.skip_nan_inf:
+            #If norm of the gradients of a parameter is inf or nan don't update that parameter
+            #That might be useful for RNNs.
+            grads[param] = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
 
           grads[param] = T.unbroadcast(grads[param], -1)
 

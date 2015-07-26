@@ -166,7 +166,7 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
-  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth = None):
+  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth=None):
     if not depth: depth = self.depth
     if name is None: name = 'W_' + self.name
     assert not (p and l)
@@ -371,8 +371,13 @@ class Layer(Container):
       name = 'W_T_%s'%self.name
       if not name in self.params:
         self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
+      W = self.params[name]
+      name = "b_T_%s"%self.name
+      if not name in self.params:
+        self.add_param(theano.shared(value=numpy.asarray(self.rng.uniform(low=-3, high=-1, size=(self.attrs['n_out'],)), dtype=theano.config.floatX), borrow=True, name=name), name=name)
+      b = self.params[name]
       x = T.concatenate([s.output for s in self.sources], axis = -1)
-      Tr = T.nnet.sigmoid(self.dot(x, self.params[name]))
+      Tr = T.nnet.sigmoid(self.dot(x, W) + b)
       self.output = Tr * self.output + (1 - Tr) * x
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)

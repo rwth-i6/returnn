@@ -205,19 +205,20 @@ class RecurrentUnitLayer(Layer):
           self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
         W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
       else:
-        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
+        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re + unit.n_in, name="W_re_%s" % self.name)
       self.add_param(W_re, W_re.name)
     # initialize forward weights
     if self.depth > 1:
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
+      value[unit.n_out:2*unit.n_out] = -1
     self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
     self.W_in = []
     for s in self.sources:
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
-                                             s.attrs['n_out'] + unit.n_in,
+                                             s.attrs['n_out'] + unit.n_in + unit.n_re,
                                              name="W_in_%s_%s" % (s.name, self.name), depth = 1)
       self.W_in.append(W)
       self.params["W_in_%s_%s" % (s.name, self.name)] = W
@@ -245,8 +246,7 @@ class RecurrentUnitLayer(Layer):
       #z = q
     if carry_time:
       assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
-      name = 'W_carry_%s'%self.name
-      W_cr = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
+      W_cr = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name='W_carry_%s'%self.name), name='W_carry_%s'%self.name)
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
