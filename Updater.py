@@ -320,7 +320,7 @@ class Updater:
             g = corrected_grad
             # Accumulate gradient
             new_sum_squared_grad = (
-                sum_square_grad + T.sqr(g)
+                sum_square_grad * self.decay + T.sqr(g)
             )
 
             rms_g_t = T.sqrt(new_sum_squared_grad)
