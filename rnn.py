@@ -127,7 +127,7 @@ def getDevicesInitArgs(config):
       specs = json.loads(open(config.value('initialize_from_json', '')).read())['worker']
     except:
       raise Exception('Unable to parse worker information from json content')
-    devices = [ { 'device' : key, 'config' : config, 'blocking' : False, 'num_batches' : specs[key]['num_batches'], "update_specs" : specs[key]['update_specs'] } for key in specs ]
+    devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key]['num_batches'], "update_specs" : specs[key]['update_specs'] } for key in specs ]
   else:
     device_tags = {}
     ncpus, ngpus = get_num_devices()

@@ -151,8 +151,9 @@ class Device():
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
     # Set device via flags.
     theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
-    if self.name.startswith("gpu"):
-      theano_flags["force_device"] = True
+    theano_flags["device"] = "cpu" if self.name == "cpuX" else theano_flags["device"]
+    #if self.name.startswith("gpu"):
+    theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
       func=self.process,
@@ -230,35 +231,36 @@ class Device():
     if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
       self.c = T.cast(self.cp, 'int32')
-    gparams = []
-    exclude = []
-    self.gradients = { k : {} for k in self.y }
-    if config.bool('debug_gradient_norm', False):
-      # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
-      # See self.fast_check_model_is_broken_from_result().
-      self.gradient_norm = 0
-    else:
-      self.gradient_norm = None
-    for target in self.y:
-      for pi, param in enumerate(self.trainnet.train_params_vars):
-        if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
-          gparam = 0
-        else:
-          try:
-            gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
-          except theano.gradient.DisconnectedInputError:
+    if self.network_task == 'train' or self.network_task == 'theano_graph':
+      gparams = []
+      exclude = []
+      self.gradients = { k : {} for k in self.y }
+      if config.bool('debug_gradient_norm', False):
+        # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
+        # See self.fast_check_model_is_broken_from_result().
+        self.gradient_norm = 0
+      else:
+        self.gradient_norm = None
+      for target in self.y:
+        for pi, param in enumerate(self.trainnet.train_params_vars):
+          if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
+          if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
             gparam = 0
-        if gparam == 0:
-          exclude.append(param)
-          print >> log.v4, "exclude:", self.name, param.name
-          gparams.append(T.constant(0))
-          continue
-        #update_specs['layers'].append(param.layer.name)
-        self.gradients[target][param] = gparam
-        gparams.append(theano.Out(gparam, borrow = True))
-        if self.gradient_norm is not None:
-          self.gradient_norm += T.sum(gparam ** 2)
+          else:
+            try:
+              gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
+            except theano.gradient.DisconnectedInputError:
+              gparam = 0
+          if gparam == 0:
+            exclude.append(param)
+            print >> log.v4, "exclude:", self.name, param.name
+            gparams.append(T.constant(0))
+            continue
+          #update_specs['layers'].append(param.layer.name)
+          self.gradients[target][param] = gparam
+          gparams.append(theano.Out(gparam, borrow = True))
+          if self.gradient_norm is not None:
+            self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
 
     # initialize functions

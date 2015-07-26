@@ -205,7 +205,10 @@ class LayerNetwork(object):
         params.pop('class', None)
         network.make_classifier(**params)
       else:
-        act = model[layer_name].attrs['activation']
+        try:
+          act = model[layer_name].attrs['activation']
+        except:
+          act = 'logistic'
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],
                    'activation': act,
@@ -218,7 +221,7 @@ class LayerNetwork(object):
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
-          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling']:
+          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry']:
             if p in model[layer_name].attrs:
               params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
