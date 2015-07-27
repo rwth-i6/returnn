@@ -181,7 +181,7 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, update_specs = None, network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, network_description=None, train_param_args=None):
     """
     :type config: Config.Config
     :type network_description: NetworkDescription.LayerNetworkDescription | None
@@ -190,8 +190,10 @@ class Device():
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
+    update_specs.setdefault('block_size', 0) #self.num_batches)
     update_specs.setdefault('layers', [])
     self.update_specs = update_specs
+    self.block_size = update_specs['block_size']
     target = config.value('target', 'classes')
     if self.blocking:
       assert os.getpid() == self.main_pid
@@ -200,6 +202,7 @@ class Device():
     import theano
     import theano.tensor as T
     import h5py
+    self.T = T
     self.network_task = config.value('task', 'train')
     if network_description is not None:
       self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
@@ -223,9 +226,9 @@ class Device():
     self.y = {}
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
-      else:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
+      else:
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'int32'), borrow=True)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
     if self.trainnet.loss in ('ctc','ce_ctc'):
@@ -267,6 +270,8 @@ class Device():
     self.updater = None
     #update_specs['layers'] = list(set(update_specs['layers']))
     self.update_specs = update_specs
+    self.block_start = T.lscalar()
+    self.block_end = T.lscalar()
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -300,7 +305,7 @@ class Device():
       if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
-        self.trainer = theano.function(inputs=[],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        updates=self.updater.getUpdateList(),
@@ -311,14 +316,14 @@ class Device():
       else:
         self.train_outputs_format += ["gparams..."]
         outputs += gparams
-        self.trainer = theano.function(inputs=[],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        no_default_updates=False,
                                        on_unused_input='warn',
                                        name="train_distributed")
 
-      self.tester = theano.function(inputs=[],
+      self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
                                     givens=test_givens,
                                     on_unused_input='warn',
@@ -393,10 +398,21 @@ class Device():
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    if task == "train" or task == "theano_graph":
-      output = self.trainer()
-    elif task == "eval":
-      output = self.tester()
+    batch_dim = self.x.get_value().shape[1]
+    block_size = self.block_size if self.block_size else batch_dim
+    if task == "train" or task == "theano_graph" or task == "eval":
+      func = self.tester if task == "eval" else self.trainer
+      output = []
+      batch_end = 0
+      while batch_end < batch_dim:
+        batch_start = batch_end
+        batch_end = min(batch_start + block_size, batch_dim)
+        block_output = func(batch_start, batch_end)
+        if not output:
+          output = block_output
+        else:
+          for j in xrange(len(block_output)):
+            output[j] += block_output[j]
     elif task == "extract" or task == "forward":
       output = self.extractor()
     elif task == 'classify':
@@ -746,7 +762,7 @@ class Device():
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
       for target in self.y:
-        self.y[target].set_value(self.targets[target].flatten().astype('int32'), borrow = True)
+        self.y[target].set_value(self.targets[target].astype('int32'), borrow = True)
       self.i.set_value(self.input_index, borrow = True)
       self.j.set_value(self.output_index, borrow = True)
       if SprintCommunicator.instance is not None:
@@ -761,9 +777,9 @@ class Device():
       for target in self.targetkeys:
         if len(self.targets[target].shape) == 3:
           #numpy.swapaxes(self.targets[target], 1, 2).
-          self.input_queue.send(self.targets[target].reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
+          self.input_queue.send(self.targets[target]) #.reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
         else:
-          self.input_queue.send(self.targets[target].flatten())
+          self.input_queue.send(self.targets[target]) #.flatten())
       self.input_queue.send(self.input_index)
       self.input_queue.send(self.output_index)
       self.input_queue.send(self.tags)
@@ -968,7 +984,12 @@ class Device():
     #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i), (network.j, self.j)] + [ (network.y[k], self.y[k]) for k in self.y ]
+    i = self.block_start
+    j = self.block_end
+    return [(network.x, self.x[:,i:j]),
+            (network.i, self.i[:,i:j]),
+            (network.j, self.j[:,i:j])] + \
+           [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
       return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
@@ -979,4 +1000,4 @@ class Device():
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x), (network.y, self.y), (network.c, self.c), (network.i, self.i)]
+    return [(network.x, self.x), (network.y, self.y.flatten()), (network.c, self.c), (network.i, self.i)]

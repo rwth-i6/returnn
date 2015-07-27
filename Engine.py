@@ -406,7 +406,7 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               pad_batches=self.pad_batches,
                               report_prefix=self.get_epoch_str() + " eval")

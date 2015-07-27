@@ -297,6 +297,8 @@ def initData():
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
+  elif config.value('chunking', "0") == "1": # MLP mode
+    chunking = "1"
   global train_data, dev_data, eval_data
   dev_data, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
                                          seq_ordering="sorted", shuffle_frames_of_nseqs=0)
