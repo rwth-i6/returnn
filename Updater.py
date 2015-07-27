@@ -318,9 +318,9 @@ class Updater:
 
           if self.use_adagrad:
             g = corrected_grad
-            # Accumulate gradient
+            # Accumulate gradient (windowed version)
             new_sum_squared_grad = (
-                sum_square_grad * self.decay + T.sqr(g)
+                sum_square_grad * self.decay + (2 - self.decay) * T.sqr(g)
             )
 
             rms_g_t = T.sqrt(new_sum_squared_grad)

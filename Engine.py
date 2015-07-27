@@ -154,6 +154,7 @@ class Engine:
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     self.exclude = config.int_list('exclude', [])
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
+    self.share_batches = config.bool('share_batches', False)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -379,7 +380,7 @@ class Engine:
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
                               learning_rate=self.learning_rate, updater=self.updater,
                               eval_batch_size=self.update_batch_size,
-                              start_batch=start_batch, pad_batches=self.pad_batches,
+                              start_batch=start_batch, pad_batches=self.pad_batches, share_batches=self.share_batches,
                               exclude=self.exclude,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
     trainer.join()

@@ -12,7 +12,7 @@ from TaskSystem import ProcConnectionDied
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, share_batches = False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -26,6 +26,7 @@ class TaskThread(threading.Thread):
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       if eval_batch_size == 0:
         eval_batch_size = sys.maxint
+      self.share_batches = share_batches
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
       self.start_batch = start_batch
@@ -57,7 +58,7 @@ class TaskThread(threading.Thread):
       self.batches.advance(batch_adv_idx)
       return batches
 
-    def allocate_devices(self):
+    def allocate_devices(self, selected_devices = None):
       """
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
@@ -71,10 +72,14 @@ class TaskThread(threading.Thread):
       :returns list of used devices, list of batches per device, and number of batches which were handled.
       Number of batches will always be positive, but devices could be empty on skipped seqs.
       """
+      if not selected_devices: selected_devices = self.devices
       devices = []; " :type: list[Device.Device] "
       devices_batches = []; " :type: list[list[EngineBatch.Batch]] "
-      for device in self.devices:
-        batches = self.batches.peek_next_n(device.num_batches)
+      if self.share_batches:
+        batches = self.batches.peek_next_n(1)
+      for device in selected_devices:
+        if not self.share_batches:
+          batches = self.batches.peek_next_n(device.num_batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
         if success:
           devices.append(device)
@@ -89,8 +94,11 @@ class TaskThread(threading.Thread):
           else:
             assert len(devices) > 0
             break
+        if not self.share_batches:
+          self.batches.advance(batch_adv_idx)
+      if self.share_batches:
         self.batches.advance(batch_adv_idx)
-      return devices, devices_batches
+      return devices_batches
 
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
@@ -128,9 +136,11 @@ class TaskThread(threading.Thread):
         if not self.alloc_devices:
           self.finished = True
           return
-        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
+        self.devices_batches = self.parent.allocate_devices(devices) #[ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
         for batches in self.devices_batches:
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
+        if self.parent.share_batches:
+          self.num_frames /= len(devices)
         self.start()
 
       def finish(self):
@@ -215,7 +225,7 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
           device.run(self.parent.task)
-          batch_idx += device.num_batches
+      #if not self.share batch_idx += device.num_batches
 
       def device_collect_results(self):
         device_results = []
@@ -338,7 +348,8 @@ class TaskThread(threading.Thread):
         device.se = 0
         device.fe = 0
 
-      deviceRuns = [ None for i in xrange(len(self.devices)) ]
+      num_device_runs = 1 if self.share_batches else len(self.devices)
+      deviceRuns = [ None for i in xrange(num_device_runs) ]
 
       results = {'batchess': [], 'results': [], 'num_frames' : 0 }
       run_frames = 0
@@ -354,7 +365,7 @@ class TaskThread(threading.Thread):
           crashed = True
           break
 
-        for i in xrange(len(self.devices)):
+        for i in xrange(num_device_runs):
           if deviceRuns[i]:
             if deviceRuns[i].crashed:
               crashed = True
@@ -364,11 +375,7 @@ class TaskThread(threading.Thread):
               results['results'] += deviceRuns[i].result['results'][:]
               results['result_format'] = deviceRuns[i].result['result_format']
               results['num_frames'] += deviceRuns[i].num_frames
-              self.devices[i].tot += time.time() - self.devices[i].te
-              self.devices[i].se += deviceRuns[i].se
-              self.devices[i].fe += deviceRuns[i].fe
               deviceRuns[i] = None
-              #print self.devices[i].name, "tot", time.time() - self.devices[i].se
 
         if crashed:
           break
@@ -402,10 +409,10 @@ class TaskThread(threading.Thread):
             self.batches.advance(1)
             break
           match = False
-          for i in xrange(len(self.devices)):
+          for i in xrange(num_device_runs):
             if not deviceRuns[i]:
               self.devices[i].te = time.time()
-              deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
+              deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices)
               run_frames += deviceRuns[i].num_frames
               match = True
               break
@@ -416,7 +423,7 @@ class TaskThread(threading.Thread):
             time.sleep(0.01)
           continue
 
-      for i,device in enumerate(self.devices):
+      for i in xrange(num_device_runs):
         if deviceRuns[i]:
           if not deviceRuns[i].finished and not deviceRuns[i].crashed:
             deviceRuns[i].join()
@@ -428,6 +435,7 @@ class TaskThread(threading.Thread):
           results['results'] += deviceRuns[i].result['results']
           results['result_format'] = deviceRuns[i].result['result_format']
           results['num_frames'] += deviceRuns[i].num_frames
+      for device in self.devices:
         device.finish_epoch_stats()
         #print device.name, "tot", device.tot,"start",device.se,"finish",device.fe
       if crashed: return
@@ -583,6 +591,7 @@ class TrainTaskThread(TaskThread):
     assert results
     assert result_format  # train should always have the format
     assert num_frames > 0
+    if self.share_batches: num_frames *= len(self.devices)
     results = [Device.make_result_dict(res, result_format) for res in results]
     cost = [res["cost"] for res in results]
     score = sum(cost)
