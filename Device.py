@@ -318,7 +318,6 @@ class Device():
                                        on_unused_input='warn',
                                        name="train_distributed")
 
-
       self.tester = theano.function(inputs=[],
                                     outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
                                     givens=test_givens,

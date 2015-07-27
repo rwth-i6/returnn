@@ -170,7 +170,7 @@ class RecurrentUnitLayer(Layer):
                **kwargs):
     # if on cpu, we need to fall back to the theano version of the LSTM Op
     unit_given = unit
-    if not str(theano.config.device).startswith('gpu') and (unit == 'lstm' or unit == 'lstmp'):
+    if str(theano.config.device).startswith('cpu') and (unit == 'lstm' or unit == 'lstmp'):
       print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
     unit = eval(unit.upper())(n_out, depth)
