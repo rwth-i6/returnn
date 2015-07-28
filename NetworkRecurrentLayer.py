@@ -71,7 +71,7 @@ class Unit(Container):
     self.params = {}
 
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    xc = T.concatenate([s.output for s in x], axis = -1)
+    xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     outputs, _ = theano.scan(step,
                              #strict = True,
                              truncate_gradient = truncate_gradient,
@@ -109,7 +109,7 @@ class LSTM(Unit):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
 
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
+    XS = [z] if not x else [S.output[::-(2 * go_backwards - 1)] for S in x]
     return [ LSTMOp2Instance(*([W_re, outputs_info[0], b, i] + XS + W_in))[0] ]
 
 
@@ -173,6 +173,7 @@ class RecurrentUnitLayer(Layer):
     if str(theano.config.device).startswith('cpu') and (unit == 'lstm' or unit == 'lstmp'):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
+    unit = unit.encode("utf8")
     unit = eval(unit.upper())(n_out, depth)
     kwargs.setdefault("layer_class", "rec")
     kwargs.setdefault("n_out", unit.n_out)
@@ -295,7 +296,7 @@ class RecurrentUnitLayer(Layer):
         else:
           act = unit.step(x_t, z_t, z_p, *args)
         if carry_time:
-          c_t = T.nnet.sigmoid(self.dot(x, W_cr))
+          c_t = T.nnet.sigmoid(self.dot(x_t, W_cr))
           for j in xrange(unit.n_act):
             act[j] = c_t * act[j] + (1 - c_t) * x_t
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
