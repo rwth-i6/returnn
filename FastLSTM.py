@@ -228,7 +228,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [XS[0].type(), XS[0].type()])
+    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [c.type(), c.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
