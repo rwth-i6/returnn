@@ -215,8 +215,8 @@ class TaskThread(threading.Thread):
             self.processing = True
             self.allocated = False
             self.finish()
-            self.processing = False
             self.finished = True
+            self.processing = False
           else:
             time.sleep(0.01)
 
@@ -586,7 +586,8 @@ class TrainTaskThread(TaskThread):
     assert results
     assert result_format  # train should always have the format
     assert num_frames > 0
-    if self.share_batches: num_frames *= len(self.devices)
+    if self.share_batches:
+      num_frames *= len(self.devices)
     results = [Device.make_result_dict(res, result_format) for res in results]
     cost = [res["cost"] for res in results]
     score = sum(cost)
@@ -598,7 +599,7 @@ class TrainTaskThread(TaskThread):
     if self.do_ctc_priors:
       for res in results:
         self.ctc_priors += res["ctc_priors"]
-    self.score += score
+    self.score += score if not self.share_batches else score / len(self.devices)
     self.create_consensus(cost, num_frames)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
