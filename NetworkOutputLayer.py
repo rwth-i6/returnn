@@ -8,6 +8,18 @@ from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
 
+
+#from Accumulator import AccumulatorOpInstance
+
+#def step(*args): # requires same amount of memory
+#  xs = args[:(len(args)-1)/2]
+#  ws = args[(len(args)-1)/2:-1]
+#  b = args[-1]
+#  out = b
+#  for w,x in zip(ws,xs):
+#    out += T.dot(x,w)
+#  return out
+
 class OutputLayer(Layer):
   def __init__(self, index, loss, y, **kwargs):
     """
@@ -28,12 +40,18 @@ class OutputLayer(Layer):
       if source.attrs['sparse']:
         self.z += W[T.cast(source.output[:,:,0], 'int32')]
       elif m is None:
-        #self.z += T.dot(W[:,:,0], source.output)
-        #self.z += T.dot(source.output, W)
-        #self.z += T.tensordot(T.sum(T.tensordot(source.output, W, 1), axis=2), Q, 1)
         self.z += self.dot(source.output, W)
       else:
         self.z += self.dot(self.mass * m * source.output, W)
+
+    #xs = [s.output for s in self.sources]
+    #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
+    #outputs_info = None #[ T.alloc(numpy.cast[theano.config.floatX](0), index.shape[1], self.attrs['n_out']) ]
+
+    #self.z, _ = theano.scan(step,
+    #                        sequences = [s.output for s in self.sources],
+    #                        non_sequences = self.W_in + [self.b])
+
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.index = index
     self.i = (index.flatten() > 0).nonzero()

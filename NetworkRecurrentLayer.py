@@ -173,7 +173,6 @@ class RecurrentUnitLayer(Layer):
     if str(theano.config.device).startswith('cpu') and (unit == 'lstm' or unit == 'lstmp'):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
-    unit = unit.encode("utf8")
     unit = eval(unit.upper())(n_out, depth)
     kwargs.setdefault("layer_class", "rec")
     kwargs.setdefault("n_out", unit.n_out)
@@ -183,7 +182,7 @@ class RecurrentUnitLayer(Layer):
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.set_attr('n_out', n_out)
-    self.set_attr('unit', unit_given)
+    self.set_attr('unit', unit_given.encode("utf8"))
     self.set_attr('psize', psize)
     self.set_attr('pact', pact)
     self.set_attr('pdepth', pdepth)

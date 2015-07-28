@@ -164,22 +164,11 @@ class LayerNetwork(object):
           if s == 'data':
             print network.n_in
             x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
-          elif s != "null" and s != "":
+          elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
-          else:
-            assert not s
-            # Fix for models via NetworkDescription.
-            s = Layer.guess_source_layer_name(layer_name)
-            if not s:
-              # Fix for data input. Just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
-            else:
-              if not network.hidden.has_key(s):
-                traverse(model, s, network)
-              # Add just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
+
       else:
         x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
@@ -216,13 +205,14 @@ class LayerNetwork(object):
                    'name': layer_name,
                    'mask': mask or model[layer_name].attrs['mask'],
                    'train_flag' : train_flag,
+                   'carry' : model[layer_name].attrs['carry'],
                    'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
           params['index'] = network.i
-          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry']:
-            if p in model[layer_name].attrs:
+          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth']:
+            if p in model[layer_name].attrs.keys():
               params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
             params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
