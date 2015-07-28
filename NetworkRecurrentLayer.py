@@ -173,6 +173,7 @@ class RecurrentUnitLayer(Layer):
     if str(theano.config.device).startswith('cpu') and (unit == 'lstm' or unit == 'lstmp'):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
+    unit = unit.encode("utf8")
     unit = eval(unit.upper())(n_out, depth)
     kwargs.setdefault("layer_class", "rec")
     kwargs.setdefault("n_out", unit.n_out)
@@ -182,7 +183,7 @@ class RecurrentUnitLayer(Layer):
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.set_attr('n_out', n_out)
-    self.set_attr('unit', unit_given.encode("utf8"))
+    self.set_attr('unit', unit_given)
     self.set_attr('psize', psize)
     self.set_attr('pact', pact)
     self.set_attr('pdepth', pdepth)
@@ -260,12 +261,13 @@ class RecurrentUnitLayer(Layer):
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z
+      sources = self.sources
       if encoder:
         n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = 1) for i in xrange(unit.n_act) ]
+        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
@@ -301,7 +303,7 @@ class RecurrentUnitLayer(Layer):
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
 
       outputs = unit.scan(step,
-                          self.sources,
+                          sources,
                           sequences[s::self.attrs['sampling']],
                           T.cast(index, theano.config.floatX),
                           outputs_info,
@@ -328,5 +330,5 @@ class RecurrentUnitLayer(Layer):
           self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
       else:
         self.act = outputs
-    self.make_output(self.act[0][::(direction or 1)])
+    self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)

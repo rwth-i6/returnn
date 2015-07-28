@@ -182,8 +182,8 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   #!!! change this when changing the code!
-  def c_code_cache_version(self):
-    return 1, 1
+  #def c_code_cache_version(self):
+  #  return 1, 1
 
 LSTMOpGradNoInplaceInstance = LSTMOp2Grad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOp2Grad(inplace=True)
@@ -228,7 +228,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [c.type(), c.type()])
+    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [XS[0].type(), XS[0].type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -330,8 +330,8 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return [Z_shape, H_shape]
 
   #!!! change this when changing the code!
-  def c_code_cache_version(self):
-    return 1, 1
+  #def c_code_cache_version(self):
+  #  return 1, 1
 
 LSTMOp2Instance = LSTMOp2()
 
