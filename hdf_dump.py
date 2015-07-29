@@ -14,7 +14,7 @@ def hdf_dataset_init(file_name):
     :param file_name: string filename of hdf dataset file in the filesystem
     :return: h5py._hl.files.File
     '''
-    print log.v3, "Creating HDF dataset file " + file_name
+    print >> log.v3, "Creating HDF dataset file " + file_name
     return h5.File(file_name, "w")
 
 
