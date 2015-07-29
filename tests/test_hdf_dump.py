@@ -16,11 +16,14 @@ def setup_module():
 # TODO: Log.V3 is a problem for nose, figure out why
 def test_hdf_dataset_init():
     dataset_name = "nose_dataset.hdf"
+    if path.exists(dataset_name):
+      remove(dataset_name)
     hdf_dump.hdf_dataset_init(dataset_name)
     assert path.exists(dataset_name)
 
 
 def teardown_module():
     dataset_name = "nose_dataset.hdf"
-    remove(dataset_name)
+    if path.exists(dataset_name):
+      remove(dataset_name)
     assert not path.exists(dataset_name)
