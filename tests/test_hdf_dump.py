@@ -2,6 +2,7 @@ import hdf_dump
 import nose.tools
 from os import path
 from os import remove
+from Log import log
 
 
 def setup_module():
@@ -10,10 +11,9 @@ def setup_module():
     here all theano stuff need to be loaded from virtualenv
     :return:
     """
-    pass
+    log.initialize()
 
 
-# TODO: Log.V3 is a problem for nose, figure out why
 def test_hdf_dataset_init():
     dataset_name = "nose_dataset.hdf"
     if path.exists(dataset_name):
