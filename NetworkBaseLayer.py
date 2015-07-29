@@ -225,7 +225,7 @@ class Container(object):
       elif attrs['from'] == '':
         guessed = self.guess_source_layer_name(self.name)
         if guessed:
-          attrs['from'] = guessed
+          attrs['from'] = [guessed]
         else:
           attrs.pop('from', None)
       else:
