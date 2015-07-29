@@ -228,7 +228,7 @@ class Device():
       if self.trainnet.y[k].type == T.ivector().type:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
       else:
-        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'int32'), borrow=True, name='y_soft_%s' % k)
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = theano.config.floatX), borrow=True, name='y_soft_%s' % k)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
     self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j')
     if self.trainnet.loss in ('ctc','ce_ctc'):
