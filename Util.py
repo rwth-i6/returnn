@@ -166,6 +166,11 @@ class ObjAsDict:
       raise KeyError(e)
 
 
+class DictAsObj:
+  def __init__(self, dikt):
+    self.__dict__ = dikt
+
+
 def obj_diff_str(self, other):
   if self is None and other is None:
     return "No diff."
@@ -196,6 +201,10 @@ def obj_diff_str(self, other):
     return "\n".join(s)
   else:
     return "No diff."
+
+
+def dict_diff_str(self, other):
+  return obj_diff_str(DictAsObj(self), DictAsObj(other))
 
 
 def find_ranges(l):
