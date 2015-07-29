@@ -448,7 +448,7 @@ class LayerNetwork(object):
     for k in self.output:
       self.output[k].save(model)
 
-  def to_json(self):
+  def to_json_content(self):
     out = {}
     for name in self.output:
       outattrs = self.output[name].attrs.copy()
@@ -457,7 +457,11 @@ class LayerNetwork(object):
       out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
-    return json.dumps(out, sort_keys=True)
+    return out
+
+  def to_json(self):
+    json_content = self.to_json_content()
+    return json.dumps(json_content, sort_keys=True)
 
   def load_hdf(self, model):
     """
