@@ -44,6 +44,13 @@ class Config:
     value = [str(v) for v in value]
     self.dict[key] = value
 
+  def update(self, dikt):
+    """
+    :type dikt: dict
+    """
+    for key, value in dikt.items():
+      self.set(key, value)
+
   def value(self, key, default, index=None):
     """
     :type key: str
