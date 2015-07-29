@@ -3,6 +3,8 @@
 from nose.tools import assert_equal, assert_is_instance, assert_in
 from NetworkDescription import LayerNetworkDescription
 from Config import Config
+from Network import LayerNetwork
+from Util import dict_diff_str
 
 
 def test_init():
@@ -35,15 +37,32 @@ config1_dict = {
   "num_inputs": 5,
   "num_outputs": 10,
   "hidden_size": (7, 8,),
-  "hidden_type": "forward",
+  "hidden_type": "hidden",
   "activation": "relu",
+  "bidirectional": False,
 }
 
 
-def test_config1():
+def test_config1_basic():
   config = Config()
   config.update(config1_dict)
   desc = LayerNetworkDescription.from_config(config)
   assert_is_instance(desc.hidden_info, list)
   assert_equal(len(desc.hidden_info), len(config1_dict["hidden_size"]))
   assert_equal(desc.num_inputs, config1_dict["num_inputs"])
+
+
+def test_config1_to_json():
+  config = Config()
+  config.update(config1_dict)
+  orig_network = LayerNetwork.from_config_topology(config)
+  orig_json_content = orig_network.to_json_content()
+  from pprint import pprint
+  pprint(orig_json_content)
+  new_network = LayerNetwork.from_json(orig_json_content, orig_network.n_in, orig_network.n_out)
+  assert_equal(orig_network.n_in, new_network.n_in)
+  assert_equal(orig_network.n_out, new_network.n_out)
+  new_json_content = new_network.to_json_content()
+  if orig_json_content != new_json_content:
+    print(dict_diff_str(orig_json_content, new_json_content))
+    assert_equal(orig_json_content, new_network.to_json_content())
