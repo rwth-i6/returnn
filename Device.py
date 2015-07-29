@@ -222,17 +222,17 @@ class Device():
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
-    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
+    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
       else:
-        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'int32'), borrow=True)
-    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
-    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'int32'), borrow=True, name='y_soft_%s' % k)
+    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
+    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j')
     if self.trainnet.loss in ('ctc','ce_ctc'):
-      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
