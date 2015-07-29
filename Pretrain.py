@@ -63,7 +63,9 @@ class Pretrain:
 
     # network.output is the remaining output layer.
     if self.copy_output_layer:
-      intelli_copy_layer(old_network.output, new_network.output)
+      for layer_name in new_network.output.keys():
+        assert layer_name in old_network.output
+        intelli_copy_layer(old_network.output[layer_name], new_network.output[layer_name])
 
   def get_train_param_args_for_epoch(self, epoch):
     """

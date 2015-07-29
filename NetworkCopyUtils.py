@@ -5,7 +5,7 @@ from Log import log
 def intelli_copy_layer(old_layer, new_layer):
   """
   :type old_layer: NetworkBaseLayer.Layer
-  :type old_layer: NetworkBaseLayer.Layer
+  :type new_layer: NetworkBaseLayer.Layer
 
   Copies from old_layer to new_layer.
   """
