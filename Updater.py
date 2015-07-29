@@ -176,13 +176,13 @@ class Updater:
       for param in grads.keys():
         deltas = grads[param]
         #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
-        #if self.gradient_clip > 0:
-        #  # Note that there is also theano.gradient.grad_clip, which would clip it already
-        #  # at the backprop step and which would affect also other dependent gradients.
-        #  # However, this is simpler for now.
-        #  # Also note that this is yet without the learning rate factor -
-        #  # this might be different to other gradient clipping implementations.
-        #  deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
+        if self.gradient_clip > 0:
+          # Note that there is also theano.gradient.grad_clip, which would clip it already
+          # at the backprop step and which would affect also other dependent gradients.
+          # However, this is simpler for now.
+          # Also note that this is yet without the learning rate factor -
+          # this might be different to other gradient clipping implementations.
+          deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
         #if self.momentum > 0:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
@@ -444,7 +444,7 @@ class Updater:
 
           if self.use_corrected_grad:
             updates.append((old_grad, corrected_grad))
-          
+
         elif self.adagrad:
           epsilon = 1e-6
           accu_new = self.accu[param] + deltas ** 2
