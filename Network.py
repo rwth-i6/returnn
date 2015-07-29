@@ -74,21 +74,27 @@ class LayerNetwork(object):
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
-    :type json_content: str
+    :type json_content: str | dict
     :type n_in: int
     :type n_out: dict[str,(int,int)]
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    try:
-      topology = json.loads(json_content)
-      if 'network' in topology: topology = topology['network']
-    except ValueError:
-      print >> log.v4, "----- BEGIN JSON CONTENT -----"
-      print >> log.v4, json_content
-      print >> log.v4, "------ END JSON CONTENT ------"
-      assert False, "invalid json content"
+    if isinstance(json_content, str):
+      try:
+        topology = json.loads(json_content)
+      except ValueError:
+        print >> log.v4, "----- BEGIN JSON CONTENT -----"
+        print >> log.v4, json_content
+        print >> log.v4, "------ END JSON CONTENT ------"
+        assert False, "invalid json content"
+      assert isinstance(topology, dict)
+    else:
+      assert isinstance(json_content, dict)
+      topology = json_content
+    if 'network' in topology:
+      topology = topology['network']
     network.recurrent = True
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
