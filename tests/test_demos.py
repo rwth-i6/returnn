@@ -61,7 +61,12 @@ def run_config_get_fer(config_filename):
   for f in glob(model_filename + ".*"):
     os.remove(f)
   # Now start.
-  return run_and_parse_last_fer("rnn.py", config_filename)
+  fer = run_and_parse_last_fer("rnn.py", config_filename)
+  # Cleanup models
+  assert model_filename.startswith("/tmp/")
+  for f in glob(model_filename + ".*"):
+    os.remove(f)
+  return fer
 
 
 class TestDemos(object):
