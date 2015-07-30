@@ -1,6 +1,6 @@
 
 
-from nose.tools import assert_equal, assert_is_instance, assert_in
+from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
 from NetworkDescription import LayerNetworkDescription
 from Config import Config
 from Network import LayerNetwork
@@ -52,6 +52,25 @@ def test_config1_basic():
   assert_is_instance(desc.hidden_info, list)
   assert_equal(len(desc.hidden_info), len(config1_dict["hidden_size"]))
   assert_equal(desc.num_inputs, config1_dict["num_inputs"])
+
+
+def test_network_config1_init():
+  config = Config()
+  config.update(config1_dict)
+  network = LayerNetwork.from_config_topology(config)
+  assert_in("hidden_0", network.hidden)
+  assert_in("hidden_1", network.hidden)
+  assert_equal(len(network.hidden), 2)
+  assert_is_instance(network.hidden["hidden_0"], ForwardLayer)
+  assert_equal(network.hidden["hidden_0"].layer_class, "hidden")
+  assert_false(network.recurrent)
+
+  json_content = network.to_json_content()
+  pprint(json_content)
+  assert_in("hidden_0", json_content)
+  assert_equal(json_content["hidden_0"]["class"], "hidden")
+  assert_in("hidden_1", json_content)
+  assert_in("output", json_content)
 
 
 def test_NetworkDescription_to_json_config1():
