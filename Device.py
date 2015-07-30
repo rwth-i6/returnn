@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -592,11 +592,11 @@ class Device():
         output_queue.send("generic-exec-result")
         output_queue.send(res)
       elif cmd == "reinit":  # via self.reinit()
-        network_description = input_queue.recv()
+        json_content = input_queue.recv()
         train_param_args = input_queue.recv()
-        if self.need_reinit(network_description, train_param_args):
+        if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
           self.initialize(config, update_specs=update_specs,
-                          network_description=network_description, train_param_args=train_param_args)
+                          json_content=json_content, train_param_args=train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
@@ -832,11 +832,14 @@ class Device():
     print >> log.v4, "Device %s proc epoch time stats: total %s, %.02f%% computing, %.02f%% updating data" % \
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
-  def need_reinit(self, network_description=None, train_param_args=None):
+  def need_reinit(self, json_content, train_param_args=None):
     assert self.trainnet
-    if self.trainnet.description != network_description:
+    if isinstance(json_content, str):
+      import json
+      json_content = json.loads(json_content)
+    if self.trainnet.to_json_content() != json_content:
       print >> log.v3, "Device: reinit because network description differs. Diff:", \
-                       obj_diff_str(self.trainnet.description, network_description)
+                       dict_diff_str(self.trainnet.to_json_content(), json_content)
       return True
     if train_param_args is None:
       train_param_args = self.trainnet.get_train_param_args_default()
@@ -845,9 +848,9 @@ class Device():
       return True
     return False
 
-  def reinit(self, network_description=None, train_param_args=None):
+  def reinit(self, json_content, train_param_args=None):
     """
-    :type network_description: NetworkDescription.LayerNetworkDescription
+    :type json_content: dict[str] | str
     :type train_param_args: dict
     :returns len of train_params
     :rtype: int
@@ -856,14 +859,14 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
-      if self.need_reinit(network_description, train_param_args):
+      if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
         self.initialize(self.config, update_specs=self.update_specs,
-                        network_description=network_description,
+                        json_content=json_content,
                         train_param_args=train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
-      self.input_queue.send(network_description)
+      self.input_queue.send(json_content)
       self.input_queue.send(train_param_args)
       r = self.output_queue.recv()
       assert r == "reinit-ready"
@@ -880,7 +883,7 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     # Reinit if needed.
-    self.reinit(network.description, train_param_args)
+    self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.targetkeys = network.cost.keys()
 
