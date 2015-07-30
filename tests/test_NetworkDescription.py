@@ -5,6 +5,7 @@ from NetworkDescription import LayerNetworkDescription
 from Config import Config
 from Network import LayerNetwork
 from Util import dict_diff_str
+from pprint import pprint
 
 
 def test_init():
@@ -52,12 +53,29 @@ def test_config1_basic():
   assert_equal(desc.num_inputs, config1_dict["num_inputs"])
 
 
-def test_config1_to_json():
+def test_NetworkDescription_to_json_config1():
+  config = Config()
+  config.update(config1_dict)
+  desc = LayerNetworkDescription.from_config(config)
+  orig_network = LayerNetwork.from_description(desc)
+  orig_json_content = orig_network.to_json_content()
+  desc_json_content = desc.to_json_content()
+  pprint(desc_json_content)
+  new_network = LayerNetwork.from_json(
+    desc_json_content,
+    config1_dict["num_inputs"],
+    {"classes": (config1_dict["num_outputs"], 1)})
+  new_json_content = new_network.to_json_content()
+  if orig_json_content != new_json_content:
+    print(dict_diff_str(orig_json_content, new_json_content))
+    assert_equal(orig_json_content, new_network.to_json_content())
+
+
+def test_config1_to_json_network_copy():
   config = Config()
   config.update(config1_dict)
   orig_network = LayerNetwork.from_config_topology(config)
   orig_json_content = orig_network.to_json_content()
-  from pprint import pprint
   pprint(orig_json_content)
   new_network = LayerNetwork.from_json(orig_json_content, orig_network.n_in, orig_network.n_out)
   assert_equal(orig_network.n_in, new_network.n_in)
