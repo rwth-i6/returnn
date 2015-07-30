@@ -54,7 +54,7 @@ class LayerNetwork(object):
       description = LayerNetworkDescription.from_config(config)
       json_content = description.to_json_content(mask=mask)
     return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
-  
+
   @classmethod
   def from_description(cls, description, mask=None, train_flag = False):
     """
@@ -347,6 +347,7 @@ class LayerNetwork(object):
       params["mask"] = mask
     params["network"] = self
     layer_class = get_layer_class(params["layer_class"])
+    params.pop("layer_class")
     if layer_class.recurrent:
       self.recurrent = True
       params['index'] = self.i
