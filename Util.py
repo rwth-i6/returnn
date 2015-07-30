@@ -194,6 +194,12 @@ def obj_diff_str(self, other):
         for i, (a, b) in enumerate(zip(value_self, value_other)):
           if a != b:
             s += ["attrib %r[%i] differ. self: %r, other: %r" % (attrib, i, a, b)]
+    elif isinstance(value_self, dict):
+      if not isinstance(value_other, dict):
+        s += ["attrib %r self is dict but other is %r" % (attrib, type(value_other))]
+      elif value_self != value_other:
+        s += ["attrib %r dict differs:" % attrib]
+        s += ["  " + l for l in dict_diff_str(value_self, value_other).splitlines()]
     else:
       if value_self != value_other:
         s += ["attrib %r differ. self: %r, other: %r" % (attrib, value_self, value_other)]
