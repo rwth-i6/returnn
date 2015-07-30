@@ -150,9 +150,12 @@ class Device():
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
     # Set device via flags.
-    theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
-    theano_flags["device"] = "cpu" if self.name == "cpuX" else theano_flags["device"]
-    #if self.name.startswith("gpu"):
+    if self.name == "cpuX":
+      theano_flags["device"] = "cpu"
+    elif self.name == "gpuX":
+      theano_flags["device"] = "gpu"
+    else:
+      theano_flags["device"] = self.name
     theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
