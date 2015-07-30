@@ -134,9 +134,13 @@ class TaskThread(threading.Thread):
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.num_frames = 0
         for batches in self.devices_batches:
+          assert batches
+          assert batches[0].seqs
+          assert batches[0].seqs[0].frame_length[1] > 0
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
         if self.parent.share_batches:
           self.num_frames /= len(self.alloc_devices)
+        assert self.num_frames > 0
         self.allocated = True
 
       def finish(self):
