@@ -178,9 +178,20 @@ def obj_diff_str(self, other):
     return "self is None and other is %r" % other
   if self is not None and other is None:
     return "other is None and self is %r" % self
+  if self == other:
+    return "No diff."
   s = []
-  for attrib in sorted(set(other.__dict__).union(other.__dict__.keys())):
-    if attrib not in self.__dict__ or attrib not in other.__dict__:
+  def _obj_attribs(obj):
+    d = getattr(obj, "__dict__", None)
+    if d is not None:
+      return d.keys()
+    return None
+  self_attribs = _obj_attribs(self)
+  other_attribs = _obj_attribs(other)
+  if self_attribs is None or other_attribs is None:
+    return "self: %r, other: %r" % (self, other)
+  for attrib in sorted(set(self_attribs).union(other_attribs)):
+    if attrib not in self_attribs or attrib not in other_attribs:
       s += ["attrib %r not on both" % attrib]
       continue
     value_self = getattr(self, attrib)
