@@ -71,6 +71,19 @@ class LayerNetwork(object):
     return network
 
   @classmethod
+  def json_init_args_from_config(cls, config):
+    """
+    :rtype: dict[str]
+    :returns the kwarg for cls.from_json()
+    """
+    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+    return {
+      "n_in": num_inputs, "n_out": num_outputs,
+      "sparse_input": config.bool("sparse_input", False),
+      "target": config.value('target', 'classes'),
+    }
+
+  @classmethod
   def from_json_and_config(cls, json_content, config, mask=None, train_flag=False):
     """
     :type config: Config.Config
@@ -78,13 +91,8 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-    return cls.from_json(json_content,
-                         n_in=num_inputs, n_out=num_outputs,
-                         mask=mask,
-                         sparse_input=config.bool("sparse_input", False),
-                         target=config.value('target', 'classes'),
-                         train_flag=train_flag)
+    return cls.from_json(json_content, mask=mask, train_flag=train_flag,
+                         **cls.json_init_args_from_config(config))
 
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
