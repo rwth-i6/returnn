@@ -409,6 +409,8 @@ class TaskThread(threading.Thread):
 
       for i in xrange(num_device_runs):
         while deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
+          if getattr(sys, "exited", False):
+            break
           time.sleep(0.01)
         deviceRuns[i].stop()
         deviceRuns[i].join()
