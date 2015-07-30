@@ -66,7 +66,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     json_content = description.to_json_content(mask=mask)
-    network = cls.from_json(json_content, mask=mask,
+    network = cls.from_json(json_content, mask=mask, train_flag=train_flag,
                             n_in=description.num_inputs, n_out=description.num_outputs)
     return network
 
