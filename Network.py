@@ -96,7 +96,7 @@ class LayerNetwork(object):
       topology = json_content
     if 'network' in topology:
       topology = topology['network']
-    network.recurrent = True
+    network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     def traverse(content, layer_name, network):
@@ -163,7 +163,7 @@ class LayerNetwork(object):
     except:
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
-    network.recurrent = True
+    network.recurrent = False
     def traverse(model, layer_name, network):
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
         x_in = []
@@ -380,7 +380,7 @@ class LayerNetwork(object):
     self.description = description
     n_in = self.n_in
     x_in = self.x
-    self.recurrent = True
+    self.recurrent = False
     self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
