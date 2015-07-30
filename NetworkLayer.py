@@ -26,4 +26,4 @@ def get_layer_class(name):
   """
   if name in LayerClasses:
     return LayerClasses[name]
-  assert False, "invalid layer type: " + name
+  assert False, "invalid layer type: %s" % name

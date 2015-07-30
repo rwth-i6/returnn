@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -150,9 +150,12 @@ class Device():
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
     # Set device via flags.
-    theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
-    theano_flags["device"] = "cpu" if self.name == "cpuX" else theano_flags["device"]
-    #if self.name.startswith("gpu"):
+    if self.name == "cpuX":
+      theano_flags["device"] = "cpu"
+    elif self.name == "gpuX":
+      theano_flags["device"] = "gpu"
+    else:
+      theano_flags["device"] = self.name
     theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
@@ -181,10 +184,10 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, update_specs=None, network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config
-    :type network_description: NetworkDescription.LayerNetworkDescription | None
+    :type json_content: dict[str] | str | None
     :type train_param_args: dict | None
     """
     if not update_specs: update_specs = {}
@@ -204,9 +207,9 @@ class Device():
     import h5py
     self.T = T
     self.network_task = config.value('task', 'train')
-    if network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
-      self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
+    if json_content is not None:
+      self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
+      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
@@ -222,17 +225,17 @@ class Device():
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
-    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
+    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
       else:
-        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'int32'), borrow=True)
-    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
-    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = theano.config.floatX), borrow=True, name='y_soft_%s' % k)
+    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
+    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j')
     if self.trainnet.loss in ('ctc','ce_ctc'):
-      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
@@ -568,7 +571,7 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config, update_specs)
+    self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
@@ -584,10 +587,11 @@ class Device():
         output_queue.send("generic-exec-result")
         output_queue.send(res)
       elif cmd == "reinit":  # via self.reinit()
-        network_description = input_queue.recv()
+        json_content = input_queue.recv()
         train_param_args = input_queue.recv()
-        if self.need_reinit(network_description, train_param_args):
-          self.initialize(config, update_specs, network_description, train_param_args)
+        if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
+          self.initialize(config, update_specs=update_specs,
+                          json_content=json_content, train_param_args=train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
@@ -823,11 +827,14 @@ class Device():
     print >> log.v4, "Device %s proc epoch time stats: total %s, %.02f%% computing, %.02f%% updating data" % \
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
-  def need_reinit(self, network_description=None, train_param_args=None):
+  def need_reinit(self, json_content, train_param_args=None):
     assert self.trainnet
-    if self.trainnet.description != network_description:
+    if isinstance(json_content, str):
+      import json
+      json_content = json.loads(json_content)
+    if self.trainnet.to_json_content() != json_content:
       print >> log.v3, "Device: reinit because network description differs. Diff:", \
-                       obj_diff_str(self.trainnet.description, network_description)
+                       dict_diff_str(self.trainnet.to_json_content(), json_content)
       return True
     if train_param_args is None:
       train_param_args = self.trainnet.get_train_param_args_default()
@@ -836,9 +843,9 @@ class Device():
       return True
     return False
 
-  def reinit(self, network_description=None, train_param_args=None):
+  def reinit(self, json_content, train_param_args=None):
     """
-    :type network_description: NetworkDescription.LayerNetworkDescription
+    :type json_content: dict[str] | str
     :type train_param_args: dict
     :returns len of train_params
     :rtype: int
@@ -847,12 +854,14 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
-      if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, self.device_specs, network_description, train_param_args)
+      if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
+        self.initialize(self.config, update_specs=self.update_specs,
+                        json_content=json_content,
+                        train_param_args=train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
-      self.input_queue.send(network_description)
+      self.input_queue.send(json_content)
       self.input_queue.send(train_param_args)
       r = self.output_queue.recv()
       assert r == "reinit-ready"
@@ -869,7 +878,7 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     # Reinit if needed.
-    self.reinit(network.description, train_param_args)
+    self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.targetkeys = network.cost.keys()
 
@@ -935,7 +944,8 @@ class Device():
         try:
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
-            if r == "error": return None
+            if r == "error":
+              return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()

@@ -65,7 +65,10 @@ class Container(object):
     :type head: h5py.File
     """
     grp = head[self.name]
-    assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+    if grp.attrs['class'] != self.layer_class:
+      from NetworkLayer import get_layer_class
+      assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
+        "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
       assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
         "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
@@ -225,7 +228,7 @@ class Container(object):
       elif attrs['from'] == '':
         guessed = self.guess_source_layer_name(self.name)
         if guessed:
-          attrs['from'] = guessed
+          attrs['from'] = [guessed]
         else:
           attrs.pop('from', None)
       else:

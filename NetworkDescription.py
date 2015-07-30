@@ -1,5 +1,4 @@
 
-import inspect
 from Util import simpleObjRepr, hdf5_dimension, hdf5_group, hdf5_shape
 
 
@@ -45,6 +44,7 @@ class LayerNetworkDescription:
     return not self == other
 
   def init_args(self):
+    import inspect
     return {arg: getattr(self, arg) for arg in inspect.getargspec(self.__init__).args[1:]}
 
   __repr__ = simpleObjRepr
@@ -57,7 +57,7 @@ class LayerNetworkDescription:
   def from_config(cls, config):
     """
     :type config: Config.Config
-    :returns dict
+    :rtype: LayerNetworkDescription
     """
     num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
     loss = cls.loss_from_config(config)
@@ -158,3 +158,95 @@ class LayerNetworkDescription:
       for k in num_outputs:
         num_outputs[k][0] += 1  # add blank
     return num_inputs, num_outputs
+
+  @classmethod
+  def _layer_param_to_json(cls, params):
+    """
+    :type params: dict[str]
+    :rtype: dict[str]
+
+    Some params are named differently in JSON than the real kwargs.
+    Some are also obsolete.
+    """
+    if "name" in params:
+      del params["name"]
+    if "layer_class" in params:
+      params["class"] = params["layer_class"]
+      del params["layer_class"]
+    for key, value in list(params.items()):
+      if value is None:
+        del params[key]
+    return params
+
+  def _layer_to_json(self, info, sources, mask, reverse=False):
+    """
+    :param dict[str] info: self.hidden_info[i]
+    :param list[str] sources: 'from' entry
+    :param None | str mask: mask
+    :param bool reverse: reverse or not
+    :rtype: dict[str]
+    """
+    import inspect
+    from NetworkLayer import get_layer_class
+    params = dict(self.default_layer_info)
+    params.update(info)
+    params["from"] = sources
+    if mask:
+      params["mask"] = mask
+    layer_class = get_layer_class(params["layer_class"])
+    if layer_class.recurrent:
+      params['truncation'] = self.truncation
+      if self.bidirectional:
+        if not reverse:
+          params['name'] += "_fw"
+        else:
+          params['name'] += "_bw"
+          params['reverse'] = True
+      if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+        params['sharpgates'] = self.sharpgates
+    return self._layer_param_to_json(params)
+
+  def _output_to_json(self, mask, sources):
+    """
+    :param list[str] sources: 'from' entry
+    :param None | str mask: mask
+    :rtype: dict[str]
+    """
+    params = dict(self.default_layer_info)
+    params.pop("layer_class", None)  # Makes no sense to use this default.
+    params.update(self.output_info)
+    params["from"] = sources
+    if mask:
+      params["mask"] = mask
+    params["class"] = "softmax"
+    return self._layer_param_to_json(params)
+
+  def to_json_content(self, mask=None):
+    """
+    :param None | str mask: mask
+    :rtype: dict
+    """
+    content = {}
+
+    # create forward layers
+    last_source = "data"
+    for info in self.hidden_info:
+      layer_name = info["name"]
+      layer = self._layer_to_json(info=info, mask=mask, sources=[last_source])
+      content[layer_name] = layer
+      last_source = layer_name
+    sources = [last_source]
+
+    if self.bidirectional:
+      # create backward layers
+      last_source = "data"
+      for info in self.hidden_info:
+        layer_name = info["name"]
+        layer = self._layer_to_json(info=info, mask=mask, sources=[last_source], reverse=True)
+        content[layer_name] = layer
+        last_source = layer_name
+      sources += [last_source]
+
+    output = self._output_to_json(sources=sources, mask=mask)
+    content["output"] = output
+    return content

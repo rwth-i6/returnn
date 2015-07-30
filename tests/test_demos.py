@@ -50,6 +50,13 @@ def run_and_parse_last_fer(*args):
 
 
 def run_config_get_fer(config_filename):
+  cleanup_tmp_models(config_filename)
+  fer = run_and_parse_last_fer("rnn.py", config_filename)
+  cleanup_tmp_models(config_filename)
+  return fer
+
+
+def cleanup_tmp_models(config_filename):
   assert os.path.exists(config_filename)
   from Config import Config
   config = Config()
@@ -60,8 +67,6 @@ def run_config_get_fer(config_filename):
   assert model_filename.startswith("/tmp/")
   for f in glob(model_filename + ".*"):
     os.remove(f)
-  # Now start.
-  return run_and_parse_last_fer("rnn.py", config_filename)
 
 
 class TestDemos(object):
@@ -76,5 +81,6 @@ class TestDemos(object):
     assert_less(fer, 0.01)
 
   def test_demo_iter_dataset_task12ax(self):
+    cleanup_tmp_models("demos/demo-task12ax.config")
     out = run("demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
     assert_in("Epoch 5.", out.splitlines())

@@ -13,7 +13,7 @@ class HiddenLayer(Layer):
     """
     kwargs.setdefault("layer_class", "hidden")
     super(HiddenLayer, self).__init__(**kwargs)
-    self.set_attr('activation', activation)
+    self.set_attr('activation', activation.encode("utf8"))
     self.activation = strtoact(activation)
     self.W_in = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
                                                             self.attrs['n_out'],

@@ -199,6 +199,7 @@ class Engine:
         print >> log.v3, "Copy layer %s" % layer_name
         intelli_copy_layer(layer, network.hidden[layer_name])
       print >> log.v3, "Not copied: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys()))
+      print >> log.v3, "Also not copied output layers: %s" % sorted(network.output.keys())
 
     # Maybe load existing model parameters.
     elif last_model_hdf:
@@ -234,11 +235,10 @@ class Engine:
     network = self.network
     print >> log.v2, "Network layer topology:"
     print >> log.v2, "  input #:", network.n_in
-    if network.description:
-      for info in network.description.hidden_info:
-        print >> log.v2, "  " + info["layer_class"] + " #:", info["n_out"]
-    else:
-      print >> log.v2, "  ..."
+    for layer_name, layer in sorted(network.hidden.items()):
+      print >> log.v2, "  %s %s #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+    if not network.hidden:
+      print >> log.v2, "  (no hidden layers)"
     print >> log.v2, "  output #:", network.n_out
     print >> log.v2, "net params #:", network.num_params()
     print >> log.v2, "net trainable params:", network.train_params_vars
