@@ -42,6 +42,11 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
+    json_content = cls.json_from_config(config, mask=mask)
+    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
+
+  @classmethod
+  def json_from_config(cls, config, mask=None):
     json_content = config.network_topology_json
     if not json_content:
       if not mask:
@@ -49,7 +54,9 @@ class LayerNetwork(object):
           mask = "dropout"
       description = LayerNetworkDescription.from_config(config)
       json_content = description.to_json_content(mask=mask)
-    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
+    if 'network' in json_content:
+      json_content = json_content['network']
+    return json_content
 
   @classmethod
   def from_description(cls, description, mask=None, train_flag = False):
