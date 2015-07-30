@@ -935,7 +935,8 @@ class Device():
         try:
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
-            if r == "error": return None
+            if r == "error":
+              return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
