@@ -195,16 +195,21 @@ class TaskThread(threading.Thread):
         return True
 
       def run(self):
-        while self.active:
-          if self.allocated and not self.finished:
-            self.device_run()
-            self.processing = True
-            self.allocated = False
-            self.finish()
-            self.finished = True
-            self.processing = False
-          else:
-            time.sleep(0.01)
+        try:
+          while self.active:
+            if self.allocated and not self.finished:
+              self.device_run()
+              self.processing = True
+              self.allocated = False
+              self.finish()
+              self.finished = True
+              self.processing = False
+            else:
+              time.sleep(0.01)
+        except Exception:
+          self.crashed = True
+          self.finished = True
+          sys.excepthook(*sys.exc_info())
 
       def stop(self):
         self.active = False
