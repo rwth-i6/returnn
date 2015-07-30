@@ -46,19 +46,20 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    if config.network_topology_json is not None:
-      num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs,
-                           mask=mask,
-                           sparse_input=config.bool("sparse_input", False),
-                           target=config.value('target', 'classes'),
-                           train_flag=train_flag)
-
-    description = LayerNetworkDescription.from_config(config)
-    if not mask:
-      if sum(config.float_list('dropout', [0])) > 0.0:
-        mask = "dropout"
-    return cls.from_description(description, mask=mask)
+    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+    json_content = config.network_topology_json
+    if not json_content:
+      if not mask:
+        if sum(config.float_list('dropout', [0])) > 0.0:
+          mask = "dropout"
+      description = LayerNetworkDescription.from_config(config)
+      json_content = description.to_json_content(mask=mask)
+    return cls.from_json(json_content,
+                         n_in=num_inputs, n_out=num_outputs,
+                         mask=mask,
+                         sparse_input=config.bool("sparse_input", False),
+                         target=config.value('target', 'classes'),
+                         train_flag=train_flag)
 
   @classmethod
   def from_description(cls, description, mask=None, train_flag = False):
