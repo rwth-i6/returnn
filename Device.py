@@ -184,12 +184,10 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, update_specs=None, json_content=None,
-                 network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config
     :type json_content: dict[str] | str | None
-    :type network_description: NetworkDescription.LayerNetworkDescription | None
     :type train_param_args: dict | None
     """
     if not update_specs: update_specs = {}
@@ -212,9 +210,6 @@ class Device():
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
       self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
-    elif network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
-      self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
