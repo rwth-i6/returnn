@@ -4,6 +4,7 @@ from nose.tools import assert_equal, assert_is_instance, assert_in
 from NetworkDescription import LayerNetworkDescription
 from Config import Config
 from Network import LayerNetwork
+from NetworkHiddenLayer import ForwardLayer
 from Util import dict_diff_str
 from pprint import pprint
 
@@ -38,7 +39,7 @@ config1_dict = {
   "num_inputs": 5,
   "num_outputs": 10,
   "hidden_size": (7, 8,),
-  "hidden_type": "hidden",
+  "hidden_type": "forward",
   "activation": "relu",
   "bidirectional": False,
 }
@@ -57,10 +58,24 @@ def test_NetworkDescription_to_json_config1():
   config = Config()
   config.update(config1_dict)
   desc = LayerNetworkDescription.from_config(config)
-  orig_network = LayerNetwork.from_description(desc)
-  orig_json_content = orig_network.to_json_content()
   desc_json_content = desc.to_json_content()
   pprint(desc_json_content)
+  assert_in("hidden_0", desc_json_content)
+  assert_equal(desc_json_content["hidden_0"]["class"], "forward")
+  assert_in("hidden_1", desc_json_content)
+  assert_in("output", desc_json_content)
+  orig_network = LayerNetwork.from_description(desc)
+  assert_in("hidden_0", orig_network.hidden)
+  assert_in("hidden_1", orig_network.hidden)
+  assert_equal(len(orig_network.hidden), 2)
+  assert_is_instance(orig_network.hidden["hidden_0"], ForwardLayer)
+  assert_equal(orig_network.hidden["hidden_0"].layer_class, "hidden")
+  orig_json_content = orig_network.to_json_content()
+  pprint(orig_json_content)
+  assert_in("hidden_0", orig_json_content)
+  assert_equal(orig_json_content["hidden_0"]["class"], "hidden")
+  assert_in("hidden_1", orig_json_content)
+  assert_in("output", orig_json_content)
   new_network = LayerNetwork.from_json(
     desc_json_content,
     config1_dict["num_inputs"],
