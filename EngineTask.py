@@ -188,11 +188,7 @@ class TaskThread(threading.Thread):
         else:
           output_results = device_results
 
-        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames}
-        self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
-                                              results=device_results,
-                                              result_format=outputs_format,
-                                              num_frames=self.num_frames)
+        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
         self.parent.lock.acquire()
         self.parent.num_frames += self.num_frames
         self.print_process()

@@ -47,7 +47,7 @@ class LayerNetwork(object):
 
   @classmethod
   def json_from_config(cls, config, mask=None):
-    json_content = config.network_topology_json
+    json_content = json.loads(config.network_topology_json)
     if not json_content:
       if not mask:
         if sum(config.float_list('dropout', [0])) > 0.0:
