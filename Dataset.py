@@ -381,16 +381,19 @@ class DatasetSeq:
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param dict[str,numpy.ndarray] | numpy.ndarray targets: name -> format 1d (time) (idx of output-feature)
-    :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] | numpy.ndarray | None targets: name -> format 1d (time) (idx of output-feature)
+    :param numpy.ndarray | None ctc_targets: format 1d (time) (idx of output-feature)
     """
     assert isinstance(seq_idx, int)
     assert isinstance(features, numpy.ndarray)
+    if targets is None:
+      targets = {}
     if isinstance(targets, numpy.ndarray):  # old format
       targets = {"classes": targets}
     assert isinstance(targets, dict)
-    assert "classes" in targets
-    assert isinstance(targets["classes"], numpy.ndarray)
+    if targets:
+      assert "classes" in targets
+      assert isinstance(targets["classes"], numpy.ndarray)
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
@@ -398,7 +401,7 @@ class DatasetSeq:
 
   @property
   def default_target(self):
-    return self.targets["classes"]
+    return self.targets.get("classes", None)
 
   @property
   def num_frames(self):
@@ -406,7 +409,7 @@ class DatasetSeq:
     :rtype: numpy.array[int,int]
     :returns the features frame len, and the target frame len
     """
-    return numpy.array([self.features.shape[0], self.default_target.shape[0]])
+    return numpy.array([self.features.shape[0], self.default_target.shape[0] if self.default_target is not None else 0])
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx

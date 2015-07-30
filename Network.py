@@ -46,20 +46,15 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    if config.network_topology_json is not None:
-      num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-      return cls.from_json(config.network_topology_json, n_in=num_inputs, n_out=num_outputs,
-                           mask=mask,
-                           sparse_input=config.bool("sparse_input", False),
-                           target=config.value('target', 'classes'),
-                           train_flag=train_flag)
-
-    description = LayerNetworkDescription.from_config(config)
-    if not mask:
-      if sum(config.float_list('dropout', [0])) > 0.0:
-        mask = "dropout"
-    return cls.from_description(description, mask=mask)
-
+    json_content = config.network_topology_json
+    if not json_content:
+      if not mask:
+        if sum(config.float_list('dropout', [0])) > 0.0:
+          mask = "dropout"
+      description = LayerNetworkDescription.from_config(config)
+      json_content = description.to_json_content(mask=mask)
+    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
+  
   @classmethod
   def from_description(cls, description, mask=None, train_flag = False):
     """
@@ -72,24 +67,46 @@ class LayerNetwork(object):
     return network
 
   @classmethod
+  def from_json_and_config(cls, json_content, config, mask=None, train_flag=False):
+    """
+    :type config: Config.Config
+    :type json_content: str | dict
+    :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
+    :rtype: LayerNetwork
+    """
+    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+    return cls.from_json(json_content,
+                         n_in=num_inputs, n_out=num_outputs,
+                         mask=mask,
+                         sparse_input=config.bool("sparse_input", False),
+                         target=config.value('target', 'classes'),
+                         train_flag=train_flag)
+
+  @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
-    :type json_content: str
+    :type json_content: str | dict
     :type n_in: int
     :type n_out: dict[str,(int,int)]
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    try:
-      topology = json.loads(json_content)
-      if 'network' in topology: topology = topology['network']
-    except ValueError:
-      print >> log.v4, "----- BEGIN JSON CONTENT -----"
-      print >> log.v4, json_content
-      print >> log.v4, "------ END JSON CONTENT ------"
-      assert False, "invalid json content"
-    network.recurrent = True
+    if isinstance(json_content, str):
+      try:
+        topology = json.loads(json_content)
+      except ValueError:
+        print >> log.v4, "----- BEGIN JSON CONTENT -----"
+        print >> log.v4, json_content
+        print >> log.v4, "------ END JSON CONTENT ------"
+        assert False, "invalid json content"
+      assert isinstance(topology, dict)
+    else:
+      assert isinstance(json_content, dict)
+      topology = json_content
+    if 'network' in topology:
+      topology = topology['network']
+    network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     def traverse(content, layer_name, network):
@@ -156,7 +173,7 @@ class LayerNetwork(object):
     except:
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
-    network.recurrent = True
+    network.recurrent = False
     def traverse(model, layer_name, network):
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
         x_in = []
@@ -373,7 +390,7 @@ class LayerNetwork(object):
     self.description = description
     n_in = self.n_in
     x_in = self.x
-    self.recurrent = True
+    self.recurrent = False
     self.bidirectional = description.bidirectional
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
@@ -442,7 +459,7 @@ class LayerNetwork(object):
     for k in self.output:
       self.output[k].save(model)
 
-  def to_json(self):
+  def to_json_content(self):
     out = {}
     for name in self.output:
       outattrs = self.output[name].attrs.copy()
@@ -451,7 +468,11 @@ class LayerNetwork(object):
       out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
-    return json.dumps(out, sort_keys=True)
+    return out
+
+  def to_json(self):
+    json_content = self.to_json_content()
+    return json.dumps(json_content, sort_keys=True)
 
   def load_hdf(self, model):
     """

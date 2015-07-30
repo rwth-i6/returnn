@@ -68,13 +68,11 @@ class TaskThread(threading.Thread):
         device.ctc_targets
         device.tags
         device.index
-      :rtype: (list[Device.Device], list[list[EngineBatch.Batch]])
-      :returns list of used devices, list of batches per device, and number of batches which were handled.
-      Number of batches will always be positive, but devices could be empty on skipped seqs.
+      :rtype: list[list[EngineBatch.Batch]]
+      :returns list of batches per device
       """
       if not selected_devices:
         selected_devices = self.devices
-      devices = []; " :type: list[Device.Device] "
       devices_batches = []; " :type: list[list[EngineBatch.Batch]] "
       if self.share_batches:
         batches = self.batches.peek_next_n(1)
@@ -82,19 +80,10 @@ class TaskThread(threading.Thread):
         if not self.share_batches:
           batches = self.batches.peek_next_n(device.num_batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
-        if success:
-          devices.append(device)
-          devices_batches.append(batches)
-        else:
-          # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
-          if batch_adv_idx > 0:
-            batch_idx = self.batches.get_current_batch_idx()
-            print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
-                             (range(batch_idx, batch_idx + batch_adv_idx),
-                              batches[batch_adv_idx - 1].start_seq)
-          else:
-            assert len(devices) > 0
-            break
+        batch_idx = self.batches.get_current_batch_idx()
+        assert success, "batches %s with seqs at %i failed to load" % \
+                        (range(batch_idx, batch_idx + batch_adv_idx), batches[batch_adv_idx - 1].start_seq)
+        devices_batches.append(batches)
         if not self.share_batches:
           self.batches.advance(batch_adv_idx)
       if self.share_batches:
@@ -145,18 +134,19 @@ class TaskThread(threading.Thread):
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.num_frames = 0
         for batches in self.devices_batches:
+          assert batches
+          assert batches[0].seqs
+          assert batches[0].seqs[0].frame_length[1] > 0
           self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
         if self.parent.share_batches:
           self.num_frames /= len(self.alloc_devices)
+        assert self.num_frames > 0
         self.allocated = True
 
       def finish(self):
         """
         :returns whether everything is fine.
         """
-        if not self.alloc_devices:
-          # We skipped segments. That's fine.
-          return True
         device_results, outputs_format = self.device_collect_results()
         if device_results is None:
           if not getattr(sys, "exited", False):
@@ -198,10 +188,10 @@ class TaskThread(threading.Thread):
           output_results = device_results
 
         self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames}
-        #self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
-        #                                      results=device_results,
-        #                                      result_format=outputs_format,
-        #                                      num_frames=self.num_frames)
+        self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
+                                              results=device_results,
+                                              result_format=outputs_format,
+                                              num_frames=self.num_frames)
         self.parent.lock.acquire()
         self.parent.num_frames += self.num_frames
         self.print_process()
@@ -209,22 +199,28 @@ class TaskThread(threading.Thread):
         return True
 
       def run(self):
-        while self.active:
-          if self.allocated and not self.finished:
-            self.device_run()
-            self.processing = True
-            self.allocated = False
-            self.finish()
-            self.finished = True
-            self.processing = False
-          else:
-            time.sleep(0.01)
+        try:
+          while self.active:
+            if self.allocated and not self.finished:
+              self.device_run()
+              self.processing = True
+              self.allocated = False
+              self.finish()
+              self.finished = True
+              self.processing = False
+            else:
+              time.sleep(0.01)
+        except Exception:
+          self.crashed = True
+          self.finished = True
+          sys.excepthook(*sys.exc_info())
 
       def stop(self):
         self.active = False
 
       def device_run(self):
         batch_idx = self.run_start_batch_idx
+        assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
             print >> log.v5, "running", device.data.shape[1], \
@@ -422,6 +418,8 @@ class TaskThread(threading.Thread):
 
       for i in xrange(num_device_runs):
         while deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
+          if getattr(sys, "exited", False):
+            break
           time.sleep(0.01)
         deviceRuns[i].stop()
         deviceRuns[i].join()

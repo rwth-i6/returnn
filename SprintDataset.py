@@ -306,7 +306,7 @@ class SprintDataset(Dataset):
   def get_targets(self, target, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).targets[target]
+      return self._getSeq(sorted_seq_idx).targets.get(target, None)
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."
