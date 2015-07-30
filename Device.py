@@ -184,9 +184,11 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, update_specs=None, network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, json_content=None,
+                 network_description=None, train_param_args=None):
     """
     :type config: Config.Config
+    :type json_content: dict[str] | str | None
     :type network_description: NetworkDescription.LayerNetworkDescription | None
     :type train_param_args: dict | None
     """
@@ -207,7 +209,10 @@ class Device():
     import h5py
     self.T = T
     self.network_task = config.value('task', 'train')
-    if network_description is not None:
+    if json_content is not None:
+      self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
+      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
+    elif network_description is not None:
       self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
       self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
@@ -571,7 +576,7 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config, update_specs)
+    self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
@@ -590,7 +595,8 @@ class Device():
         network_description = input_queue.recv()
         train_param_args = input_queue.recv()
         if self.need_reinit(network_description, train_param_args):
-          self.initialize(config, update_specs, network_description, train_param_args)
+          self.initialize(config, update_specs=update_specs,
+                          network_description=network_description, train_param_args=train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
@@ -851,7 +857,9 @@ class Device():
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
       if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, self.update_specs, network_description, train_param_args)
+        self.initialize(self.config, update_specs=self.update_specs,
+                        network_description=network_description,
+                        train_param_args=train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")

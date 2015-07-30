@@ -46,7 +46,6 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
     json_content = config.network_topology_json
     if not json_content:
       if not mask:
@@ -54,13 +53,8 @@ class LayerNetwork(object):
           mask = "dropout"
       description = LayerNetworkDescription.from_config(config)
       json_content = description.to_json_content(mask=mask)
-    return cls.from_json(json_content,
-                         n_in=num_inputs, n_out=num_outputs,
-                         mask=mask,
-                         sparse_input=config.bool("sparse_input", False),
-                         target=config.value('target', 'classes'),
-                         train_flag=train_flag)
-
+    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
+  
   @classmethod
   def from_description(cls, description, mask=None, train_flag = False):
     """
@@ -71,6 +65,22 @@ class LayerNetwork(object):
     network = cls(description.num_inputs, description.num_outputs)
     network.initialize(description, mask=mask)
     return network
+
+  @classmethod
+  def from_json_and_config(cls, json_content, config, mask=None, train_flag=False):
+    """
+    :type config: Config.Config
+    :type json_content: str | dict
+    :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
+    :rtype: LayerNetwork
+    """
+    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+    return cls.from_json(json_content,
+                         n_in=num_inputs, n_out=num_outputs,
+                         mask=mask,
+                         sparse_input=config.bool("sparse_input", False),
+                         target=config.value('target', 'classes'),
+                         train_flag=train_flag)
 
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
