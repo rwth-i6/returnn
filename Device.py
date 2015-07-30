@@ -984,12 +984,18 @@ class Device():
     #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
-    i = self.block_start
-    j = self.block_end
-    return [(network.x, self.x[:,i:j]),
-            (network.i, self.i[:,i:j]),
-            (network.j, self.j[:,i:j])] + \
-           [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+    if True or self.block_size:
+      i = self.block_start
+      j = self.block_end
+      return [(network.x, self.x[:,i:j]),
+              (network.i, self.i[:,i:j]),
+              (network.j, self.j[:,i:j])] + \
+             [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+    else:
+      return [(network.x, self.x),
+              (network.i, self.i),
+              (network.j, self.j)] + \
+             [ (network.y[k], self.y[k].flatten()) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
       return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]

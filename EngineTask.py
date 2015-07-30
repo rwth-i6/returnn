@@ -135,6 +135,7 @@ class TaskThread(threading.Thread):
         self.finished = True
         self.crashed = False
         self.num_frames = 0
+        self.run_frames = 0
         self.daemon = True
         self.active = True
         self.result = { 'batchess': [], 'results': [], 'result_format': None, 'num_frames': 0 }
@@ -361,7 +362,7 @@ class TaskThread(threading.Thread):
       num_device_runs = 1 if self.share_batches else len(self.devices)
       deviceRuns = [ self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices) for i in xrange(num_device_runs) ]
 
-      results = {'batchess': [], 'results': [], 'num_frames' : 0 }
+      results = { 'batchess': [], 'results': [], 'num_frames' : 0 }
       run_frames = 0
 
       crashed = False
@@ -382,25 +383,25 @@ class TaskThread(threading.Thread):
             results['batchess'] += deviceRuns[i].result['batchess'][:]
             results['results'] += deviceRuns[i].result['results'][:]
             results['result_format'] = deviceRuns[i].result['result_format']
-            results['num_frames'] += deviceRuns[i].num_frames
             deviceRuns[i].finished = False
         if crashed:
           break
 
-        if run_frames >= self.eval_batch_size:
+        if run_frames >= self.eval_batch_size or not self.batches.has_more():
           if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
+            results['num_frames'] = run_frames
             self.evaluate(**results)
             self.eval_batch_idx += 1
             run_frames = 0
             results['batchess'] = []
             results['results'] = []
-            results['num_frames'] = 0
             for device in self.devices:
               device.num_frames = 0
               device.tot_cost = 0
+            if not self.batches.has_more():
+              break
           else:
             time.sleep(0.01)
-            continue
 
         match = True
         while self.batches.has_more() and run_frames < self.eval_batch_size and match:
@@ -415,30 +416,12 @@ class TaskThread(threading.Thread):
               run_frames += deviceRuns[i].num_frames
               match = True
               break
-        if not self.batches.has_more():
-          break
         if not match:
           time.sleep(0.01)
 
-      for i in xrange(num_device_runs):
-        while deviceRuns[i] and not deviceRuns[i].finished and not deviceRuns[i].crashed:
-          time.sleep(0.01)
-        deviceRuns[i].stop()
-        deviceRuns[i].join()
-        if deviceRuns[i] and deviceRuns[i].crashed:
-          deviceRuns[i] = None
-          crashed = True
-        if deviceRuns[i] and deviceRuns[i].finished:
-          results['batchess'] += deviceRuns[i].result['batchess']
-          results['results'] += deviceRuns[i].result['results']
-          results['result_format'] = deviceRuns[i].result['result_format']
-          results['num_frames'] += deviceRuns[i].num_frames
       for device in self.devices:
         device.finish_epoch_stats()
       if crashed: return
-      if results['results']:
-        self.evaluate(**results)
-        self.eval_batch_idx += 1
       self.finalize()
       if self.interactive: progress_bar()
       self.elapsed = (time.time() - self.start_time)
