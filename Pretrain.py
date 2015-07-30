@@ -8,47 +8,86 @@ from NetworkCopyUtils import intelli_copy_layer
 class Pretrain:
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_description, copy_output_layer=None, greedy=None):
+  def __init__(self, original_network_json, network_init_args, copy_output_layer=None, greedy=None):
     """
-    :type original_network_description: NetworkDescription.LayerNetworkDescription
+    :type original_network_json: dict[str]
+    :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
+      must have n_in, n_out.
     :param bool copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
+
+    Start with 1 hidden layers up to N hidden layers -> N epochs.
+    The first hidden layer is the input layer.
     """
-    self.original_network_description = original_network_description
     if copy_output_layer is None:
       copy_output_layer = True
     self.copy_output_layer = copy_output_layer
     if greedy is None:
       greedy = False
     self.greedy = greedy
+    self.network_init_args = network_init_args
+    assert "n_in" in network_init_args
+    assert "n_out" in network_init_args
+    self._epoch_jsons = [original_network_json]
+    self._construct_epochs()
+
+  def _get_network_json_for_epoch(self, epoch):
+    """
+    :param int epoch: starting at 1
+    :rtype: dict[str]
+    """
+    if epoch > len(self._epoch_jsons):
+      epoch = len(self._epoch_jsons)  # take the last, which is the original
+    return self._epoch_jsons[epoch - 1]
+
+  def _construct_epoch(self):
+    from copy import deepcopy
+    new_json = deepcopy(self._epoch_jsons[0])
+    assert "output" in new_json
+    # From the sources of the output layer, collect all their sources.
+    # Then remove the direct output sources and replace them with the indirect sources.
+    new_sources = set()
+    for source in new_json["output"]["from"]:
+      # Except for data sources. Just keep them.
+      if source == "data":
+        new_sources.add("data")
+      else:
+        assert source in new_json
+        new_sources.update(new_json[source]["from"])
+        del new_json[source]
+    # Check if anything changed.
+    # This is e.g. not the case if the only source was data.
+    if list(sorted(new_sources)) == list(sorted(new_json["output"]["from"])):
+      return False
+    # If we have data input, it likely means that the input dimension
+    # for the output layer would change. Just avoid that for now.
+    if "data" in new_sources:
+      return False
+    new_json["output"]["from"] = list(sorted(new_sources))
+    self._epoch_jsons = [new_json] + self._epoch_jsons
+    return True
+
+  def _construct_epochs(self):
+    while self._construct_epoch():
+      pass
+
+  # -------------- Public interface
 
   def __str__(self):
     return "Default layerwise construction+pretraining, starting with input+hidden+output. " + \
            "Epochs: %i" % self.get_train_num_epochs()
 
   def get_train_num_epochs(self):
-    # Start with 1 hidden layers up to N hidden layers -> N epochs.
-    # The first hidden layer is the input layer.
-    return len(self.original_network_description.hidden_info)
+    return len(self._epoch_jsons)
 
-  def get_network_description_for_epoch(self, epoch):
-    """
-    :type epoch: int
-    :rtype: LayerNetworkDescription
-    """
-    description = self.original_network_description.copy()
-    # We start with epoch 1. Start with 1 layer.
-    description.hidden_info = description.hidden_info[:epoch]
-    return description
-
-  def get_network_for_epoch(self, epoch, mask="unity"):
+  def get_network_for_epoch(self, epoch, mask=None):
     """
     :type epoch: int
     :rtype: Network.LayerNetwork
     """
-    description = self.get_network_description_for_epoch(epoch)
+    json_content = self._get_network_json_for_epoch(epoch)
     Layer.rng_seed = epoch
-    return LayerNetwork.from_description(description, mask)
+    return LayerNetwork.from_json(json_content, mask=mask, **self.network_init_args)
 
   def copy_params_from_old_network(self, new_network, old_network):
     """
@@ -93,11 +132,12 @@ def pretrainFromConfig(config):
   """
   pretrainType = config.value("pretrain", "")
   if pretrainType == "default":
-    assert config.network_topology_json is None, "Cannot handle JSON network topology in pretrain."
-    original_network_description = LayerNetworkDescription.from_config(config)
+    network_init_args = LayerNetwork.json_init_args_from_config(config)
+    original_network_json = LayerNetwork.json_from_config(config)
     copy_output_layer = config.bool("pretrain_copy_output_layer", None)
     greedy = config.bool("pretrain_greedy", None)
-    return Pretrain(original_network_description=original_network_description,
+    return Pretrain(original_network_json=original_network_json,
+                    network_init_args=network_init_args,
                     copy_output_layer=copy_output_layer, greedy=greedy)
   elif pretrainType == "":
     return None
