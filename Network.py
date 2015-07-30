@@ -58,8 +58,9 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(description.num_inputs, description.num_outputs)
-    network.initialize(description, mask=mask)
+    json_content = description.to_json_content(mask=mask)
+    network = cls.from_json(json_content, mask=mask,
+                            n_in=description.num_inputs, n_out=description.num_outputs)
     return network
 
   @classmethod
