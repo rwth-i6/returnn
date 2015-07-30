@@ -1,10 +1,6 @@
 #! /usr/bin/python2.7
 
 import json
-import inspect
-import numpy
-
-import theano.tensor as T
 import h5py
 
 from NetworkDescription import LayerNetworkDescription
@@ -358,6 +354,7 @@ class LayerNetwork(object):
         else:
           params['name'] += "_bw"
           params['reverse'] = True
+      import inspect
       if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
         params['sharpgates'] = description.sharpgates
     layer = layer_class(**params)
