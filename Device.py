@@ -586,6 +586,9 @@ class Device():
         res = self._generic_exec(*args)
         output_queue.send("generic-exec-result")
         output_queue.send(res)
+      elif cmd == "reset":  # via self.reset()
+        if self.updater:
+          self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
         json_content = input_queue.recv()
         train_param_args = input_queue.recv()
@@ -881,6 +884,11 @@ class Device():
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.targetkeys = network.cost.keys()
+    if self.blocking:
+      if self.updater:
+        self.updater.reset()
+    else:
+      self.input_queue.send('reset')
 
   def run(self, task):
     """
