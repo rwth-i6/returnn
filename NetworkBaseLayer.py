@@ -65,7 +65,10 @@ class Container(object):
     :type head: h5py.File
     """
     grp = head[self.name]
-    assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+    if grp.attrs['class'] != self.layer_class:
+      from NetworkLayer import get_layer_class
+      assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
+        "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
       assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
         "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
@@ -257,6 +260,7 @@ class Layer(Container):
     super(Layer, self).__init__(**kwargs)
     self.sources = sources; ":type: list[SourceLayer]"
     self.num_sources = len(sources)
+    if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
@@ -269,16 +273,16 @@ class Layer(Container):
     if target:
       self.set_attr('target', target)
     self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name, False)
-    self.mass = T.constant(1., name = "mass_%s" % self.name)
-    if mask == "unity" or dropout == 0:
-      self.masks = [None] * len(self.sources)
-    elif mask == "dropout" or (mask == "none" and dropout > 0):
+    self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
+    self.masks = [None] * len(self.sources)
+    assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
+    if mask == "dropout" or (mask == 'none' and dropout > 0):
       assert 0.0 < dropout < 1.0
       # If we apply this mass during training then we don't need any mask or mass for testing.
       # The expected weight should be 1 in
       #   E[x] = mass * (1-dropout)
       # so mass has to be 1 / (1 - dropout).
-      self.mass = T.constant(1.0 / (1.0 - dropout))
+      self.mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
       if self.depth > 1:
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
@@ -286,8 +290,6 @@ class Layer(Container):
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
-    else:
-      assert False, "invalid mask: %s" % mask
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)

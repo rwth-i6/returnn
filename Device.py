@@ -188,12 +188,10 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, update_specs=None, json_content=None,
-                 network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config
     :type json_content: dict[str] | str | None
-    :type network_description: NetworkDescription.LayerNetworkDescription | None
     :type train_param_args: dict | None
     """
     if not update_specs: update_specs = {}
@@ -216,15 +214,12 @@ class Device():
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
       self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
-    elif network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
-      self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
                                                            sparse_input=config.bool("sparse_input", False),
                                                            target=target)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, mask="unity", train_flag=False,
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False,
                                                           sparse_input=config.bool("sparse_input", False),
                                                           target=target)
       model.close()
@@ -595,6 +590,9 @@ class Device():
         res = self._generic_exec(*args)
         output_queue.send("generic-exec-result")
         output_queue.send(res)
+      elif cmd == "reset":  # via self.reset()
+        if self.updater:
+          self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
         json_content = input_queue.recv()
         train_param_args = input_queue.recv()
@@ -890,6 +888,11 @@ class Device():
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.targetkeys = network.cost.keys()
+    if self.blocking:
+      if self.updater:
+        self.updater.reset()
+    else:
+      self.input_queue.send('reset')
 
   def run(self, task):
     """
@@ -1003,12 +1006,18 @@ class Device():
     #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
-    i = self.block_start
-    j = self.block_end
-    return [(network.x, self.x[:,i:j]),
-            (network.i, self.i[:,i:j]),
-            (network.j, self.j[:,i:j])] + \
-           [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+    if True or self.block_size:
+      i = self.block_start
+      j = self.block_end
+      return [(network.x, self.x[:,i:j]),
+              (network.i, self.i[:,i:j]),
+              (network.j, self.j[:,i:j])] + \
+             [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+    else:
+      return [(network.x, self.x),
+              (network.i, self.i),
+              (network.j, self.j)] + \
+             [ (network.y[k], self.y[k].flatten()) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
       return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]

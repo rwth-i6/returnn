@@ -53,6 +53,7 @@ class Updater:
     self.adasecant = adasecant
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
+    self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.varreg and self.adasecant)
     if self.adadelta:
@@ -155,11 +156,18 @@ class Updater:
 
     return constrained_output
 
-  @staticmethod
-  def var(value, name = "", broadcastable = None):
+  def var(self, value, name = "", broadcastable = None, reset = True):
     if broadcastable:
-      return theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
-    return theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
+    else:
+      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+    if reset:
+      self.params[param] = value
+    return param
+
+  def reset(self):
+    for param in self.params:
+      param.set_value(self.params[param])
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
@@ -187,7 +195,7 @@ class Updater:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = True #True #False #True #False #True
+          self.use_adagrad = False
           self.use_adadelta = False #True #True
           self.skip_nan_inf = True
           self.start_var_reduction = 0
@@ -195,7 +203,7 @@ class Updater:
           self.decay = 0.95
           ### default
           self.delta_clip = 50.0
-          self.outlier_detection = True
+          self.outlier_detection = False #True
           self.gamma_clip = 1.8
           ### aggressive
           #self.delta_clip = None

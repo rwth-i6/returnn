@@ -55,6 +55,7 @@ class OutputLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.index = index
     self.i = (index.flatten() > 0).nonzero()
+    self.j = ((T.constant(1.0) - index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
@@ -114,7 +115,9 @@ class FramewiseOutputLayer(OutputLayer):
       if self.y.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
+        nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
       return T.sum(nll), known_grads
