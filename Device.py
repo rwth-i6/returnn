@@ -149,6 +149,10 @@ class Device():
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
+    if self.name[-1] == 'X':
+      import string
+      import random
+      theano_flags["compiledir_format"] += "-%s" % ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(5))
     # Set device via flags.
     if self.name == "cpuX":
       theano_flags["device"] = "cpu"
