@@ -97,7 +97,7 @@ def initConfigJson():
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print >> log.v5, "loading network topology from json:", json_file
-    config.network_topology_json = open(json_file).read()
+    config.network_topology_json = open(json_file).read().encode('utf8')
 
 
 def maybeInitSprintCommunicator(device_proc):

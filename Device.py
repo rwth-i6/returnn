@@ -215,7 +215,7 @@ class Device():
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
                                                            sparse_input=config.bool("sparse_input", False),
                                                            target=target)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, mask="unity", train_flag=False,
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False,
                                                           sparse_input=config.bool("sparse_input", False),
                                                           target=target)
       model.close()

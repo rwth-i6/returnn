@@ -80,7 +80,7 @@ class LayerNetwork(object):
     return {
       "n_in": num_inputs, "n_out": num_outputs,
       "sparse_input": config.bool("sparse_input", False),
-      "target": config.value('target', 'classes'),
+      "target": config.value('target', 'classes')
     }
 
   @classmethod
@@ -126,7 +126,6 @@ class LayerNetwork(object):
       obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
-
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
       else:
@@ -145,13 +144,13 @@ class LayerNetwork(object):
             encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       obj.pop('from', None)
-      params = { 'sources': source, 'dropout' : 0.0,
+      params = { 'sources': source,
+                 'dropout' : 0.0,
                  'name' : layer_name,
                  "train_flag": train_flag,
                  'network': network }
       params.update(obj)
-      if mask:
-        params["mask"] = mask  # overwrite
+      params["mask"] = mask  # overwrite
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
@@ -169,14 +168,13 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, mask=None, sparse_input = False, target = 'classes', train_flag = False):
+  def from_hdf_model_topology(cls, model, input_mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
     grp = model['training']
-
     n_out = {}
     try:
       for k in model['n_out'].attrs:
@@ -187,17 +185,19 @@ class LayerNetwork(object):
     network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
     def traverse(model, layer_name, network):
+      mask = input_mask
+      if not input_mask and 'mask' in model[layer_name].attrs:
+        mask = model[layer_name].attrs
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
             print network.n_in
-            x_in.append(SourceLayer(network.n_in, network.x, name = 'data'))
+            x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
-
       else:
         x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
@@ -211,7 +211,7 @@ class LayerNetwork(object):
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
                    'name' : 'output',
-                   'mask' : mask or model[layer_name].attrs['mask'],
+                   'mask' : mask,
                    'train_flag' : train_flag }
         params.update(model[layer_name].attrs)
         if 'encoder' in model[layer_name].attrs:
@@ -230,11 +230,12 @@ class LayerNetwork(object):
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],
                    'activation': act,
-                   'dropout': model[layer_name].attrs['dropout'],
+                   'dropout': model[layer_name].attrs['dropout'] if train_flag else 0.0,
                    'name': layer_name,
-                   'mask': mask or model[layer_name].attrs['mask'],
+                   'mask': mask,
                    'train_flag' : train_flag,
                    'carry' : model[layer_name].attrs['carry'],
+                   'depth' : model[layer_name].attrs['depth'],
                    'network': network }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:

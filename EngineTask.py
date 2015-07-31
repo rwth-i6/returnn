@@ -133,15 +133,15 @@ class TaskThread(threading.Thread):
 
       def allocate(self):
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
-        self.num_frames = 0
+        self.run_frames = 0
         for batches in self.devices_batches:
           assert batches
           assert batches[0].seqs
           assert batches[0].seqs[0].frame_length[1] > 0
-          self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
+          self.run_frames += sum([batch.get_total_num_frames() for batch in batches])
         if self.parent.share_batches:
-          self.num_frames /= len(self.alloc_devices)
-        assert self.num_frames > 0
+          self.run_frames /= len(self.alloc_devices)
+        assert self.run_frames > 0
         self.allocated = True
 
       def finish(self):
@@ -190,7 +190,6 @@ class TaskThread(threading.Thread):
 
         self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
         self.parent.lock.acquire()
-        self.parent.num_frames += self.num_frames
         self.print_process()
         self.parent.lock.release()
         return True
@@ -200,6 +199,7 @@ class TaskThread(threading.Thread):
           while self.active:
             if self.allocated and not self.finished:
               self.device_run()
+              self.num_frames = self.run_frames
               self.processing = True
               self.allocated = False
               self.finish()
@@ -382,6 +382,7 @@ class TaskThread(threading.Thread):
         if run_frames >= self.eval_batch_size or not self.batches.has_more():
           if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
             results['num_frames'] = run_frames
+            self.num_frames += run_frames
             self.evaluate(**results)
             self.eval_batch_idx += 1
             run_frames = 0
@@ -405,7 +406,7 @@ class TaskThread(threading.Thread):
           for i in xrange(num_device_runs):
             if not deviceRuns[i].allocated:
               deviceRuns[i].allocate()
-              run_frames += deviceRuns[i].num_frames
+              run_frames += deviceRuns[i].run_frames
               match = True
               break
         if not match:
@@ -538,8 +539,9 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
+          nframes = numpy.sum([ dev.num_frames for net,dev in zip(hypnets,self.devices) if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
         encoded.append(q)
