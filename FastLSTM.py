@@ -6,6 +6,7 @@ import theano.printing
 import theano.gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
+from theano.sandbox.cuda import CudaNdarrayType
 from theano.gof.opt import OpSub
 from theano.compile import optdb
 import os
@@ -236,7 +237,12 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [XS[0].type(), XS[0].type(), c.type()])
+    if len(XS) > 0:
+      X_type = XS[0].type
+    else:
+      broad = (False, False, False)
+      X_type = CudaNdarrayType(dtype=V_h.dtype, broadcastable=broad)
+    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [X_type(), X_type(), c.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -250,8 +256,12 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     XS = input_names[4:n_inputs+4]
     WS = input_names[n_inputs+4:2*n_inputs+4]
 
-    XS_str = ",".join(XS)
-    WS_str = ",".join(WS)
+    if len(XS) == 0:
+      XS_str = "CudaNdarray ** XS = 0;"
+      WS_str = "CudaNdarray ** WS = 0;"
+    else:
+      XS_str = "CudaNdarray * XS[] = {" + ",".join(XS) + "}"
+      WS_str = "CudaNdarray * WS[] = {" + ",".join(WS) + "}"
 
     Z, H, d = output_names #d: endstate
     fail = sub['fail']
@@ -268,17 +278,20 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     //std::cout << "LSTMOp called" << std::endl;
 
     int n_inputs = %(n_inputs)s;
-    CudaNdarray * XS[] = {%(XS_str)s};
-    CudaNdarray * WS[] = {%(WS_str)s};
+    //these declare
+    //CudaNdarray * XS[] and CudaNdarray * WS[]
+    %(XS_str)s;
+    %(WS_str)s;
 
-    const int * X_dim = CudaNdarray_HOST_DIMS(XS[0]);
-    const int * W_dim = CudaNdarray_HOST_DIMS(WS[0]);
-    //we can't use the modulo operator easily as it should not be replaced
-    assert((W_dim[1] / 4) * 4 == W_dim[1] && "W has wrong shape");
-    const int dims_Z[] = {X_dim[0], X_dim[1], W_dim[1] / 4};
-    const int dims_H[] = {X_dim[0], X_dim[1], W_dim[1]};
-    const int dims_d[] = {X_dim[1], W_dim[1] / 4};
-    int size_d = X_dim[1] * W_dim[1] / 4;
+    const int * c_dim = CudaNdarray_HOST_DIMS(%(c)s);
+    const int * i_dim = CudaNdarray_HOST_DIMS(%(i)s);
+    int T = i_dim[0];
+    int batch = c_dim[0];
+    int n_cells = c_dim[1];
+    const int dims_Z[] = {T, batch, n_cells};
+    const int dims_H[] = {T, batch, n_cells * 4};
+    const int dims_d[] = {batch, n_cells};
+    int size_d = batch * n_cells;
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
     %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
@@ -292,14 +305,14 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     }
 
     int y = 0;
-    for(int x = 0; x < X_dim[0]; ++x)
+    for(int x = 0; x < T; ++x)
     {
       if(x > 0)
       {
         //H += Z[x-1]*V_h
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
-      float * d_ptr = (x == X_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
+      float * d_ptr = (x == T - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x);
     }
     """ % locals()
@@ -340,15 +353,13 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return [DV_h, Dc, Db, Di] + DXS + DWS
 
   def infer_shape(self, node, input_shapes):
-    n_inputs = (len(input_shapes) - 4) / 2
-    V_hs, cs, bs, bi = input_shapes[:4]
-    XSs = input_shapes[4:n_inputs+4]
-    WSs = input_shapes[n_inputs+4:2*n_inputs+4]
-    Xs = XSs[0]
-    Ws = WSs[0]
-    Z_shape = (Xs[0], Xs[1], Ws[1] / 4)
-    H_shape = (Xs[0], Xs[1], Ws[1])
-    d_shape = (Xs[1], Ws[1] / 4)
+    V_hs, cs, bs, i_s = input_shapes[:4]
+    time = i_s[0]
+    batch = cs[0]
+    n_cells = cs[1]
+    Z_shape = (time, batch, n_cells)
+    H_shape = (time, batch, n_cells * 4)
+    d_shape = (batch, n_cells)
     return [Z_shape, H_shape, d_shape]
 
   #!!! change this when changing the code!
