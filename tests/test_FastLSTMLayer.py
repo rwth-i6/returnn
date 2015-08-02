@@ -11,13 +11,14 @@ def test_grad():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
-  DX = T.grad(Z.sum(), X)
-  DW = T.grad(Z.sum(), W)
-  DV_h = T.grad(Z.sum(), V_h)
-  Db = T.grad(Z.sum(), b)
-  Dc = T.grad(Z.sum(), c)
-  f = theano.function(inputs=[X, W, V_h, c, b], outputs=[Z, DX, DW, DV_h, Dc, Db])
+  Z, H, d = LSTMOp2Instance(V_h, c, b, i, X, W)
+  objective = Z.sum() + d.sum()
+  DX = T.grad(objective, X)
+  DW = T.grad(objective, W)
+  DV_h = T.grad(objective, V_h)
+  Db = T.grad(objective, b)
+  Dc = T.grad(objective, c)
+  f = theano.function(inputs=[V_h, c, b, i, X, W], outputs=[Z, DX, DW, DV_h, Dc, Db])
   #g = theano.function(inputs=[X, W, V_h, b], outputs=[Z,H])
 
   X_val_mat0 = 0.1 * numpy.array([[1,2,3], [4,5,6]], dtype='float32')
@@ -38,6 +39,7 @@ def test_grad():
                               dtype='float32').T
   b_val = 0.1 * numpy.array([1,2,3,4,5,6,7,8,9,10,11,12], dtype='float32')
   c_val = numpy.zeros((2,3), dtype='float32')
+  i_val = numpy.ones((3,2), dtype='int8')
 
   #print "calling g"
   #Z_val, H_val = g(X_val, W_val, V_h_val, b_val)
@@ -45,7 +47,7 @@ def test_grad():
   #print "done calling g"
 
   print "calling f"
-  Z_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(X_val, W_val, V_h_val, c_val, b_val)
+  Z_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
   print numpy.asarray(Z_val), '\n', numpy.asarray(DX_val), '\n', \
     numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
   print "done calling f"
@@ -56,10 +58,16 @@ def test_grad():
   #  return TestOp()(X_val, W_val, V_h_val, b)[0]
   #theano.tests.unittest_tools.verify_grad(testOp_only_b, [b_val])
 
-  def LSTMOp_Z(X, W, V_h, c, b):
-    return LSTMOp2Instance(X, W, V_h, c, b)[0]
+  def LSTMOp_Z(V_h, c, b, X, W):
+    return LSTMOp2Instance(V_h, c, b, i_val, X, W)[0]
 
-  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [X_val, W_val, V_h_val, c_val, b_val])
+  def LSTMOp_d(V_h, c, b, X, W):
+    return LSTMOp2Instance(V_h, c, b, i_val, X, W)[2]
+
+  print "verifying grad of Z"
+  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
+  print "verifying grad of d"
+  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val])
 
   print "success"
 
@@ -157,8 +165,8 @@ def test_multiple_inputs():
   c_val = numpy.zeros((2,3), dtype='float32')
   i_val = numpy.ones((3,2),dtype='int8')
 
-  Z1, H1 = LSTMOp2Instance(V_h, c, b, i, X, W)
-  Z2, H2 = LSTMOp2Instance(V_h, c, b, i, X, X2, W, W)
+  Z1, H1, d1 = LSTMOp2Instance(V_h, c, b, i, X, W)
+  Z2, H2, d2 = LSTMOp2Instance(V_h, c, b, i, X, X2, W, W)
   DX1 = T.grad(Z1.sum(), X)
   DW1 = T.grad(Z1.sum(), W)
   DV_h1 = T.grad(Z1.sum(), V_h)
@@ -181,4 +189,5 @@ def test_multiple_inputs():
 
 if __name__ == '__main__':
   #test_compatible_with_other_implementation()
-  test_multiple_inputs()
+  #test_multiple_inputs()
+  test_grad()
