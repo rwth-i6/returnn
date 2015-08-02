@@ -109,7 +109,7 @@ class LSTM(Unit):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    XS = [z] if not x else [S.output[::-(2 * go_backwards - 1)] for S in x]
+    XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
     return [ result[0], [result[2]] ]
 
