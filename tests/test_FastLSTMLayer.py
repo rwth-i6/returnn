@@ -18,7 +18,7 @@ def test_grad():
   DV_h = T.grad(objective, V_h)
   Db = T.grad(objective, b)
   Dc = T.grad(objective, c)
-  f = theano.function(inputs=[V_h, c, b, i, X, W], outputs=[Z, DX, DW, DV_h, Dc, Db])
+  f = theano.function(inputs=[V_h, c, b, i, X, W], outputs=[Z, d, DX, DW, DV_h, Dc, Db])
   #g = theano.function(inputs=[X, W, V_h, b], outputs=[Z,H])
 
   X_val_mat0 = 0.1 * numpy.array([[1,2,3], [4,5,6]], dtype='float32')
@@ -47,8 +47,8 @@ def test_grad():
   #print "done calling g"
 
   print "calling f"
-  Z_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
-  print numpy.asarray(Z_val), '\n', numpy.asarray(DX_val), '\n', \
+  Z_val, d_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
+  print numpy.asarray(Z_val), '\n', numpy.asarray(d_val), '\n', numpy.asarray(DX_val), '\n', \
     numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
   print "done calling f"
 

@@ -83,7 +83,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    n_inputs = (len(input_names) - 7) / 2
+    n_inputs = (len(input_names) - 8) / 2
     V_h, b, DZ, Z, H, c, i, Dd = input_names[:8]
     XS = input_names[8:8+n_inputs]
     WS = input_names[8+n_inputs:]
@@ -147,7 +147,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, y, x, rightBorder);
     }
 
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
@@ -281,6 +281,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     int size_d = X_dim[1] * W_dim[1] / 4;
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
+    %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
     %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //init H with b
     fillmat(%(b)s, %(H)s);
@@ -298,11 +299,9 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
         //H += Z[x-1]*V_h
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
-      do_lstm(%(H)s, %(Z)s, %(c)s, y, x);
+      float * d_ptr = (x == X_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
+      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x);
     }
-    %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
-    HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(%(d)s), data_ptr(%(H)s, 0, X_dim[0] - 1) + 3 * size_d,
-     size_d * sizeof(float),  cudaMemcpyDeviceToDevice));
     """ % locals()
 
   def grad(self, inputs, output_grads):
