@@ -180,11 +180,13 @@ def test_multiple_inputs():
   Db2 = T.grad(Z2.sum(), b)
   Dc2 = T.grad(Z2.sum(), c)
 
+  DV_h3 = T.grad(Z3.sum(), V_h)
+
   f = theano.function(inputs=[X, W, V_h, c, b, i], outputs=[Z1, DX1, DW1])
   g = theano.function(inputs=[X, X2, W, V_h, c, b, i], outputs=[Z2, DX2, DW2])
-  h = theano.function(inputs=[V_h, c, b, i], outputs=[Z3])
+  h = theano.function(inputs=[V_h, c, b, i], outputs=[Z3, DV_h3])
   h_res = [numpy.asarray(A, dtype='float32') for A in h(V_h_val, c_val, b_val, i_val)]
-  print h_res[0]
+  print h_res[0], h_res[1]
   f_res = [numpy.asarray(A, dtype='float32') for A in f(X_val, W_val, V_h_val, c_val, b_val, i_val)]
   g_res = [numpy.asarray(A, dtype='float32') for A in g(X_val, X_val2, W_val, V_h_val, c_val, b_val, i_val)]
   for A1, A2 in zip(f_res, g_res):

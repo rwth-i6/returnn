@@ -93,10 +93,16 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     DXS = output_names[3:n_inputs+3]
     DWS = output_names[n_inputs+3:2*n_inputs+3]
 
-    XS_str = ",".join(XS)
-    WS_str = ",".join(WS)
-    DXS_str = ",".join(["&" + XS for XS in DXS])
-    DWS_str = ",".join(["&" + WS for WS in DWS])
+    if n_inputs == 0:
+      XS_str = "CudaNdarray ** XS = 0;"
+      WS_str = "CudaNdarray ** WS = 0;"
+      DXS_str = "CudaNdarray *** DXS = 0;"
+      DWS_str = "CudaNdarray *** DWS = 0;"
+    else:
+      XS_str = "CudaNdarray * XS[] = {" + ",".join(XS) + "}"
+      WS_str = "CudaNdarray * WS[] = {" + ",".join(WS) + "}"
+      DXS_str = "CudaNdarray ** DXS[] = {" + ",".join(["&" + DX for DX in DXS]) + "}"
+      DWS_str = "CudaNdarray ** DWS[] = {" + ",".join(["&" + DW for DW in DWS]) + "}"
 
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -109,10 +115,11 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     }
 
     int n_inputs = %(n_inputs)s;
-    CudaNdarray * XS[] = {%(XS_str)s};
-    CudaNdarray * WS[] = {%(WS_str)s};
-    CudaNdarray ** DXS[] = {%(DXS_str)s};
-    CudaNdarray ** DWS[] = {%(DWS_str)s};
+    //these declare CudaNdarray **(*) s (see above)
+    %(XS_str)s;
+    %(WS_str)s;
+    %(DXS_str)s;
+    %(DWS_str)s;
 
     //TODO: DX and DW are not checked here anymore, as they are harder to handle as arrays
     if(%(DV_h)s || %(Dc)s || %(Db)s)
@@ -137,12 +144,12 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       delta = (CudaNdarray *) CudaNdarray_Copy(%(H)s);
     }
 
-    const int * X_dim = CudaNdarray_HOST_DIMS(XS[0]);
+    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
     int y = 0;
-    for(int x = X_dim[0]-1; x >= 0; --x)
+    for(int x = Z_dim[0]-1; x >= 0; --x)
     {
       //add recurrent
-      bool rightBorder = (x == X_dim[0]-1);
+      bool rightBorder = (x == Z_dim[0]-1);
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
@@ -173,7 +180,6 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     %(Db)s = sumOverAllButLastDimensions(delta);
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
-    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
     cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
       Z_dim[1]*Z_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
