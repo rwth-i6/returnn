@@ -48,6 +48,7 @@ def get_device_attributes():
                  "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
@@ -339,7 +340,7 @@ class Device():
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "classification":
-          source.append(T.argmax(self.testnet.output['output'].y_m, axis = -1, keepdims = True))
+          source.append(self.testnet.output['output'].y_pred)
         elif extract == "log-posteriors":
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":

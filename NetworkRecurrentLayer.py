@@ -120,7 +120,6 @@ class LSTMP(Unit):
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     return [ LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[0], i)[0] ]
 
-
 class GRU(Unit):
   def __init__(self, n_units, depth):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
@@ -229,7 +228,7 @@ class RecurrentUnitLayer(Layer):
       self.W_in.append(W)
       self.params["W_in_%s_%s" % (s.name, self.name)] = W
     # make input
-    z = self.b
+    z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
         z += W[T.cast(x_t.output[:,:,0], 'int32')]

@@ -187,7 +187,7 @@ class LayerNetwork(object):
     def traverse(model, layer_name, network):
       mask = input_mask
       if not input_mask and 'mask' in model[layer_name].attrs:
-        mask = model[layer_name].attrs
+        mask = model[layer_name].attrs['mask']
       if 'from' in model[layer_name].attrs and model[layer_name].attrs['from'] != 'data':
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
