@@ -38,6 +38,15 @@ class ForwardLayer(HiddenLayer):
     self.make_output(z if self.activation is None else self.activation(z))
 
 
+class StateToAct(ForwardLayer):
+  def __init__(self, **kwargs):
+    kwargs['n_out'] = 1
+    kwargs.setdefault("layer_class", "state_to_act")
+    super(StateToAct, self).__init__(**kwargs)
+    self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis = 0))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+
+
 class ConvPoolLayer(ForwardLayer):
   def __init__(self, **kwargs):
     kwargs.setdefault("layer_class", "convpool")
