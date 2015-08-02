@@ -167,6 +167,7 @@ def test_multiple_inputs():
 
   Z1, H1, d1 = LSTMOp2Instance(V_h, c, b, i, X, W)
   Z2, H2, d2 = LSTMOp2Instance(V_h, c, b, i, X, X2, W, W)
+  Z3, H3, d3 = LSTMOp2Instance(V_h, c, b, i) # no inputs!
   DX1 = T.grad(Z1.sum(), X)
   DW1 = T.grad(Z1.sum(), W)
   DV_h1 = T.grad(Z1.sum(), V_h)
@@ -181,11 +182,16 @@ def test_multiple_inputs():
 
   f = theano.function(inputs=[X, W, V_h, c, b, i], outputs=[Z1, DX1, DW1])
   g = theano.function(inputs=[X, X2, W, V_h, c, b, i], outputs=[Z2, DX2, DW2])
+  h = theano.function(inputs=[V_h, c, b, i], outputs=[Z3])
+  h_res = [numpy.asarray(A, dtype='float32') for A in h(V_h_val, c_val, b_val, i_val)]
+  print h_res[0]
   f_res = [numpy.asarray(A, dtype='float32') for A in f(X_val, W_val, V_h_val, c_val, b_val, i_val)]
   g_res = [numpy.asarray(A, dtype='float32') for A in g(X_val, X_val2, W_val, V_h_val, c_val, b_val, i_val)]
   for A1, A2 in zip(f_res, g_res):
     assert numpy.allclose(A1, A2)
   print f_res[0], g_res[0]
+
+  print "success"
 
 if __name__ == '__main__':
   #test_compatible_with_other_implementation()
