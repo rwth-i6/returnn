@@ -71,6 +71,34 @@ def test_grad():
 
   print "success"
 
+def test_grad_large():
+  n_T = 5
+  n_batch = 4
+  n_inp_dim = 3
+  n_cells = 8
+  X_val = numpy.random.ranf((n_T,n_batch,n_inp_dim)).astype('float32')
+  W_val = numpy.random.ranf((n_inp_dim, 4 * n_cells)).astype('float32')
+  V_h_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  b_val = numpy.random.ranf((4 * n_cells,)).astype('float32')
+  c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  #c_val = numpy.zeros((n_batch, n_cells), dtype='float32')
+  i_val = numpy.ones((n_T, n_inp_dim), dtype='int8')
+
+  print "verifying grad..."
+
+  def LSTMOp_Z(V_h, c, b, X, W):
+    return LSTMOp2Instance(V_h, c, b, i_val, X, W)[0]
+
+  def LSTMOp_d(V_h, c, b, X, W):
+    return LSTMOp2Instance(V_h, c, b, i_val, X, W)[2]
+
+  print "verifying grad of Z"
+  theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
+  print "verifying grad of d"
+  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val])
+
+  print "success"
+
 def test_compatible_with_other_implementation():
   X = T.ftensor3('X')
   W = T.fmatrix('W')
@@ -198,4 +226,7 @@ def test_multiple_inputs():
 if __name__ == '__main__':
   #test_compatible_with_other_implementation()
   #test_multiple_inputs()
-  test_grad()
+  #print "calling test_grad()"
+  #test_grad()
+  #print "calling test_grad_large()"
+  test_grad_large()

@@ -300,7 +300,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     int size_d = batch * n_cells;
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
-    %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
+    %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2,dims_d);
     %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //init H with b
     fillmat(%(b)s, %(H)s);
