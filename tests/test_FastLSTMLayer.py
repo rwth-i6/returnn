@@ -1,9 +1,11 @@
-#TODO change to work with nose
 import numpy
 import theano
 import theano.tensor as T
 from FastLSTM import LSTMOp2Instance
+import unittest
+from Device import have_gpu
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad():
   X = T.ftensor3('X')
   W = T.fmatrix('W')
@@ -71,6 +73,7 @@ def test_grad():
 
   print "success"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad_large():
   n_T = 5
   n_batch = 4
@@ -99,6 +102,7 @@ def test_grad_large():
 
   print "success"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_compatible_with_other_implementation():
   X = T.ftensor3('X')
   W = T.fmatrix('W')
@@ -164,6 +168,7 @@ def test_compatible_with_other_implementation():
   print Z2_val
   print "sucess"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_multiple_inputs():
   X = T.ftensor3('X')
   X2 = T.ftensor3('X')
