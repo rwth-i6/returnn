@@ -194,7 +194,6 @@ class LayerNetwork(object):
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
-            print network.n_in
             x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
