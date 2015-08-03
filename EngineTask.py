@@ -106,6 +106,8 @@ class TaskThread(threading.Thread):
       pass
     def initialize(self):
       pass
+    def reduce(self, num_frames):
+      pass
     def finalize(self):
       self.finalized = True
 
@@ -184,11 +186,12 @@ class TaskThread(threading.Thread):
               self.alloc_devices[i].set_net_params(self.parent.network)
               res.pop('gparams', None)
             output_results.append([res[k] for k in res if k != 'gparams'])
-          outputs_format = res.keys()
+          outputs_format.remove('gparams')
         else:
           output_results = device_results
 
         self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
         self.parent.lock.release()
@@ -383,7 +386,8 @@ class TaskThread(threading.Thread):
           if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
             results['num_frames'] = run_frames
             self.num_frames += run_frames
-            self.evaluate(**results)
+            if self.share_batches: run_frames *= len(self.devices)
+            self.reduce(run_frames)
             self.eval_batch_idx += 1
             run_frames = 0
             results['batchess'] = []
@@ -519,7 +523,7 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
 
-  def create_consensus(self, cost, num_frames):
+  def reduce(self, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
     try:
@@ -584,7 +588,6 @@ class TrainTaskThread(TaskThread):
       for res in results:
         self.ctc_priors += res["ctc_priors"]
     self.score += score if not self.share_batches else score / len(self.devices)
-    self.create_consensus(cost, num_frames)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().

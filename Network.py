@@ -162,7 +162,7 @@ class LayerNetwork(object):
         params.update({'activation': act, 'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
-          params['index'] = network.i
+          params['index'] = network.i if not 'encoder' in params else network.j
         network.add_layer(layer_class(**params))
     for layer_name in topology:
       if layer_name == 'output' or 'target' in topology[layer_name]:
@@ -242,7 +242,7 @@ class LayerNetwork(object):
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
-          params['index'] = network.i
+          params['index'] = network.i if not 'encoder' in model[layer_name].attrs else network.j
           for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth']:
             if p in model[layer_name].attrs.keys():
               params[p] = model[layer_name].attrs[p]
