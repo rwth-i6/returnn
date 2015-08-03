@@ -627,7 +627,7 @@ class EvalTaskThread(TaskThread):
       error = sum([res[1] for res in results])
       self.score += score
       self.error += error
-      return {"score": score / num_frames, "error": error / num_frames}
+      return {"score": score / num_frames, "error": float(error) / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0
