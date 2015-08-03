@@ -47,9 +47,21 @@ class LayerNetwork(object):
 
   @classmethod
   def json_from_config(cls, config, mask=None):
+    """
+    :type config: Config.Config
+    :param str mask: "unity", "none" or "dropout"
+    :rtype: dict[str]
+    """
     json_content = None
     if config.network_topology_json:
-      json_content = json.loads(config.network_topology_json)
+      try:
+        topology = json.loads(config.network_topology_json)
+      except ValueError:
+        print >> log.v4, "----- BEGIN JSON CONTENT -----"
+        print >> log.v4, json_content
+        print >> log.v4, "------ END JSON CONTENT ------"
+        assert False, "invalid json content"
+      assert isinstance(topology, dict)
     if not json_content:
       if not mask:
         if sum(config.float_list('dropout', [0])) > 0.0:
@@ -99,27 +111,15 @@ class LayerNetwork(object):
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
     """
-    :type json_content: str | dict
+    :type json_content: dict[str]
     :type n_in: int
     :type n_out: dict[str,(int,int)]
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    if isinstance(json_content, str):
-      try:
-        topology = json.loads(json_content)
-      except ValueError:
-        print >> log.v4, "----- BEGIN JSON CONTENT -----"
-        print >> log.v4, json_content
-        print >> log.v4, "------ END JSON CONTENT ------"
-        assert False, "invalid json content"
-      assert isinstance(topology, dict)
-    else:
-      assert isinstance(json_content, dict)
-      topology = json_content
-    if 'network' in topology:
-      topology = topology['network']
+    topology = json_content
+    assert isinstance(topology, dict)
     network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
