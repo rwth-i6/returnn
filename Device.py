@@ -840,7 +840,6 @@ class Device():
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
   def need_reinit(self, json_content, train_param_args=None):
-    return False # TODO needs fix
     assert self.trainnet
     if isinstance(json_content, str):
       import json
