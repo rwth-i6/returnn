@@ -62,8 +62,9 @@ class HDFDataset(CachedDataset):
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
-      self.num_inputs = fin.attrs[attr_inputPattSize]
-    assert self.num_inputs == fin.attrs[attr_inputPattSize], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
+      self.num_inputs = fin['inputs'][0].shape[0] #fin.attrs[attr_inputPattSize]
+      print self.num_inputs
+    assert self.num_inputs == fin['inputs'][0].shape[0], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
     if not self.num_outputs:
       if 'targets/size' in  fin:
         self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
