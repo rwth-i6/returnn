@@ -579,7 +579,14 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config, update_specs=update_specs)
+
+    json_content = config.value('initialize_from_json', None)
+    if json_content:
+      import json
+      json_content = json.loads(open(json_content).read())
+      if 'network' in json_content:
+        json_content = json_content['network']
+    self.initialize(config, update_specs=update_specs, json_content=json_content)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
