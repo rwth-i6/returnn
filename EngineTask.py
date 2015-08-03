@@ -120,7 +120,8 @@ class TaskThread(threading.Thread):
         threading.Thread.__init__(self, name="DeviceThread %s" % " ".join([dev.name for dev in devices]))
         self.alloc_devices = devices
         self.parent = parent
-        self.run_start_batch_idx = parent.batches.get_current_batch_idx()
+        self.devices_batches_idx = None
+        self.run_start_batch_idx = None
         self.eval_info = None; " :type: dict[str] | None "
         self.allocated = False
         self.processing = False
@@ -135,6 +136,7 @@ class TaskThread(threading.Thread):
           self.start()
 
       def allocate(self):
+        self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.run_frames = 0
         for batches in self.devices_batches:
@@ -220,7 +222,7 @@ class TaskThread(threading.Thread):
         self.active = False
 
       def device_run(self):
-        batch_idx = self.run_start_batch_idx
+        batch_idx = self.run_start_batch_idx = self.devices_batches_idx
         assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
