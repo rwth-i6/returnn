@@ -216,7 +216,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		if (outGate != 0)
 		{
 			gc = Y[idx] / outGate;
-		}		
+		}
 		if (inpGate != 0)
 		{
 			gzc = (state - fgtGate * lastState) / inpGate;
@@ -297,6 +297,7 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 	float * data_delta = data_ptr(delta, y, x);	
 	float * data_epsilon = data_ptr(epsilon, y, x);
 	const float * data_next_epsilon = rightBorder ? CudaNdarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
+	//const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : 0;
 	const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : 0;
 	const float * data_Y = data_ptr(Y, y, x);
 	//TODO tune launch configuration
