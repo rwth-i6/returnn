@@ -267,6 +267,12 @@ class RecurrentUnitLayer(Layer):
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
+        #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
+        #offset = 0
+        #for i in xrange(len(encoder)):
+        #  for j in xrange(unit.n_act):
+        #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
+        #  offset += encoder[i].attrs['n_out']
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
