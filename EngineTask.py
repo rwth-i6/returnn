@@ -294,19 +294,6 @@ class TaskThread(threading.Thread):
         if self.parent.interactive:
           progress_bar(complete, hms(remaining_estimated))
 
-    def device_can_run_async(self):
-      return False
-      if len(self.devices) != 1:
-        return False
-      if self.devices[0].blocking:
-        # If we are in the same proc (= blocking), nothing can be async.
-        return False
-      if self.devices[0].updater is None:
-        # If nothing needs to be updated, we can run async.
-        return True
-      # We can run async iff we do the updates online.
-      return self.devices[0].updater.updateOnDevice
-
     def run(self):
       # Wrap run_inner() for better exception printing.
       # Thread.__bootstrap_inner() ignores sys.excepthook.
@@ -341,11 +328,6 @@ class TaskThread(threading.Thread):
       terminal_width, _ = terminal_size()
       self.interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting task", self.task
-
-      canRunAsync = self.device_can_run_async()
-
-      if canRunAsync:
-        print >> log.v5, "Run %s in async mode." % self.name
 
       for device in self.devices:
         device.eval_batch_idx = -1
