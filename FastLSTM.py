@@ -155,7 +155,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder);
     }
 
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
@@ -168,6 +168,10 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       //DX = delta * W^T
       affine_global(delta, WS[j], *DXS[j], false, true, 0, 0.0f);
     }
+
+    //for testing!!!
+    /* *DXS[0] = delta;
+    Py_XINCREF(delta);*/
 
     for(int j = 0; j < n_inputs; ++j)
     {

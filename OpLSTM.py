@@ -115,7 +115,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder);
     }
 
     %(DX)s = CudaNdarray_uninitialized_like(%(X)s);

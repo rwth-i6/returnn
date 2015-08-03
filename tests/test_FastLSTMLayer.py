@@ -1,9 +1,11 @@
-#TODO change to work with nose
 import numpy
 import theano
 import theano.tensor as T
 from FastLSTM import LSTMOp2Instance
+import unittest
+from Device import have_gpu
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad():
   X = T.ftensor3('X')
   W = T.fmatrix('W')
@@ -38,7 +40,8 @@ def test_grad():
                                [-3,7,-7], [2,-2,-3], [-5,2,1], [-4,-5,-4]],
                               dtype='float32').T
   b_val = 0.1 * numpy.array([1,2,3,4,5,6,7,8,9,10,11,12], dtype='float32')
-  c_val = numpy.zeros((2,3), dtype='float32')
+  #c_val = numpy.zeros((2,3), dtype='float32')
+  c_val = 0.1 * numpy.array([[1,2,-3],[6,-5,4]], dtype='float32')
   i_val = numpy.ones((3,2), dtype='int8')
 
   #print "calling g"
@@ -50,6 +53,13 @@ def test_grad():
   Z_val, d_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
   print numpy.asarray(Z_val), '\n', numpy.asarray(d_val), '\n', numpy.asarray(DX_val), '\n', \
     numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
+  print "----------"
+  print "----------"
+  print "----------"
+  print numpy.asarray(DX_val)
+  print "----------"
+  print "----------"
+  print "----------"
   print "done calling f"
 
   print "verifying grad..."
@@ -71,6 +81,7 @@ def test_grad():
 
   print "success"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad_large():
   n_T = 5
   n_batch = 4
@@ -95,10 +106,11 @@ def test_grad_large():
   print "verifying grad of Z"
   theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
   print "verifying grad of d"
-  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val])
+  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val], eps=1e-3)
 
   print "success"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_compatible_with_other_implementation():
   X = T.ftensor3('X')
   W = T.fmatrix('W')
@@ -164,6 +176,7 @@ def test_compatible_with_other_implementation():
   print Z2_val
   print "sucess"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_multiple_inputs():
   X = T.ftensor3('X')
   X2 = T.ftensor3('X')

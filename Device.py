@@ -12,6 +12,11 @@ import pickle
 from thread import start_new_thread
 
 
+def have_gpu():
+  cpus, gpus = get_num_devices()
+  return gpus > 0
+
+
 def get_num_devices():
   if os.name == 'nt':
     return 1, 1 #TODO
