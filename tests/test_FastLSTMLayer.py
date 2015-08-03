@@ -106,7 +106,7 @@ def test_grad_large():
   print "verifying grad of Z"
   theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
   print "verifying grad of d"
-  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val])
+  theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val], eps=1e-3)
 
   print "success"
 
