@@ -118,8 +118,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    topology = json_content
-    assert isinstance(topology, dict)
+    assert isinstance(json_content, dict)
     network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
@@ -164,9 +163,9 @@ class LayerNetwork(object):
           network.recurrent = True
           params['index'] = network.i
         network.add_layer(layer_class(**params))
-    for layer_name in topology:
-      if layer_name == 'output' or 'target' in topology[layer_name]:
-        traverse(topology, layer_name, network)
+    for layer_name in json_content:
+      if layer_name == 'output' or 'target' in json_content[layer_name]:
+        traverse(json_content, layer_name, network)
     return network
 
   @classmethod
