@@ -18,6 +18,7 @@ from Device import get_gpu_names
 import rnn
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
+from Network import LayerNetwork
 import Debug
 from Util import interrupt_main
 
@@ -369,13 +370,20 @@ def prepareForwarding(epoch):
     fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fns_existing = [fn for fn in fns if os.path.exists(fn)]
     assert len(fns_existing) == 1, "%s not found" % fns
-    config.set('load', fns_existing[0])
 
-  lastEpoch, _ = engine.get_last_epoch_model(config)
-  assert lastEpoch == epoch
+    # Load network.
+    import h5py
+    last_model_epoch_filename = fns_existing[0]
+    last_model_hdf = h5py.File(last_model_epoch_filename, "r")
+    network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
+    network.load_hdf(last_model_hdf)
+    engine.network = network
 
-  # Load network and copy over net params.
-  engine.init_network_from_config(config)
+  else:
+    # Load network.
+    engine.init_network_from_config(config)
+
+  # Copy over net params.
   engine.devices[0].prepare(engine.network)
 
 
