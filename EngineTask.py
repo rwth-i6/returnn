@@ -102,6 +102,7 @@ class TaskThread(threading.Thread):
       :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
       :returns some score or None
+      :rtype: dict[str] | None
       """
       pass
     def initialize(self):
