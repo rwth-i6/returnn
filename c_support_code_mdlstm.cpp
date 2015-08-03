@@ -183,8 +183,8 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 	}
 }
 
-__global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * last_state,
-  const float * Y, int n_cells, int n_batch)
+__global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * old_state,
+  bool old_state_strided, const float * Y, int n_cells, int n_batch)
 {
 	//layout: 
 	//delta[0*n_cells..1*n_cells-1] : input gate
@@ -206,7 +206,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		float inpGate = delta[start];
 		float fgtGate = delta[start + n_cells];
 		float outGate = delta[start + 2 * n_cells];
-		float lastState = last_state ? last_state[start] : 0.f;
+		float oldState = old_state_strided ? old_state[start] : old_state[idx];
 		float state = delta[start + 3 * n_cells];
 		float eps = epsilon[idx];
 
@@ -219,7 +219,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		}		
 		if (inpGate != 0)
 		{
-			gzc = (state - fgtGate * lastState) / inpGate;
+			gzc = (state - fgtGate * oldState) / inpGate;
 		}
 		
 		//delta_output
@@ -237,7 +237,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		delta[start + 3 * n_cells] = inpGate * (1.f - (gzc * gzc)) * epsilon_c;
 
 		//delta_forget
-		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * lastState * epsilon_c;
+		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c;
 
 		//delta_input
 		delta[start] = inpGate * (1.f - inpGate) * gzc * epsilon_c;
@@ -285,7 +285,8 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
 //Dd stores the derivative w.r.t. end state
-void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray * Y, const CudaNdarray * Dd, int y, int x, bool rightBorder)
+void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray * Y, const CudaNdarray * Dd,
+ const CudaNdarray * c, int y, int x, bool rightBorder)
 {
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
@@ -297,10 +298,11 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 	float * data_delta = data_ptr(delta, y, x);	
 	float * data_epsilon = data_ptr(epsilon, y, x);
 	const float * data_next_epsilon = rightBorder ? CudaNdarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
-	const float * data_last_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : 0;
+	const float * data_old_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : CudaNdarray_DEV_DATA(c);
 	const float * data_Y = data_ptr(Y, y, x);
 	//TODO tune launch configuration
-	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_delta, data_epsilon, data_next_epsilon, data_last_state, data_Y, n_cells, n_batch);
+	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_delta, data_epsilon, data_next_epsilon,
+	 data_old_state, x > 0, data_Y, n_cells, n_batch);
 }
 
 void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y, int x)
