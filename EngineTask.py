@@ -101,6 +101,8 @@ class TaskThread(threading.Thread):
       :param list[list[numpy.ndarray]] results: results per device
       :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
+      :returns some score or None
+      :rtype: dict[str] | None
       """
       pass
     def initialize(self):
@@ -119,6 +121,7 @@ class TaskThread(threading.Thread):
         self.alloc_devices = devices
         self.parent = parent
         self.run_start_batch_idx = parent.batches.get_current_batch_idx()
+        self.eval_info = None; " :type: dict[str] | None "
         self.allocated = False
         self.processing = False
         self.finished = True
@@ -266,35 +269,6 @@ class TaskThread(threading.Thread):
         s = ["%s MB" % (mem / (1024*1024)) if mem is not None else "unknown" for mem in mem_usage]
         return "/".join(s)
 
-      def device_run_evaluate(self):
-        """
-        :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
-        :param list[str]|None result_format: describes what we have in a result list
-        :type num_frames: int
-        :rtype: dict[str]
-        """
-        results = self.result['results']
-        assert results
-        result_format = self.result['result_format']
-        if not result_format:
-          if len(results[0]) == 2:
-            result_format = ["cost", "error"]  # default eval format
-          else:
-            return {}
-        num_frames = self.result['num_frames']
-        assert num_frames > 0
-        num_frames *= len(self.alloc_devices)
-        results = [Device.make_result_dict(res, result_format) for res in results]
-        cost = [res["cost"] for res in results]
-        score = sum(cost)
-        score /= len(self.alloc_devices)
-        eval_info = {"score": score / num_frames}
-        # Maybe we got some more info such as gradient_norm.
-        # See Device.initialize().
-        for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
-          eval_info[attrib] = sum([res[attrib] for res in results]) / float(num_frames)
-        return eval_info
-
       def print_process(self):
         if not self.parent.interactive and not log.v[5]:
           return
@@ -308,8 +282,8 @@ class TaskThread(threading.Thread):
           info = [
             self.parent.report_prefix,
             "batch %i" % self.run_start_batch_idx]
-          # Such as score.
-          info += ["%s %s" % item for item in sorted(self.device_run_evaluate().items())]
+          if self.eval_info:  # Such as score.
+            info += ["%s %s" % item for item in sorted(self.eval_info.items())]
           info += [
             "elapsed %s" % hms(start_elapsed),
             "exp. remaining %s" % hms(remaining_estimated),
@@ -653,6 +627,7 @@ class EvalTaskThread(TaskThread):
       error = sum([res[1] for res in results])
       self.score += score
       self.error += error
+      return {"score": score / num_frames, "error": error / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0
