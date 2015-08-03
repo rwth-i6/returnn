@@ -55,13 +55,13 @@ class LayerNetwork(object):
     json_content = None
     if config.network_topology_json:
       try:
-        topology = json.loads(config.network_topology_json)
+        json_content = json.loads(config.network_topology_json)
       except ValueError:
         print >> log.v4, "----- BEGIN JSON CONTENT -----"
         print >> log.v4, json_content
         print >> log.v4, "------ END JSON CONTENT ------"
         assert False, "invalid json content"
-      assert isinstance(topology, dict)
+      assert isinstance(json_content, dict)
     if not json_content:
       if not mask:
         if sum(config.float_list('dropout', [0])) > 0.0:
