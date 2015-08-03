@@ -343,7 +343,6 @@ class TaskThread(threading.Thread):
       print >> log.v5, "starting task", self.task
 
       canRunAsync = self.device_can_run_async()
-      remainingDeviceRun = None; " :type: DeviceBatchRun "
 
       if canRunAsync:
         print >> log.v5, "Run %s in async mode." % self.name
