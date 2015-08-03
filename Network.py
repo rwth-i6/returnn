@@ -130,7 +130,9 @@ class LayerNetwork(object):
       cl = obj.pop('class', None)
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
-      else:
+      elif obj['from']:
+        if not isinstance(obj['from'], list):
+          obj['from'] = [ obj['from'] ]
         for prev in obj['from']:
           if prev == 'data':
             source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
@@ -140,6 +142,8 @@ class LayerNetwork(object):
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
         encoder = []
+        if not isinstance(obj['encoder'], list):
+          obj['encoder'] = [obj['encoder']]
         for prev in obj['encoder']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
             traverse(content, prev, network)
@@ -395,7 +399,10 @@ class LayerNetwork(object):
       outattrs = self.output[name].attrs.copy()
       outattrs['from'] = outattrs['from'].split(',')
       outattrs['class'] = 'softmax'
-      out[name] = outattrs
+      if ',' in outattrs:
+        out[name] = outattrs.split(',')
+      else:
+        out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
     return out
