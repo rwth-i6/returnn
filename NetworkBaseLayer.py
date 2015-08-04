@@ -305,7 +305,7 @@ class Layer(Container):
     :type name: str
     :rtype: T
     """
-    super(Layer, self).add_param(param, name)
+    param = super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
         self.constraints +=  self.attrs['L1'] * abs(param).sum()
