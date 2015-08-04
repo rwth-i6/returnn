@@ -198,12 +198,23 @@ class LayerNetwork(object):
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
-            print network.n_in
             x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             x_in.append(network.hidden[s])
+          elif s == "":
+            assert not s
+            # Fix for old models via NetworkDescription.
+            s = Layer.guess_source_layer_name(layer_name)
+            if not s:
+              # Fix for data input. Just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
+            else:
+              if not network.hidden.has_key(s):
+                traverse(model, s, network)
+              # Add just like in NetworkDescription, so that param names are correct.
+              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
         x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
       if 'encoder' in model[layer_name].attrs:
@@ -306,7 +317,7 @@ class LayerNetwork(object):
         self.ctc_priors = None
       #self.objective[target] = self.cost[target] / self.x.shape[1] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
       #self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      self.objective[target] = self.cost[target] / T.sum(self.j) + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
+      self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)

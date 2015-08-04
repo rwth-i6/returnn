@@ -7,6 +7,7 @@ from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
+import signal
 import time
 import pickle
 from thread import start_new_thread
@@ -972,6 +973,10 @@ class Device():
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
+      try:
+        os.kill(self.proc.proc.pid, signal.SIGUSR1)
+      except Exception as e:
+        print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
 
   def terminate(self):
