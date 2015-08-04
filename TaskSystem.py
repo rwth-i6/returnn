@@ -493,11 +493,11 @@ class ExecingProcess_ConnectionWrapper(object):
   def __getattr__(self, attr): return getattr(self.conn, attr)
 
   def _check_closed(self):
-    if self.conn.closed: raise ProcConnectionDied
+    if self.conn.closed: raise ProcConnectionDied("connection closed")
   def _check_writable(self):
-    if not self.conn.writable: raise ProcConnectionDied
+    if not self.conn.writable: raise ProcConnectionDied("connection not writeable")
   def _check_readable(self):
-    if not self.conn.readable: raise ProcConnectionDied
+    if not self.conn.readable: raise ProcConnectionDied("connection not readable")
 
   def poll(self, *args, **kwargs):
     while True:
@@ -507,16 +507,16 @@ class ExecingProcess_ConnectionWrapper(object):
         if e.errno == errno.EINTR:
           # http://stackoverflow.com/questions/14136195
           # We can just keep trying.
-          pass
-        raise ProcConnectionDied
-      except EOFError:
-        raise ProcConnectionDied
+          continue
+        raise ProcConnectionDied("poll IOError: %s" % e)
+      except EOFError as e:
+        raise ProcConnectionDied("poll EOFError: %s" % e)
 
   def send_bytes(self, value):
     try:
       self.conn.send_bytes(value)
-    except (EOFError, IOError):
-      raise ProcConnectionDied
+    except (EOFError, IOError) as e:
+      raise ProcConnectionDied("send_bytes EOFError/IOError: %s" % e)
 
   def send(self, value):
     self._check_closed()
@@ -533,10 +533,10 @@ class ExecingProcess_ConnectionWrapper(object):
         if e.errno == errno.EINTR:
           # http://stackoverflow.com/questions/14136195
           # We can just keep trying.
-          pass
-        raise ProcConnectionDied
-      except EOFError:
-        raise ProcConnectionDied
+          continue
+        raise ProcConnectionDied("recv_bytes IOError: %s" % e)
+      except EOFError as e:
+        raise ProcConnectionDied("recv_bytes EOFError: %s" % e)
 
   def recv(self):
     self._check_closed()
