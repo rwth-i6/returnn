@@ -166,6 +166,7 @@ class Updater:
     return param
 
   def reset(self):
+    return # this needs to be done smarter
     for param in self.params:
       param.set_value(self.params[param])
 
@@ -195,7 +196,7 @@ class Updater:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = False
+          self.use_adagrad = True
           self.use_adadelta = False #True #True
           self.skip_nan_inf = True
           self.start_var_reduction = 0
@@ -328,7 +329,7 @@ class Updater:
             g = corrected_grad
             # Accumulate gradient (windowed version)
             new_sum_squared_grad = (
-                sum_square_grad * self.decay + (2 - self.decay) * T.sqr(g)
+                sum_square_grad + T.sqr(g)
             )
 
             rms_g_t = T.sqrt(new_sum_squared_grad)
