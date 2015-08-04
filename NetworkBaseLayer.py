@@ -272,7 +272,7 @@ class Layer(Container):
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name, False)
+    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
     self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
     self.masks = [None] * len(self.sources)
     assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
