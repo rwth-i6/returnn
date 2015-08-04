@@ -299,7 +299,7 @@ class Layer(Container):
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
 
-  def add_param(self, param, name="", constraints = True):
+  def add_param(self, param, name="", constraints=True):
     """
     :type param: T
     :type name: str
@@ -308,9 +308,9 @@ class Layer(Container):
     param = super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints +=  self.attrs['L1'] * abs(param).sum()
+        self.constraints += self.attrs['L1'] * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
-        self.constraints +=  self.attrs['L2'] * (param**2).sum()
+        self.constraints += self.attrs['L2'] * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
