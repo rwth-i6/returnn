@@ -308,9 +308,9 @@ class Layer(Container):
     param = super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints += self.attrs['L1'] * abs(param).sum()
+        self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
-        self.constraints += self.attrs['L2'] * (param**2).sum()
+        self.constraints += T.constant(self.attrs['L2'], name="L2", dtype='floatX') * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
