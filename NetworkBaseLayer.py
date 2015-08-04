@@ -250,7 +250,7 @@ class SourceLayer(Container):
 class Layer(Container):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
-    :param list[NetworkBaseLayer.SourceLayer] sources: list of source layers
+    :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
@@ -258,7 +258,7 @@ class Layer(Container):
     :type dropout: float
     """
     super(Layer, self).__init__(**kwargs)
-    self.sources = sources; ":type: list[SourceLayer]"
+    self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
