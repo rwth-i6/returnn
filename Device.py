@@ -7,9 +7,15 @@ from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
+import signal
 import time
 import pickle
 from thread import start_new_thread
+
+
+def have_gpu():
+  cpus, gpus = get_num_devices()
+  return gpus > 0
 
 
 def get_num_devices():
@@ -38,16 +44,19 @@ def get_gpu_names():
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = {
+                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
-                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 760" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
+                 "GeForce GTX 790" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
@@ -343,7 +352,7 @@ class Device():
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "classification":
-          source.append(T.argmax(self.testnet.output['output'].y_m, axis = -1, keepdims = True))
+          source.append(self.testnet.output['output'].y_pred)
         elif extract == "log-posteriors":
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
@@ -575,6 +584,7 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
+
     self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
@@ -950,6 +960,7 @@ class Device():
       assert self.main_pid == os.getpid()
       assert self.result_called_count <= self.run_called_count
       if not self.proc.is_alive():
+        print >> log.v4, "Dev %s proc not alive anymore" % self.name
         return None, None
       timeout = 60 * 10  # 10 minutes execution timeout
       while timeout > 0:
@@ -957,16 +968,23 @@ class Device():
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
             if r == "error":
+              print >> log.v5, "Dev %s proc reported error" % self.name
               return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
+            assert output is not None
             return output, outputs_format
-        except ProcConnectionDied:
+        except ProcConnectionDied as e:
           # The process is dying or died.
+          print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
+      try:
+        os.kill(self.proc.proc.pid, signal.SIGUSR1)
+      except Exception as e:
+        print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
 
   def terminate(self):

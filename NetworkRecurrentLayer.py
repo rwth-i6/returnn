@@ -106,20 +106,21 @@ class LSTME(Unit):
 
 class LSTM(Unit):
   def __init__(self, n_units, depth):
-    super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
+    super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    XS = [z] if not x else [S.output[::-(2 * go_backwards - 1)] for S in x]
-    return [ LSTMOp2Instance(*([W_re, outputs_info[0], b, i] + XS + W_in))[0] ]
+    XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
+    result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
+    return [ result[0], [result[2]] ]
 
 
 class LSTMP(Unit):
   def __init__(self, n_units, depth):
-    super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 1)
+    super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    return [ LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[0], i)[0] ]
-
+    result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i)
+    return [ result[0], [result[2]] ]
 
 class GRU(Unit):
   def __init__(self, n_units, depth):
@@ -229,7 +230,7 @@ class RecurrentUnitLayer(Layer):
       self.W_in.append(W)
       self.params["W_in_%s_%s" % (s.name, self.name)] = W
     # make input
-    z = self.b
+    z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
         z += W[T.cast(x_t.output[:,:,0], 'int32')]
@@ -266,6 +267,12 @@ class RecurrentUnitLayer(Layer):
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
+        #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
+        #offset = 0
+        #for i in xrange(len(encoder)):
+        #  for j in xrange(unit.n_act):
+        #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
+        #  offset += encoder[i].attrs['n_out']
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:

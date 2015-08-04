@@ -102,9 +102,12 @@ class TaskThread(threading.Thread):
       :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
       :returns some score or None
+      :rtype: dict[str] | None
       """
       pass
     def initialize(self):
+      pass
+    def reduce(self, num_frames):
       pass
     def finalize(self):
       self.finalized = True
@@ -117,7 +120,8 @@ class TaskThread(threading.Thread):
         threading.Thread.__init__(self, name="DeviceThread %s" % " ".join([dev.name for dev in devices]))
         self.alloc_devices = devices
         self.parent = parent
-        self.run_start_batch_idx = parent.batches.get_current_batch_idx()
+        self.devices_batches_idx = None
+        self.run_start_batch_idx = None
         self.eval_info = None; " :type: dict[str] | None "
         self.allocated = False
         self.processing = False
@@ -132,6 +136,7 @@ class TaskThread(threading.Thread):
           self.start()
 
       def allocate(self):
+        self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.run_frames = 0
         for batches in self.devices_batches:
@@ -184,11 +189,12 @@ class TaskThread(threading.Thread):
               self.alloc_devices[i].set_net_params(self.parent.network)
               res.pop('gparams', None)
             output_results.append([res[k] for k in res if k != 'gparams'])
-          outputs_format = res.keys()
+          outputs_format.remove('gparams')
         else:
           output_results = device_results
 
         self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
         self.parent.lock.release()
@@ -216,7 +222,7 @@ class TaskThread(threading.Thread):
         self.active = False
 
       def device_run(self):
-        batch_idx = self.run_start_batch_idx
+        batch_idx = self.run_start_batch_idx = self.devices_batches_idx
         assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
@@ -290,19 +296,6 @@ class TaskThread(threading.Thread):
         if self.parent.interactive:
           progress_bar(complete, hms(remaining_estimated))
 
-    def device_can_run_async(self):
-      return False
-      if len(self.devices) != 1:
-        return False
-      if self.devices[0].blocking:
-        # If we are in the same proc (= blocking), nothing can be async.
-        return False
-      if self.devices[0].updater is None:
-        # If nothing needs to be updated, we can run async.
-        return True
-      # We can run async iff we do the updates online.
-      return self.devices[0].updater.updateOnDevice
-
     def run(self):
       # Wrap run_inner() for better exception printing.
       # Thread.__bootstrap_inner() ignores sys.excepthook.
@@ -337,12 +330,6 @@ class TaskThread(threading.Thread):
       terminal_width, _ = terminal_size()
       self.interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting task", self.task
-
-      canRunAsync = self.device_can_run_async()
-      remainingDeviceRun = None; " :type: DeviceBatchRun "
-
-      if canRunAsync:
-        print >> log.v5, "Run %s in async mode." % self.name
 
       for device in self.devices:
         device.eval_batch_idx = -1
@@ -383,7 +370,8 @@ class TaskThread(threading.Thread):
           if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
             results['num_frames'] = run_frames
             self.num_frames += run_frames
-            self.evaluate(**results)
+            if self.share_batches: run_frames *= len(self.devices)
+            self.reduce(run_frames)
             self.eval_batch_idx += 1
             run_frames = 0
             results['batchess'] = []
@@ -519,7 +507,7 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
 
-  def create_consensus(self, cost, num_frames):
+  def reduce(self, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
     try:
@@ -539,9 +527,14 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          nframes = numpy.sum([ dev.num_frames for net,dev in zip(hypnets,self.devices) if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
+          nframes = numpy.sum([ dev.num_frames for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          if nframes:
+            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          else:
+            print >> log.v4, "warning: no update available for parameter", basenet[i]
+          #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
         encoded.append(q)
@@ -579,7 +572,6 @@ class TrainTaskThread(TaskThread):
       for res in results:
         self.ctc_priors += res["ctc_priors"]
     self.score += score if not self.share_batches else score / len(self.devices)
-    self.create_consensus(cost, num_frames)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().
@@ -618,7 +610,7 @@ class EvalTaskThread(TaskThread):
       error = sum([res[1] for res in results])
       self.score += score
       self.error += error
-      return {"score": score / num_frames, "error": error / num_frames}
+      return {"score": score / num_frames, "error": float(error) / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0

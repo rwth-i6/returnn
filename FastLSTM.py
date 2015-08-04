@@ -6,11 +6,12 @@ import theano.printing
 import theano.gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
+from theano.sandbox.cuda import CudaNdarrayType
 from theano.gof.opt import OpSub
 from theano.compile import optdb
 import os
 
-#renmaed this to LSTMOp2 because there is almost the same in OpLSTM.py (without the 2)
+#renamed this to LSTMOp2 because there is almost the same in OpLSTM.py (without the 2)
 
 class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
   def __init__(self, inplace):
@@ -35,7 +36,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, V_h, b, DZ, Z, H, c, i, *args):
+  def make_node(self, V_h, b, DZ, Z, H, c, i, Dd, *args):
     num_inputs = len(args) / 2
     XS = args[:num_inputs]
     WS = args[num_inputs:]
@@ -44,6 +45,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     b = gpu_contiguous(as_cuda_ndarray_variable(b))
     DZ = gpu_contiguous(as_cuda_ndarray_variable(DZ))
+    Dd = gpu_contiguous(as_cuda_ndarray_variable(Dd))
     for X in XS:
       assert X.dtype == "float32"
       assert X.ndim == 3
@@ -56,6 +58,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     assert Z.dtype == 'float32'
     assert H.dtype == 'float32'
     assert c.dtype == 'float32'
+    assert Dd.dtype == 'float32'
     assert V_h.ndim == 2
     assert b.ndim == 1
     assert DZ.ndim == 3
@@ -63,15 +66,16 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     assert H.ndim == 3
     assert c.ndim == 2
     assert i.ndim == 2
+    assert Dd.ndim == 2
 
-    return theano.Apply(self, [V_h, b, DZ, Z, H, c, i] + XS + WS,
+    return theano.Apply(self, [V_h, b, DZ, Z, H, c, i, Dd] + XS + WS,
                         [V_h.type(), c.type(), b.type()] + [X.type() for X in XS] + [W.type() for W in WS])
 
   def infer_shape(self, node, input_shapes):
     n_inputs = (len(input_shapes) - 7) / 2
-    V_hs, bs, DZs, Zs, Hs, cs, i_s = input_shapes[:7]
-    XSs = input_shapes[7:7+n_inputs]
-    WSs = input_shapes[7+n_inputs:]
+    V_hs, bs, DZs, Zs, Hs, cs, i_s, Dd_s = input_shapes[:8]
+    XSs = input_shapes[8:8+n_inputs]
+    WSs = input_shapes[8+n_inputs:]
     return [V_hs, cs, bs] + XSs + WSs
 
   def c_support_code(self):
@@ -80,19 +84,25 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    n_inputs = (len(input_names) - 7) / 2
-    V_h, b, DZ, Z, H, c, i = input_names[:7]
-    XS = input_names[7:7+n_inputs]
-    WS = input_names[7+n_inputs:]
+    n_inputs = (len(input_names) - 8) / 2
+    V_h, b, DZ, Z, H, c, i, Dd = input_names[:8]
+    XS = input_names[8:8+n_inputs]
+    WS = input_names[8+n_inputs:]
 
     DV_h, Dc, Db = output_names[:3]
     DXS = output_names[3:n_inputs+3]
     DWS = output_names[n_inputs+3:2*n_inputs+3]
 
-    XS_str = ",".join(XS)
-    WS_str = ",".join(WS)
-    DXS_str = ",".join(["&" + XS for XS in DXS])
-    DWS_str = ",".join(["&" + WS for WS in DWS])
+    if n_inputs == 0:
+      XS_str = "CudaNdarray ** XS = 0;"
+      WS_str = "CudaNdarray ** WS = 0;"
+      DXS_str = "CudaNdarray *** DXS = 0;"
+      DWS_str = "CudaNdarray *** DWS = 0;"
+    else:
+      XS_str = "CudaNdarray * XS[] = {" + ",".join(XS) + "}"
+      WS_str = "CudaNdarray * WS[] = {" + ",".join(WS) + "}"
+      DXS_str = "CudaNdarray ** DXS[] = {" + ",".join(["&" + DX for DX in DXS]) + "}"
+      DWS_str = "CudaNdarray ** DWS[] = {" + ",".join(["&" + DW for DW in DWS]) + "}"
 
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -105,10 +115,11 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     }
 
     int n_inputs = %(n_inputs)s;
-    CudaNdarray * XS[] = {%(XS_str)s};
-    CudaNdarray * WS[] = {%(WS_str)s};
-    CudaNdarray ** DXS[] = {%(DXS_str)s};
-    CudaNdarray ** DWS[] = {%(DWS_str)s};
+    //these declare CudaNdarray **(*) s (see above)
+    %(XS_str)s;
+    %(WS_str)s;
+    %(DXS_str)s;
+    %(DWS_str)s;
 
     //TODO: DX and DW are not checked here anymore, as they are harder to handle as arrays
     if(%(DV_h)s || %(Dc)s || %(Db)s)
@@ -133,18 +144,18 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       delta = (CudaNdarray *) CudaNdarray_Copy(%(H)s);
     }
 
-    const int * X_dim = CudaNdarray_HOST_DIMS(XS[0]);
+    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
     int y = 0;
-    for(int x = X_dim[0]-1; x >= 0; --x)
+    for(int x = Z_dim[0]-1; x >= 0; --x)
     {
       //add recurrent
-      bool rightBorder = (x == X_dim[0]-1);
+      bool rightBorder = (x == Z_dim[0]-1);
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder);
     }
 
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
@@ -158,6 +169,10 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
       affine_global(delta, WS[j], *DXS[j], false, true, 0, 0.0f);
     }
 
+    //for testing!!!
+    /* *DXS[0] = delta;
+    Py_XINCREF(delta);*/
+
     for(int j = 0; j < n_inputs; ++j)
     {
       *DWS[j] = CudaNdarray_uninitialized_like(WS[j]);
@@ -169,7 +184,6 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     %(Db)s = sumOverAllButLastDimensions(delta);
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
-    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
     cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
       Z_dim[1]*Z_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
@@ -203,6 +217,11 @@ if not hasattr(optdb, 'LSTMOp2InlaceOpt_registered'):
 class LSTMOp2(theano.sandbox.cuda.GpuOp):
   __props__ = ()
 
+  #V_h: recurrent (horizontal) weight matrix
+  #c: initial state
+  #b: bias
+  #i index
+  #args: XS and WS (inputs and weight matrices)
   def make_node(self, V_h, c, b, i, *args):
     num_inputs = len(args) / 2
     XS = args[:num_inputs]
@@ -228,7 +247,12 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [XS[0].type(), XS[0].type()])
+    if len(XS) > 0:
+      X_type = XS[0].type
+    else:
+      broad = (False, False, False)
+      X_type = CudaNdarrayType(dtype=V_h.dtype, broadcastable=broad)
+    return theano.Apply(self, [V_h, c, b, i] + XS + WS, [X_type(), X_type(), c.type()])
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -242,34 +266,45 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     XS = input_names[4:n_inputs+4]
     WS = input_names[n_inputs+4:2*n_inputs+4]
 
-    XS_str = ",".join(XS)
-    WS_str = ",".join(WS)
+    if len(XS) == 0:
+      XS_str = "CudaNdarray ** XS = 0;"
+      WS_str = "CudaNdarray ** WS = 0;"
+    else:
+      XS_str = "CudaNdarray * XS[] = {" + ",".join(XS) + "}"
+      WS_str = "CudaNdarray * WS[] = {" + ",".join(WS) + "}"
 
-    Z, H = output_names
+    Z, H, d = output_names #d: endstate
     fail = sub['fail']
     return """
-    if(%(Z)s || %(H)s)
+    if(%(Z)s || %(H)s || %(d)s)
     {
-      printf("Z or H already exist\\n");
+      printf("Z or H or d already exist\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(Z)s);
       Py_XDECREF(%(H)s);
+      Py_XDECREF(%(d)s);
     }
 
     //std::cout << "LSTMOp called" << std::endl;
 
     int n_inputs = %(n_inputs)s;
-    CudaNdarray * XS[] = {%(XS_str)s};
-    CudaNdarray * WS[] = {%(WS_str)s};
+    //these declare
+    //CudaNdarray * XS[] and CudaNdarray * WS[]
+    %(XS_str)s;
+    %(WS_str)s;
 
-    const int * X_dim = CudaNdarray_HOST_DIMS(XS[0]);
-    const int * W_dim = CudaNdarray_HOST_DIMS(WS[0]);
-    //we can't use the modulo operator easily as it should not be replaced
-    assert((W_dim[1] / 4) * 4 == W_dim[1] && "W has wrong shape");
-    const int dims_Z[] = {X_dim[0], X_dim[1], W_dim[1] / 4};
-    const int dims_H[] = {X_dim[0], X_dim[1], W_dim[1]};
+    const int * c_dim = CudaNdarray_HOST_DIMS(%(c)s);
+    const int * i_dim = CudaNdarray_HOST_DIMS(%(i)s);
+    int T = i_dim[0];
+    int batch = c_dim[0];
+    int n_cells = c_dim[1];
+    const int dims_Z[] = {T, batch, n_cells};
+    const int dims_H[] = {T, batch, n_cells * 4};
+    const int dims_d[] = {batch, n_cells};
+    int size_d = batch * n_cells;
 
     %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
+    %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2,dims_d);
     %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
     //init H with b
     fillmat(%(b)s, %(H)s);
@@ -280,14 +315,15 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     }
 
     int y = 0;
-    for(int x = 0; x < X_dim[0]; ++x)
+    for(int x = 0; x < T; ++x)
     {
       if(x > 0)
       {
         //H += Z[x-1]*V_h
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
-      do_lstm(%(H)s, %(Z)s, %(c)s, y, x);
+      float * d_ptr = (x == T - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
+      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x);
     }
     """ % locals()
 
@@ -297,7 +333,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     XS = inputs[4:n_inputs+4]
     WS = inputs[n_inputs+4:2*n_inputs+4]
 
-    DZ, DH = output_grads
+    DZ, DH, Dd = output_grads
 
     XS_raw = [X.owner.inputs[0].owner.inputs[0] for X in XS]
     #TODO
@@ -308,9 +344,17 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H = LSTMOp2Instance(*([V_h_raw, c_raw, b_raw, i] + XS_raw + WS_raw))
+    Z, H, d = LSTMOp2Instance(*([V_h_raw, c_raw, b_raw, i] + XS_raw + WS_raw))
 
-    grads = LSTMOpGradNoInplaceInstance(*([V_h, b, DZ, Z, H, c, i] + XS + WS))
+    DZ_valid = not isinstance(DZ.type, theano.gradient.DisconnectedType)
+    Dd_valid = not isinstance(Dd.type, theano.gradient.DisconnectedType)
+    assert DZ_valid or Dd_valid, "both outputs disconnected"
+    if not DZ_valid:
+      DZ = T.zeros_like(Z)
+    if not Dd_valid:
+      Dd = T.zeros_like(c)
+
+    grads = LSTMOpGradNoInplaceInstance(*([V_h, b, DZ, Z, H, c, i, Dd] + XS + WS))
     DV_h, Dc, Db = grads[:3]
     DXS = grads[3:n_inputs+3]
     DWS = grads[n_inputs+3:2*n_inputs+3]
@@ -319,15 +363,14 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return [DV_h, Dc, Db, Di] + DXS + DWS
 
   def infer_shape(self, node, input_shapes):
-    n_inputs = (len(input_shapes) - 4) / 2
-    V_hs, cs, bs, bi = input_shapes[:4]
-    XSs = input_shapes[4:n_inputs+4]
-    WSs = input_shapes[n_inputs+4:2*n_inputs+4]
-    Xs = XSs[0]
-    Ws = WSs[0]
-    Z_shape = (Xs[0], Xs[1], Ws[1] / 4)
-    H_shape = (Xs[0], Xs[1], Ws[1])
-    return [Z_shape, H_shape]
+    V_hs, cs, bs, i_s = input_shapes[:4]
+    time = i_s[0]
+    batch = cs[0]
+    n_cells = cs[1]
+    Z_shape = (time, batch, n_cells)
+    H_shape = (time, batch, n_cells * 4)
+    d_shape = (batch, n_cells)
+    return [Z_shape, H_shape, d_shape]
 
   #!!! change this when changing the code!
   #def c_code_cache_version(self):

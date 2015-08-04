@@ -36,6 +36,7 @@ class OutputLayer(Layer):
                  for source in self.sources]
 
     assert len(self.sources) == len(self.masks) == len(self.W_in)
+    assert len(self.sources) > 0
     for source, m, W in zip(self.sources, self.masks, self.W_in):
       if source.attrs['sparse']:
         self.z += W[T.cast(source.output[:,:,0], 'int32')]
@@ -43,6 +44,7 @@ class OutputLayer(Layer):
         self.z += self.dot(source.output, W)
       else:
         self.z += self.dot(self.mass * m * source.output, W)
+    assert self.z.ndim == 3
 
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
@@ -83,9 +85,9 @@ class OutputLayer(Layer):
     """
     if self.y.dtype.startswith('int'):
       if self.y.type == T.ivector().type:
-        return T.sum(T.neq(self.y_pred[self.i], self.y[self.i]))
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y[self.i]))
       else:
-        return T.sum(T.neq(self.y_pred[self.i], T.argmax(self.y[self.i], axis = -1)))
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
     else:
       raise NotImplementedError()
 
@@ -106,7 +108,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
-    self.y_pred = T.argmax(self.p_y_given_x, axis=-1)
+    self.y_pred = T.argmax(self.y_m[self.i], axis=-1, keepdims=True)
     self.output = self.p_y_given_x
 
   def cost(self):
@@ -115,9 +117,9 @@ class FramewiseOutputLayer(OutputLayer):
       if self.y.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
-        nll = T.set_subtensor(nll[self.j], T.constant(0.0))
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
+        #nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
       return T.sum(nll), known_grads
