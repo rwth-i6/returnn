@@ -36,6 +36,7 @@ class OutputLayer(Layer):
                  for source in self.sources]
 
     assert len(self.sources) == len(self.masks) == len(self.W_in)
+    assert len(self.sources) > 0
     for source, m, W in zip(self.sources, self.masks, self.W_in):
       if source.attrs['sparse']:
         self.z += W[T.cast(source.output[:,:,0], 'int32')]
@@ -43,6 +44,7 @@ class OutputLayer(Layer):
         self.z += self.dot(source.output, W)
       else:
         self.z += self.dot(self.mass * m * source.output, W)
+    assert self.z.ndim == 3
 
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
