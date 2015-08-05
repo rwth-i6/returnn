@@ -289,21 +289,24 @@ class RecurrentUnitLayer(Layer):
         src += [s.output for s in e.sources]
         n_in += sum([s.attrs['n_out'] for s in e.sources])
       self.xc = T.concatenate(src, axis=-1)
-      #l = sqrt(6.) / sqrt(self.attrs['n_out'] * 3 + n_in)
-      #values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-      #self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-      #self.add_param(self.W_att_in, name = "W_att_in")
-      #values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], 1)), dtype=theano.config.floatX)
-      #self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
-      #self.add_param(self.W_att_re, name = "W_att_re")
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in + self.attrs['n_out'], 1)), dtype=theano.config.floatX)
-      self.W_att = theano.shared(value=values, borrow=True, name = "W_att")
-      self.add_param(self.W_att, name = "W_att")
+
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
+      self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
+      self.add_param(self.W_att_xc, name = "W_att_xc")
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], 1)), dtype=theano.config.floatX)
+      self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
+      self.add_param(self.W_att_re, name = "W_att_re")
+      self.zc = T.dot(self.xc, self.W_att_xc).reshape((self.xc.shape[0], self.xc.shape[1]))
+
+      #values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in + self.attrs['n_out'], 1)), dtype=theano.config.floatX)
+      #self.W_att = theano.shared(value=values, borrow=True, name = "W_att")
+      #self.add_param(self.W_att, name = "W_att")
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
       self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
       self.add_param(self.W_att_in, name = "W_att_in")
-      non_sequences.append(self.xc)
+
+      non_sequences += [self.xc, self.zc]
 
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
@@ -341,8 +344,9 @@ class RecurrentUnitLayer(Layer):
 
       def step(x_t, z_t, i_t, *args):
         if self.attrs['attention']:
-          xc = args[-1]
-          args = args[:-1]
+          xc = args[-2]
+          zc = args[-1]
+          args = args[:-2]
         h_p = args[0]
         if self.depth == 1:
           i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
@@ -359,7 +363,8 @@ class RecurrentUnitLayer(Layer):
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.attrs['attention']:
-            f_t = T.dot(T.concatenate([h_p.dimshuffle('x',0,1).repeat(xc.shape[0], axis=0),xc], axis = 2), self.W_att).reshape((xc.shape[0],h_p.shape[0]))
+            #f_t = T.dot(T.concatenate([h_p.dimshuffle('x',0,1).repeat(xc.shape[0], axis=0),xc], axis = 2), self.W_att).reshape((xc.shape[0],h_p.shape[0]))
+            f_t = zc + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
             #f_t = z_t + T.dot(h_p, self.W_att_re)
             #f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
             w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x') #1,'x',0) # (batch, 1, time)
