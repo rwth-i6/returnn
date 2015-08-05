@@ -956,6 +956,7 @@ class Device():
       assert self.main_pid == os.getpid()
       assert self.result_called_count <= self.run_called_count
       if not self.proc.is_alive():
+        print >> log.v4, "Dev %s proc not alive anymore" % self.name
         return None, None
       timeout = 60 * 10  # 10 minutes execution timeout
       while timeout > 0:
@@ -963,13 +964,16 @@ class Device():
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
             if r == "error":
+              print >> log.v5, "Dev %s proc reported error" % self.name
               return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
+            assert output is not None
             return output, outputs_format
-        except ProcConnectionDied:
+        except ProcConnectionDied as e:
           # The process is dying or died.
+          print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
