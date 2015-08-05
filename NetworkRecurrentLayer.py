@@ -353,8 +353,8 @@ class RecurrentUnitLayer(Layer):
         else:
           h_p = self.make_consensus(h_p, axis = 1)
           i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
-        #if not self.W_in:
-        #  z_t += self.b
+        if not self.W_in:
+          z_t += self.b
         for W in self.Wp:
           h_p = pact(T.dot(h_p, W))
         z_p = self.dot(h_p, W_re)
@@ -368,8 +368,12 @@ class RecurrentUnitLayer(Layer):
             #f_t = z_t + T.dot(h_p, self.W_att_re)
             #f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
             w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x') #1,'x',0) # (batch, 1, time)
+            #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
+            #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
+            #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
+            #w_t = f_t.dimshuffle(0,1,'x')
             #z_t = T.dot(self.xc.dimshuffle(1,2,0), w_t).dimshuffle(2,0,1).reshape(z_p.shape)
-            z_t = T.dot(T.sum(xc * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
+            z_t += T.dot(T.sum(xc * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t = T.dot(xc.dimshuffle(1,2,0), w_t).reshape(z_t.shape)
           act = unit.step(x_t, z_t, z_p, *args)
         if carry_time:
