@@ -178,7 +178,7 @@ class LayerNetworkDescription:
         del params[key]
     return params
 
-  def _layer_to_json(self, info, sources, mask, reverse=False):
+  def _layer_params(self, info, sources, mask, reverse=False):
     """
     :param dict[str] info: self.hidden_info[i]
     :param list[str] sources: 'from' entry
@@ -204,7 +204,7 @@ class LayerNetworkDescription:
           params['reverse'] = True
       if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
         params['sharpgates'] = self.sharpgates
-    return self._layer_param_to_json(params)
+    return params
 
   def _output_to_json(self, mask, sources):
     """
@@ -231,9 +231,9 @@ class LayerNetworkDescription:
     # create forward layers
     last_source = "data"
     for info in self.hidden_info:
-      layer_name = info["name"]
-      layer = self._layer_to_json(info=info, mask=mask, sources=[last_source])
-      content[layer_name] = layer
+      layer = self._layer_params(info=info, mask=mask, sources=[last_source])
+      layer_name = layer["name"]
+      content[layer_name] = self._layer_param_to_json(layer)
       last_source = layer_name
     sources = [last_source]
 
@@ -241,9 +241,9 @@ class LayerNetworkDescription:
       # create backward layers
       last_source = "data"
       for info in self.hidden_info:
-        layer_name = info["name"]
-        layer = self._layer_to_json(info=info, mask=mask, sources=[last_source], reverse=True)
-        content[layer_name] = layer
+        layer = self._layer_params(info=info, mask=mask, sources=[last_source], reverse=True)
+        layer_name = layer["name"]
+        content[layer_name] = self._layer_param_to_json(layer)
         last_source = layer_name
       sources += [last_source]
 
