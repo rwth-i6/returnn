@@ -204,7 +204,7 @@ class Updater:
           self.decay = 0.95
           ### default
           self.delta_clip = 50.0
-          self.outlier_detection = False #True
+          self.outlier_detection = True #True
           self.gamma_clip = 1.8
           ### aggressive
           #self.delta_clip = None
