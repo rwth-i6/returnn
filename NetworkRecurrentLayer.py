@@ -106,27 +106,6 @@ class LSTME(Unit):
     return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
 
 
-class LSTMD(LSTME): # simple attention based model
-  def __init__(self, n_units, depth):
-    super(LSTMD, self).__init__(n_units, depth)
-
-  def step(self, x_t, z_t, z_p, h_p, s_p):
-    f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
-    w_t = T.nnet.softmax(f_t)
-    z_t = T.dot(self.xc.dimshuffle(1,0), w_t).dimshuffle(1,0)
-    return super(LSTMD, self).step(x_t, z_t, z_p, h_p, s_p)
-
-  def scan(self, step, x, z, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    self.xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
-    n_in = numpy.sum([s.attrs['n_out'] for s in x])
-    l = sqrt(6.) / sqrt(self.n_units * 4)
-    rng = numpy.random.RandomState(1234)
-    values = numpy.asarray(rng.uniform(low=-l, high=l, size=(self.n_units * 4 + n_in, 1)), dtype=theano.config.floatX)
-    self.W_attention = theano.shared(value=values, borrow=True, name = "W_attention")
-    self.params['W_attention'] = self.W_attention
-    return super(LSTMD, self).scan(step,x,z,i,outputs_info,W_re,W_in,b,go_backwards,truncate_gradient)
-
-
 class LSTM(Unit):
   def __init__(self, n_units, depth):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
@@ -134,7 +113,7 @@ class LSTM(Unit):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
-    return [ result[0], [result[2]] ]
+    return [ result[0] * i, [result[2] * i[-1]] ] # TODO: evil hack to reduce noise in output while i is not used
 
 
 class LSTMP(Unit):
@@ -143,7 +122,7 @@ class LSTMP(Unit):
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i)
-    return [ result[0], [result[2]] ]
+    return [ result[0] * i, [result[2] * i[-1]] ] # TODO ...
 
 class GRU(Unit):
   def __init__(self, n_units, depth):

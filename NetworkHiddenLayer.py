@@ -54,7 +54,7 @@ class StateToAct(ForwardLayer):
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
   def __init__(self, base=None, method="softmax", **kwargs):
-    assert base, "missing base in", kwargs['name']
+    assert base, "missing base in" + kwargs['name']
     kwargs['n_out'] = 1
     kwargs['method'] = method
     kwargs.setdefault("layer_class", "base")
