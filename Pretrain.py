@@ -52,7 +52,7 @@ class Pretrain:
       if source == "data":
         new_sources.add("data")
       else:
-        assert source in new_json
+        assert source in new_json, "error %r, n: %i, last: %s" % (source, len(self._epoch_jsons), self._epoch_jsons[0])
         new_sources.update(new_json[source]["from"])
         del new_json[source]
     # Check if anything changed.

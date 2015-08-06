@@ -316,7 +316,7 @@ class LayerNetwork(object):
       else:
         self.ctc_priors = None
       #self.objective[target] = self.cost[target] / self.x.shape[1] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      #self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
+      #self.objective[target] = self.cost[target] / T.sum(self.j) + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
       self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()

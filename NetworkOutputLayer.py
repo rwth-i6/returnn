@@ -31,8 +31,7 @@ class OutputLayer(Layer):
     self.z = self.b
     self.y = y
     self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
-                                                            name="W_in_%s_%s" % (source.name, self.name)),
-                                "W_in_%s_%s" % (source.name, self.name))
+                                                            name="W_in_%s_%s" % (source.name, self.name)))
                  for source in self.sources]
 
     assert len(self.sources) == len(self.masks) == len(self.W_in)

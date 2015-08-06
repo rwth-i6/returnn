@@ -250,7 +250,7 @@ class SourceLayer(Container):
 class Layer(Container):
   def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
-    :param list[NetworkBaseLayer.SourceLayer] sources: list of source layers
+    :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
@@ -258,7 +258,7 @@ class Layer(Container):
     :type dropout: float
     """
     super(Layer, self).__init__(**kwargs)
-    self.sources = sources; ":type: list[SourceLayer]"
+    self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
@@ -272,7 +272,7 @@ class Layer(Container):
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name, False)
+    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
     self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
     self.masks = [None] * len(self.sources)
     assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
@@ -299,18 +299,18 @@ class Layer(Container):
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
 
-  def add_param(self, param, name="", constraints = True):
+  def add_param(self, param, name="", constraints=True):
     """
     :type param: T
     :type name: str
     :rtype: T
     """
-    super(Layer, self).add_param(param, name)
+    param = super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints +=  self.attrs['L1'] * abs(param).sum()
+        self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
-        self.constraints +=  self.attrs['L2'] * (param**2).sum()
+        self.constraints += T.constant(self.attrs['L2'], name="L2", dtype='floatX') * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
