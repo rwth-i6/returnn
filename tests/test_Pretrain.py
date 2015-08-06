@@ -25,6 +25,27 @@ config2_dict = {
   "dropout": 0.1,
 }
 
+config3_dict = {
+  "pretrain": "default",
+  "num_inputs": 40,
+  "num_outputs": 4498,
+}
+
+config3_json = """
+{
+"lstm0_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false },
+"lstm0_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true },
+
+"lstm1_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false, "from" : ["lstm0_fw", "lstm0_bw"] },
+"lstm1_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true, "from" : ["lstm0_fw", "lstm0_bw"] },
+
+"lstm2_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false, "from" : ["lstm1_fw", "lstm1_bw"] },
+"lstm2_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true, "from" : ["lstm1_fw", "lstm1_bw"] },
+
+"output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
+}
+"""
+
 
 def test_init_config1():
   config = Config()
@@ -51,5 +72,13 @@ def test_config1():
 def test_config2():
   config = Config()
   config.update(config2_dict)
+  pretrain = pretrainFromConfig(config)
+  assert_equal(pretrain.get_train_num_epochs(), 3)
+
+
+def test_config3():
+  config = Config()
+  config.update(config3_dict)
+  config.network_topology_json = config3_json
   pretrain = pretrainFromConfig(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)
