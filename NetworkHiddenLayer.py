@@ -48,8 +48,32 @@ class StateToAct(ForwardLayer):
     kwargs['n_out'] = 1
     kwargs.setdefault("layer_class", "state_to_act")
     super(StateToAct, self).__init__(**kwargs)
-    self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis = 0))
+    self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+
+
+class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
+  def __init__(self, base=None, method="softmax", **kwargs):
+    assert base, "missing base in", kwargs['name']
+    n_bs = sum([b.attrs['n_out'] for b in base])
+    n_in = sum([s.attrs['n_out'] for s in kwargs['sources']])
+    kwargs['n_out'] = 1 #n_bs
+    kwargs['method'] = method #n_bs
+    kwargs.setdefault("layer_class", "base_interpolation")
+    super(BaseInterpolationLayer, self).__init__(**kwargs)
+    self.set_attr('base', ",".join([b.name for b in base]))
+    self.W_base = [ self.add_param(self.create_forward_weights(bs.attrs['n_out'], 1, name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)), name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)) ]
+    self.base = T.concatenate([b.output for b in base], axis=2) # TBD
+    # self.z : T'
+    bz = 0 # : T
+    for x,W in zip(base, self.W_base):
+      bz += T.dot(x,W) # TB1
+    z = bz.flatten().dimshuffle('x',1,0) + self.z.flatten().dimshuffle(0,1,'x') # T'BT
+    h = z.reshape((z.shape[0] * z.shape[1], z.shape[2])) # (T'xB)T
+    w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0) # TBT'
+    self.set_attr('n_out', sum([b.attrs['n_out'] for b in base]))
+    self.make_output(T.sum(self.base.dimshuffle(0,1,'x').repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimeshuffle(1,0)) # T'BD
+
 
 import theano
 from theano.tensor.nnet import conv

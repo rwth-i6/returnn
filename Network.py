@@ -149,6 +149,15 @@ class LayerNetwork(object):
             traverse(content, prev, network)
             encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
+      if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
+        base = []
+        if not isinstance(obj['base'], list):
+          obj['base'] = [obj['base']]
+        for prev in obj['base']:
+          if not network.hidden.has_key(prev) and not network.output.has_key(prev):
+            traverse(content, prev, network)
+            base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+        obj['base'] = base
       obj.pop('from', None)
       params = { 'sources': source,
                  'dropout' : 0.0,
@@ -224,6 +233,13 @@ class LayerNetwork(object):
             if not network.hidden.has_key(s):
               traverse(model, s, network)
             encoder.append(network.hidden[s])
+      if 'base' in model[layer_name].attrs: # TODO see json
+        base = []
+        for s in model[layer_name].attrs['base'].split(','):
+          if s != "":
+            if not network.hidden.has_key(s):
+              traverse(model, s, network)
+            base.append(network.hidden[s])
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
@@ -233,6 +249,8 @@ class LayerNetwork(object):
         params.update(model[layer_name].attrs)
         if 'encoder' in model[layer_name].attrs:
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
+        if 'base' in model[layer_name].attrs:
+          params['base'] = base
         if not 'target' in params:
           params['target'] = target
         params['sources'] = x_in
