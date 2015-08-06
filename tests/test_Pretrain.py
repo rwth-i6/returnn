@@ -14,6 +14,17 @@ config1_dict = {
   "bidirectional": False,
 }
 
+config2_dict = {
+  "pretrain": "default",
+  "num_inputs": 40,
+  "num_outputs": 4498,
+  "bidirectional": True,
+  "hidden_size": (500,500,500),
+  "hidden_type": "lstm_opt",
+  "activation": "sigmoid",
+  "dropout": 0.1,
+}
+
 
 def test_init_config1():
   config = Config()
@@ -35,3 +46,10 @@ def test_config1():
   assert_in("hidden_0", net2_json)
   assert_in("hidden_1", net2_json)
   assert_equal(net2_json, net3_json)
+
+
+def test_config2():
+  config = Config()
+  config.update(config2_dict)
+  pretrain = pretrainFromConfig(config)
+  assert_equal(pretrain.get_train_num_epochs(), 3)

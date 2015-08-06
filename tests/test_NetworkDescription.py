@@ -44,6 +44,18 @@ config1_dict = {
   "bidirectional": False,
 }
 
+config2_dict = {
+  "pretrain": "default",
+  "num_inputs": 40,
+  "num_outputs": 4498,
+  "bidirectional": True,
+  "hidden_size": (500,500,500),
+  "hidden_type": "lstm_opt",
+  "activation": "sigmoid",
+  "dropout": 0.1,
+}
+
+
 
 def test_config1_basic():
   config = Config()
@@ -118,3 +130,22 @@ def test_config1_to_json_network_copy():
   if orig_json_content != new_json_content:
     print(dict_diff_str(orig_json_content, new_json_content))
     assert_equal(orig_json_content, new_network.to_json_content())
+
+
+def test_config2_bidirect_lstm():
+  config = Config()
+  config.update(config2_dict)
+  desc = LayerNetworkDescription.from_config(config)
+  assert_true(desc.bidirectional)
+  network = LayerNetwork.from_config_topology(config)
+  net_json = network.to_json_content()
+  pprint(net_json)
+  assert_in("output", net_json)
+  assert_in("hidden_0_fw", net_json)
+  assert_in("hidden_0_bw", net_json)
+  assert_in("hidden_1_fw", net_json)
+  assert_in("hidden_1_bw", net_json)
+  assert_in("hidden_2_fw", net_json)
+  assert_in("hidden_2_bw", net_json)
+  assert_equal(net_json["output"]["from"], ["hidden_2_fw", "hidden_2_bw"])
+  assert_equal(len(net_json), 7)
