@@ -1,5 +1,5 @@
 
-from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer
+from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer
 from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
 from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, SimpleLstmLayer, GRULayer, SRULayer, SRALayer
 
@@ -12,6 +12,7 @@ LayerClasses = {
   'gru': GRULayer,
   'sru': SRULayer,
   'sra': SRALayer,
+  'chunking' : ChunkingLayer,
   "state_to_act" : StateToAct,
   "base" : BaseInterpolationLayer,
   'rec' : RecurrentUnitLayer,

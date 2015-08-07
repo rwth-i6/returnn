@@ -214,14 +214,30 @@ def finishError(error, errorSignal, naturalPairingType=None):
   Criterion.gotErrorSignal.set()
 
 
+def feedInputAndTarget(features, weights=None, segmentName=None,
+                       orthography=None, alignment=None,
+                       speaker_name=None, speaker_gender=None,
+                       **kwargs):
+  assert features.shape[0] == InputDim
+  targets = {}
+  if alignment is not None:
+    targets["classes"] = alignment
+  if orthography is not None:
+    targets["orth"] = orthography
+  train(segmentName, features, targets)
+
+
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
   #print "feedInputAndTargetAlignment", segmentName
   assert features.shape[0] == InputDim
+  assert Task == "train"
   train(segmentName, features, targetAlignment)
 
 
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
-  raise NotImplementedError
+  assert features.shape[0] == InputDim
+  assert Task == "train"
+  train(segmentName, features, {"orth": targetSegmentOrth})
 
 
 def feedInputUnsupervised(features, weights=None, segmentName=None):
@@ -409,7 +425,7 @@ def train(segmentName, features, targets=None):
   """
   :param str|None segmentName: full name
   :param numpy.ndarray features: 2d array
-  :param numpy.ndarray|None targets: 2d or 1d array
+  :param numpy.ndarray|dict[str,numpy.ndarray]|None targets: 2d or 1d array
   """
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset

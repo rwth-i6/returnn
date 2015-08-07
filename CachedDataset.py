@@ -68,10 +68,11 @@ class CachedDataset(Dataset):
 
       for i in xrange(self.num_seqs):
         ids = old_index[i]
-        jds = old_index[seq_index[i]] # old_index[old_index.index(seq_index[i])] #seq_index.index(ids) #[i]
+        jds = seq_index[ids]
+        #jds = old_index[seq_index[i]] # old_index[old_index.index(seq_index[i])] #seq_index.index(ids) #[i]
         idi = self.alloc_interval_index(ids)
         alloc_start_seq, alloc_end_seq, source_alloc_data = self.alloc_intervals[idi]
-        o = old_start[ids][0] - old_start[alloc_start_seq][0]
+        o = old_start[i][0] - old_start[alloc_start_seq][0]
         l = self._seq_lengths[ids][0]
         source_seq = source_alloc_data[o:o + l][:]
 
