@@ -54,27 +54,27 @@ class StateToAct(ForwardLayer):
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
   def __init__(self, base=None, method="softmax", **kwargs):
-    assert base, "missing base in" + kwargs['name']
+    assert base, "missing base in " + kwargs['name']
     kwargs['n_out'] = 1
-    kwargs['method'] = method
     kwargs.setdefault("layer_class", "base")
     super(BaseInterpolationLayer, self).__init__(**kwargs)
     self.set_attr('base', ",".join([b.name for b in base]))
-    self.W_base = [ self.add_param(self.create_forward_weights(bs.attrs['n_out'], 1, name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)), name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)) ]
+    self.set_attr('method', method)
+    self.W_base = [ self.add_param(self.create_forward_weights(bs.attrs['n_out'], 1, name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)), name='W_base_%s_%s' % (bs.attrs['n_out'], self.name)) for bs in base ]
     self.base = T.concatenate([b.output for b in base], axis=2) # TBD
     # self.z : T'
     bz = 0 # : T
     for x,W in zip(base, self.W_base):
-      bz += T.dot(x,W) # TB1
-    z = bz.flatten().dimshuffle('x',1,0) + self.z.flatten().dimshuffle(0,1,'x') # T'BT
+      bz += T.dot(x.output,W) # TB1
+    z = bz.reshape((bz.shape[0],bz.shape[1])).dimshuffle('x',1,0) + self.z.reshape((self.z.shape[0],self.z.shape[1])).dimshuffle(0,1,'x') # T'BT
     h = z.reshape((z.shape[0] * z.shape[1], z.shape[2])) # (T'xB)T
     if method == 'softmax':
-      w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0) # TBT'
+      w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
     else:
       assert False, "invalid method %s in %s" % (method, self.name)
     
     self.set_attr('n_out', sum([b.attrs['n_out'] for b in base]))
-    self.make_output(T.sum(self.base.dimshuffle(0,1,'x').repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimeshuffle(1,0)) # T'BD
+    self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
 
 import theano

@@ -147,7 +147,7 @@ class LayerNetwork(object):
         for prev in obj['encoder']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
             traverse(content, prev, network)
-            encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+          encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
         base = []
@@ -156,7 +156,7 @@ class LayerNetwork(object):
         for prev in obj['base']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
             traverse(content, prev, network)
-            base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+          base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
       obj.pop('from', None)
       params = { 'sources': source,

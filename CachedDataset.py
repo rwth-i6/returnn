@@ -55,10 +55,33 @@ class CachedDataset(Dataset):
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
-    self._seq_index = seq_index
 
-    self._init_alloc_intervals()
-    self._init_seq_starts()
+    if not self.alloc_intervals:
+      self._init_alloc_intervals()
+      self._seq_index = seq_index
+      self._init_seq_starts()
+    else: # TODO: win the index fight
+      old_index = self._seq_index[:]
+      old_start = self._seq_start[:]
+      self._seq_index = seq_index
+      self._init_seq_starts()
+
+      for i in xrange(self.num_seqs):
+        ids = old_index[i]
+        jds = old_index[old_index.index(seq_index[i])] #seq_index.index(ids) #[i]
+        idi = self.alloc_interval_index(ids)
+        alloc_start_seq, alloc_end_seq, source_alloc_data = self.alloc_intervals[idi]
+        o = old_start[ids][0] - old_start[alloc_start_seq][0]
+        l = self._seq_lengths[ids][0]
+        source_seq = source_alloc_data[o:o + l][:]
+
+        jdi = self.alloc_interval_index(jds)
+        alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[jdi]
+        q = old_start[jds][0] - old_start[alloc_start_seq][0]
+        #target_seq = alloc_data[q:q + l]
+
+        self.alloc_intervals[idi][2][o:o + l] = source_alloc_data[q:q + l]
+        self.alloc_intervals[idi][2][q:q + l] = source_seq
     self._init_start_cache()
 
   def _init_alloc_intervals(self):
