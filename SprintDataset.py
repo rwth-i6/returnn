@@ -282,6 +282,12 @@ class SprintDataset(Dataset):
       self._waitForSeq(n)
       return n < self.next_seq_to_be_added
 
+  def get_target_list(self):
+    with self.lock:
+      self._waitForSeq(0)
+      assert self.added_data
+      return self.added_data[0].targets.keys()
+
   def set_complete_frac(self, frac):
     self._complete_frac = frac
 
