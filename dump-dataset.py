@@ -21,10 +21,10 @@ def dump_dataset(dataset, options):
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx)
     data = dataset.get_data(seq_idx)
+    numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     for target in dataset.get_target_list():
       targets = dataset.get_targets(target, seq_idx)
-    numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
-    numpy.savetxt("%s%i.targets%s" % (options.dump_prefix, seq_idx, options.dump_postfix), targets, fmt='%i')
+      numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
     seq_idx += 1
 
   print >> log.v3, "Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx)
