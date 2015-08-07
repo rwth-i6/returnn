@@ -77,6 +77,19 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
     self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
 
+class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
+  def __init__(self, chunk_size=1, **kwargs):
+    assert chunk_size >= 1
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    kwargs.setdefault("layer_class", "chunking")
+    super(ChunkingLayer, self).__init__(**kwargs)
+    self.set_attr('chunk_size', chunk_size)
+    z = T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(1,0,2)
+    container = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[1], z.shape[0] + z.shape[0] % chunk_size, z.shape[2])
+    T.set_subtensor(container[:z.shape[0],:,:], z)
+    self.make_output(container.reshape((container.shape[1], container.shape[0]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2))
+
+
 import theano
 from theano.tensor.nnet import conv
 import numpy
