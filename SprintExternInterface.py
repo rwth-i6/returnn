@@ -78,18 +78,28 @@ def exit():
   assert isInitialized
   sprintDataset.close()
 
-def feedInput(features, targetAlignment=None, weights=None, segmentName=None):
-  assert features.shape[0] == InputDim
-  sprintDataset.addNewData(features=features, targets=targetAlignment)
+def feedInput(features, weights=None, segmentName=None):  # unsupervised case
+  feedInputAndTarget(features=features, weights=weights, segmentName=segmentName)
 
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
-  feedInput(features=features, targetAlignment=targetAlignment, weights=weights, segmentName=segmentName)
+  feedInputAndTarget(features=features, alignment=targetAlignment, weights=weights, segmentName=segmentName)
 
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
-  raise NotImplementedError
+  feedInputAndTarget(features=features, orthography=targetSegmentOrth, weights=weights, segmentName=segmentName)
 
-def feedInputUnsupervised(features, weights=None, segmentName=None):
-  feedInput(segmentName=segmentName, features=features, weights=weights)
+feedInputUnsupervised = feedInput
+
+def feedInputAndTarget(features, weights=None, segmentName=None,
+                       orthography=None, alignment=None,
+                       speaker_name=None, speaker_gender=None,
+                       **kwargs):
+  assert features.shape[0] == InputDim
+  targets = {}
+  if alignment is not None:
+    targets["classes"] = alignment
+  if orthography is not None:
+    targets["orth"] = orthography
+  sprintDataset.addNewData(features=features, targets=targets)
 
 # End Sprint PythonTrainer interface. }
 
@@ -120,6 +130,10 @@ class ExternSprintDatasetSource:
     self.pipe_c2p.flush()
 
   def addNewData(self, features, targets):
+    """
+    :param numpy.ndarray features: 2D array, (feature,time)
+    :param dict[str,numpy.ndarray] targets: each target is either 1D (time->idx) or 2D (time,class)
+    """
     self._send("data", (features, targets))
 
   def close(self):
