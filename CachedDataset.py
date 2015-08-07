@@ -56,7 +56,7 @@ class CachedDataset(Dataset):
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
 
-    if not self.alloc_intervals:
+    if False and not self.alloc_intervals:
       self._init_alloc_intervals()
       self._seq_index = seq_index
       self._init_seq_starts()
