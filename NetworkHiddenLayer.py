@@ -86,7 +86,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     self.set_attr('chunk_size', chunk_size)
     z = T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(1,0,2)
     container = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[1], z.shape[0] + z.shape[0] % chunk_size, z.shape[2])
-    T.set_subtensor(container[:z.shape[0],:,:], z)
+    container = T.set_subtensor(container[:z.shape[0],:,:], z)
     self.make_output(container.reshape((container.shape[1], container.shape[0]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2))
 
 

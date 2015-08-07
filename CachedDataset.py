@@ -78,7 +78,7 @@ class CachedDataset(Dataset):
 
         jdi = self.alloc_interval_index(jds)
         alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[jdi]
-        q = old_start[ids][0] - old_start[alloc_start_seq][0]
+        q = old_start[jds][0] - old_start[alloc_start_seq][0]
         #target_seq = alloc_data[q:q + l]
 
         self.alloc_intervals[idi][2][o:o + l] = source_alloc_data[q:q + l]
