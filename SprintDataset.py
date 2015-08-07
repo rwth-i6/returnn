@@ -197,7 +197,7 @@ class SprintDataset(Dataset):
     Adds a new seq.
     This is called via the Sprint main thread.
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param numpy.ndarray targets: format (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -209,8 +209,13 @@ class SprintDataset(Dataset):
     features = features.transpose()
     assert features.shape == (T, self.num_inputs)
 
-    if targets is not None:
-      assert targets.shape == (T,)  # is in format (time,)
+    if targets is None:
+      targets = {}
+    if not isinstance(targets, dict):
+      targets = {"classes": targets}
+    if "classes" in targets:
+      # 'classes' is always the alignment
+      assert targets["classes"].shape == (T,)  # is in format (time,)
 
     with self.lock:
       # This gets called in the Sprint main thread.
