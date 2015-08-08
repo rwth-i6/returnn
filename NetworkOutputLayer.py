@@ -21,7 +21,7 @@ from NetworkRecurrentLayer import RecurrentLayer
 #  return out
 
 class OutputLayer(Layer):
-  def __init__(self, index, loss, y, **kwargs):
+  def __init__(self, loss, y, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -54,9 +54,8 @@ class OutputLayer(Layer):
     #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    self.index = index
-    self.i = (index.flatten() > 0).nonzero()
-    self.j = ((T.constant(1.0) - index.flatten()) > 0).nonzero()
+    self.i = (self.index.flatten() > 0).nonzero()
+    self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':

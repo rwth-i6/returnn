@@ -12,7 +12,7 @@ from FastLSTM import LSTMOp2Instance
 class RecurrentLayer(HiddenLayer):
   recurrent = True
 
-  def __init__(self, index, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
+  def __init__(self, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
     kwargs.setdefault("layer_class", "recurrent")
     kwargs.setdefault("activation", "tanh")
     super(RecurrentLayer, self).__init__(**kwargs)
@@ -36,7 +36,6 @@ class RecurrentLayer(HiddenLayer):
     #for s, W in zip(self.sources, self.W_in):
     #  W.set_value(self.create_random_normal_weights(n=s.attrs['n_out'], m=n_out, scale=n_in,
     #                                                name=W.name).get_value())
-    self.index = index
     self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
     if compile: self.compile()
 
@@ -159,7 +158,6 @@ class SRU(Unit):
 class RecurrentUnitLayer(Layer):
   recurrent = True
   def __init__(self,
-               index, # frame selection mask
                n_out, # number of cells
                direction = 1, # forward (1), backward (-1) or bidirectional (0)
                truncation = -1, # truncate the gradient after this amount of time steps
@@ -183,7 +181,6 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("layer_class", "rec")
     kwargs.setdefault("n_out", unit.n_out)
     kwargs.setdefault("depth", depth)
-    kwargs.pop("index", None)
     kwargs.pop("activation", None)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]))
@@ -197,7 +194,6 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('direction', direction)
     self.set_attr('carry_time', carry_time)
     self.set_attr('attention', attention)
-    self.index = index
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)

@@ -248,7 +248,7 @@ class SourceLayer(Container):
     self.set_attr('delay', delay)
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
+  def __init__(self, sources, n_out, index, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -258,6 +258,7 @@ class Layer(Container):
     :type dropout: float
     """
     super(Layer, self).__init__(**kwargs)
+    self.index = index
     self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
     if mask is None: mask = 'none'
@@ -298,6 +299,8 @@ class Layer(Container):
         self.params[p].set_value(numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = min(len(self.params[p].get_value().shape) - 1, axis)))
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
+  def output_index(self):
+    return self.index
 
   def add_param(self, param, name="", constraints=True):
     """

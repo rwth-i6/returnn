@@ -56,7 +56,7 @@ class CachedDataset(Dataset):
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
 
-    if False and not self.alloc_intervals:
+    if True or not self.alloc_intervals:
       self._init_alloc_intervals()
       self._seq_index = seq_index
       self._init_seq_starts()
@@ -68,21 +68,25 @@ class CachedDataset(Dataset):
 
       for i in xrange(self.num_seqs):
         ids = old_index[i]
+
         jds = seq_index[ids]
         #jds = old_index[seq_index[i]] # old_index[old_index.index(seq_index[i])] #seq_index.index(ids) #[i]
         idi = self.alloc_interval_index(ids)
         alloc_start_seq, alloc_end_seq, source_alloc_data = self.alloc_intervals[idi]
-        o = old_start[i][0] - old_start[alloc_start_seq][0]
+        o = old_start[ids][0] - old_start[alloc_start_seq][0]
         l = self._seq_lengths[ids][0]
         source_seq = source_alloc_data[o:o + l][:]
 
         jdi = self.alloc_interval_index(jds)
         alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[jdi]
-        q = old_start[jds][0] - old_start[alloc_start_seq][0]
+        q = self._seq_start[ids][0] - self._seq_start[seq_index[alloc_start_seq]][0]
         #target_seq = alloc_data[q:q + l]
 
-        self.alloc_intervals[idi][2][o:o + l] = source_alloc_data[q:q + l]
-        self.alloc_intervals[idi][2][q:q + l] = source_seq
+        print ids,jds,o,q,self.alloc_intervals[jdi][2].shape, self._seq_lengths[ids][0], self._seq_lengths[i][0]
+        self.alloc_intervals[jdi][2][o:o + l] = source_alloc_data[q:q + l]
+        self.alloc_intervals[jdi][2][q:q + l] = source_seq
+        self.alloc_intervals[jdi][0] = seq_index[alloc_start_seq]
+        self.alloc_intervals[jdi][1] = seq_index[alloc_end_seq]
     self._init_start_cache()
 
   def _init_alloc_intervals(self):

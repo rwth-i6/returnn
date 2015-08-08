@@ -123,7 +123,7 @@ class LayerNetwork(object):
     network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    def traverse(content, layer_name, network):
+    def traverse(content, layer_name, network, index):
       source = []
       obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
@@ -138,7 +138,7 @@ class LayerNetwork(object):
             source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-              traverse(content, prev, network)
+              index = traverse(content, prev, network, index)
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
         encoder = []
@@ -146,7 +146,7 @@ class LayerNetwork(object):
           obj['encoder'] = [obj['encoder']]
         for prev in obj['encoder']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, network)
+            index = traverse(content, prev, network, index)
           encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
@@ -155,7 +155,7 @@ class LayerNetwork(object):
           obj['base'] = [obj['base']]
         for prev in obj['base']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, network)
+            index = traverse(content, prev, network, index)
           base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
       obj.pop('from', None)
@@ -165,21 +165,21 @@ class LayerNetwork(object):
                  "train_flag": train_flag,
                  'network': network }
       params.update(obj)
-      params["mask"] = mask  # overwrite
+      params["mask"] = mask # overwrite
+      params['index'] = index if not 'encoder' in obj else network.j
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
-        network.make_classifier(**params)
+        return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
         params.update({'activation': act, 'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
-          params['index'] = network.i if not 'encoder' in params else network.j
-        network.add_layer(layer_class(**params))
+        return network.add_layer(layer_class(**params))
     for layer_name in json_content:
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        traverse(json_content, layer_name, network)
+        traverse(json_content, layer_name, network, network.i)
     return network
 
   @classmethod
@@ -199,7 +199,7 @@ class LayerNetwork(object):
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
-    def traverse(model, layer_name, network):
+    def traverse(model, layer_name, network, index):
       mask = input_mask
       if not input_mask and 'mask' in model[layer_name].attrs:
         mask = model[layer_name].attrs['mask']
@@ -210,7 +210,7 @@ class LayerNetwork(object):
             x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
-              traverse(model, s, network)
+              index = traverse(model, s, network, index)
             x_in.append(network.hidden[s])
           elif s == "":
             assert not s
@@ -221,7 +221,7 @@ class LayerNetwork(object):
               x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
             else:
               if not network.hidden.has_key(s):
-                traverse(model, s, network)
+                index = traverse(model, s, network, index)
               # Add just like in NetworkDescription, so that param names are correct.
               x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
@@ -231,14 +231,14 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['encoder'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              traverse(model, s, network)
+              index = traverse(model, s, network, index)
             encoder.append(network.hidden[s])
       if 'base' in model[layer_name].attrs: # TODO see json
         base = []
         for s in model[layer_name].attrs['base'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              traverse(model, s, network)
+              index = traverse(model, s, network, index)
             base.append(network.hidden[s])
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
@@ -271,20 +271,20 @@ class LayerNetwork(object):
                    'train_flag' : train_flag,
                    'carry' : model[layer_name].attrs['carry'],
                    'depth' : model[layer_name].attrs['depth'],
-                   'network': network }
+                   'network': network,
+                   'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
-          params['index'] = network.i if not 'encoder' in model[layer_name].attrs else network.j
           for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth']:
             if p in model[layer_name].attrs.keys():
               params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
             params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
-        network.add_layer(layer_class(**params))
+        return network.add_layer(layer_class(**params))
     for layer_name in model:
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
-        traverse(model, layer_name, network)
+        traverse(model, layer_name, network, network.i)
     return network
 
   def add_layer(self, layer):
@@ -294,6 +294,7 @@ class LayerNetwork(object):
     assert layer.name
     self.hidden[layer.name] = layer
     self.constraints += layer.make_constraints()
+    return layer.output_index()
 
   def make_classifier(self, name='output', target='classes', **kwargs):
     """
@@ -321,8 +322,8 @@ class LayerNetwork(object):
     else:
       kwargs['n_out'] = self.n_out[target][0]
       targets = self.c if self.loss == 'ctc' else self.y[target]
-
-    self.output[name] = layer_class(index=self.j, name=name, target=target, y = targets, **kwargs)
+    kwargs['index'] = self.j
+    self.output[name] = layer_class(name=name, target=target, y = targets, **kwargs)
     if target != "null":
       self.errors[target] = self.output[name].errors()
       self.declare_train_params()
