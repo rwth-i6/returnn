@@ -69,7 +69,9 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
     z = bz.reshape((bz.shape[0],bz.shape[1])).dimshuffle('x',1,0) + self.z.reshape((self.z.shape[0],self.z.shape[1])).dimshuffle(0,1,'x') # T'BT
     h = z.reshape((z.shape[0] * z.shape[1], z.shape[2])) # (T'xB)T
     if method == 'softmax':
-      w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
+      h_e = T.exp(h).dimshuffle(1,0)
+      w = (h_e / T.sum(h_e, axis=0)).dimshuffle(1,0).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
+      #w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
     else:
       assert False, "invalid method %s in %s" % (method, self.name)
     
@@ -84,11 +86,19 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     kwargs.setdefault("layer_class", "chunking")
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
-    z = T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(1,0,2)
-    container = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], z.shape[1] + z.shape[1] % chunk_size, z.shape[2])
-    container = T.set_subtensor(container[:,:z.shape[1],:], z)
-    self.index = self.index[::chunk_size]
-    self.make_output(container.reshape((container.shape[0], container.shape[1]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2))
+    z = T.concatenate([s.output for s in self.sources], axis=2) # BTD
+    calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), z.shape[1], z.shape[2])
+    container = T.set_subtensor(
+      calloc[:self.index.shape[0]],
+      z).dimshuffle(1,0,2) # BT'D
+    ialloc = T.alloc(numpy.cast['int32'](1), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), self.index.shape[1])
+    self.index = T.set_subtensor(
+      ialloc[:self.index.shape[0]],
+      self.index)[::chunk_size] # BT'D
+
+    #self.index = self.index.repeat(self.index.shape[0] % chunk_size, axis = 0)
+    self.make_output(container.reshape((container.shape[0], container.shape[1]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
+
 
 import theano
 from theano.tensor.nnet import conv

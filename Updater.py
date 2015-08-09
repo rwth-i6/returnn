@@ -166,7 +166,7 @@ class Updater:
     return param
 
   def reset(self):
-    return # this needs to be done smarter
+    #return # this needs to be done smarter
     for param in self.params:
       param.set_value(self.params[param])
 

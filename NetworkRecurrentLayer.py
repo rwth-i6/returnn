@@ -154,7 +154,7 @@ class SRU(Unit):
     h_c = CI(z_t[:,2*self.slice:] + r_t * z_p[:,2*self.slice:])
     return [ u_t * h_p + (1 - u_t) * h_c ]
 
-
+import theano.sandbox.cuda.dnn
 class RecurrentUnitLayer(Layer):
   recurrent = True
   def __init__(self,
@@ -344,7 +344,8 @@ class RecurrentUnitLayer(Layer):
             f_t = zc + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
             #f_t = z_t + T.dot(h_p, self.W_att_re)
             #f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
-            w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x') #1,'x',0) # (batch, 1, time)
+            f_e = T.exp(f_t)
+            w_t = (f_e / T.sum(f_e, axis=0)).dimshuffle(0,1,'x') # T.nnet.softmax gives weird results when cudnn is installed
             #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')

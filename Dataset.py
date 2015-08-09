@@ -9,7 +9,7 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 from threading import RLock
-from random import Random
+from random import Random, random
 
 import sys
 import numpy
@@ -324,7 +324,7 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
@@ -342,6 +342,15 @@ class Dataset(object):
         print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
         chunk_size = 0
 
+    ms = max_seqs
+    bs = batch_size
+
+    assert batch_variance <= 1.0
+    if batch_variance > 0.0:
+      r = (1.0 - random() * batch_variance)
+      max_seqs = max(int(r * ms), 1)
+      batch_size = max(int(r * bs), 1)
+
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
@@ -352,6 +361,10 @@ class Dataset(object):
         if ds > 1 and (dt * ds > batch_size or ds > max_seqs):
           yield batch
           batch = Batch()
+          if batch_variance > 0.0:
+            r = (1.0 - random() * batch_variance)
+            max_seqs = max(int(r * ms), 1)
+            batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start[0] < t_end[0]:
@@ -368,14 +381,14 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
     """
     :type recurrent_net: bool
     :type batch_size: int
     :type max_seqs: int
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs))
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance))
 
 
 class DatasetSeq:

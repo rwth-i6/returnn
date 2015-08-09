@@ -155,6 +155,7 @@ class Engine:
     self.exclude = config.int_list('exclude', [])
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
     self.share_batches = config.bool('share_batches', False)
+    self.batch_variance = config.float('batch_variance', 0.0)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -374,7 +375,8 @@ class Engine:
     training_devices = self.devices
     train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                      batch_size=self.batch_size,
-                                                     max_seqs=self.max_seqs)
+                                                     max_seqs=self.max_seqs,
+                                                     batch_variance=self.batch_variance)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,

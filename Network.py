@@ -146,7 +146,7 @@ class LayerNetwork(object):
           obj['encoder'] = [obj['encoder']]
         for prev in obj['encoder']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            index = traverse(content, prev, network, index)
+            traverse(content, prev, network, index)
           encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
@@ -155,7 +155,7 @@ class LayerNetwork(object):
           obj['base'] = [obj['base']]
         for prev in obj['base']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            index = traverse(content, prev, network, index)
+            traverse(content, prev, network, index)
           base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
       obj.pop('from', None)
@@ -231,14 +231,14 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['encoder'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              index = traverse(model, s, network, index)
+              traverse(model, s, network, index)
             encoder.append(network.hidden[s])
       if 'base' in model[layer_name].attrs: # TODO see json
         base = []
         for s in model[layer_name].attrs['base'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              index = traverse(model, s, network, index)
+              traverse(model, s, network, index)
             base.append(network.hidden[s])
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
