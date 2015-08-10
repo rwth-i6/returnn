@@ -1,4 +1,5 @@
 import subprocess
+from subprocess import CalledProcessError
 import h5py
 from collections import deque
 import inspect
@@ -8,15 +9,19 @@ import shlex
 import numpy as np
 
 
-def cmd(cmd):
+def cmd(s):
   """
-  :type cmd: list[str] | str
+  :type s: str
   :rtype: list[str]
+  :returns all stdout splitted by newline. Does not cover stderr.
+  Raises CalledProcessError on error.
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
+  p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
+  if p.returncode != 0:
+    raise CalledProcessError(p.returncode, s, "\n".join(result))
   return result
 
 
@@ -337,5 +342,3 @@ def uniq(seq):
   idx = diffs.nonzero()
   return seq[idx]
 
-def test_uniq():
-  assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
