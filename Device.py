@@ -24,7 +24,7 @@ def get_num_devices():
   elif sys.platform == 'darwin':
       #TODO parse via xml output
       return int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),\
-               len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA'"))
+               len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat"))
   else:
     num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
     try:
