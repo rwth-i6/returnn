@@ -110,11 +110,13 @@ class Device():
     self.compute_total_time = 0
     self.update_total_time = 0
     self.num_frames = 0
+    self.num_updates = 0
     self.tot_cost = 0
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
     update_specs.setdefault('layers', [])
+    update_specs.setdefault('block_size', 0)
     self.update_specs = update_specs
     self.data = None
     self.main_pid = os.getpid()
@@ -328,7 +330,6 @@ class Device():
                                        on_unused_input='warn',
                                        no_default_updates=exclude,
                                        name="train_and_updater")
-
       else:
         self.train_outputs_format += ["gparams..."]
         outputs += gparams
@@ -450,7 +451,7 @@ class Device():
     #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
     #if model_broken_info:
     #  self.handle_model_broken(model_broken_info)
-      # Pass on, let the Engine decide what to do (or also just fail).
+    # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
 

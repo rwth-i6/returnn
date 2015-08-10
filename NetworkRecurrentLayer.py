@@ -70,7 +70,10 @@ class Unit(Container):
     self.params = {}
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
+    try:
+      xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
+    except:
+      xc = z if not x else T.concatenate(x, axis = -1)
     outputs, _ = theano.scan(step,
                              #strict = True,
                              truncate_gradient = truncate_gradient,
@@ -110,7 +113,10 @@ class LSTM(Unit):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
+    try:
+      XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
+    except:
+      XS = [S[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
     j = i.dimshuffle(0,1,'x').repeat(self.n_units, axis=2)[::-(2 * go_backwards - 1)]
     return [ result[0] * j, [result[2] * j[-1]] ] # TODO: evil hack to reduce noise in output while i is not used
@@ -154,7 +160,7 @@ class SRU(Unit):
     h_c = CI(z_t[:,2*self.slice:] + r_t * z_p[:,2*self.slice:])
     return [ u_t * h_p + (1 - u_t) * h_c ]
 
-import theano.sandbox.cuda.dnn
+
 class RecurrentUnitLayer(Layer):
   recurrent = True
   def __init__(self,
@@ -339,7 +345,7 @@ class RecurrentUnitLayer(Layer):
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
-          if self.attrs['attention']:
+          if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
             #f_t = T.dot(T.concatenate([h_p.dimshuffle('x',0,1).repeat(xc.shape[0], axis=0),xc], axis = 2), self.W_att).reshape((xc.shape[0],h_p.shape[0]))
             f_t = zc + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
             #f_t = z_t + T.dot(h_p, self.W_att_re)
@@ -360,17 +366,19 @@ class RecurrentUnitLayer(Layer):
             act[j] = c_t * act[j] + (1 - c_t) * x_t
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
 
+      index_f = T.cast(index, theano.config.floatX)
       outputs = unit.scan(step,
                           sources,
                           sequences[s::self.attrs['sampling']],
                           non_sequences,
-                          T.cast(index, theano.config.floatX),
+                          index_f,
                           outputs_info,
                           W_re,
                           self.W_in,
                           self.b,
                           direction == -1,
                           self.attrs['truncation'])
+
 
       #outputs, _ = theano.scan(step,
       #              #strict = True,
@@ -382,6 +390,32 @@ class RecurrentUnitLayer(Layer):
 
       if not isinstance(outputs, list):
         outputs = [outputs]
+
+      if self.attrs['attention'] and (unit_given == 'lstm' or unit_given == 'lstmp'):
+        # self.zc : T'
+        # outputs[0]: T
+        xr = outputs[0][::direction or 1]
+        #xr = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_out)
+        #zc = self.zc.dimshuffle(0,'x',1).repeat(self.index.shape[0], axis=1) + T.dot(xr, self.W_att_re).reshape((self.index.shape[0], self.index.shape[1])).dimshuffle('x',0,1).repeat(self.zc.shape[0], axis=0) # T'TB
+        zc = self.zc.dimshuffle(0,'x',1).repeat(self.index.shape[0], axis=1) + T.dot(xr, self.W_att_re).reshape((self.index.shape[0], self.index.shape[1])).dimshuffle('x',0,1).repeat(self.zc.shape[0], axis=0) # T'TB
+        ze = T.exp(zc)
+        w = ze / ze.sum(axis=0, keepdims = True) # T'TB
+        x_a = T.sum(self.xc.dimshuffle(0,'x',1,2).repeat(index.shape[0],axis=1) * w.dimshuffle(0,1,2,'x').repeat(n_in,axis=3), axis=0, keepdims=False) # TB(Dx4)
+        z_a = T.dot(x_a, self.W_att_in) # TODO: if you use this in computation, then Theano will get a circular dependency
+        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
+        #z_t = T.zeros_like(z_t)
+
+        outputs = unit.scan(step,
+                            [x_a],
+                            z_a, #sequences[s::self.attrs['sampling']], #z,
+                            non_sequences,
+                            index_f,
+                            outputs_info,
+                            W_re,
+                            [self.W_att_in],
+                            self.b,
+                            direction == -1,
+                            self.attrs['truncation'])
       if self.attrs['sampling'] > 1:
         if s == 0:
           self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]

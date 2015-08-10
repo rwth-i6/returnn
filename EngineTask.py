@@ -9,6 +9,7 @@ from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
 from Device import Device
 from TaskSystem import ProcConnectionDied
+from math import ceil
 
 
 class TaskThread(threading.Thread):
@@ -139,10 +140,11 @@ class TaskThread(threading.Thread):
         self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.run_frames = 0
-        for batches in self.devices_batches:
+        for batches, device in zip(self.devices_batches,self.alloc_devices):
           assert batches
           assert batches[0].seqs
           assert batches[0].seqs[0].frame_length[1] > 0
+          device.num_updates += 1 if not device.update_specs['block_size'] else int(ceil(sum([len(batch.seqs) for batch in batches]) / float(device.update_specs['block_size'])))
           self.run_frames += sum([batch.get_total_num_frames() for batch in batches])
         if self.parent.share_batches:
           self.run_frames /= len(self.alloc_devices)
@@ -335,6 +337,7 @@ class TaskThread(threading.Thread):
         device.eval_batch_idx = -1
         device.start_epoch_stats()
         device.num_frames = 0
+        device.num_updates = 0
         device.tot_cost = 0
         device.tot = 0
 
@@ -378,6 +381,7 @@ class TaskThread(threading.Thread):
             results['results'] = []
             for device in self.devices:
               device.num_frames = 0
+              device.num_updates = 0
               device.tot_cost = 0
             if not self.batches.has_more():
               break
@@ -527,11 +531,11 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          nframes = numpy.sum([ dev.num_frames for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
           #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          if nframes:
-            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          if num_updates:
+            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_updates) / num_updates) for net,dev in zip(hypnets,self.devices) ], axis = 0)
           else:
             print >> log.v4, "warning: no update available for parameter", basenet[i]
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
