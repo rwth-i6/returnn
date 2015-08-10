@@ -340,5 +340,3 @@ def uniq(seq):
   idx = diffs.nonzero()
   return seq[idx]
 
-def test_uniq():
-  assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
