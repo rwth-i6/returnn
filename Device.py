@@ -780,7 +780,7 @@ class Device(object):
     import theano
     self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
     self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in targets}
-    self.ctc_targets = numpy.zeros((output_shape['classes'][1], max_ctc_length), dtype=theano.config.floatX)
+    self.ctc_targets = numpy.zeros((output_shape.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.input_index = numpy.zeros(input_shape[0:2], dtype='int8')
     self.output_index = numpy.zeros(input_shape[0:2], dtype='int8')
     self.tags = [None] * input_shape[1]  # TODO
