@@ -1,4 +1,5 @@
 import subprocess
+from subprocess import CalledProcessError
 import h5py
 from collections import deque
 import inspect
@@ -17,6 +18,8 @@ def cmd(s):
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
+  if p.returncode != 0:
+    raise CalledProcessError(p.returncode, s, "\n".join(result))
   return result
 
 
