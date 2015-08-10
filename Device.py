@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -26,7 +26,12 @@ def get_num_devices():
       return int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),\
                len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA'"))
   else:
-    return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
+    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
+    try:
+      num_gpus = len(cmd('nvidia-smi -L'))
+    except CalledProcessError:
+      num_gpus = 0
+    return num_cpus, num_gpus
 
 
 def get_gpu_names():
@@ -38,7 +43,10 @@ def get_gpu_names():
                "grep 'Chipset Model: NVIDIA' | "
                "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
   else:
-    return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+    try:
+      return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+    except CalledProcessError:
+      return []
 
 
 def get_device_attributes():
