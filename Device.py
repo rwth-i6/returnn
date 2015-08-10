@@ -89,7 +89,7 @@ def get_device_attributes():
   return attributes
 
 
-class Device():
+class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
     :param str device: name, "gpu*" or "cpu*"
