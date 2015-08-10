@@ -284,7 +284,8 @@ class SprintDataset(Dataset):
 
   def get_target_list(self):
     with self.lock:
-      self._waitForSeq(0)
+      if not self.added_data:
+        self._waitForSeq(0)
       assert self.added_data
       return self.added_data[0].targets.keys()
 
