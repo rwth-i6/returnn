@@ -75,6 +75,8 @@ def hdf5_strings(handle, name, data):
 
 def terminal_size(): # this will probably work on linux only
   import os, sys
+  if not hasattr(sys.stdout, "fileno"):
+    return -1, -1
   if not os.isatty(sys.stdout.fileno()):
     return -1, -1
   env = os.environ
