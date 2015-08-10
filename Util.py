@@ -13,6 +13,8 @@ def cmd(s):
   """
   :type s: str
   :rtype: list[str]
+  :returns all stdout splitted by newline. Does not cover stderr.
+  Raises CalledProcessError on error.
   """
   p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
