@@ -623,7 +623,8 @@ class Device(object):
       elif cmd == "update-data":  # via self.update_data()
         x = input_queue.recv()
         t = {}
-        for k in self.y:
+        target_keys = input_queue.recv()
+        for k in target_keys:
           t[k] = input_queue.recv()
         i = input_queue.recv()
         j = input_queue.recv()
@@ -635,7 +636,7 @@ class Device(object):
         if SprintCommunicator.instance is not None:
           SprintCommunicator.instance.segments = self.tags
         self.x.set_value(x.astype('float32'), borrow = True)
-        for k in self.y:
+        for k in target_keys:
           self.y[k].set_value(t[k].astype('int32'), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
@@ -804,7 +805,9 @@ class Device(object):
       assert self.main_pid == os.getpid()
       self.input_queue.send("update-data")
       self.input_queue.send(self.data)
-      for target in self.targetkeys:
+      target_keys = list(sorted(self.targets.keys()))
+      self.input_queue.send(target_keys)
+      for target in target_keys:
         if len(self.targets[target].shape) == 3:
           #numpy.swapaxes(self.targets[target], 1, 2).
           self.input_queue.send(self.targets[target]) #.reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
