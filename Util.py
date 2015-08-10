@@ -8,12 +8,12 @@ import shlex
 import numpy as np
 
 
-def cmd(cmd):
+def cmd(s):
   """
-  :type cmd: list[str] | str
+  :type s: str
   :rtype: list[str]
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
+  p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
