@@ -18,6 +18,7 @@ from Device import get_gpu_names
 import rnn
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
+from Network import LayerNetwork
 import Debug
 from Util import interrupt_main
 
@@ -213,14 +214,30 @@ def finishError(error, errorSignal, naturalPairingType=None):
   Criterion.gotErrorSignal.set()
 
 
+def feedInputAndTarget(features, weights=None, segmentName=None,
+                       orthography=None, alignment=None,
+                       speaker_name=None, speaker_gender=None,
+                       **kwargs):
+  assert features.shape[0] == InputDim
+  targets = {}
+  if alignment is not None:
+    targets["classes"] = alignment
+  if orthography is not None:
+    targets["orth"] = orthography
+  train(segmentName, features, targets)
+
+
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
   #print "feedInputAndTargetAlignment", segmentName
   assert features.shape[0] == InputDim
+  assert Task == "train"
   train(segmentName, features, targetAlignment)
 
 
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
-  raise NotImplementedError
+  assert features.shape[0] == InputDim
+  assert Task == "train"
+  train(segmentName, features, {"orth": targetSegmentOrth})
 
 
 def feedInputUnsupervised(features, weights=None, segmentName=None):
@@ -369,13 +386,20 @@ def prepareForwarding(epoch):
     fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fns_existing = [fn for fn in fns if os.path.exists(fn)]
     assert len(fns_existing) == 1, "%s not found" % fns
-    config.set('load', fns_existing[0])
 
-  lastEpoch, _ = engine.get_last_epoch_model(config)
-  assert lastEpoch == epoch
+    # Load network.
+    import h5py
+    last_model_epoch_filename = fns_existing[0]
+    last_model_hdf = h5py.File(last_model_epoch_filename, "r")
+    network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
+    network.load_hdf(last_model_hdf)
+    engine.network = network
 
-  # Load network and copy over net params.
-  engine.init_network_from_config(config)
+  else:
+    # Load network.
+    engine.init_network_from_config(config)
+
+  # Copy over net params.
   engine.devices[0].prepare(engine.network)
 
 
@@ -401,7 +425,7 @@ def train(segmentName, features, targets=None):
   """
   :param str|None segmentName: full name
   :param numpy.ndarray features: 2d array
-  :param numpy.ndarray|None targets: 2d or 1d array
+  :param numpy.ndarray|dict[str,numpy.ndarray]|None targets: 2d or 1d array
   """
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset

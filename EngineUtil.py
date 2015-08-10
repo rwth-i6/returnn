@@ -27,14 +27,16 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
   for k in output_shape:
     if dataset.get_target_dim(k) > 1:
       output_shape[k] += [dataset.get_target_dim(k)]
-
+  import time
+  ts = time.time()
   device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window],
                     output_shape=output_shape,
                     targets=dataset.get_target_list(),
                     max_ctc_length=dataset.get_max_ctc_length(),
                     pad=pad_batches)
-
+  ts = time.time()
   offset_slice = 0
+
   for batch in batches:
     dataset.load_seqs(batch.start_seq, batch.end_seq)
     device.num_frames += batch.get_total_num_frames()
@@ -46,7 +48,6 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
       assert q < shape[1]
       device.input_index[o:o + l[0], q] = numpy.ones((l[0],), dtype='int8')
       device.output_index[o:o + l[1], q] = numpy.ones((l[1],), dtype='int8')
-
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
         device.data[o:o + l[0], q] = data[seq.seq_start_frame[0]:seq.seq_end_frame[0]]
@@ -66,7 +67,6 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
-
     #for i in xrange(device.input_index.shape[0]):
     #  if numpy.sum(device.input_index[i,:]) == 0:
     #    device.input_index[i,0] = 1

@@ -4,7 +4,7 @@ from theano import tensor as T
 import theano
 from NetworkRecurrentLayer import RecurrentLayer
 from ActivationFunctions import strtoact
-from FastLSTM import LSTMOpInstance
+from FastLSTM import LSTMOp2Instance
 
 class LstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', **kwargs):
@@ -262,17 +262,22 @@ class OptimizedLstmLayer(RecurrentLayer):
         input = CI(z[:,:,:n_out]) # bdm
       else:
         i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
-        ingate = GI(z[:,n_out: 2 * n_out])
-        forgetgate = GF(z[:,2 * n_out:3 * n_out])
-        outgate = GO(z[:,3 * n_out:])
-        input = CI(z[:,:n_out]) # bdm
+        #ingate = GI(z[:,n_out: 2 * n_out])
+        #forgetgate = GF(z[:,2 * n_out:3 * n_out])
+        #outgate = GO(z[:,3 * n_out:])
+        #input = CI(z[:,:n_out]) # bdm
+        ingate = GI(z[:,: n_out])
+        forgetgate = GF(z[:,1 * n_out:2 * n_out])
+        outgate = GO(z[:,2 * n_out:3 * n_out])
+        input = CI(z[:,3 * n_out:]) # bdm
 
       #s_i = input * ingate + s_p * forgetgate
       s_t = (input * ingate + s_p * forgetgate) # bdm  #if not self.W_proj else T.dot(s_i, self.W_proj)
       #h_t = T.max(CO(s_t) * outgate, axis = -1, keepdims = False) #T.max(CO(s_t) * outgate, axis=-1, keepdims=True) #T.max(CO(s_t) * outgate, axis = -1, keepdims = True)
       h_t = CO(s_t) * outgate
-      #return s_t, h_t
-      return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
+      return s_t, h_t
+      #return theano.gradient.grad_clip(s_t, -50, 50), h_t
+      #return theano.gradient.grad_clip(s_t * i + s_p * (1-i), -50, 50), h_t * i + h_p * (1-i)
 
 
     self.out_dec = self.index.shape[0]
@@ -344,10 +349,9 @@ class OptimizedLstmLayer(RecurrentLayer):
 #showed a speedup from 81 sec/epoch to 11 sec/epoch on demo dataset
 #TODO:
 # 1) !! use index vector for different sequence lengths
-# 2) change activation functions to be consistent with the other implementations
-# 3) make sure implementations are compatible
-# 4) support multiple sources, dropout, sharpgates, ...
-# 5) use two CUDA streams for concurrent bidirectional execution
+# 2) make sure implementations are compatible
+# 3) support multiple sources, dropout, sharpgates, ...
+# 4) use two CUDA streams for concurrent bidirectional execution
 class FastLstmLayer(RecurrentLayer):
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
     kwargs.setdefault("layer_class", "lstm_fast")
@@ -369,9 +373,54 @@ class FastLstmLayer(RecurrentLayer):
                                                      s.attrs['n_out'] + n_out + n_out * 4,
                                                      name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
 
-    self.act = LSTMOpInstance(self.sources[0].output, self.W_in[0], self.W_re,  self.b)[0]
+    initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
+    XS = [S.output[::-(2 * self.attrs['reverse'] - 1)] for S in self.sources]
+    Z, _, d = LSTMOp2Instance(*([self.W_re, initial_state, self.b, self.index] + XS + self.W_in))
+    self.act = [Z, [d]]
+    self.state = [d]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
+class SimpleLstmLayer(RecurrentLayer):
+  def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
+    kwargs.setdefault("layer_class", "lstm_simple")
+    kwargs.setdefault("activation", "sigmoid")
+    kwargs["compile"] = False
+    kwargs["n_out"] = n_out * 4
+    super(SimpleLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
+    self.b.set_value(value)
+    n_re = n_out
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    assert len(self.sources) == 1
+    W_re = self.create_random_uniform_weights(n_re, n_out * 4, n_in + n_out * 4,
+                                              name="W_re_%s" % self.name)
+    self.W_re.set_value(W_re.get_value())
+    for s, W in zip(self.sources, self.W_in):
+      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4,
+                                                     s.attrs['n_out'] + n_out + n_out * 4,
+                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
+
+    initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
+
+    X = self.sources[0].output[::-(2 * self.attrs['reverse'] - 1)]
+    W = self.W_in[0]
+    def _step(x_t, c_tm1, y_tm1):
+      z_t = T.dot(x_t, W) + T.dot(y_tm1, self.W_re) + self.b
+      partition = z_t.shape[1] / 4
+      ingate = T.nnet.sigmoid(z_t[:,:partition])
+      forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+      outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+      input = T.tanh(z_t[:,3*partition:4*partition])
+      c_t = forgetgate * c_tm1 + ingate * input
+      y_t = outgate * T.tanh(c_t)
+      return c_t, y_t
+
+    [self.state, self.act], _ = theano.scan(_step, sequences=[X],
+                            outputs_info=[initial_state,
+                                          initial_state])
+
+    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class GRULayer(RecurrentLayer):
   def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):

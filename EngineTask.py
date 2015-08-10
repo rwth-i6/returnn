@@ -9,10 +9,11 @@ from Log import log
 from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
 from Device import Device
 from TaskSystem import ProcConnectionDied
+from math import ceil
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, share_batches = False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -26,6 +27,7 @@ class TaskThread(threading.Thread):
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       if eval_batch_size == 0:
         eval_batch_size = sys.maxint
+      self.share_batches = share_batches
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
       self.start_batch = start_batch
@@ -57,7 +59,7 @@ class TaskThread(threading.Thread):
       self.batches.advance(batch_adv_idx)
       return batches
 
-    def allocate_devices(self):
+    def allocate_devices(self, selected_devices = None):
       """
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
@@ -67,30 +69,27 @@ class TaskThread(threading.Thread):
         device.ctc_targets
         device.tags
         device.index
-      :rtype: (list[Device.Device], list[list[EngineBatch.Batch]])
-      :returns list of used devices, list of batches per device, and number of batches which were handled.
-      Number of batches will always be positive, but devices could be empty on skipped seqs.
+      :rtype: list[list[EngineBatch.Batch]]
+      :returns list of batches per device
       """
-      devices = []; " :type: list[Device.Device] "
+      if not selected_devices:
+        selected_devices = self.devices
       devices_batches = []; " :type: list[list[EngineBatch.Batch]] "
-      for device in self.devices:
-        batches = self.batches.peek_next_n(device.num_batches)
+      if self.share_batches:
+        batches = self.batches.peek_next_n(1)
+      for device in selected_devices:
+        if not self.share_batches:
+          batches = self.batches.peek_next_n(device.num_batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
-        if success:
-          devices.append(device)
-          devices_batches.append(batches)
-        else:
-          # We expect that there was a problem with batch_idx + batch_adv_idx - 1.
-          if batch_adv_idx > 0:
-            batch_idx = self.batches.get_current_batch_idx()
-            print >> log.v3, "Skipping batches %s because some seqs at %i are missing" % \
-                             (range(batch_idx, batch_idx + batch_adv_idx),
-                              batches[batch_adv_idx - 1].start_seq)
-          else:
-            assert len(devices) > 0
-            break
+        batch_idx = self.batches.get_current_batch_idx()
+        assert success, "batches %s with seqs at %i failed to load" % \
+                        (range(batch_idx, batch_idx + batch_adv_idx), batches[batch_adv_idx - 1].start_seq)
+        devices_batches.append(batches)
+        if not self.share_batches:
+          self.batches.advance(batch_adv_idx)
+      if self.share_batches:
         self.batches.advance(batch_adv_idx)
-      return devices, devices_batches
+      return devices_batches
 
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
@@ -104,9 +103,12 @@ class TaskThread(threading.Thread):
       :param list[str]|None result_format: describes what we have in a result list
       :type num_frames: int
       :returns some score or None
+      :rtype: dict[str] | None
       """
       pass
     def initialize(self):
+      pass
+    def reduce(self, num_frames):
       pass
     def finalize(self):
       self.finalized = True
@@ -119,27 +121,40 @@ class TaskThread(threading.Thread):
         threading.Thread.__init__(self, name="DeviceThread %s" % " ".join([dev.name for dev in devices]))
         self.alloc_devices = devices
         self.parent = parent
-        self.run_start_batch_idx = parent.batches.get_current_batch_idx()
+        self.devices_batches_idx = None
+        self.run_start_batch_idx = None
         self.eval_info = None; " :type: dict[str] | None "
-        self.finished = False
+        self.allocated = False
+        self.processing = False
+        self.finished = True
         self.crashed = False
         self.num_frames = 0
+        self.run_frames = 0
         self.daemon = True
-        if not self.alloc_devices:
-          self.finished = True
-          return
-        self.devices_batches = [ self.parent.allocate_device(dev) for dev in self.alloc_devices ]
-        for batches in self.devices_batches:
-          self.num_frames += sum([batch.get_total_num_frames() for batch in batches])
-        self.start()
+        self.active = True
+        self.result = { 'batchess': [], 'results': [], 'result_format': None, 'num_frames': 0 }
+        if self.alloc_devices:
+          self.start()
+
+      def allocate(self):
+        self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
+        self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
+        self.run_frames = 0
+        for batches, device in zip(self.devices_batches,self.alloc_devices):
+          assert batches
+          assert batches[0].seqs
+          assert batches[0].seqs[0].frame_length[1] > 0
+          device.num_updates += 1 if not device.update_specs['block_size'] else int(ceil(sum([len(batch.seqs) for batch in batches]) / float(device.update_specs['block_size'])))
+          self.run_frames += sum([batch.get_total_num_frames() for batch in batches])
+        if self.parent.share_batches:
+          self.run_frames /= len(self.alloc_devices)
+        assert self.run_frames > 0
+        self.allocated = True
 
       def finish(self):
         """
         :returns whether everything is fine.
         """
-        if not self.alloc_devices:
-          # We skipped segments. That's fine.
-          return True
         device_results, outputs_format = self.device_collect_results()
         if device_results is None:
           if not getattr(sys, "exited", False):
@@ -176,33 +191,41 @@ class TaskThread(threading.Thread):
               self.alloc_devices[i].set_net_params(self.parent.network)
               res.pop('gparams', None)
             output_results.append([res[k] for k in res if k != 'gparams'])
-          outputs_format = res.keys()
+          outputs_format.remove('gparams')
         else:
           output_results = device_results
 
-        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames}
-        #self.eval_info = self.parent.evaluate(batchess=self.devices_batches,
-        #                                      results=device_results,
-        #                                      result_format=outputs_format,
-        #                                      num_frames=self.num_frames)
+        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
-        self.parent.num_frames += self.num_frames
         self.print_process()
         self.parent.lock.release()
         return True
 
       def run(self):
-        s = time.time()
-        self.device_run()
-        self.se = time.time () - s
-        s = time.time()
-        # Note that alloc_devices could be empty if we skipped seqs.
-        self.finish()
-        self.fe = time.time() - s
-        self.finished = True
+        try:
+          while self.active:
+            if self.allocated and not self.finished:
+              self.device_run()
+              self.num_frames = self.run_frames
+              self.processing = True
+              self.allocated = False
+              self.finish()
+              self.finished = True
+              self.processing = False
+            else:
+              time.sleep(0.01)
+        except:
+          self.crashed = True
+          self.finished = True
+          sys.excepthook(*sys.exc_info())
+
+      def stop(self):
+        self.active = False
 
       def device_run(self):
-        batch_idx = self.run_start_batch_idx
+        batch_idx = self.run_start_batch_idx = self.devices_batches_idx
+        assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
             print >> log.v5, "running", device.data.shape[1], \
@@ -215,7 +238,7 @@ class TaskThread(threading.Thread):
             print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
           print >> log.v5, "on device", device.name
           device.run(self.parent.task)
-          batch_idx += device.num_batches
+      #if not self.share batch_idx += device.num_batches
 
       def device_collect_results(self):
         device_results = []
@@ -275,19 +298,6 @@ class TaskThread(threading.Thread):
         if self.parent.interactive:
           progress_bar(complete, hms(remaining_estimated))
 
-    def device_can_run_async(self):
-      return False
-      if len(self.devices) != 1:
-        return False
-      if self.devices[0].blocking:
-        # If we are in the same proc (= blocking), nothing can be async.
-        return False
-      if self.devices[0].updater is None:
-        # If nothing needs to be updated, we can run async.
-        return True
-      # We can run async iff we do the updates online.
-      return self.devices[0].updater.updateOnDevice
-
     def run(self):
       # Wrap run_inner() for better exception printing.
       # Thread.__bootstrap_inner() ignores sys.excepthook.
@@ -323,26 +333,19 @@ class TaskThread(threading.Thread):
       self.interactive = (log.v[3] and terminal_width >= 0)
       print >> log.v5, "starting task", self.task
 
-      canRunAsync = self.device_can_run_async()
-      remainingDeviceRun = None; " :type: DeviceBatchRun "
-
-      if canRunAsync:
-        print >> log.v5, "Run %s in async mode." % self.name
-
       for device in self.devices:
         device.eval_batch_idx = -1
         device.start_epoch_stats()
         device.num_frames = 0
+        device.num_updates = 0
         device.tot_cost = 0
         device.tot = 0
-        device.se = 0
-        device.fe = 0
 
-      deviceRuns = [ None for i in xrange(len(self.devices)) ]
+      num_device_runs = 1 if self.share_batches else len(self.devices)
+      deviceRuns = [ self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices) for i in xrange(num_device_runs) ]
 
-      results = {'batchess': [], 'results': [], 'num_frames' : 0 }
+      results = { 'batchess': [], 'results': [], 'num_frames' : 0 }
       run_frames = 0
-      se = time.time()
 
       crashed = False
 
@@ -354,46 +357,36 @@ class TaskThread(threading.Thread):
           crashed = True
           break
 
-        for i in xrange(len(self.devices)):
-          if deviceRuns[i]:
-            if deviceRuns[i].crashed:
-              crashed = True
-              break
-            if deviceRuns[i].finished:
-              results['batchess'] += deviceRuns[i].result['batchess'][:]
-              results['results'] += deviceRuns[i].result['results'][:]
-              results['result_format'] = deviceRuns[i].result['result_format']
-              results['num_frames'] += deviceRuns[i].num_frames
-              self.devices[i].tot += time.time() - self.devices[i].te
-              self.devices[i].se += deviceRuns[i].se
-              self.devices[i].fe += deviceRuns[i].fe
-              deviceRuns[i] = None
-              #print self.devices[i].name, "tot", time.time() - self.devices[i].se
-
+        for i in xrange(num_device_runs):
+          if deviceRuns[i].crashed:
+            crashed = True
+            break
+          if deviceRuns[i].finished:
+            results['batchess'] += deviceRuns[i].result['batchess'][:]
+            results['results'] += deviceRuns[i].result['results'][:]
+            results['result_format'] = deviceRuns[i].result['result_format']
+            deviceRuns[i].finished = False
         if crashed:
           break
 
-        if run_frames >= self.eval_batch_size:
-          if all(dev == None for dev in deviceRuns):
-            #print "train:", time.time() - se
-            #se = time.time()
-            #for dev in self.devices:
-            #  print dev.name, "tot", dev.tot,"start",dev.se,"finish",dev.fe
-            #  dev.tot = 0
-            #  dev.se = 0
-            #  dev.fe = 0
-            self.evaluate(**results)
+        if run_frames >= self.eval_batch_size or not self.batches.has_more():
+          if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
+            results['num_frames'] = run_frames
+            self.num_frames += run_frames
+            if self.share_batches: run_frames *= len(self.devices)
+            self.reduce(run_frames)
             self.eval_batch_idx += 1
             run_frames = 0
             results['batchess'] = []
             results['results'] = []
-            results['num_frames'] = 0
             for device in self.devices:
               device.num_frames = 0
+              device.num_updates = 0
               device.tot_cost = 0
+            if not self.batches.has_more():
+              break
           else:
             time.sleep(0.01)
-            continue
 
         match = True
         while self.batches.has_more() and run_frames < self.eval_batch_size and match:
@@ -402,38 +395,18 @@ class TaskThread(threading.Thread):
             self.batches.advance(1)
             break
           match = False
-          for i in xrange(len(self.devices)):
-            if not deviceRuns[i]:
-              self.devices[i].te = time.time()
-              deviceRuns[i] = self.DeviceBatchRun(self, [self.devices[i]])
-              run_frames += deviceRuns[i].num_frames
+          for i in xrange(num_device_runs):
+            if not deviceRuns[i].allocated:
+              deviceRuns[i].allocate()
+              run_frames += deviceRuns[i].run_frames
               match = True
               break
-        else:
-          if not self.batches.has_more():
-            break
-          if not match:
-            time.sleep(0.01)
-          continue
+        if not match:
+          time.sleep(0.01)
 
-      for i,device in enumerate(self.devices):
-        if deviceRuns[i]:
-          if not deviceRuns[i].finished and not deviceRuns[i].crashed:
-            deviceRuns[i].join()
-          if deviceRuns[i].crashed:
-            deviceRuns[i] = None
-            crashed = True
-        if deviceRuns[i] and deviceRuns[i].finished:
-          results['batchess'] += deviceRuns[i].result['batchess']
-          results['results'] += deviceRuns[i].result['results']
-          results['result_format'] = deviceRuns[i].result['result_format']
-          results['num_frames'] += deviceRuns[i].num_frames
+      for device in self.devices:
         device.finish_epoch_stats()
-        #print device.name, "tot", device.tot,"start",device.se,"finish",device.fe
       if crashed: return
-      if results['results']:
-        self.evaluate(**results)
-        self.eval_batch_idx += 1
       self.finalize()
       if self.interactive: progress_bar()
       self.elapsed = (time.time() - self.start_time)
@@ -538,7 +511,7 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
 
-  def create_consensus(self, cost, num_frames):
+  def reduce(self, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
     try:
@@ -558,7 +531,14 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices)], axis = 0)
+          num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
+          #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
+          if num_updates:
+            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_updates) / num_updates) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          else:
+            print >> log.v4, "warning: no update available for parameter", basenet[i]
+          #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
         encoded.append(q)
@@ -582,6 +562,8 @@ class TrainTaskThread(TaskThread):
     assert results
     assert result_format  # train should always have the format
     assert num_frames > 0
+    if self.share_batches:
+      num_frames *= len(self.devices)
     results = [Device.make_result_dict(res, result_format) for res in results]
     cost = [res["cost"] for res in results]
     score = sum(cost)
@@ -593,8 +575,7 @@ class TrainTaskThread(TaskThread):
     if self.do_ctc_priors:
       for res in results:
         self.ctc_priors += res["ctc_priors"]
-    self.score += score
-    self.create_consensus(cost, num_frames)
+    self.score += score if not self.share_batches else score / len(self.devices)
     eval_info = {"score": score / num_frames}
     # Maybe we got some more info such as gradient_norm.
     # See Device.initialize().
@@ -633,7 +614,7 @@ class EvalTaskThread(TaskThread):
       error = sum([res[1] for res in results])
       self.score += score
       self.error += error
-      return {"score": score / num_frames, "error": error / num_frames}
+      return {"score": score / num_frames, "error": float(error) / num_frames}
 
     def finalize(self):
       assert self.num_frames > 0

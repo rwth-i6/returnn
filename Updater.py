@@ -23,6 +23,20 @@ class Updater:
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
+  @classmethod
+  def initRule(cls, rule, **kwargs):
+    kwargs.setdefault('momentum', 0)
+    kwargs.setdefault('gradient_clip', -1)
+    kwargs.setdefault('adadelta_decay', 0.90)
+    kwargs.setdefault('adadelta_offset', 1e-6)
+    kwargs.setdefault('adagrad', False)
+    kwargs.setdefault('adadelta', False)
+    kwargs.setdefault('adasecant', False)
+    kwargs.setdefault('varreg', False)
+    if rule != "default":
+      kwargs[rule] = True
+    return cls(**kwargs)
+
   def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, varreg, adasecant):
     """
     :type momentum: float
@@ -39,6 +53,7 @@ class Updater:
     self.adasecant = adasecant
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
+    self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.varreg and self.adasecant)
     if self.adadelta:
@@ -141,11 +156,19 @@ class Updater:
 
     return constrained_output
 
-  @staticmethod
-  def var(value, name = "", broadcastable = None):
+  def var(self, value, name = "", broadcastable = None, reset = True):
     if broadcastable:
-      return theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
-    return theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
+    else:
+      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+    if reset:
+      self.params[param] = value
+    return param
+
+  def reset(self):
+    #return # this needs to be done smarter
+    for param in self.params:
+      param.set_value(self.params[param])
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
@@ -162,27 +185,27 @@ class Updater:
       for param in grads.keys():
         deltas = grads[param]
         #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
-        #if self.gradient_clip > 0:
-        #  # Note that there is also theano.gradient.grad_clip, which would clip it already
-        #  # at the backprop step and which would affect also other dependent gradients.
-        #  # However, this is simpler for now.
-        #  # Also note that this is yet without the learning rate factor -
-        #  # this might be different to other gradient clipping implementations.
-        #  deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
+        if self.gradient_clip > 0:
+          # Note that there is also theano.gradient.grad_clip, which would clip it already
+          # at the backprop step and which would affect also other dependent gradients.
+          # However, this is simpler for now.
+          # Also note that this is yet without the learning rate factor -
+          # this might be different to other gradient clipping implementations.
+          deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
         #if self.momentum > 0:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = False #True #False #True #False #True
+          self.use_adagrad = True
           self.use_adadelta = False #True #True
-          self.skip_nan_inf = False
+          self.skip_nan_inf = True
           self.start_var_reduction = 0
           self.use_corrected_grad = True
           self.decay = 0.95
           ### default
-          self.delta_clip = None
-          self.outlier_detection = True
-          self.gamma_clip = 2.45
+          self.delta_clip = 50.0
+          self.outlier_detection = True #True
+          self.gamma_clip = 1.8
           ### aggressive
           #self.delta_clip = None
           #self.outlier_detection = False
@@ -191,6 +214,11 @@ class Updater:
           #self.delta_clip = 50.0 #None
           #self.outlier_detection = True #False
           #self.gamma_clip = 1.8 #None #1.8
+
+          if self.skip_nan_inf:
+            #If norm of the gradients of a parameter is inf or nan don't update that parameter
+            #That might be useful for RNNs.
+            grads[param] = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
 
           grads[param] = T.unbroadcast(grads[param], -1)
 
@@ -299,7 +327,7 @@ class Updater:
 
           if self.use_adagrad:
             g = corrected_grad
-            # Accumulate gradient
+            # Accumulate gradient (windowed version)
             new_sum_squared_grad = (
                 sum_square_grad + T.sqr(g)
             )
@@ -425,7 +453,7 @@ class Updater:
 
           if self.use_corrected_grad:
             updates.append((old_grad, corrected_grad))
-          
+
         elif self.adagrad:
           epsilon = 1e-6
           accu_new = self.accu[param] + deltas ** 2

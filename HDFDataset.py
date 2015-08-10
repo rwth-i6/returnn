@@ -62,8 +62,8 @@ class HDFDataset(CachedDataset):
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if self.num_inputs == 0:
-      self.num_inputs = fin.attrs[attr_inputPattSize]
-    assert self.num_inputs == fin.attrs[attr_inputPattSize], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
+      self.num_inputs = fin['inputs'][0].shape[0] #fin.attrs[attr_inputPattSize]
+    assert self.num_inputs == fin['inputs'][0].shape[0], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
     if not self.num_outputs:
       if 'targets/size' in  fin:
         self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
@@ -117,7 +117,6 @@ class HDFDataset(CachedDataset):
         continue
       print >> log.v4, "loading file", self.files[i]
       fin = h5py.File(self.files[i], 'r')
-      inputs = fin['inputs'][...]; """ :type: numpy.ndarray """
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
@@ -125,8 +124,7 @@ class HDFDataset(CachedDataset):
         if 'targets' in fin:
           for k in fin['targets/data']:
             self.targets[k][self.get_seq_start(idc)[1]:self.get_seq_start(idc)[1] + l[1]] = fin['targets/data/' + k][p[1] : p[1] + l[1]][...]
-        x = inputs[p[0] : p[0] + l[0]]
-        self._set_alloc_intervals_data(idc, data=x)
+        self._set_alloc_intervals_data(idc, data=fin['inputs'][p[0] : p[0] + l[0]][...])
       fin.close()
     gc.collect()
     assert self.is_cached(start, end)

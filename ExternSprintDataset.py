@@ -41,7 +41,8 @@ class ExternSprintDataset(SprintDataset):
   def _exit_child(self, wait_thread=True):
     if self.child_pid:
       interrupt = False
-      if self._join_child(wait=False, expected_exit_status=0) is False:  # Not yet terminated.
+      expected_exit_status = 0 if not self.python_exit else None
+      if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq
         if interrupt:
           print >> log.v5, "ExternSprintDataset: interrupt child proc %i" % self.child_pid

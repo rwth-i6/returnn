@@ -9,7 +9,7 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 from threading import RLock
-from random import Random
+from random import Random, random
 
 import sys
 import numpy
@@ -324,7 +324,7 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
@@ -342,6 +342,15 @@ class Dataset(object):
         print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
         chunk_size = 0
 
+    ms = max_seqs
+    bs = batch_size
+
+    assert batch_variance <= 1.0
+    if batch_variance > 0.0:
+      r = (1.0 - random() * batch_variance)
+      max_seqs = max(int(r * ms), 1)
+      batch_size = max(int(r * bs), 1)
+
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
@@ -352,12 +361,18 @@ class Dataset(object):
         if ds > 1 and (dt * ds > batch_size or ds > max_seqs):
           yield batch
           batch = Batch()
+          if batch_variance > 0.0:
+            r = (1.0 - random() * batch_variance)
+            max_seqs = max(int(r * ms), 1)
+            batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start[0] < t_end[0]:
           length = t_end[0] - t_start[0]
           num_frames = min(length, batch_size - batch.get_all_slices_num_frames())
-          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=numpy.array([num_frames, num_frames]))
+          assert num_frames > 0
+          batch.add_frames(seq_idx=seq_idx, seq_start_frame=numpy.array(t_start),
+                           length=numpy.array([num_frames, num_frames]))
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch
             batch = Batch()
@@ -366,14 +381,14 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
     """
     :type recurrent_net: bool
     :type batch_size: int
     :type max_seqs: int
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs))
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance))
 
 
 class DatasetSeq:
@@ -381,16 +396,19 @@ class DatasetSeq:
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param dict[str,numpy.ndarray] | numpy.ndarray targets: name -> format 1d (time) (idx of output-feature)
-    :param numpy.ndarray ctc_targets: format 1d (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] | numpy.ndarray | None targets: name -> format 1d (time) (idx of output-feature)
+    :param numpy.ndarray | None ctc_targets: format 1d (time) (idx of output-feature)
     """
     assert isinstance(seq_idx, int)
     assert isinstance(features, numpy.ndarray)
+    if targets is None:
+      targets = {}
     if isinstance(targets, numpy.ndarray):  # old format
       targets = {"classes": targets}
     assert isinstance(targets, dict)
-    assert "classes" in targets
-    assert isinstance(targets["classes"], numpy.ndarray)
+    if targets:
+      assert "classes" in targets
+      assert isinstance(targets["classes"], numpy.ndarray)
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
@@ -398,7 +416,7 @@ class DatasetSeq:
 
   @property
   def default_target(self):
-    return self.targets["classes"]
+    return self.targets.get("classes", None)
 
   @property
   def num_frames(self):
@@ -406,7 +424,7 @@ class DatasetSeq:
     :rtype: numpy.array[int,int]
     :returns the features frame len, and the target frame len
     """
-    return numpy.array([self.features.shape[0], self.default_target.shape[0]])
+    return numpy.array([self.features.shape[0], self.default_target.shape[0] if self.default_target is not None else 0])
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx

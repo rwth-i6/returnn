@@ -15,7 +15,7 @@ class Container(object):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class, name="", network=None,
-               train_flag=False, depth=1, consensus = "flat",
+               train_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                substitute_param_expr=None):
     """
@@ -65,7 +65,10 @@ class Container(object):
     :type head: h5py.File
     """
     grp = head[self.name]
-    assert grp.attrs['class'] == self.layer_class, "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+    if grp.attrs['class'] != self.layer_class:
+      from NetworkLayer import get_layer_class
+      assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
+        "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
       assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
         "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
@@ -102,7 +105,11 @@ class Container(object):
     """
     :returns list of shared vars in a well-defined order
     """
-    return [v for (k, v) in sorted(self.params.items())]
+    res = []
+    for (k, v) in sorted(self.params.items()):
+      v.layer = self
+      res.append(v)
+    return res
 
   def add_param(self, param, name=""):
     """
@@ -162,7 +169,7 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
 
-  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth = None):
+  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth=None):
     if not depth: depth = self.depth
     if name is None: name = 'W_' + self.name
     assert not (p and l)
@@ -221,7 +228,7 @@ class Container(object):
       elif attrs['from'] == '':
         guessed = self.guess_source_layer_name(self.name)
         if guessed:
-          attrs['from'] = guessed
+          attrs['from'] = [guessed]
         else:
           attrs.pop('from', None)
       else:
@@ -241,9 +248,9 @@ class SourceLayer(Container):
     self.set_attr('delay', delay)
 
 class Layer(Container):
-  def __init__(self, sources, n_out, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
+  def __init__(self, sources, n_out, index, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
-    :param list[NetworkBaseLayer.SourceLayer] sources: list of source layers
+    :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
     :param float L1: l1-param-norm regularization
     :param float L2: l2-param-norm regularization
@@ -251,8 +258,10 @@ class Layer(Container):
     :type dropout: float
     """
     super(Layer, self).__init__(**kwargs)
-    self.sources = sources; ":type: list[SourceLayer]"
+    self.index = index
+    self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
+    if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
@@ -264,17 +273,17 @@ class Layer(Container):
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name, False)
-    self.mass = T.constant(1., name = "mass_%s" % self.name)
-    if mask == "unity" or dropout == 0:
-      self.masks = [None] * len(self.sources)
-    elif mask == "dropout" or (mask == "none" and dropout > 0):
+    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
+    self.masks = [None] * len(self.sources)
+    assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
+    if mask == "dropout" or (mask == 'none' and dropout > 0):
       assert 0.0 < dropout < 1.0
       # If we apply this mass during training then we don't need any mask or mass for testing.
       # The expected weight should be 1 in
       #   E[x] = mass * (1-dropout)
       # so mass has to be 1 / (1 - dropout).
-      self.mass = T.constant(1.0 / (1.0 - dropout))
+      self.mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
       if self.depth > 1:
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
@@ -282,8 +291,6 @@ class Layer(Container):
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
-    else:
-      assert False, "invalid mask: %s" % mask
 
   def concat_units(self, other, axis = 1):
     assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
@@ -292,19 +299,21 @@ class Layer(Container):
         self.params[p].set_value(numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = min(len(self.params[p].get_value().shape) - 1, axis)))
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
+  def output_index(self):
+    return self.index
 
-  def add_param(self, param, name="", constraints = True):
+  def add_param(self, param, name="", constraints=True):
     """
     :type param: T
     :type name: str
     :rtype: T
     """
-    super(Layer, self).add_param(param, name)
+    param = super(Layer, self).add_param(param, name)
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints +=  self.attrs['L1'] * abs(param).sum()
+        self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
-        self.constraints +=  self.attrs['L2'] * (param**2).sum()
+        self.constraints += T.constant(self.attrs['L2'], name="L2", dtype='floatX') * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param
@@ -367,8 +376,13 @@ class Layer(Container):
       name = 'W_T_%s'%self.name
       if not name in self.params:
         self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
+      W = self.params[name]
+      name = "b_T_%s"%self.name
+      if not name in self.params:
+        self.add_param(theano.shared(value=numpy.asarray(self.rng.uniform(low=-3, high=-1, size=(self.attrs['n_out'],)), dtype=theano.config.floatX), borrow=True, name=name), name=name)
+      b = self.params[name]
       x = T.concatenate([s.output for s in self.sources], axis = -1)
-      Tr = T.nnet.sigmoid(self.dot(x, self.params[name]))
+      Tr = T.nnet.sigmoid(self.dot(x, W) + b)
       self.output = Tr * self.output + (1 - Tr) * x
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)

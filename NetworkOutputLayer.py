@@ -8,8 +8,20 @@ from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
 
+
+#from Accumulator import AccumulatorOpInstance
+
+#def step(*args): # requires same amount of memory
+#  xs = args[:(len(args)-1)/2]
+#  ws = args[(len(args)-1)/2:-1]
+#  b = args[-1]
+#  out = b
+#  for w,x in zip(ws,xs):
+#    out += T.dot(x,w)
+#  return out
+
 class OutputLayer(Layer):
-  def __init__(self, index, loss, y, **kwargs):
+  def __init__(self, loss, y, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -19,24 +31,31 @@ class OutputLayer(Layer):
     self.z = self.b
     self.y = y
     self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
-                                                            name="W_in_%s_%s" % (source.name, self.name)),
-                                "W_in_%s_%s" % (source.name, self.name))
+                                                            name="W_in_%s_%s" % (source.name, self.name)))
                  for source in self.sources]
 
     assert len(self.sources) == len(self.masks) == len(self.W_in)
+    assert len(self.sources) > 0
     for source, m, W in zip(self.sources, self.masks, self.W_in):
       if source.attrs['sparse']:
         self.z += W[T.cast(source.output[:,:,0], 'int32')]
       elif m is None:
-        #self.z += T.dot(W[:,:,0], source.output)
-        #self.z += T.dot(source.output, W)
-        #self.z += T.tensordot(T.sum(T.tensordot(source.output, W, 1), axis=2), Q, 1)
         self.z += self.dot(source.output, W)
       else:
         self.z += self.dot(self.mass * m * source.output, W)
+    assert self.z.ndim == 3
+
+    #xs = [s.output for s in self.sources]
+    #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
+    #outputs_info = None #[ T.alloc(numpy.cast[theano.config.floatX](0), index.shape[1], self.attrs['n_out']) ]
+
+    #self.z, _ = theano.scan(step,
+    #                        sequences = [s.output for s in self.sources],
+    #                        non_sequences = self.W_in + [self.b])
+
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    self.index = index
-    self.i = (index.flatten() > 0).nonzero()
+    self.i = (self.index.flatten() > 0).nonzero()
+    self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
@@ -64,9 +83,9 @@ class OutputLayer(Layer):
     """
     if self.y.dtype.startswith('int'):
       if self.y.type == T.ivector().type:
-        return T.sum(T.neq(self.y_pred[self.i], self.y[self.i]))
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y[self.i]))
       else:
-        return T.sum(T.neq(self.y_pred[self.i], T.argmax(self.y[self.i], axis = -1)))
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
     else:
       raise NotImplementedError()
 
@@ -77,9 +96,8 @@ class FramewiseOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    #self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
-    #T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
+    #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
+    self.y_m = self.output.reshape((self.output.shape[0]*self.output.shape[1],self.output.shape[2]))
     if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':
     #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
@@ -88,7 +106,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
-    self.y_pred = T.argmax(self.p_y_given_x, axis=-1)
+    self.y_pred = T.argmax(self.y_m[self.i], axis=-1, keepdims=True)
     self.output = self.p_y_given_x
 
   def cost(self):
@@ -98,6 +116,8 @@ class FramewiseOutputLayer(OutputLayer):
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
         nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
+        #nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
       return T.sum(nll), known_grads

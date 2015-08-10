@@ -1,4 +1,5 @@
 import subprocess
+from subprocess import CalledProcessError
 import h5py
 from collections import deque
 import inspect
@@ -8,15 +9,19 @@ import shlex
 import numpy as np
 
 
-def cmd(cmd):
+def cmd(s):
   """
-  :type cmd: list[str] | str
+  :type s: str
   :rtype: list[str]
+  :returns all stdout splitted by newline. Does not cover stderr.
+  Raises CalledProcessError on error.
   """
-  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, close_fds=True,
+  p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
   result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
   p.stdout.close()
+  if p.returncode != 0:
+    raise CalledProcessError(p.returncode, s, "\n".join(result))
   return result
 
 
@@ -166,6 +171,11 @@ class ObjAsDict:
       raise KeyError(e)
 
 
+class DictAsObj:
+  def __init__(self, dikt):
+    self.__dict__ = dikt
+
+
 def obj_diff_str(self, other):
   if self is None and other is None:
     return "No diff."
@@ -173,9 +183,20 @@ def obj_diff_str(self, other):
     return "self is None and other is %r" % other
   if self is not None and other is None:
     return "other is None and self is %r" % self
+  if self == other:
+    return "No diff."
   s = []
-  for attrib in sorted(set(other.__dict__).union(other.__dict__.keys())):
-    if attrib not in self.__dict__ or attrib not in other.__dict__:
+  def _obj_attribs(obj):
+    d = getattr(obj, "__dict__", None)
+    if d is not None:
+      return d.keys()
+    return None
+  self_attribs = _obj_attribs(self)
+  other_attribs = _obj_attribs(other)
+  if self_attribs is None or other_attribs is None:
+    return "self: %r, other: %r" % (self, other)
+  for attrib in sorted(set(self_attribs).union(other_attribs)):
+    if attrib not in self_attribs or attrib not in other_attribs:
       s += ["attrib %r not on both" % attrib]
       continue
     value_self = getattr(self, attrib)
@@ -189,6 +210,12 @@ def obj_diff_str(self, other):
         for i, (a, b) in enumerate(zip(value_self, value_other)):
           if a != b:
             s += ["attrib %r[%i] differ. self: %r, other: %r" % (attrib, i, a, b)]
+    elif isinstance(value_self, dict):
+      if not isinstance(value_other, dict):
+        s += ["attrib %r self is dict but other is %r" % (attrib, type(value_other))]
+      elif value_self != value_other:
+        s += ["attrib %r dict differs:" % attrib]
+        s += ["  " + l for l in dict_diff_str(value_self, value_other).splitlines()]
     else:
       if value_self != value_other:
         s += ["attrib %r differ. self: %r, other: %r" % (attrib, value_self, value_other)]
@@ -196,6 +223,10 @@ def obj_diff_str(self, other):
     return "\n".join(s)
   else:
     return "No diff."
+
+
+def dict_diff_str(self, other):
+  return obj_diff_str(DictAsObj(self), DictAsObj(other))
 
 
 def find_ranges(l):
@@ -311,5 +342,3 @@ def uniq(seq):
   idx = diffs.nonzero()
   return seq[idx]
 
-def test_uniq():
-  assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()

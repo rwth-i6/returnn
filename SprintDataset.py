@@ -197,7 +197,7 @@ class SprintDataset(Dataset):
     Adds a new seq.
     This is called via the Sprint main thread.
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param numpy.ndarray targets: format (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray] targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -209,8 +209,13 @@ class SprintDataset(Dataset):
     features = features.transpose()
     assert features.shape == (T, self.num_inputs)
 
-    if targets is not None:
-      assert targets.shape == (T,)  # is in format (time,)
+    if targets is None:
+      targets = {}
+    if not isinstance(targets, dict):
+      targets = {"classes": targets}
+    if "classes" in targets:
+      # 'classes' is always the alignment
+      assert targets["classes"].shape == (T,)  # is in format (time,)
 
     with self.lock:
       # This gets called in the Sprint main thread.
@@ -277,6 +282,12 @@ class SprintDataset(Dataset):
       self._waitForSeq(n)
       return n < self.next_seq_to_be_added
 
+  def get_target_list(self):
+    with self.lock:
+      self._waitForSeq(0)
+      assert self.added_data
+      return self.added_data[0].targets.keys()
+
   def set_complete_frac(self, frac):
     self._complete_frac = frac
 
@@ -306,7 +317,7 @@ class SprintDataset(Dataset):
   def get_targets(self, target, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).targets[target]
+      return self._getSeq(sorted_seq_idx).targets.get(target, None)
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."

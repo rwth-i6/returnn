@@ -1,15 +1,21 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
+import signal
 import time
 import pickle
 from thread import start_new_thread
+
+
+def have_gpu():
+  cpus, gpus = get_num_devices()
+  return gpus > 0
 
 
 def get_num_devices():
@@ -20,7 +26,12 @@ def get_num_devices():
       return int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),\
                len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA'"))
   else:
-    return len(cmd('cat /proc/cpuinfo | grep processor')) or 1, len(cmd('nvidia-smi -L'))
+    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
+    try:
+      num_gpus = len(cmd('nvidia-smi -L'))
+    except CalledProcessError:
+      num_gpus = 0
+    return num_cpus, num_gpus
 
 
 def get_gpu_names():
@@ -32,22 +43,28 @@ def get_gpu_names():
                "grep 'Chipset Model: NVIDIA' | "
                "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
   else:
-    return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+    try:
+      return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+    except CalledProcessError:
+      return []
 
 
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = {
+                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
-                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 760" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
+                 "GeForce GTX 790" : (2304, 980, 3 * 1024 * 1024 * 1024),
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
@@ -72,13 +89,14 @@ def get_device_attributes():
   return attributes
 
 
-class Device():
-  def __init__(self, device, config, blocking=False, num_batches=1, device_update = True):
+class Device(object):
+  def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
     :param str device: name, "gpu*" or "cpu*"
     :param Config.Config config: config
     :param bool blocking: False -> multiprocessing, otherwise its blocking
     :param int num_batches: num batches to train on this device
+    :param dict update_specs
     """
     try:
       import pynvml
@@ -100,8 +118,14 @@ class Device():
     self.compute_total_time = 0
     self.update_total_time = 0
     self.num_frames = 0
+    self.num_updates = 0
     self.tot_cost = 0
-    self.device_update = device_update
+    if not update_specs: update_specs = {}
+    update_specs.setdefault('update_rule', 'global')
+    update_specs.setdefault('update_params', {})
+    update_specs.setdefault('layers', [])
+    update_specs.setdefault('block_size', 0)
+    self.update_specs = update_specs
     self.data = None
     self.main_pid = os.getpid()
 
@@ -144,10 +168,18 @@ class Device():
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
+    if self.name[-1] == 'X':
+      import string
+      import random
+      theano_flags["compiledir_format"] += "-%s" % ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(5))
     # Set device via flags.
-    theano_flags["device"] = "gpu" if self.name == "gpuX" else self.name
-    if self.name.startswith("gpu"):
-      theano_flags["force_device"] = True
+    if self.name == "cpuX":
+      theano_flags["device"] = "cpu"
+    elif self.name == "gpuX":
+      theano_flags["device"] = "gpu"
+    else:
+      theano_flags["device"] = self.name
+    theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
     self.proc = AsyncTask(
       func=self.process,
@@ -175,12 +207,19 @@ class Device():
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
 
-  def initialize(self, config, device_update = True, network_description=None, train_param_args=None):
+  def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config
-    :type network_description: NetworkDescription.LayerNetworkDescription | None
+    :type json_content: dict[str] | str | None
     :type train_param_args: dict | None
     """
+    if not update_specs: update_specs = {}
+    update_specs.setdefault('update_rule', 'global')
+    update_specs.setdefault('update_params', {})
+    update_specs.setdefault('block_size', 0) #self.num_batches)
+    update_specs.setdefault('layers', [])
+    self.update_specs = update_specs
+    self.block_size = update_specs['block_size']
     target = config.value('target', 'classes')
     if self.blocking:
       assert os.getpid() == self.main_pid
@@ -189,16 +228,17 @@ class Device():
     import theano
     import theano.tensor as T
     import h5py
+    self.T = T
     self.network_task = config.value('task', 'train')
-    if network_description is not None:
-      self.trainnet = LayerNetwork.from_description(network_description, train_flag=True)
-      self.testnet = LayerNetwork.from_description(network_description, mask="unity", train_flag=False)
+    if json_content is not None:
+      self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
+      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
                                                            sparse_input=config.bool("sparse_input", False),
                                                            target=target)
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, mask="unity", train_flag=False,
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False,
                                                           sparse_input=config.bool("sparse_input", False),
                                                           target=target)
       model.close()
@@ -208,51 +248,56 @@ class Device():
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
-    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True)
+    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,), dtype = 'int32'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
       else:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True)
-    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
-    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True)
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = theano.config.floatX), borrow=True, name='y_soft_%s' % k)
+    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
+    self.j = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j')
     if self.trainnet.loss in ('ctc','ce_ctc'):
-      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True)
+      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
-    gparams = []
-    exclude = []
-    self.gradients = { k : {} for k in self.y }
-    if config.bool('debug_gradient_norm', False):
-      # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
-      # See self.fast_check_model_is_broken_from_result().
-      self.gradient_norm = 0
-    else:
-      self.gradient_norm = None
-    for target in self.y:
-      for pi, param in enumerate(self.trainnet.train_params_vars):
-        if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if False: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
-          gparam = 0
-        else:
-          try:
-            gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
-          except theano.gradient.DisconnectedInputError:
+    if self.network_task == 'train' or self.network_task == 'theano_graph':
+      gparams = []
+      exclude = []
+      self.gradients = { k : {} for k in self.y }
+      if config.bool('debug_gradient_norm', False):
+        # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
+        # See self.fast_check_model_is_broken_from_result().
+        self.gradient_norm = 0
+      else:
+        self.gradient_norm = None
+      for target in self.y:
+        for pi, param in enumerate(self.trainnet.train_params_vars):
+          if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
+          if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
             gparam = 0
-        if gparam == 0:
-          exclude.append(param)
-          print "exclude:", param.name
-          gparams.append(T.constant(0))
-          continue
-        self.gradients[target][param] = gparam
-        gparams.append(theano.Out(gparam, borrow = True))
-        if self.gradient_norm is not None:
-          self.gradient_norm += T.sum(gparam ** 2)
+          else:
+            try:
+              gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
+            except theano.gradient.DisconnectedInputError:
+              gparam = 0
+          if gparam == 0:
+            exclude.append(param)
+            print >> log.v4, "exclude:", self.name, param.name
+            gparams.append(T.constant(0))
+            continue
+          #update_specs['layers'].append(param.layer.name)
+          self.gradients[target][param] = gparam
+          gparams.append(theano.Out(gparam, borrow = True))
+          if self.gradient_norm is not None:
+            self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
 
     # initialize functions
     self.updater = None
-    self.device_update = device_update
+    #update_specs['layers'] = list(set(update_specs['layers']))
+    self.update_specs = update_specs
+    self.block_start = T.lscalar()
+    self.block_end = T.lscalar()
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -268,8 +313,10 @@ class Device():
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
 
-      if self.device_update:
-        self.updater = Updater.initFromConfig(config)
+      if self.update_specs['update_rule'] == 'global':
+        self.updater = Updater.initFromConfig(self.config)
+      elif self.update_specs['update_rule'] != 'none':
+        self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost"]
@@ -281,29 +328,27 @@ class Device():
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
 
-      if self.device_update:
+      if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
-        self.trainer = theano.function(inputs=[],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        updates=self.updater.getUpdateList(),
                                        on_unused_input='warn',
                                        no_default_updates=exclude,
                                        name="train_and_updater")
-
       else:
         self.train_outputs_format += ["gparams..."]
         outputs += gparams
-        self.trainer = theano.function(inputs=[],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        no_default_updates=False,
                                        on_unused_input='warn',
                                        name="train_distributed")
 
-
-      self.tester = theano.function(inputs=[],
+      self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
                                     givens=test_givens,
                                     on_unused_input='warn',
@@ -316,7 +361,7 @@ class Device():
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         if extract == "classification":
-          source.append(T.argmax(self.testnet.output['output'].y_m, axis = -1, keepdims = True))
+          source.append(self.testnet.output['output'].y_pred)
         elif extract == "log-posteriors":
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
@@ -378,10 +423,21 @@ class Device():
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    if task == "train" or task == "theano_graph":
-      output = self.trainer()
-    elif task == "eval":
-      output = self.tester()
+    batch_dim = self.x.get_value().shape[1]
+    block_size = self.block_size if self.block_size else batch_dim
+    if task == "train" or task == "theano_graph" or task == "eval":
+      func = self.tester if task == "eval" else self.trainer
+      output = []
+      batch_end = 0
+      while batch_end < batch_dim:
+        batch_start = batch_end
+        batch_end = min(batch_start + block_size, batch_dim)
+        block_output = func(batch_start, batch_end)
+        if not output:
+          output = block_output
+        else:
+          for j in xrange(len(block_output)):
+            output[j] += block_output[j]
     elif task == "extract" or task == "forward":
       output = self.extractor()
     elif task == 'classify':
@@ -403,7 +459,7 @@ class Device():
     #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
     #if model_broken_info:
     #  self.handle_model_broken(model_broken_info)
-      # Pass on, let the Engine decide what to do (or also just fail).
+    # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
 
@@ -480,7 +536,6 @@ class Device():
     """
     device = self.name
     config = self.config
-    device_update = self.device_update
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
@@ -493,7 +548,7 @@ class Device():
       rnn.initFaulthandler()
       rnn.initConfigJson()
       #rnn.maybeInitSprintCommunicator(device_proc=True)
-      self.process_inner(device, config, device_update, asyncTask)
+      self.process_inner(device, config, self.update_specs, asyncTask)
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except ProcConnectionDied:
       print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
@@ -507,7 +562,7 @@ class Device():
       sys.excepthook(*sys.exc_info())
       sys.exit(1)
 
-  def process_inner(self, device, config, device_update, asyncTask):
+  def process_inner(self, device, config, update_specs, asyncTask):
     """
     :type device: str
     :type config: Config.Config
@@ -538,7 +593,8 @@ class Device():
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
-    self.initialize(config, device_update)
+
+    self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(self.trainnet.train_params_vars))
     print >> log.v4, "Device %s proc, pid %i is ready for commands." % (device, os.getpid())
@@ -553,11 +609,15 @@ class Device():
         res = self._generic_exec(*args)
         output_queue.send("generic-exec-result")
         output_queue.send(res)
+      elif cmd == "reset":  # via self.reset()
+        if self.updater:
+          self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
-        network_description = input_queue.recv()
+        json_content = input_queue.recv()
         train_param_args = input_queue.recv()
-        if self.need_reinit(network_description, train_param_args):
-          self.initialize(config, device_update, network_description, train_param_args)
+        if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
+          self.initialize(config, update_specs=update_specs,
+                          json_content=json_content, train_param_args=train_param_args)
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
@@ -583,7 +643,7 @@ class Device():
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
-        if self.device_update:
+        if self.updater:
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
@@ -732,7 +792,7 @@ class Device():
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
       for target in self.y:
-        self.y[target].set_value(self.targets[target].flatten().astype('int32'), borrow = True)
+        self.y[target].set_value(self.targets[target].astype('int32'), borrow = True)
       self.i.set_value(self.input_index, borrow = True)
       self.j.set_value(self.output_index, borrow = True)
       if SprintCommunicator.instance is not None:
@@ -747,9 +807,9 @@ class Device():
       for target in self.targetkeys:
         if len(self.targets[target].shape) == 3:
           #numpy.swapaxes(self.targets[target], 1, 2).
-          self.input_queue.send(self.targets[target].reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
+          self.input_queue.send(self.targets[target]) #.reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
         else:
-          self.input_queue.send(self.targets[target].flatten())
+          self.input_queue.send(self.targets[target]) #.flatten())
       self.input_queue.send(self.input_index)
       self.input_queue.send(self.output_index)
       self.input_queue.send(self.tags)
@@ -761,7 +821,7 @@ class Device():
     :type learning_rate: float
     """
     if self.blocking:
-      if self.device_update:
+      if self.updater:
         self.updater.setLearningRate(learning_rate)
     else:
       assert self.main_pid == os.getpid()
@@ -793,11 +853,14 @@ class Device():
     print >> log.v4, "Device %s proc epoch time stats: total %s, %.02f%% computing, %.02f%% updating data" % \
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
-  def need_reinit(self, network_description=None, train_param_args=None):
+  def need_reinit(self, json_content, train_param_args=None):
     assert self.trainnet
-    if self.trainnet.description != network_description:
+    if isinstance(json_content, str):
+      import json
+      json_content = json.loads(json_content)
+    if self.trainnet.to_json_content() != json_content:
       print >> log.v3, "Device: reinit because network description differs. Diff:", \
-                       obj_diff_str(self.trainnet.description, network_description)
+                       dict_diff_str(self.trainnet.to_json_content(), json_content)
       return True
     if train_param_args is None:
       train_param_args = self.trainnet.get_train_param_args_default()
@@ -806,9 +869,9 @@ class Device():
       return True
     return False
 
-  def reinit(self, network_description=None, train_param_args=None):
+  def reinit(self, json_content, train_param_args=None):
     """
-    :type network_description: NetworkDescription.LayerNetworkDescription
+    :type json_content: dict[str] | str
     :type train_param_args: dict
     :returns len of train_params
     :rtype: int
@@ -817,12 +880,14 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     if self.blocking:
-      if self.need_reinit(network_description, train_param_args):
-        self.initialize(self.config, self.device_update, network_description, train_param_args)
+      if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
+        self.initialize(self.config, update_specs=self.update_specs,
+                        json_content=json_content,
+                        train_param_args=train_param_args)
       return len(self.trainnet.train_params_vars)
     else:
       self.input_queue.send("reinit")
-      self.input_queue.send(network_description)
+      self.input_queue.send(json_content)
       self.input_queue.send(train_param_args)
       r = self.output_queue.recv()
       assert r == "reinit-ready"
@@ -839,9 +904,14 @@ class Device():
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     # Reinit if needed.
-    self.reinit(network.description, train_param_args)
+    self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.targetkeys = network.cost.keys()
+    if self.blocking:
+      if self.updater:
+        self.updater.reset()
+    else:
+      self.input_queue.send('reset')
 
   def run(self, task):
     """
@@ -899,22 +969,31 @@ class Device():
       assert self.main_pid == os.getpid()
       assert self.result_called_count <= self.run_called_count
       if not self.proc.is_alive():
+        print >> log.v4, "Dev %s proc not alive anymore" % self.name
         return None, None
-      timeout = 60 * 10  # 10 minutes execution timeout
+      timeout = 60 * 60  # 60 minutes execution timeout
       while timeout > 0:
         try:
           if self.output_queue.poll(1):
             r = self.output_queue.recv()
-            if r == "error": return None
+            if r == "error":
+              print >> log.v5, "Dev %s proc reported error" % self.name
+              return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
+            assert output is not None
             return output, outputs_format
-        except ProcConnectionDied:
+        except ProcConnectionDied as e:
           # The process is dying or died.
+          print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout expired for device", self.name
+      try:
+        os.kill(self.proc.proc.pid, signal.SIGUSR1)
+      except Exception as e:
+        print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
 
   def terminate(self):
@@ -948,12 +1027,24 @@ class Device():
       import pynvml
     except ImportError as exc:
       return None
-    hmap = [2, 3, 1, 0]
-    handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
-    return pynvml.nvmlDeviceGetMemoryInfo(handle)
+    return None
+    #hmap = [2, 3, 1, 0]
+    #handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
+    #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i), (network.j, self.j)] + [ (network.y[k], self.y[k]) for k in self.y ]
+    if True or self.block_size:
+      i = self.block_start
+      j = self.block_end
+      return [(network.x, self.x[:,i:j]),
+              (network.i, self.i[:,i:j]),
+              (network.j, self.j[:,i:j])] + \
+             [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+    else:
+      return [(network.x, self.x),
+              (network.i, self.i),
+              (network.j, self.j)] + \
+             [ (network.y[k], self.y[k].flatten()) for k in self.y ]
   def make_input_givens(self, network):
     if network.recurrent:
       return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
@@ -964,4 +1055,4 @@ class Device():
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x), (network.y, self.y), (network.c, self.c), (network.i, self.i)]
+    return [(network.x, self.x), (network.y, self.y.flatten()), (network.c, self.c), (network.i, self.i)]

@@ -4,7 +4,7 @@ import re
 import os
 import sys
 from glob import glob
-from nose.tools import assert_less
+from nose.tools import assert_less, assert_in
 
 
 def build_env():
@@ -25,7 +25,7 @@ def build_env():
   return env_update
 
 
-def run_and_parse_last_fer(*args):
+def run(*args):
   args = list(args)
   assert os.path.exists(args[0]), "not found: %s" % args[0]
   args[0] = os.path.abspath(args[0])
@@ -33,6 +33,11 @@ def run_and_parse_last_fer(*args):
   p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env())
   out, _ = p.communicate()
   assert p.returncode == 0, "Return code is %i, std out/err: %s\n" % (p.returncode, out)
+  return out
+
+
+def run_and_parse_last_fer(*args):
+  out = run(*args)
   parsed_fer = None
   for l in out.splitlines():
     # example: epoch 5 score: 0.0231807245472 elapsed: 0:00:04 dev: score 0.0137521058997 error 0.00268961807423
@@ -45,6 +50,13 @@ def run_and_parse_last_fer(*args):
 
 
 def run_config_get_fer(config_filename):
+  cleanup_tmp_models(config_filename)
+  fer = run_and_parse_last_fer("rnn.py", config_filename)
+  cleanup_tmp_models(config_filename)
+  return fer
+
+
+def cleanup_tmp_models(config_filename):
   assert os.path.exists(config_filename)
   from Config import Config
   config = Config()
@@ -55,8 +67,6 @@ def run_config_get_fer(config_filename):
   assert model_filename.startswith("/tmp/")
   for f in glob(model_filename + ".*"):
     os.remove(f)
-  # Now start.
-  return run_and_parse_last_fer("rnn.py", config_filename)
 
 
 class TestDemos(object):
@@ -69,3 +79,8 @@ class TestDemos(object):
   def test_demo_task12ax(self):
     fer = run_config_get_fer("demos/demo-task12ax.config")
     assert_less(fer, 0.01)
+
+  def test_demo_iter_dataset_task12ax(self):
+    cleanup_tmp_models("demos/demo-task12ax.config")
+    out = run("demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
+    assert_in("Epoch 5.", out.splitlines())

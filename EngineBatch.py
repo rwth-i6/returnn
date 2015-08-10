@@ -87,6 +87,14 @@ class Batch:
     return self.data_shape[0] * self.data_shape[1]
 
   @property
+  def max_input_length(self):
+    return max([s.frame_length[0] for s in self.seqs])
+
+  @property
+  def max_output_length(self):
+    return max([s.frame_length[1] for s in self.seqs])
+
+  @property
   def max_num_frames_per_slice(self):
     return self.data_shape[0]
 

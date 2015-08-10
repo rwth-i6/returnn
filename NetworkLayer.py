@@ -1,7 +1,7 @@
 
-from NetworkHiddenLayer import ForwardLayer
+from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer
 from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
-from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, GRULayer, SRULayer, SRALayer
+from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, SimpleLstmLayer, GRULayer, SRULayer, SRALayer
 
 
 LayerClasses = {
@@ -12,9 +12,13 @@ LayerClasses = {
   'gru': GRULayer,
   'sru': SRULayer,
   'sra': SRALayer,
+  'chunking' : ChunkingLayer,
+  "state_to_act" : StateToAct,
+  "base" : BaseInterpolationLayer,
   'rec' : RecurrentUnitLayer,
   'lstm_opt': OptimizedLstmLayer,
-  'lstm_fast': FastLstmLayer
+  'lstm_fast': FastLstmLayer,
+  'lstm_simple': SimpleLstmLayer
 }
 
 
@@ -25,4 +29,4 @@ def get_layer_class(name):
   """
   if name in LayerClasses:
     return LayerClasses[name]
-  assert False, "invalid layer type: " + name
+  assert False, "invalid layer type: %s" % name

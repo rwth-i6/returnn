@@ -4,7 +4,6 @@ import numpy
 import sys
 import os
 from collections import OrderedDict
-import threading
 import h5py
 import json
 from Network import LayerNetwork
@@ -135,7 +134,6 @@ class Engine:
     :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
-    :type start_epoch: int | None
     """
     self.train_data = train_data
     self.dev_data = dev_data
@@ -156,6 +154,8 @@ class Engine:
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     self.exclude = config.int_list('exclude', [])
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
+    self.share_batches = config.bool('share_batches', False)
+    self.batch_variance = config.float('batch_variance', 0.0)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -200,6 +200,7 @@ class Engine:
         print >> log.v3, "Copy layer %s" % layer_name
         intelli_copy_layer(layer, network.hidden[layer_name])
       print >> log.v3, "Not copied: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys()))
+      print >> log.v3, "Also not copied output layers: %s" % sorted(network.output.keys())
 
     # Maybe load existing model parameters.
     elif last_model_hdf:
@@ -235,11 +236,10 @@ class Engine:
     network = self.network
     print >> log.v2, "Network layer topology:"
     print >> log.v2, "  input #:", network.n_in
-    if network.description:
-      for info in network.description.hidden_info:
-        print >> log.v2, "  " + info["layer_class"] + " #:", info["n_out"]
-    else:
-      print >> log.v2, "  ..."
+    for layer_name, layer in sorted(network.hidden.items()):
+      print >> log.v2, "  %s %s #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+    if not network.hidden:
+      print >> log.v2, "  (no hidden layers)"
     print >> log.v2, "  output #:", network.n_out
     print >> log.v2, "net params #:", network.num_params()
     print >> log.v2, "net trainable params:", network.train_params_vars
@@ -375,13 +375,14 @@ class Engine:
     training_devices = self.devices
     train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                      batch_size=self.batch_size,
-                                                     max_seqs=self.max_seqs)
+                                                     max_seqs=self.max_seqs,
+                                                     batch_variance=self.batch_variance)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
                               learning_rate=self.learning_rate, updater=self.updater,
                               eval_batch_size=self.update_batch_size,
-                              start_batch=start_batch, pad_batches=self.pad_batches,
+                              start_batch=start_batch, pad_batches=self.pad_batches, share_batches=self.share_batches,
                               exclude=self.exclude,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
     trainer.join()
@@ -407,7 +408,7 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size)
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               pad_batches=self.pad_batches,
                               report_prefix=self.get_epoch_str() + " eval")
