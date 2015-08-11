@@ -373,3 +373,13 @@ def parse_orthography_into_symbols(orthography):
         ret += c
   return ret
 
+
+def parse_orthography(orthography, end_symbol="END"):
+  """
+  For Speech. Full processing.
+  Parses "hello [HESITATION] there " -> list("hello ") + ["HESITATION"] + list(" there") + ["END"].
+  :param str orthography: e.g. "hello [HESITATION] there "
+  :rtype: list[str]
+  """
+  orthography = orthography.strip()
+  return parse_orthography_into_symbols(orthography) + [end_symbol]
