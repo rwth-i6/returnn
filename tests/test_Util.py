@@ -25,3 +25,14 @@ def test_cmd_stderr():
 
 def test_uniq():
   assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
+
+
+def test_parse_orthography_into_symbols():
+  assert_equal(list("hi"), parse_orthography_into_symbols("hi"))
+  assert_equal(list(" hello "), parse_orthography_into_symbols(" hello "))
+  assert_equal(list("  "), parse_orthography_into_symbols("  "))
+  assert_equal(list("hello ") + ["FOO"] + list(" bar "), parse_orthography_into_symbols("hello [FOO] bar "))
+
+
+def test_parse_orthography():
+  assert_equal(list("hi ") + ["HES"] + list(" there") + ["END"], parse_orthography("hi [HES] there "))
