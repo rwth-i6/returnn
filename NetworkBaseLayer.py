@@ -248,7 +248,7 @@ class SourceLayer(Container):
     self.set_attr('delay', delay)
 
 class Layer(Container):
-  def __init__(self, sources, n_out, index, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
+  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -270,6 +270,7 @@ class Layer(Container):
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
     self.set_attr('varreg', varreg)
+    self.y_in = y_in
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)

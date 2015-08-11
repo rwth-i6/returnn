@@ -36,6 +36,13 @@ class LayerNetwork(object):
     self.cost = {}
     self.errors = {}
 
+    for target in self.n_out:
+      if self.n_out[target][1] == 1:
+        self.y[target] = T.ivector('y')
+      else:
+        self.y[target] = T.imatrix('y')
+    self.y[target].n_out = self.n_out[target][0]
+
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
     """
@@ -167,6 +174,7 @@ class LayerNetwork(object):
       params.update(obj)
       params["mask"] = mask # overwrite
       params['index'] = index if not 'encoder' in obj else network.j
+      params['y_in'] = network.y
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
@@ -273,10 +281,11 @@ class LayerNetwork(object):
                    'depth' : model[layer_name].attrs['depth'],
                    'network': network,
                    'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
+        params['y_in'] = network.y
         layer_class = get_layer_class(cl)
         if layer_class.recurrent:
           network.recurrent = True
-          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth']:
+          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm']:
             if p in model[layer_name].attrs.keys():
               params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
@@ -309,12 +318,6 @@ class LayerNetwork(object):
       layer_class = LstmOutputLayer
     else:
       layer_class = FramewiseOutputLayer
-
-    if not 'n_symbols' in kwargs and not target in self.y:
-      if self.n_out[target][1] == 1:
-        self.y[target] = T.ivector('y')
-      else:
-        self.y[target] = T.imatrix('y')
 
     if 'n_symbols' in kwargs:
       targets = T.ivector()

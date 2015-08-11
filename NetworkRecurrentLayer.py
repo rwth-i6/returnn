@@ -176,6 +176,7 @@ class RecurrentUnitLayer(Layer):
                unit = 'lstm', # cell type
                n_dec = 0, # number of time steps to decode
                attention = False, # soft-attention
+               lm = False, # language model
                depth = 1,
                **kwargs):
     # if on cpu, we need to fall back to the theano version of the LSTM Op
@@ -200,6 +201,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('direction', direction)
     self.set_attr('carry_time', carry_time)
     self.set_attr('attention', attention)
+    self.set_attr('lm', lm)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     pact = strtoact(pact)
@@ -291,6 +293,16 @@ class RecurrentUnitLayer(Layer):
 
       non_sequences += [self.xc, self.zc]
 
+    if self.attrs['lm']:
+      if not 'target' in self.attrs:
+        self.attrs['target'] = 'classes'
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
+      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
+      self.add_param(self.W_lm_in, name = "W_lm_in")
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
+      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
+      self.add_param(self.W_lm_out, name = "W_lm_out")
+
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
@@ -313,10 +325,15 @@ class RecurrentUnitLayer(Layer):
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            #if self.attrs['attention']:
-            #  sequences = T.dot(self.xc, self.W_att_in)
-            #else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
+            if self.attrs['lm']:
+              if self.train_flag:
+                y_t = T.dot(T.extra_ops.to_one_hot(self.y_in[self.attrs['target']][1:],self.y_in[self.attrs['target']].n_out), self.W_lm_out)
+                sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x',0).repeat(self.index.shape[1],axis=0), y_t], axis=0)
+              else:
+                sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
+              outputs_info.append(T.eye(self.y_in[self.attrs['target']].n_out, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
+            else:
+              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
           else:
             sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in)
       else:
@@ -330,16 +347,24 @@ class RecurrentUnitLayer(Layer):
           xc = args[-2]
           zc = args[-1]
           args = args[:-2]
+        if self.attrs['lm']:
+          c_p = args[-1]
+          args = args[:-1]
         h_p = args[0]
         if self.depth == 1:
           i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
         else:
           h_p = self.make_consensus(h_p, axis = 1)
           i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
-        #if not self.W_in:
-        #  z_t += self.b
+        if not self.W_in:
+          z_t += self.b
         for W in self.Wp:
           h_p = pact(T.dot(h_p, W))
+        if self.attrs['lm']:
+          h_e = T.exp(T.dot(h_p, self.W_lm_in))
+          c_t = h_e / T.sum(h_e, axis=1, keepdims=True)
+          if not self.train_flag:
+            z_t += T.dot(c_p, self.W_lm_out)
         z_p = self.dot(h_p, W_re)
         if self.depth > 1: # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
@@ -357,14 +382,14 @@ class RecurrentUnitLayer(Layer):
             #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
             #w_t = f_t.dimshuffle(0,1,'x')
             #z_t = T.dot(self.xc.dimshuffle(1,2,0), w_t).dimshuffle(2,0,1).reshape(z_p.shape)
-            z_t = T.dot(T.sum(xc * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
+            z_t += T.dot(T.sum(xc * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t = T.dot(xc.dimshuffle(1,2,0), w_t).reshape(z_t.shape)
           act = unit.step(x_t, z_t, z_p, *args)
         if carry_time:
           c_t = T.nnet.sigmoid(self.dot(x_t, W_cr))
           for j in xrange(unit.n_act):
             act[j] = c_t * act[j] + (1 - c_t) * x_t
-        return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ]
+        return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ] + ([c_t] if self.attrs['lm'] else [])
 
       index_f = T.cast(index, theano.config.floatX)
       outputs = unit.scan(step,
@@ -416,6 +441,12 @@ class RecurrentUnitLayer(Layer):
                             self.b,
                             direction == -1,
                             self.attrs['truncation'])
+
+      if self.attrs['lm'] and self.train_flag:
+        self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2]))
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.index.flatten()], y_idx=self.y_in[self.attrs['target']][self.index.flatten()])
+        self.constraints += T.sum(nll)
+        outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:
         if s == 0:
           self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]
