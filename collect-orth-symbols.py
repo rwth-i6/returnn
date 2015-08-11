@@ -81,6 +81,9 @@ def collect_stats(options, iter_corpus):
     Stats.orth_syms_set.update(map(chr, range(ord("A"), ord("Z") + 1)))
 
   def cb(frame_len, orth):
+    if frame_len >= options.max_seq_frame_len:
+      return
+    
     Stats.total_frame_len += frame_len
 
     orth_syms = parse_orthography(orth)
@@ -149,6 +152,7 @@ def main(argv):
   argparser.add_argument('--dump_orth_syms', action='store_true')
   argparser.add_argument('--filter_orth_sym')
   argparser.add_argument('--filter_orth_syms_seq')
+  argparser.add_argument('--max_seq_frame_len', type=int, default=float('inf'))
   argparser.add_argument('--add_numbers', type=bool, default=True)
   argparser.add_argument('--add_lower_alphabet', type=bool, default=True)
   argparser.add_argument('--add_upper_alphabet', type=bool, default=True)
