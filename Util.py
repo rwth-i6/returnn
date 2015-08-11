@@ -344,3 +344,32 @@ def uniq(seq):
   idx = diffs.nonzero()
   return seq[idx]
 
+
+def parse_orthography_into_symbols(orthography):
+  """
+  For Speech.
+  Parses "hello [HESITATION] there " -> list("hello ") + ["HESITATION"] + list(" there ").
+  No pre/post-processing such as:
+  Spaces are kept as-is. No stripping at begin/end. (E.g. trailing spaces are not removed.)
+  No tolower/toupper.
+  Doesn't add [BEGIN]/[END] symbols or so.
+  Any such operations should be done explicitly in an additional function.
+  :param str orthography: example: "hello [HESITATION] there "
+  :rtype: list[str]
+  """
+  ret = []
+  in_special = False
+  for c in orthography:
+    if in_special:
+      if c == "]":
+        in_special = False
+      else:
+        ret[-1] += c
+    else:  # not in_special
+      if c == "[":
+        in_special = True
+        ret += [""]
+      else:
+        ret += c
+  return ret
+
