@@ -326,12 +326,14 @@ class RecurrentUnitLayer(Layer):
         if len(self.W_in) == 0:
           if self.depth == 1:
             if self.attrs['lm']:
+              y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
+              n_cls = self.y_in[self.attrs['target']].n_out
               if self.train_flag:
-                y_t = T.dot(T.extra_ops.to_one_hot(self.y_in[self.attrs['target']][:-1],self.y_in[self.attrs['target']].n_out), self.W_lm_out)
-                sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x',0).repeat(self.index.shape[1],axis=0), y_t], axis=0)
+                y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
+                sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0)
               else:
                 sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
-              outputs_info.append(T.eye(self.y_in[self.attrs['target']].n_out, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
+              outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
               sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
           else:
