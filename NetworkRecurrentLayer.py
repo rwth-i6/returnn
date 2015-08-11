@@ -327,7 +327,7 @@ class RecurrentUnitLayer(Layer):
           if self.depth == 1:
             if self.attrs['lm']:
               if self.train_flag:
-                y_t = T.dot(T.extra_ops.to_one_hot(self.y_in[self.attrs['target']][1:],self.y_in[self.attrs['target']].n_out), self.W_lm_out)
+                y_t = T.dot(T.extra_ops.to_one_hot(self.y_in[self.attrs['target']][:-1],self.y_in[self.attrs['target']].n_out), self.W_lm_out)
                 sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x',0).repeat(self.index.shape[1],axis=0), y_t], axis=0)
               else:
                 sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
@@ -364,7 +364,8 @@ class RecurrentUnitLayer(Layer):
           h_e = T.exp(T.dot(h_p, self.W_lm_in))
           c_t = h_e / T.sum(h_e, axis=1, keepdims=True)
           if not self.train_flag:
-            z_t += T.dot(c_p, self.W_lm_out)
+            #z_t += T.dot(c_p, self.W_lm_out)
+            z_t += self.W_lm_out[T.argmax(c_p,axis=1)]
         z_p = self.dot(h_p, W_re)
         if self.depth > 1: # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
