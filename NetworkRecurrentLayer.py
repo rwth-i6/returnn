@@ -72,7 +72,7 @@ class Unit(Container):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     try:
       xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
-    except:
+    except Exception:
       xc = z if not x else T.concatenate(x, axis = -1)
     outputs, _ = theano.scan(step,
                              #strict = True,
@@ -115,7 +115,7 @@ class LSTM(Unit):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     try:
       XS = [S.output[::-(2 * go_backwards - 1)] for S in x]
-    except:
+    except Exception:
       XS = [S[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
     j = i.dimshuffle(0,1,'x').repeat(self.n_units, axis=2)[::-(2 * go_backwards - 1)]
