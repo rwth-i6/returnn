@@ -131,6 +131,7 @@ class LSTMP(Unit):
     j = i.dimshuffle(0,1,'x').repeat(self.n_units, axis=2)[::-(2 * go_backwards - 1)]
     return [ result[0] * j, [result[2] * j[-1]] ] # TODO ...
 
+
 class GRU(Unit):
   def __init__(self, n_units, depth):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
@@ -296,9 +297,11 @@ class RecurrentUnitLayer(Layer):
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
+      l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
       self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
       self.add_param(self.W_lm_in, name = "W_lm_in")
+      l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
       self.add_param(self.W_lm_out, name = "W_lm_out")
@@ -328,7 +331,7 @@ class RecurrentUnitLayer(Layer):
             if self.attrs['lm']:
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
-              if self.train_flag:
+              if False and self.train_flag:
                 y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
                 sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0)
               else:
@@ -365,9 +368,9 @@ class RecurrentUnitLayer(Layer):
         if self.attrs['lm']:
           h_e = T.exp(T.dot(h_p, self.W_lm_in))
           c_t = h_e / T.sum(h_e, axis=1, keepdims=True)
-          if not self.train_flag:
-            #z_t += T.dot(c_p, self.W_lm_out)
-            z_t += self.W_lm_out[T.argmax(c_p,axis=1)]
+          if True or not self.train_flag:
+            z_t += T.dot(c_p, self.W_lm_out)
+            #z_t += self.W_lm_out[T.argmax(c_p,axis=1)]
         z_p = self.dot(h_p, W_re)
         if self.depth > 1: # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
@@ -447,7 +450,8 @@ class RecurrentUnitLayer(Layer):
 
       if self.attrs['lm'] and self.train_flag:
         self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2]))
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.index.flatten()], y_idx=self.y_in[self.attrs['target']][self.index.flatten()])
+        j = (self.index.flatten() > 0).nonzero()
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[j], y_idx=self.y_in[self.attrs['target']][j])
         self.constraints += T.sum(nll)
         outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:
