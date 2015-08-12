@@ -124,7 +124,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6)
-      ee = self.index * (T.max(pcx,axis=1) * T.log(T.max(pcx,axis=1))).reshape(self.index.shape)
+      ee = self.index * (T.max(pcx,axis=1) * T.log(T.max(pcx,axis=2)))
       #nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
       ce = nll.reshape(self.index.shape) * self.index # TB
