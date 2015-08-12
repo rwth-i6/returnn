@@ -77,10 +77,10 @@ class Container(object):
       array = grp[p][...]
       assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
       self.params[p].set_value(array)
-    for p in self.attrs.keys():
-      att = grp.attrs.get(p, None)
-      if att != None:
-        self.attrs[p] = att
+    #for p in self.attrs.keys():
+    #  att = grp.attrs.get(p, None)
+    #  if att != None:
+    #    self.attrs[p] = att
 
   def num_params(self):
     return sum([numpy.prod(v.get_value(borrow=True, return_internal_type=True).shape[0:]) for v in self.params.values()])

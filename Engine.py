@@ -90,9 +90,13 @@ class Engine:
       last = (None, None)
 
     if start_epoch == 1:
-      assert last[0] is None, "There is an existing model: %s" % (last,)
+      if last[0]:
+        print >> log.v4, "warning: there is an existing model: %s" % (last,)
+        last = (None, None)
     elif start_epoch > 1:
-      assert last[0] == start_epoch - 1, "start_epoch %i but there is %s" % (start_epoch, last)
+      if last[0] != start_epoch - 1:
+        print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, last)
+        last = (start_epoch - 1, existing_models[start_epoch - 1])
 
     cls._last_epoch_model = last
     return last

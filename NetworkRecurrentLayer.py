@@ -449,9 +449,17 @@ class RecurrentUnitLayer(Layer):
                             self.attrs['truncation'])
 
       if self.attrs['lm'] and self.train_flag:
-        self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2]))
-        j = (self.index.flatten() > 0).nonzero()
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[j], y_idx=self.y_in[self.attrs['target']][j])
+
+        #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
+        j = (self.index[::direction or 1].flatten() > 0).nonzero() # (TB)
+        #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C
+        #y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
+        #self.constraints += -T.sum(T.log(self.y_m[j,y_f[j]]))
+        #self.constraints += T.mean(T.sqr(self.y_m[j] - y_f[j]))
+
+        h_e = T.dot(outputs[0][::direction or 1], self.W_lm_in)
+        h_f = h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2]))
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j], y_idx=self.y_in[self.attrs['target']][j])
         self.constraints += T.sum(nll)
         outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:

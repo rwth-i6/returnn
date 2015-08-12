@@ -178,9 +178,11 @@ class Dataset(object):
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
       seq_index.sort(key=lambda x: get_seq_len(x)[0])  # sort by length
-    elif self.seq_ordering == 'random':
+    elif self.seq_ordering.startswith('random'):
+      tmp = self.seq_ordering.split(':')
+      nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
-      rnd_seed = epoch or 1
+      rnd_seed = ((epoch-1) / nth + 1) if epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
     else:

@@ -98,7 +98,7 @@ class FramewiseOutputLayer(OutputLayer):
   def initialize(self):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     self.y_m = self.output.reshape((self.output.shape[0]*self.output.shape[1],self.output.shape[2]))
-    if self.loss == 'ce': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
+    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':
     #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
     #  y_mmin = self.y_m.min(axis = 1, keepdims = True)
@@ -121,6 +121,16 @@ class FramewiseOutputLayer(OutputLayer):
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
       return T.sum(nll), known_grads
+    elif self.loss == 'entropy':
+      h_e = T.exp(self.y_m)
+      pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6)
+      ee = self.index * (T.max(pcx,axis=1) * T.log(T.max(pcx,axis=1))).reshape(self.index.shape)
+      #nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
+      ce = nll.reshape(self.index.shape) * self.index # TB
+      y = self.y.reshape(self.index.shape) * self.index
+      return T.sum(T.switch(T.gt(T.sum(y,axis=0),0), T.sum(ce, axis=0), -T.sum(ee, axis=0))), known_grads
+      #return T.switch(T.gt(T.sum(self.y_m[self.i]),0), T.sum(nll), -T.sum(pcx * T.log(pcx))), known_grads
     elif self.loss == 'priori':
       pcx = self.p_y_given_x[self.i, self.y[self.i]]
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
