@@ -311,8 +311,8 @@ class RecurrentUnitLayer(Layer):
       #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
 
     self.out_dec = self.index.shape[0]
-    if encoder and 'n_dec' in encoder[0].attrs:
-      self.out_dec = encoder[0].out_dec
+    #if encoder and 'n_dec' in encoder[0].attrs:
+    #  self.out_dec = encoder[0].out_dec
     # scan over sequence
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -322,7 +322,7 @@ class RecurrentUnitLayer(Layer):
         n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder.index.shape[1])
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder[0].index.shape[1])
         #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
         #offset = 0
         #for i in xrange(len(encoder)):

@@ -70,13 +70,14 @@ class Container(object):
       assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
         "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in grp:
-      assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
-        "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
-        " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
-        " got " + str(grp[p].shape) + ")"
-      array = grp[p][...]
-      assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
-      self.params[p].set_value(array)
+      if p in self.params:
+        assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
+          "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
+          " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
+          " got " + str(grp[p].shape) + ")"
+        array = grp[p][...]
+        assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
+        self.params[p].set_value(array)
     #for p in self.attrs.keys():
     #  att = grp.attrs.get(p, None)
     #  if att != None:
