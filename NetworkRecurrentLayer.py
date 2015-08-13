@@ -306,6 +306,10 @@ class RecurrentUnitLayer(Layer):
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
       self.add_param(self.W_lm_out, name = "W_lm_out")
 
+      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+      lmmask = T.cast(srng.binomial(n=1, p=0.05, size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2) * int(self.train_flag)
+      #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
+
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
@@ -331,11 +335,8 @@ class RecurrentUnitLayer(Layer):
             if self.attrs['lm']:
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
-              if False and self.train_flag:
-                y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
-                sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0)
-              else:
-                sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
+              y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
+              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * lmmask
               outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
               sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in)
@@ -361,16 +362,15 @@ class RecurrentUnitLayer(Layer):
         else:
           h_p = self.make_consensus(h_p, axis = 1)
           i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
-        if not self.W_in:
-          z_t += self.b
         for W in self.Wp:
           h_p = pact(T.dot(h_p, W))
         if self.attrs['lm']:
           h_e = T.exp(T.dot(h_p, self.W_lm_in))
           c_t = h_e / T.sum(h_e, axis=1, keepdims=True)
-          if True or not self.train_flag:
-            z_t += T.dot(c_p, self.W_lm_out)
-            #z_t += self.W_lm_out[T.argmax(c_p,axis=1)]
+          #z_t += T.dot(c_p, self.W_lm_out) * T.all(T.eq(z_t,0),axis=1,keepdims=True)
+          z_t += self.W_lm_out[T.argmax(c_p,axis=1)] * T.all(T.eq(z_t,0),axis=1,keepdims=True)
+        if not self.W_in:
+          z_t += self.b
         z_p = self.dot(h_p, W_re)
         if self.depth > 1: # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
@@ -451,16 +451,18 @@ class RecurrentUnitLayer(Layer):
       if self.attrs['lm'] and self.train_flag:
 
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
-        j = (self.index[::direction or 1].flatten() > 0).nonzero() # (TB)
+        j = (self.index[:-1].flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C
         #y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
         #self.constraints += -T.sum(T.log(self.y_m[j,y_f[j]]))
         #self.constraints += T.mean(T.sqr(self.y_m[j] - y_f[j]))
 
+        h_y = (self.y_in[self.attrs['target']].reshape(index.shape)).flatten()
         h_e = T.dot(outputs[0][::direction or 1], self.W_lm_in)
-        h_f = h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2]))
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j], y_idx=self.y_in[self.attrs['target']][j])
-        self.constraints += T.sum(nll)
+        h_f = T.exp(h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2])))[j]
+        self.constraints += self.index.shape[0] * T.sum(-T.log((h_f / T.sum(h_f,axis=1,keepdims=True))[:,h_y[j]]))
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j,self.y_in[self.attrs['target']][j]], y_idx=)
+        #self.constraints += T.sum(nll)
         outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:
         if s == 0:
