@@ -179,6 +179,7 @@ class Updater:
       eps = 1e-7
       if self.adasecant:
         grads = OrderedDict({p: self.net_train_param_deltas[target][p] / (self.net_train_param_deltas[target][p].norm(2) + eps) for p in self.net_train_param_deltas[target].keys()})
+        #grads = OrderedDict({p: self.net_train_param_deltas[target][p] for p in self.net_train_param_deltas[target].keys()})
         step = self.var(0, "adasecant_step")
       else:
         grads = self.net_train_param_deltas[target]
@@ -196,16 +197,16 @@ class Updater:
         #  upd[p] += self.momentum * self.deltas[target][param]
         if self.adasecant:
           # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-          self.use_adagrad = True
+          self.use_adagrad = False
           self.use_adadelta = False #True #True
           self.skip_nan_inf = True
-          self.start_var_reduction = 0
-          self.use_corrected_grad = True
-          self.decay = 0.95
+          self.start_var_reduction = -1
+          self.use_corrected_grad = True  #True
+          self.decay = 0.9 #0.95
           ### default
           self.delta_clip = 50.0
-          self.outlier_detection = True #True
-          self.gamma_clip = 1.8
+          self.outlier_detection = False # True #True
+          self.gamma_clip = None #1.8
           ### aggressive
           #self.delta_clip = None
           #self.outlier_detection = False
