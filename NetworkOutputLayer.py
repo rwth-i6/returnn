@@ -21,28 +21,31 @@ from NetworkRecurrentLayer import RecurrentLayer
 #  return out
 
 class OutputLayer(Layer):
-  def __init__(self, loss, y, **kwargs):
+  def __init__(self, loss, y, z=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
     """
     kwargs.setdefault("layer_class", "softmax")
     super(OutputLayer, self).__init__(**kwargs)
-    self.z = self.b
-    self.y = y
-    self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
-                                                            name="W_in_%s_%s" % (source.name, self.name)))
-                 for source in self.sources]
+    if not z:
+      self.z = self.b
+      self.y = y
+      self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
+                                                              name="W_in_%s_%s" % (source.name, self.name)))
+                   for source in self.sources]
 
-    assert len(self.sources) == len(self.masks) == len(self.W_in)
-    assert len(self.sources) > 0
-    for source, m, W in zip(self.sources, self.masks, self.W_in):
-      if source.attrs['sparse']:
-        self.z += W[T.cast(source.output[:,:,0], 'int32')]
-      elif m is None:
-        self.z += self.dot(source.output, W)
-      else:
-        self.z += self.dot(self.mass * m * source.output, W)
+      assert len(self.sources) == len(self.masks) == len(self.W_in)
+      assert len(self.sources) > 0
+      for source, m, W in zip(self.sources, self.masks, self.W_in):
+        if source.attrs['sparse']:
+          self.z += W[T.cast(source.output[:,:,0], 'int32')]
+        elif m is None:
+          self.z += self.dot(source.output, W)
+        else:
+          self.z += self.dot(self.mass * m * source.output, W)
+    else:
+      self.z = z
     assert self.z.ndim == 3
 
     #xs = [s.output for s in self.sources]
