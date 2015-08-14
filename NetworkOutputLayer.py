@@ -21,16 +21,17 @@ from NetworkRecurrentLayer import RecurrentLayer
 #  return out
 
 class OutputLayer(Layer):
-  def __init__(self, loss, y, z=None, **kwargs):
+  def __init__(self, loss, y, copy_input=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
     """
     kwargs.setdefault("layer_class", "softmax")
     super(OutputLayer, self).__init__(**kwargs)
-    if not z:
+    self.y = y
+    self.set_attr("copy_input", copy_input.name)
+    if not copy_input:
       self.z = self.b
-      self.y = y
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
                                                               name="W_in_%s_%s" % (source.name, self.name)))
                    for source in self.sources]
@@ -45,7 +46,7 @@ class OutputLayer(Layer):
         else:
           self.z += self.dot(self.mass * m * source.output, W)
     else:
-      self.z = z
+      self.z = copy_input.output
     assert self.z.ndim == 3
 
     #xs = [s.output for s in self.sources]
@@ -89,6 +90,8 @@ class OutputLayer(Layer):
         return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y[self.i]))
       else:
         return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
+    elif self.y.dtype.startswith('float'):
+      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
     else:
       raise NotImplementedError()
 
@@ -141,9 +144,12 @@ class FramewiseOutputLayer(OutputLayer):
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
-      y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
-      y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
-      return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
+      if self.y.dtype.startswith('int'):
+        y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
+        y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
+        return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
+      else:
+        return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
     else:
       assert False, "unknown loss: %s" % self.loss
 

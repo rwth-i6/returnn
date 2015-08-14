@@ -253,6 +253,10 @@ class Device(object):
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
+      elif self.trainnet.y[k].type == T.fvector().type:
+        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'float32'), borrow=True, name='y_%s' % k)
+      elif self.trainnet.y[k].type == T.fmatrix().type:
+        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'float32'), borrow=True, name='y_%s' % k)
       else:
         self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = theano.config.floatX), borrow=True, name='y_soft_%s' % k)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
@@ -637,7 +641,7 @@ class Device(object):
           SprintCommunicator.instance.segments = self.tags
         self.x.set_value(x.astype('float32'), borrow = True)
         for k in target_keys:
-          self.y[k].set_value(t[k].astype('int32'), borrow = True)
+          self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
         self.i.set_value(i.astype('int8'), borrow = True)
         self.j.set_value(j.astype('int8'), borrow = True)
@@ -793,7 +797,7 @@ class Device(object):
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
       for target in self.y:
-        self.y[target].set_value(self.targets[target].astype('int32'), borrow = True)
+        self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       self.i.set_value(self.input_index, borrow = True)
       self.j.set_value(self.output_index, borrow = True)
       if SprintCommunicator.instance is not None:
@@ -857,6 +861,8 @@ class Device(object):
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100)
 
   def need_reinit(self, json_content, train_param_args=None):
+    if self.config.bool('reinit', True) == False:
+      return False
     assert self.trainnet
     if isinstance(json_content, str):
       import json
@@ -1039,10 +1045,11 @@ class Device(object):
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
+      y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=len(self.y['classes'].get_value().shape)-1)) for k in self.y ]
+
       return [(network.x, self.x[:,i:j]),
               (network.i, self.i[:,i:j]),
-              (network.j, self.j[:,i:j])] + \
-             [ (network.y[k], self.y[k][:,i:j].flatten()) for k in self.y ]
+              (network.j, self.j[:,i:j])] + y_given
     else:
       return [(network.x, self.x),
               (network.i, self.i),
@@ -1058,4 +1065,4 @@ class Device(object):
   def make_ctc_givens(self, network):
     return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x), (network.y, self.y.flatten()), (network.c, self.c), (network.i, self.i)]
+    return [(network.x, self.x), (network.y, self.y.reshape([self.y.shape[0]*self.y.shape[1]] + self.y.shape[2:])), (network.c, self.c), (network.i, self.i)]

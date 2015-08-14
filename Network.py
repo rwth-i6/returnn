@@ -41,7 +41,7 @@ class LayerNetwork(object):
         self.y[target] = T.ivector('y')
       else:
         self.y[target] = T.imatrix('y')
-    self.y[target].n_out = self.n_out[target][0]
+      self.y[target].n_out = self.n_out[target][0]
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -165,6 +165,10 @@ class LayerNetwork(object):
             traverse(content, prev, network, index)
           base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
+      if 'copy_input' in obj:
+        index = traverse(content, obj['copy_input'], network, index)
+        obj['copy_input'] = network.hidden[obj['copy_input']] if obj['copy_input'] in network.hidden else network.output[obj['copy_input']]
+
       obj.pop('from', None)
       params = { 'sources': source,
                  'dropout' : 0.0,
@@ -248,6 +252,9 @@ class LayerNetwork(object):
             if not network.hidden.has_key(s):
               traverse(model, s, network, index)
             base.append(network.hidden[s])
+      if 'copy_input' in model[layer_name].attrs:
+        index = traverse(model, model[layer_name].attrs['copy_input'], network, index)
+        copy_input = network.hidden[model[layer_name].attrs['copy_input']]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
@@ -259,6 +266,8 @@ class LayerNetwork(object):
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         if 'base' in model[layer_name].attrs:
           params['base'] = base
+        if 'copy_input' in model[layer_name].attrs:
+          params['copy_input'] = copy_input
         if not 'target' in params:
           params['target'] = target
         params['sources'] = x_in
@@ -318,6 +327,14 @@ class LayerNetwork(object):
       layer_class = LstmOutputLayer
     else:
       layer_class = FramewiseOutputLayer
+
+    if 'dtype' in kwargs and kwargs['dtype'].startswith('float'):
+      if self.n_out[target][1] == 1:
+        self.y[target] = T.fvector('y')
+      else:
+        self.y[target] = T.fmatrix('y')
+      self.y[target].n_out = self.n_out[target][0]
+      kwargs.pop('dtype', None)
 
     if 'n_symbols' in kwargs:
       targets = T.ivector()
