@@ -177,6 +177,7 @@ class RecurrentUnitLayer(Layer):
                unit = 'lstm', # cell type
                n_dec = 0, # number of time steps to decode
                attention = False, # soft-attention
+               base = None,
                lm = False, # language model
                depth = 1,
                **kwargs):
@@ -205,6 +206,10 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('lm', lm)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
+    if base:
+      self.set_attr('base', ",".join([b.name for b in base]))
+    else:
+      base = encoder
     pact = strtoact(pact)
     if n_dec:
       self.set_attr('n_dec', n_dec)
@@ -271,7 +276,7 @@ class RecurrentUnitLayer(Layer):
       assert encoder, "attention networks are only defined for decoder networks"
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
       src = []
-      for e in encoder:
+      for e in base:
         src += [s.output for s in e.sources]
         n_in += sum([s.attrs['n_out'] for s in e.sources])
       self.xc = T.concatenate(src, axis=-1)
@@ -421,32 +426,6 @@ class RecurrentUnitLayer(Layer):
 
       if not isinstance(outputs, list):
         outputs = [outputs]
-
-      if self.attrs['attention'] and (unit_given == 'lstm' or unit_given == 'lstmp'):
-        # self.zc : T'
-        # outputs[0]: T
-        xr = outputs[0][::direction or 1]
-        #xr = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_out)
-        #zc = self.zc.dimshuffle(0,'x',1).repeat(self.index.shape[0], axis=1) + T.dot(xr, self.W_att_re).reshape((self.index.shape[0], self.index.shape[1])).dimshuffle('x',0,1).repeat(self.zc.shape[0], axis=0) # T'TB
-        zc = self.zc.dimshuffle(0,'x',1).repeat(self.index.shape[0], axis=1) + T.dot(xr, self.W_att_re).reshape((self.index.shape[0], self.index.shape[1])).dimshuffle('x',0,1).repeat(self.zc.shape[0], axis=0) # T'TB
-        ze = T.exp(zc)
-        w = ze / ze.sum(axis=0, keepdims = True) # T'TB
-        x_a = T.sum(self.xc.dimshuffle(0,'x',1,2).repeat(index.shape[0],axis=1) * w.dimshuffle(0,1,2,'x').repeat(n_in,axis=3), axis=0, keepdims=False) # TB(Dx4)
-        z_a = T.dot(x_a, self.W_att_in) # TODO: if you use this in computation, then Theano will get a circular dependency
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
-        #z_t = T.zeros_like(z_t)
-
-        outputs = unit.scan(step,
-                            [x_a],
-                            z_a, #sequences[s::self.attrs['sampling']], #z,
-                            non_sequences,
-                            index_f,
-                            outputs_info,
-                            W_re,
-                            [self.W_att_in],
-                            self.b,
-                            direction == -1,
-                            self.attrs['truncation'])
 
       if self.attrs['lm'] and self.train_flag:
 

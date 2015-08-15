@@ -61,7 +61,7 @@ class DualStateLayer(ForwardLayer):
     super(DualStateLayer, self).__init__(**kwargs)
     self.set_attr('acts', acts)
     self.set_attr('acth', acth)
-    self.activations = [strtoact(acts), strtoact(acth)]
+    self.activations = [strtoact(acth), strtoact(acts)]
     self.params = {}
     self.W_in = []
     self.act = [self.b,self.b]
