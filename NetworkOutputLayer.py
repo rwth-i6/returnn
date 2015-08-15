@@ -29,7 +29,8 @@ class OutputLayer(Layer):
     kwargs.setdefault("layer_class", "softmax")
     super(OutputLayer, self).__init__(**kwargs)
     self.y = y
-    self.set_attr("copy_input", copy_input.name)
+    if copy_input:
+      self.set_attr("copy_input", copy_input.name)
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -58,7 +59,10 @@ class OutputLayer(Layer):
     #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    self.i = (self.index.flatten() > 0).nonzero()
+    if self.y.dtype.startswith('int'):
+      self.i = (self.index.flatten() > 0).nonzero()
+    elif self.y.dtype.startswith('float'):
+      self.i = (self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2).flatten() > 0).nonzero()
     self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
@@ -91,11 +95,16 @@ class OutputLayer(Layer):
       else:
         return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
     elif self.y.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
+      return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
+      #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
+      #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
+      #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i])
+      #return T.sum(T.sqr(self.y_m[self.i] - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]]).reshape(self.y_m.shape)[self.i]))
+      #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
     else:
       raise NotImplementedError()
 
-
+from theano.ifelse import ifelse
 class FramewiseOutputLayer(OutputLayer):
   def __init__(self, **kwargs):
     super(FramewiseOutputLayer, self).__init__(**kwargs)
@@ -103,7 +112,9 @@ class FramewiseOutputLayer(OutputLayer):
 
   def initialize(self):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
-    self.y_m = self.output.reshape((self.output.shape[0]*self.output.shape[1],self.output.shape[2]))
+    nreps = T.switch(T.eq(self.output.shape[0], 1), self.index.shape[0], 1)
+    output = self.output.repeat(nreps,axis=0)
+    self.y_m = output.flatten() if self.y.dtype.startswith('float') else output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':
     #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
@@ -149,7 +160,12 @@ class FramewiseOutputLayer(OutputLayer):
         y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
-        return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
+        #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
+        return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i])), known_grads
+        #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
+        #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
+        #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
+        #return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
     else:
       assert False, "unknown loss: %s" % self.loss
 

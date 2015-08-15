@@ -64,7 +64,12 @@ class Container(object):
     """
     :type head: h5py.File
     """
-    grp = head[self.name]
+    try:
+      grp = head[self.name]
+    except:
+      print >> log.v3, "warning: unable to load parameters for layer", self.name
+      return
+
     if grp.attrs['class'] != self.layer_class:
       from NetworkLayer import get_layer_class
       assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
@@ -78,6 +83,8 @@ class Container(object):
         array = grp[p][...]
         assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
         self.params[p].set_value(array)
+      else:
+        print >> log.v4, "unable to match parameter %s in %s" % (p, self.name)
     #for p in self.attrs.keys():
     #  att = grp.attrs.get(p, None)
     #  if att != None:

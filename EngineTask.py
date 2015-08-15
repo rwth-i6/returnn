@@ -538,6 +538,7 @@ class TrainTaskThread(TaskThread):
             consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_updates) / num_updates) for net,dev in zip(hypnets,self.devices) ], axis = 0)
           else:
             print >> log.v4, "warning: no update available for parameter", basenet[i]
+            consnet[i] = basenet[i].get_value()
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)

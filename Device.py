@@ -1045,7 +1045,7 @@ class Device(object):
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
-      y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=len(self.y['classes'].get_value().shape)-1)) for k in self.y ]
+      y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=len(self.y[k].get_value().shape)-1)) for k in self.y ]
 
       return [(network.x, self.x[:,i:j]),
               (network.i, self.i[:,i:j]),

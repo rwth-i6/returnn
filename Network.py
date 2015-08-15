@@ -343,7 +343,7 @@ class LayerNetwork(object):
       kwargs['n_out'] = self.n_out[target][0]
       targets = self.c if self.loss == 'ctc' else self.y[target]
     kwargs['index'] = self.j
-    self.output[name] = layer_class(name=name, target=target, y = targets, **kwargs)
+    self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
     if target != "null":
       self.errors[target] = self.output[name].errors()
       self.declare_train_params()
