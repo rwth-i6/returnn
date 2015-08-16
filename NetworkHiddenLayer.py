@@ -65,13 +65,18 @@ class DualStateLayer(ForwardLayer):
     self.params = {}
     self.W_in = []
     self.act = [self.b,self.b]
-    for s in self.sources:
+    for s,m in zip(self.sources,self.masks):
       assert len(s.act) == 2
       for i,a in enumerate(s.act):
         self.W_in.append(self.add_param(self.create_forward_weights(s.attrs['n_out'],
                                                                     self.attrs['n_out'],
                                                                     name="W_in_%s_%s_%d" % (s.name, self.name, i))))
-        self.act[i] += self.dot(s.act[i], self.W_in[-1])
+        if s.attrs['sparse']:
+          self.act[i] += self.W_in[-1][T.cast(s.act[i], 'int32')].reshape((s.act[i].shape[0],s.act[i].shape[1],s.act[i].shape[2] * self.W_in[-1].shape[1]))
+        elif m is None:
+          self.act[i] += self.dot(s.act[i], self.W_in[-1])
+        else:
+          self.act[i] += self.dot(self.mass * m * s.act[i], self.W_in[-1])
     for i in xrange(2):
       self.act[i] = self.activations[i](self.act[i])
     self.make_output(self.act[0])
