@@ -184,7 +184,7 @@ class Updater:
       else:
         grads = self.net_train_param_deltas[target]
       for param in grads.keys():
-        deltas = grads[param]
+        deltas = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
         #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
         if self.gradient_clip > 0:
           # Note that there is also theano.gradient.grad_clip, which would clip it already
