@@ -43,16 +43,21 @@ class ForwardLayer(HiddenLayer):
 
 
 class StateToAct(ForwardLayer):
-  def __init__(self, **kwargs):
+  def __init__(self, dual=False, **kwargs):
     kwargs['n_out'] = 1
     kwargs.setdefault("layer_class", "state_to_act")
     super(StateToAct, self).__init__(**kwargs)
+    self.set_attr("dual", dual)
     self.params = {}
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ]
-    self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    if dual:
+      self.make_output(self.act[1])
+      self.act[0] = T.tanh(self.act[1])
+    else:
+      self.make_output(self.act[0])
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
 class DualStateLayer(ForwardLayer):
@@ -80,6 +85,18 @@ class DualStateLayer(ForwardLayer):
     for i in xrange(2):
       self.act[i] = self.activations[i](self.act[i])
     self.make_output(self.act[0])
+
+
+class StateLayer(DualStateLayer):
+  def __init__(self, acts = "relu", **kwargs):
+    kwargs.setdefault("layer_class", "state")
+    kwargs['acth'] = 'identity'
+    super(StateToAct, self).__init__(acts, **kwargs)
+    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
+    self.act[0] = T.tanh(self.act[1])
+    self.make_output(self.act[0])
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
 
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements

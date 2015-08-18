@@ -292,11 +292,11 @@ class LayerNetwork(object):
                    'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
+        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth']:
+          if p in model[layer_name].attrs.keys():
+            params[p] = model[layer_name].attrs[p]
         if layer_class.recurrent:
           network.recurrent = True
-          for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm']:
-            if p in model[layer_name].attrs.keys():
-              params[p] = model[layer_name].attrs[p]
           if 'encoder' in model[layer_name].attrs:
             params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         return network.add_layer(layer_class(**params))
