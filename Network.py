@@ -207,7 +207,7 @@ class LayerNetwork(object):
       for k in model['n_out'].attrs:
         dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
         n_out[k] = [model['n_out'].attrs[k], 1]
-    except:
+    except Exception:
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
@@ -277,7 +277,7 @@ class LayerNetwork(object):
       else:
         try:
           act = model[layer_name].attrs['activation']
-        except:
+        except Exception:
           act = 'logistic'
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],

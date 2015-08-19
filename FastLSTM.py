@@ -155,7 +155,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
     }
 
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
@@ -259,7 +259,6 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return f.read()
 
-  #TODO: use i (also in grad!)
   def c_code(self, node, name, input_names, output_names, sub):
     n_inputs = (len(input_names) - 4) / 2
     V_h, c, b, i = input_names[:4]
@@ -323,7 +322,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
       float * d_ptr = (x == T - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
-      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x);
+      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x, %(i)s);
     }
     """ % locals()
 

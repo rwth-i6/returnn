@@ -1056,10 +1056,7 @@ class Device(object):
               (network.j, self.j)] + \
              [ (network.y[k], self.y[k].flatten()) for k in self.y ]
   def make_input_givens(self, network):
-    if network.recurrent:
-      return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
-    else:
-      return [(network.x, self.x)]
+    return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
   def make_sprint_givens(self, network):
     return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
   def make_ctc_givens(self, network):

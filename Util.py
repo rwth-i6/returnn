@@ -84,7 +84,7 @@ def terminal_size(): # this will probably work on linux only
     try:
       import fcntl, termios, struct, os
       cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ,'1234'))
-    except:
+    except Exception:
         return
     return cr
   cr = ioctl_GWINSZ(0) or ioctl_GWINSZ(1) or ioctl_GWINSZ(2)
@@ -93,7 +93,7 @@ def terminal_size(): # this will probably work on linux only
         fd = os.open(os.ctermid(), os.O_RDONLY)
         cr = ioctl_GWINSZ(fd)
         os.close(fd)
-    except:
+    except Exception:
         pass
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
@@ -313,6 +313,7 @@ def interrupt_main():
     # Not main thread. This will just exit the thread.
     sys.exit(1)
   sys.exited = True  # Don't do it twice.
+  sys.exited_frame = sys._getframe()
   if is_main_thread:
     raise KeyboardInterrupt
   else:

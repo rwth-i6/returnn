@@ -14,6 +14,33 @@ import numpy
 sys.stderr = sys.stdout
 log.initialize()
 
+def install_sigint_handler():
+  import better_exchook
+  import signal
+  import Util
+
+  def signal_handler(signal, frame):
+    print "\nSIGINT at:"
+    better_exchook.print_traceback(frame)
+    print ""
+
+    # It's likely that SIGINT was caused by Util.interrupt_main().
+    # We might have a stacktrace from there.
+    if hasattr(sys, "exited_frame"):
+      print "interrupt_main via:"
+      better_exchook.print_traceback(sys.exited_frame)
+      print ""
+    else:
+      print "\nno sys.exited_frame\n"
+
+    # Normal exception instead so that Nose will catch it.
+    # Nose doesn't catch KeyboardInterrupt for some reason.
+    raise Exception("Got SIGINT!")
+
+  signal.signal(signal.SIGINT, signal_handler)
+
+install_sigint_handler()
+
 
 def create_first_epoch(config_filename):
   config = Config()
@@ -40,6 +67,7 @@ def test_forward():
     activation relu
     bidirectional false
     model model
+    log_verbosity 5
     """)
 
   create_first_epoch("config")
