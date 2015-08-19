@@ -51,15 +51,11 @@ def test_grad():
 
   print "calling f"
   Z_val, d_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
-  print numpy.asarray(Z_val), '\n', numpy.asarray(d_val), '\n', numpy.asarray(DX_val), '\n', \
+  #print numpy.asarray(Z_val), '\n', numpy.asarray(d_val), '\n', numpy.asarray(DX_val), '\n', \
     numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
-  print "----------"
-  print "----------"
-  print "----------"
-  print numpy.asarray(DX_val)
-  print "----------"
-  print "----------"
-  print "----------"
+  #print "----------"
+  #print numpy.asarray(DX_val)
+  #print "----------"
   print "done calling f"
 
   print "verifying grad..."
@@ -118,7 +114,7 @@ def test_compatible_with_other_implementation():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
+  Z, _, _ = LSTMOp2Instance(V_h, c, b, i, X, W)
   DX = T.grad(Z.sum(), X)
   DW = T.grad(Z.sum(), W)
   DV_h = T.grad(Z.sum(), V_h)
@@ -142,8 +138,6 @@ def test_compatible_with_other_implementation():
   b_val = 0.1 * numpy.array([1,2,3,4,5,6,7,8,9,10,11,12], dtype='float32')
   c_val = numpy.zeros((2,3), dtype='float32')
   i_val = numpy.ones((3,2),dtype='int8')
-
-  n_cells = 3
 
   def _step(x_t, c_tm1, y_tm1):
     z_t = T.dot(x_t, W) + T.dot(y_tm1, V_h) + b
@@ -172,8 +166,8 @@ def test_compatible_with_other_implementation():
 
   for f, s in zip(vals_fast, vals_simple):
     assert numpy.allclose(f, s)
-  print numpy.asarray(Z_val, 'float32')
-  print Z2_val
+  #print numpy.asarray(Z_val, 'float32')
+  #print Z2_val
   print "sucess"
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
@@ -227,19 +221,32 @@ def test_multiple_inputs():
   g = theano.function(inputs=[X, X2, W, V_h, c, b, i], outputs=[Z2, DX2, DW2])
   h = theano.function(inputs=[V_h, c, b, i], outputs=[Z3, DV_h3])
   h_res = [numpy.asarray(A, dtype='float32') for A in h(V_h_val, c_val, b_val, i_val)]
-  print h_res[0], h_res[1]
+  #print h_res[0], h_res[1]
   f_res = [numpy.asarray(A, dtype='float32') for A in f(X_val, W_val, V_h_val, c_val, b_val, i_val)]
   g_res = [numpy.asarray(A, dtype='float32') for A in g(X_val, X_val2, W_val, V_h_val, c_val, b_val, i_val)]
   for A1, A2 in zip(f_res, g_res):
     assert numpy.allclose(A1, A2)
-  print f_res[0], g_res[0]
+  #print f_res[0], g_res[0]
 
   print "success"
 
 if __name__ == '__main__':
-  #test_compatible_with_other_implementation()
-  #test_multiple_inputs()
-  #print "calling test_grad()"
-  #test_grad()
-  #print "calling test_grad_large()"
+  print "calling test_compatible_with_other_implementation()"
+  test_compatible_with_other_implementation()
+  print "test_compatible_with_other_implementation(): success"
+  print "------------------"
+
+  print "calling test_multiple_inputs()"
+  test_multiple_inputs()
+  print "test_multiple_inputs(): success"
+  print "------------------"
+
+  print "calling test_grad()"
+  test_grad()
+  print "test_grad(): success"
+  print "------------------"
+
+  print "calling test_grad_large()"
   test_grad_large()
+  print "test_grad_large(): success"
+  print "------------------"
