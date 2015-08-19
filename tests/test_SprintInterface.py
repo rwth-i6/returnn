@@ -67,6 +67,7 @@ def test_forward():
     activation relu
     bidirectional false
     model model
+    log_verbosity 5
     """)
 
   create_first_epoch("config")
