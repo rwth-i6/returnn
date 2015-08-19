@@ -796,7 +796,7 @@ class Device(object):
       update_start_time = time.time()
       self.x.set_value(self.data, borrow = True)
       #self.t.set_value(self.targets, borrow = True)
-      for target in self.trainnet.objective:
+      for target in self.targets:
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       self.i.set_value(self.input_index, borrow = True)
       self.j.set_value(self.output_index, borrow = True)
