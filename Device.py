@@ -1061,8 +1061,8 @@ class Device(object):
     else:
       return [(network.x, self.x)]
   def make_sprint_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)]
+    return [(network.x, self.x), (network.i, self.i), (network.j, self.j)]
   def make_ctc_givens(self, network):
-    return [(network.x, self.x), (network.c, self.c), (network.i, self.i)]
+    return [(network.x, self.x), (network.c, self.c), (network.i, self.i), (network.j, self.j)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x), (network.y, self.y.reshape([self.y.shape[0]*self.y.shape[1]] + self.y.shape[2:])), (network.c, self.c), (network.i, self.i)]
+    return [(network.x, self.x), (network.y, self.y.reshape([self.y.shape[0]*self.y.shape[1]] + self.y.shape[2:])), (network.c, self.c), (network.i, self.i), (network.j, self.j)]
