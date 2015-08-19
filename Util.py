@@ -313,6 +313,7 @@ def interrupt_main():
     # Not main thread. This will just exit the thread.
     sys.exit(1)
   sys.exited = True  # Don't do it twice.
+  sys.exited_frame = sys._getframe()
   if is_main_thread:
     raise KeyboardInterrupt
   else:
