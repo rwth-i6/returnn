@@ -115,7 +115,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta, y, x, %(V_h)s, y, x, epsilon, false, true);
       }
 
-      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder);
+      do_lstm_bwd(delta, epsilon, %(Z)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
 
     }
 
@@ -222,7 +222,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
       }
       float * d_ptr = (x == X_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
-      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x);
+      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x, %(i)s);
     }
     """ % locals()
 
