@@ -138,7 +138,7 @@ __global__ void tanh_kernel(float * dst, int len)
 }
 
 __global__ void lstm_kernel(float * data, const float * old_state, bool old_state_strided,
- float * output, float * state_out, int n_cells, int n_batch)
+ float * output, float * state_out, int n_cells, int n_batch, const float * i)
 {
 	//layout: 
 	//data[0*n_cells..1*n_cells-1] : input gate
@@ -151,24 +151,22 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 	int idx = threadIdx.x + blockDim.x * blockIdx.x;
 	while (idx < n_cells * n_batch)
 	{
-		int start = (idx/n_cells) * 4 * n_cells + idx % n_cells;
+	    int batch_idx = idx / n_cells;
+		int start = batch_idx * 4 * n_cells + idx % n_cells;
+		float i_batch = i[batch_idx];
 
 		//input, forget and output gates
 		float inpGate = 1.f / (1.f + expf(-data[start]));
 		float fgtGate = 1.f / (1.f + expf(-data[start + n_cells]));
 		float outGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
 		float state = inpGate * tanhf(data[start + 3 * n_cells]);
-		if(old_state_strided)
-		{
-		    state += fgtGate * old_state[start];
-		}
-		else
-		{
-		    state += fgtGate * old_state[idx];
-		}
+		float old_state_batch = old_state_strided ? old_state[start] : old_state[idx];
+
+		state += fgtGate * old_state_batch;
+		state = state * i_batch + old_state_batch * (1.f - i_batch);
 
 		//cell output
-		output[idx] = outGate * tanhf(state);
+		output[idx] = outGate * tanhf(state) * i_batch;
 
 		data[start] = inpGate;
 		data[start + n_cells] = fgtGate;
@@ -184,7 +182,7 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 }
 
 __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * old_state,
-  bool old_state_strided, const float * Y, int n_cells, int n_batch)
+  bool old_state_strided, const float * Y, int n_cells, int n_batch, const float * i)
 {
 	//layout: 
 	//delta[0*n_cells..1*n_cells-1] : input gate
@@ -202,6 +200,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		int batch_offset = batch_idx * 4 * n_cells;
 		int cell_offset = idx % n_cells;
 		int start = batch_offset + cell_offset;
+		float i_batch = i[batch_idx];
 
 		float inpGate = delta[start];
 		float fgtGate = delta[start + n_cells];
@@ -223,24 +222,21 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		}
 		
 		//delta_output
-		delta[start + 2 * n_cells] = outGate * (1.f - outGate) * gc * eps;
+		delta[start + 2 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
 		
 		//epsilon_c
 		float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
-		if (next_epsilon)
-		{
-			epsilon_c += next_epsilon[idx];
-		}
-		epsilon[idx] = epsilon_c * fgtGate;
+		epsilon_c += next_epsilon[idx];
+		epsilon[idx] = epsilon_c * fgtGate * i_batch + next_epsilon[idx] * (1.f - i_batch);
 
 		//delta_cell
-		delta[start + 3 * n_cells] = inpGate * (1.f - (gzc * gzc)) * epsilon_c;
+		delta[start + 3 * n_cells] = inpGate * (1.f - (gzc * gzc)) * epsilon_c * i_batch;
 
 		//delta_forget
-		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c;
+		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c * i_batch;
 
 		//delta_input
-		delta[start] = inpGate * (1.f - inpGate) * gzc * epsilon_c;
+		delta[start] = inpGate * (1.f - inpGate) * gzc * epsilon_c * i_batch;
 
 		idx += gridDim.x * blockDim.x;
 	}
@@ -266,7 +262,7 @@ void do_tanh(CudaNdarray * a, int y, int x)
 	tanh_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_a, size);
 }
 
-void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x)
+void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x, const CudaNdarray * i)
 {		
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
@@ -278,15 +274,16 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float
 	float * data_H = data_ptr(H, y, x);
 	const float * data_prev = CudaNdarray_DEV_DATA(prev);
 	const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
-	float * data_out = data_ptr(out, y, x);	
+	float * data_out = data_ptr(out, y, x);
+	const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
 	//TODO tune launch configuration
-	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch);
+	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i);
 }
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
 //Dd stores the derivative w.r.t. end state
 void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray * Y, const CudaNdarray * Dd,
- const CudaNdarray * c, int y, int x, bool rightBorder)
+ const CudaNdarray * c, int y, int x, bool rightBorder, const CudaNdarray * i)
 {
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
@@ -300,9 +297,10 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 	const float * data_next_epsilon = rightBorder ? CudaNdarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
 	const float * data_old_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : CudaNdarray_DEV_DATA(c);
 	const float * data_Y = data_ptr(Y, y, x);
+	const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
 	//TODO tune launch configuration
 	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_delta, data_epsilon, data_next_epsilon,
-	 data_old_state, x > 0, data_Y, n_cells, n_batch);
+	 data_old_state, x > 0, data_Y, n_cells, n_batch, data_i);
 }
 
 void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y, int x)
