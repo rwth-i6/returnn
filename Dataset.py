@@ -271,6 +271,9 @@ class Dataset(object):
     """
     return 1
 
+  def get_target_type(self, target):
+    return 'int32'
+
   def have_seqs(self):
     return self.num_seqs > 0
 

@@ -25,7 +25,7 @@ def assign_dev_data(device, dataset, batches, recurrent=False, pad_batches=False
 
   output_shape = { k : shape[:] for k in dataset.get_target_list() }
   for k in output_shape:
-    if dataset.get_target_dim(k) > 1:
+    if dataset.get_target_type(k) != 'int32':
       output_shape[k] += [dataset.get_target_dim(k)]
   import time
   ts = time.time()

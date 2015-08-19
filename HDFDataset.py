@@ -22,6 +22,7 @@ class HDFDataset(CachedDataset):
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
     self.tags = []; """ :type: list[str] """
+    self.target_type = {}
 
   def add_file(self, filename):
     """
@@ -84,6 +85,7 @@ class HDFDataset(CachedDataset):
     if 'targets' in fin:
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
+        self.target_type[name] = fin['targets/data'][name].dtype
         if tdim == 1 and fin['targets/data'][name].dtype != 'float32':
           self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
         else:
@@ -132,6 +134,9 @@ class HDFDataset(CachedDataset):
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[sorted_seq_idx]
     return self.tags[ids]
+
+  def get_target_type(self, target):
+    return self.target_type[target]
 
   def len_info(self):
     return ", ".join(["HDF dataset",
