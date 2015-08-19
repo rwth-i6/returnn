@@ -66,7 +66,7 @@ class Container(object):
     """
     try:
       grp = head[self.name]
-    except:
+    except Exception:
       print >> log.v3, "warning: unable to load parameters for layer", self.name
       return
 
