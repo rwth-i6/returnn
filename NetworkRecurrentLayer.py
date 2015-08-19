@@ -119,7 +119,7 @@ class LSTM(Unit):
       XS = [S[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i] + XS + W_in))
     j = i.dimshuffle(0,1,'x').repeat(self.n_units, axis=2)[::-(2 * go_backwards - 1)]
-    return [ result[0] * j, [result[2] * j[-1]] ] # TODO: evil hack to reduce noise in output while i is not used
+    return [ result[0] * j, result[2] * j[-1] ] # TODO: evil hack to reduce noise in output while i is not used
 
 
 class LSTMP(Unit):
@@ -129,7 +129,7 @@ class LSTMP(Unit):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i)
     j = i.dimshuffle(0,1,'x').repeat(self.n_units, axis=2)[::-(2 * go_backwards - 1)]
-    return [ result[0] * j, [result[2] * j[-1]] ] # TODO ...
+    return [ result[0] * j, result[2] * j[-1] ] # TODO ...
 
 
 class GRU(Unit):
