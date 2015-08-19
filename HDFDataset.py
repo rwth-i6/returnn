@@ -84,7 +84,7 @@ class HDFDataset(CachedDataset):
     if 'targets' in fin:
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
-        if tdim == 1:
+        if tdim == 1 and fin['targets/data'][name].dtype != 'float32':
           self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
         else:
           self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1

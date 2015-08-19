@@ -118,7 +118,7 @@ class LSTM(Unit):
     except Exception:
       XS = [S[::-(2 * go_backwards - 1)] for S in x]
     result = LSTMOp2Instance(*([W_re, outputs_info[1], b, i[::-(2 * go_backwards - 1)]] + XS + W_in))
-    return [ result[0], result[2].dimshuffle('x',0,1) ] # TODO: evil hack to reduce noise in output while i is not used
+    return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 
 class LSTMP(Unit):
@@ -127,7 +127,7 @@ class LSTMP(Unit):
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
-    return [ result[0], result[2].dimshuffle('x',0,1) ] # TODO ...
+    return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 
 class GRU(Unit):
@@ -412,15 +412,6 @@ class RecurrentUnitLayer(Layer):
                           self.b,
                           direction == -1,
                           self.attrs['truncation'])
-
-
-      #outputs, _ = theano.scan(step,
-      #              #strict = True,
-      #              name = "scan_%s"%self.name,
-      #              truncate_gradient = self.attrs['truncation'],
-      #              go_backwards = (direction == -1),
-      #              sequences = [ x[s::self.attrs['sampling']], sequences[s::self.attrs['sampling']], T.cast(index, theano.config.floatX) ],
-      #              outputs_info = outputs_info)
 
       if not isinstance(outputs, list):
         outputs = [outputs]
