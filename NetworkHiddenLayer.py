@@ -147,12 +147,13 @@ class CentroidLayer(ForwardLayer):
   recurrent=True
   layer_class="centroid"
 
-  def __init__(self, centroids, output_scores=False, **kwargs):
+  def __init__(self, centroids, output_scores=False, entropy_weight=1.0, **kwargs):
     assert centroids
     kwargs['n_out'] = centroids.z.get_value().shape[1]
     super(CentroidLayer, self).__init__(**kwargs)
     self.set_attr('centroids', centroids.name)
     self.set_attr('output_scores', output_scores)
+    self.set_attr('entropy_weight', entropy_weight)
     W_att_ce = self.add_param(self.create_forward_weights(centroids.z.get_value().shape[1], 1), name = "W_att_ce_%s" % self.name)
     W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
 
@@ -160,11 +161,11 @@ class CentroidLayer(ForwardLayer):
     ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(centroids.z.get_value().shape[0],axis=2)) # TBQ1
     att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
     if output_scores:
-      self.make_output(att)
+      self.make_output(att.flatten(ndim=3))
     else:
       self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
 
-    self.constraints += 0.1 * -T.sum(att * T.log(att))
+    self.constraints += entropy_weight * -T.sum(att * T.log(att))
 
     if 'dual' in centroids.attrs:
       self.act = [ T.tanh(self.output), self.output ]

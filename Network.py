@@ -300,7 +300,7 @@ class LayerNetwork(object):
                    'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset']:
+        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight']:
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:
