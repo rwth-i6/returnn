@@ -1,30 +1,23 @@
 
-from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer, DualStateLayer, StateLayer, HDF5DataLayer, CentroidLayer
-from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
-from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, SimpleLstmLayer, GRULayer, SRULayer, SRALayer
+LayerClasses = {}
 
+def _initLayerClasses():
+  global LayerClasses
+  from inspect import isclass
+  import NetworkHiddenLayer
+  import NetworkRecurrentLayer
+  import NetworkLstmLayer
+  mods = [NetworkHiddenLayer, NetworkRecurrentLayer, NetworkLstmLayer]
+  for mod in mods:
+    for _, clazz in vars(mod).items():
+      if not isclass(clazz): continue
+      layer_class = getattr(clazz, "layer_class", None)
+      if not layer_class: continue
+      LayerClasses[layer_class] = clazz
+  from NetworkHiddenLayer import ForwardLayer
+  LayerClasses["forward"] = ForwardLayer  # used in crnn.config format
 
-LayerClasses = {
-  'forward': ForwardLayer,  # used in crnn.config format
-  'hidden': ForwardLayer,  # used in JSON format
-  'recurrent': RecurrentLayer,
-  'lstm': LstmLayer,
-  'gru': GRULayer,
-  'sru': SRULayer,
-  'sra': SRALayer,
-  'chunking' : ChunkingLayer,
-  'dual' : DualStateLayer,
-  'state' : StateLayer,
-  'hdf5' : HDF5DataLayer,
-  'centroid' : CentroidLayer,
-  "state_to_act" : StateToAct,
-  "base" : BaseInterpolationLayer,
-  'rec' : RecurrentUnitLayer,
-  'lstm_opt': OptimizedLstmLayer,
-  'lstm_fast': FastLstmLayer,
-  'lstm_simple': SimpleLstmLayer
-}
-
+_initLayerClasses()
 
 def get_layer_class(name):
   """

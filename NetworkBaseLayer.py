@@ -9,12 +9,13 @@ __author__ = 'az'
 
 class Container(object):
   rng_seed = 1234
+  layer_class = None
 
   @classmethod
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
-  def __init__(self, layer_class, name="", network=None,
+  def __init__(self, layer_class=None, name="", network=None,
                train_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                substitute_param_expr=None):
@@ -27,7 +28,8 @@ class Container(object):
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
-    self.layer_class = layer_class.encode("utf8")
+    if layer_class:
+      self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
     self.train_flag = train_flag
     self.depth = depth
@@ -245,8 +247,10 @@ class Container(object):
 
 
 class SourceLayer(Container):
+  layer_class = "source"
+
   def __init__(self, n_out, x_out, delay = 0, sparse = False, name=""):
-    super(SourceLayer, self).__init__(layer_class='source', name=name)
+    super(SourceLayer, self).__init__(layer_class=self.layer_class, name=name)
     if not delay:
       self.output = x_out
     else:
@@ -254,6 +258,7 @@ class SourceLayer(Container):
     self.set_attr('n_out', n_out)
     self.set_attr('sparse', sparse)
     self.set_attr('delay', delay)
+
 
 class Layer(Container):
   def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):

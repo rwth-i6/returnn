@@ -11,7 +11,6 @@ class HiddenLayer(Layer):
     """
     :type activation: str | list[str]
     """
-    kwargs.setdefault("layer_class", "hidden")
     super(HiddenLayer, self).__init__(**kwargs)
     self.set_attr('activation', activation.encode("utf8"))
     self.activation = strtoact(activation)
@@ -23,8 +22,9 @@ class HiddenLayer(Layer):
 
 
 class ForwardLayer(HiddenLayer):
+  layer_class = "hidden"
+
   def __init__(self, sparse_window = 1, **kwargs):
-    kwargs.setdefault("layer_class", "hidden")
     super(ForwardLayer, self).__init__(**kwargs)
     self.set_attr('sparse_window', sparse_window) # TODO this is ugly
     self.attrs['n_out'] = sparse_window * kwargs['n_out']
@@ -43,15 +43,16 @@ class ForwardLayer(HiddenLayer):
 
 
 class DualStateLayer(ForwardLayer):
+  layer_class = "dual"
+
   def __init__(self, acts = "relu", acth = "tanh", **kwargs):
-    kwargs.setdefault("layer_class", "dual")
     super(DualStateLayer, self).__init__(**kwargs)
     self.set_attr('acts', acts)
     self.set_attr('acth', acth)
     self.activations = [strtoact(acth), strtoact(acts)]
     self.params = {}
     self.W_in = []
-    self.act = [self.b,self.b]
+    self.act = [self.b,self.b]  # TODO b is not in params anymore?
     for s,m in zip(self.sources,self.masks):
       assert len(s.act) == 2
       for i,a in enumerate(s.act):
@@ -68,10 +69,12 @@ class DualStateLayer(ForwardLayer):
       self.act[i] = self.activations[i](self.act[i])
     self.make_output(self.act[0])
 
+
 class StateToAct(ForwardLayer):
+  layer_class = "state_to_act"
+
   def __init__(self, dual=False, **kwargs):
     kwargs['n_out'] = 1
-    kwargs.setdefault("layer_class", "state_to_act")
     super(StateToAct, self).__init__(**kwargs)
     self.set_attr("dual", dual)
     self.params = {}
@@ -85,11 +88,13 @@ class StateToAct(ForwardLayer):
       self.make_output(self.act[0])
     self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
+
 class StateLayer(DualStateLayer):
+  layer_class = "state"
+
   def __init__(self, acts = "relu", **kwargs):
-    kwargs.setdefault("layer_class", "state")
     kwargs['acth'] = 'identity'
-    super(StateToAct, self).__init__(acts, **kwargs)
+    super(StateToAct, self).__init__(acts, **kwargs)  # TODO wrong super __init__, wrong base class?
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act[0] = T.tanh(self.act[1])
     self.make_output(self.act[0])
@@ -99,8 +104,9 @@ class StateLayer(DualStateLayer):
 
 class HDF5DataLayer(Layer):
   recurrent=True
+  layer_class = "hdf5"
+
   def __init__(self, filename, dset, **kwargs):
-    kwargs.setdefault("layer_class", "hdf5")
     kwargs['n_out'] = 1
     kwargs.pop('activation')
     super(HDF5DataLayer, self).__init__(**kwargs)
@@ -117,8 +123,9 @@ class HDF5DataLayer(Layer):
 
 class CentroidLayer(ForwardLayer):
   recurrent=True
+  layer_class="centroid"
+
   def __init__(self, centroids, output_scores=False, **kwargs):
-    kwargs.setdefault("layer_class", "centroid")
     assert centroids
     kwargs['n_out'] = centroids.z.get_value().shape[1]
     super(CentroidLayer, self).__init__(**kwargs)
@@ -137,10 +144,11 @@ class CentroidLayer(ForwardLayer):
 
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
+  layer_class = "base"
+
   def __init__(self, base=None, method="softmax", **kwargs):
     assert base, "missing base in " + kwargs['name']
     kwargs['n_out'] = 1
-    kwargs.setdefault("layer_class", "base")
     super(BaseInterpolationLayer, self).__init__(**kwargs)
     self.set_attr('base', ",".join([b.name for b in base]))
     self.set_attr('method', method)
@@ -158,16 +166,17 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
       #w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
     else:
       assert False, "invalid method %s in %s" % (method, self.name)
-    
+
     self.set_attr('n_out', sum([b.attrs['n_out'] for b in base]))
     self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
 
 class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
+  layer_class = "chunking"
+
   def __init__(self, chunk_size=1, **kwargs):
     assert chunk_size >= 1
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) * chunk_size
-    kwargs.setdefault("layer_class", "chunking")
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
     z = T.concatenate([s.output for s in self.sources], axis=2) # BTD
@@ -189,8 +198,9 @@ from theano.tensor.nnet import conv
 import numpy
 
 class ConvPoolLayer(ForwardLayer):
+  layer_class = "convpool"
+
   def __init__(self, dx, dy, fx, fy, **kwargs):
-    kwargs.setdefault("layer_class", "convpool")
     kwargs['n_out'] = fx * fy
     super(ConvPoolLayer, self).__init__(**kwargs)
     self.set_attr('dx', dx) # receptive fields
