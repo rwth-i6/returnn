@@ -69,7 +69,7 @@ class DualStateLayer(ForwardLayer):
     self.activations = [strtoact(acth), strtoact(acts)]
     self.params = {}
     self.W_in = []
-    self.act = [self.b,self.b]
+    self.act = [self.b,self.b]  # TODO b is not in params anymore?
     for s,m in zip(self.sources,self.masks):
       assert len(s.act) == 2
       for i,a in enumerate(s.act):
@@ -91,7 +91,7 @@ class StateLayer(DualStateLayer):
   def __init__(self, acts = "relu", **kwargs):
     kwargs.setdefault("layer_class", "state")
     kwargs['acth'] = 'identity'
-    super(StateToAct, self).__init__(acts, **kwargs)
+    super(StateToAct, self).__init__(acts, **kwargs)  # TODO wrong super __init__, wrong base class?
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act[0] = T.tanh(self.act[1])
     self.make_output(self.act[0])
@@ -121,7 +121,7 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
       #w = T.nnet.softmax(h).reshape(z.shape).dimshuffle(2,1,0,'x').repeat(self.base.shape[2], axis=3) # TBT'D
     else:
       assert False, "invalid method %s in %s" % (method, self.name)
-    
+
     self.set_attr('n_out', sum([b.attrs['n_out'] for b in base]))
     self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
