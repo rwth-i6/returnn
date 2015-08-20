@@ -121,6 +121,28 @@ class HDF5DataLayer(Layer):
     h5.close()
 
 
+class CentroidLayer2(ForwardLayer):
+  recurrent=True
+  layer_class="centroid2"
+
+  def __init__(self, centroids, output_scores=False, **kwargs):
+    assert centroids
+    kwargs['n_out'] = centroids.z.get_value().shape[1]
+    super(CentroidLayer2, self).__init__(**kwargs)
+    self.set_attr('centroids', centroids.name)
+    self.set_attr('output_scores', output_scores)
+    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1)) # TBQD
+    if output_scores:
+      self.make_output(T.sum(diff, axis=3))
+    else:
+      self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
+
+    if 'dual' in centroids.attrs:
+      self.act = [ T.tanh(self.output), self.output ]
+    else:
+      self.act = [ self.output, self.output ]
+
+
 class CentroidLayer(ForwardLayer):
   recurrent=True
   layer_class="centroid"
@@ -131,11 +153,18 @@ class CentroidLayer(ForwardLayer):
     super(CentroidLayer, self).__init__(**kwargs)
     self.set_attr('centroids', centroids.name)
     self.set_attr('output_scores', output_scores)
-    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1)) # TBQD
+    W_att_ce = self.add_param(self.create_forward_weights(centroids.z.get_value().shape[1], 1), name = "W_att_ce_%s" % self.name)
+    W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
+
+    zc = centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1) # TBQD
+    ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(centroids.z.get_value().shape[0],axis=2)) # TBQ1
+    att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
     if output_scores:
-      self.make_output(T.sum(diff, axis=3))
+      self.make_output(att)
     else:
-      self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
+      self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
+
+    self.constraints += 0.1 * -T.sum(att * T.log(att))
 
     if 'dual' in centroids.attrs:
       self.act = [ T.tanh(self.output), self.output ]
