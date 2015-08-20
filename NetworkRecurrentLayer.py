@@ -105,7 +105,8 @@ class LSTME(Unit):
     a_t = CI(z[:,3 * self.slice:])
     s_t = (a_t * u_t + s_p * r_t)
     h_t = CO(s_t) * b_t
-    return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
+    #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
+    return [ h_t, s_t ]
 
 
 class LSTM(Unit):
