@@ -401,7 +401,7 @@ class Device(object):
           source.append(T.reshape(hidden.output[target], (hidden.output[target].shape[0] * hidden.output[target].shape[1], hidden.output[target].shape[2])))
         elif extract in self.testnet.hidden:
           hidden = self.testnet.hidden[extract]
-          source.append(T.reshape(hidden.output, (hidden.output.shape[0] * hidden.output.shape[1], hidden.output.shape[2])))
+          source.append(T.reshape(hidden.output, (hidden.index.shape[0] * hidden.index.shape[1], hidden.output.shape[2])))
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],

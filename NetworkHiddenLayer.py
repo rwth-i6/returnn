@@ -42,24 +42,6 @@ class ForwardLayer(HiddenLayer):
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
 
-class StateToAct(ForwardLayer):
-  def __init__(self, dual=False, **kwargs):
-    kwargs['n_out'] = 1
-    kwargs.setdefault("layer_class", "state_to_act")
-    super(StateToAct, self).__init__(**kwargs)
-    self.set_attr("dual", dual)
-    self.params = {}
-    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
-    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ]
-    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
-    if dual:
-      self.make_output(self.act[1])
-      self.act[0] = T.tanh(self.act[1])
-    else:
-      self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
-
-
 class DualStateLayer(ForwardLayer):
   def __init__(self, acts = "relu", acth = "tanh", **kwargs):
     kwargs.setdefault("layer_class", "dual")
@@ -86,6 +68,22 @@ class DualStateLayer(ForwardLayer):
       self.act[i] = self.activations[i](self.act[i])
     self.make_output(self.act[0])
 
+class StateToAct(ForwardLayer):
+  def __init__(self, dual=False, **kwargs):
+    kwargs['n_out'] = 1
+    kwargs.setdefault("layer_class", "state_to_act")
+    super(StateToAct, self).__init__(**kwargs)
+    self.set_attr("dual", dual)
+    self.params = {}
+    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
+    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    if dual:
+      self.make_output(self.act[1])
+      self.act[0] = T.tanh(self.act[1])
+    else:
+      self.make_output(self.act[0])
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 class StateLayer(DualStateLayer):
   def __init__(self, acts = "relu", **kwargs):
@@ -113,19 +111,24 @@ class HDF5DataLayer(Layer):
     data = h5[dset][...]
     self.z = theano.shared(value=data.astype('float32'), borrow=True, name=self.name)
     self.make_output(self.z) # QD
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
     h5.close()
 
 
 class CentroidLayer(ForwardLayer):
   recurrent=True
-  def __init__(self, centroids, **kwargs):
+  def __init__(self, centroids, output_scores=False, **kwargs):
     kwargs.setdefault("layer_class", "centroid")
     assert centroids
     kwargs['n_out'] = centroids.z.get_value().shape[1]
     super(CentroidLayer, self).__init__(**kwargs)
     self.set_attr('centroids', centroids.name)
-    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z) # TBQD
-    self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
+    self.set_attr('output_scores', output_scores)
+    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1)) # TBQD
+    if output_scores:
+      self.make_output(T.sum(diff, axis=3))
+    else:
+      self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
 
     if 'dual' in centroids.attrs:
       self.act = [ T.tanh(self.output), self.output ]

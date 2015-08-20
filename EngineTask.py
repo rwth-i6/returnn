@@ -699,7 +699,7 @@ class HDFForwardTaskThread(TaskThread):
     def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)
       if not "inputs" in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numTimesteps'], features.shape[2]), dtype='f', maxshape=(None, features.shape[2]))
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[2]), dtype='f', maxshape=(None, features.shape[2]))
       if self.merge.keys():
         merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
         for i in xrange(len(features)):
