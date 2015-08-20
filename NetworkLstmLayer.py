@@ -6,9 +6,12 @@ from NetworkRecurrentLayer import RecurrentLayer
 from ActivationFunctions import strtoact
 from FastLSTM import LSTMOp2Instance
 
+
 class LstmLayer(RecurrentLayer):
+  layer_class = "lstm"
+
   def __init__(self, n_out, sharpgates='none', **kwargs):
-    kwargs.setdefault("layer_class", "lstm")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs.setdefault("compile", False)
     projection = kwargs.get("projection", None)
@@ -148,8 +151,10 @@ class LstmLayer(RecurrentLayer):
 
 #faster but needs much more memory
 class OptimizedLstmLayer(RecurrentLayer):
+  layer_class = "lstm_opt"
+
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "lstm_opt")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -345,6 +350,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       self.constraints =  self.attrs['varreg'] * (T.mean(energy) - T.sqrt(6.)) #T.mean((energy - 6.0)**2) # * T.var(energy) #(T.sqrt(T.var(energy)) - T.sqrt(6.0))**2
     return super(OptimizedLstmLayer, self).make_constraints()
 
+
 #warning: highly experimental (not recommended for productive use yet)
 #showed a speedup from 81 sec/epoch to 11 sec/epoch on demo dataset
 #TODO:
@@ -353,8 +359,10 @@ class OptimizedLstmLayer(RecurrentLayer):
 # 3) support multiple sources, dropout, sharpgates, ...
 # 4) use two CUDA streams for concurrent bidirectional execution
 class FastLstmLayer(RecurrentLayer):
+  layer_class = "lstm_fast"
+
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "lstm_fast")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -380,9 +388,12 @@ class FastLstmLayer(RecurrentLayer):
     self.state = [d]
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
+
 class SimpleLstmLayer(RecurrentLayer):
+  layer_class = "lstm_simple"
+
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "lstm_simple")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -422,9 +433,12 @@ class SimpleLstmLayer(RecurrentLayer):
 
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
+
 class GRULayer(RecurrentLayer):
+  layer_class = "gru"
+
   def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "gru")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 3
@@ -524,9 +538,12 @@ class GRULayer(RecurrentLayer):
     self.act = totact #[::-(2 * self.attrs['reverse'] - 1)] # tbdm
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
+
 class SRULayer(RecurrentLayer):
+  layer_class = "sru"
+
   def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, carry_time = False, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "sru")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 3
@@ -657,8 +674,10 @@ class SRULayer(RecurrentLayer):
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 class SRALayer(RecurrentLayer):
+  layer_class = "sra"
+
   def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", "sra")
+    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 2
