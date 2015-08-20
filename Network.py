@@ -168,6 +168,9 @@ class LayerNetwork(object):
       if 'copy_input' in obj:
         index = traverse(content, obj['copy_input'], network, index)
         obj['copy_input'] = network.hidden[obj['copy_input']] if obj['copy_input'] in network.hidden else network.output[obj['copy_input']]
+      if 'centroids' in obj:
+        index = traverse(content, obj['centroids'], network, index)
+        obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
 
       obj.pop('from', None)
       params = { 'sources': source,
@@ -255,6 +258,9 @@ class LayerNetwork(object):
       if 'copy_input' in model[layer_name].attrs:
         index = traverse(model, model[layer_name].attrs['copy_input'], network, index)
         copy_input = network.hidden[model[layer_name].attrs['copy_input']]
+      if 'centroids' in model[layer_name].attrs:
+        index = traverse(model, model[layer_name].attrs['centroids'], network, index)
+        centroids = network.hidden[model[layer_name].attrs['centroids']]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
@@ -266,6 +272,8 @@ class LayerNetwork(object):
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         if 'base' in model[layer_name].attrs:
           params['base'] = base
+        if 'centroids' in model[layer_name].attrs:
+          params['centroids'] = centroids
         if 'copy_input' in model[layer_name].attrs:
           params['copy_input'] = copy_input
         if not 'target' in params:
@@ -292,13 +300,17 @@ class LayerNetwork(object):
                    'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth']:
+        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset']:
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
+        if 'encoder' in model[layer_name].attrs:
+          params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
+        if 'base' in model[layer_name].attrs:
+          params['base'] = base
+        if 'centroids' in model[layer_name].attrs:
+          params['centroids'] = centroids
         if layer_class.recurrent:
           network.recurrent = True
-          if 'encoder' in model[layer_name].attrs:
-            params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         return network.add_layer(layer_class(**params))
     for layer_name in model:
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
@@ -334,7 +346,7 @@ class LayerNetwork(object):
       else:
         self.y[target] = T.fmatrix('y')
       self.y[target].n_out = self.n_out[target][0]
-      kwargs.pop('dtype', None)
+    dtype = kwargs.pop('dtype', 'int32')
 
     if 'n_symbols' in kwargs:
       targets = T.ivector()
@@ -344,6 +356,7 @@ class LayerNetwork(object):
       targets = self.c if self.loss == 'ctc' else self.y[target]
     kwargs['index'] = self.j
     self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
+    self.output[name].set_attr('dtype', dtype)
     if target != "null":
       self.errors[target] = self.output[name].errors()
       self.declare_train_params()

@@ -104,7 +104,6 @@ class OutputLayer(Layer):
     else:
       raise NotImplementedError()
 
-from theano.ifelse import ifelse
 class FramewiseOutputLayer(OutputLayer):
   def __init__(self, **kwargs):
     super(FramewiseOutputLayer, self).__init__(**kwargs)

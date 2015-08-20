@@ -99,6 +99,40 @@ class StateLayer(DualStateLayer):
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
 
 
+class HDF5DataLayer(Layer):
+  recurrent=True
+  def __init__(self, filename, dset, **kwargs):
+    kwargs.setdefault("layer_class", "hdf5")
+    kwargs['n_out'] = 1
+    kwargs.pop('activation')
+    super(HDF5DataLayer, self).__init__(**kwargs)
+    self.set_attr('filename', filename)
+    self.set_attr('dset', dset)
+    import h5py
+    h5 = h5py.File(filename, "r")
+    data = h5[dset][...]
+    self.z = theano.shared(value=data.astype('float32'), borrow=True, name=self.name)
+    self.make_output(self.z) # QD
+    h5.close()
+
+
+class CentroidLayer(ForwardLayer):
+  recurrent=True
+  def __init__(self, centroids, **kwargs):
+    kwargs.setdefault("layer_class", "centroid")
+    assert centroids
+    kwargs['n_out'] = centroids.z.get_value().shape[1]
+    super(CentroidLayer, self).__init__(**kwargs)
+    self.set_attr('centroids', centroids.name)
+    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z) # TBQD
+    self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
+
+    if 'dual' in centroids.attrs:
+      self.act = [ T.tanh(self.output), self.output ]
+    else:
+      self.act = [ self.output, self.output ]
+
+
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
   def __init__(self, base=None, method="softmax", **kwargs):
     assert base, "missing base in " + kwargs['name']
