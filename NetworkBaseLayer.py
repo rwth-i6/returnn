@@ -15,7 +15,7 @@ class Container(object):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
-  def __init__(self, layer_class, name="", network=None,
+  def __init__(self, layer_class=None, name="", network=None,
                train_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                substitute_param_expr=None):
@@ -28,7 +28,8 @@ class Container(object):
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
-    self.layer_class = layer_class.encode("utf8")
+    if layer_class:
+      self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
     self.train_flag = train_flag
     self.depth = depth

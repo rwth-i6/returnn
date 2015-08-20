@@ -14,7 +14,6 @@ class RecurrentLayer(HiddenLayer):
   layer_class = "recurrent"
 
   def __init__(self, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "tanh")
     super(RecurrentLayer, self).__init__(**kwargs)
     self.set_attr('reverse', reverse)
@@ -188,7 +187,6 @@ class RecurrentUnitLayer(Layer):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
     unit = eval(unit.upper())(n_out, depth)
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("n_out", unit.n_out)
     kwargs.setdefault("depth", depth)
     kwargs.pop("activation", None)

@@ -21,12 +21,13 @@ from NetworkRecurrentLayer import RecurrentLayer
 #  return out
 
 class OutputLayer(Layer):
+  layer_class = "softmax"
+
   def __init__(self, loss, y, copy_input=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
     """
-    kwargs.setdefault("layer_class", "softmax")
     super(OutputLayer, self).__init__(**kwargs)
     self.y = y
     if copy_input:

@@ -11,7 +11,6 @@ class LstmLayer(RecurrentLayer):
   layer_class = "lstm"
 
   def __init__(self, n_out, sharpgates='none', **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs.setdefault("compile", False)
     projection = kwargs.get("projection", None)
@@ -154,7 +153,6 @@ class OptimizedLstmLayer(RecurrentLayer):
   layer_class = "lstm_opt"
 
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -362,7 +360,6 @@ class FastLstmLayer(RecurrentLayer):
   layer_class = "lstm_fast"
 
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -393,7 +390,6 @@ class SimpleLstmLayer(RecurrentLayer):
   layer_class = "lstm_simple"
 
   def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 4
@@ -438,7 +434,6 @@ class GRULayer(RecurrentLayer):
   layer_class = "gru"
 
   def __init__(self, n_out, encoder = None, mode = "cho", n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 3
@@ -543,7 +538,6 @@ class SRULayer(RecurrentLayer):
   layer_class = "sru"
 
   def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, carry_time = False, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 3
@@ -677,7 +671,6 @@ class SRALayer(RecurrentLayer):
   layer_class = "sra"
 
   def __init__(self, n_out, encoder = None, psize = 0, pact = 'relu', pdepth = 1, n_dec = 0, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs.setdefault("activation", "sigmoid")
     kwargs["compile"] = False
     kwargs["n_out"] = n_out * 2

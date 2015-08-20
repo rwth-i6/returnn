@@ -11,7 +11,6 @@ class HiddenLayer(Layer):
     """
     :type activation: str | list[str]
     """
-    kwargs.setdefault("layer_class", self.layer_class)
     super(HiddenLayer, self).__init__(**kwargs)
     self.set_attr('activation', activation.encode("utf8"))
     self.activation = strtoact(activation)
@@ -48,7 +47,6 @@ class StateToAct(ForwardLayer):
 
   def __init__(self, dual=False, **kwargs):
     kwargs['n_out'] = 1
-    kwargs.setdefault("layer_class", self.layer_class)
     super(StateToAct, self).__init__(**kwargs)
     self.set_attr("dual", dual)
     self.params = {}
@@ -67,7 +65,6 @@ class DualStateLayer(ForwardLayer):
   layer_class = "dual"
 
   def __init__(self, acts = "relu", acth = "tanh", **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     super(DualStateLayer, self).__init__(**kwargs)
     self.set_attr('acts', acts)
     self.set_attr('acth', acth)
@@ -96,7 +93,6 @@ class StateLayer(DualStateLayer):
   layer_class = "state"
 
   def __init__(self, acts = "relu", **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs['acth'] = 'identity'
     super(StateToAct, self).__init__(acts, **kwargs)  # TODO wrong super __init__, wrong base class?
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
@@ -112,7 +108,6 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
   def __init__(self, base=None, method="softmax", **kwargs):
     assert base, "missing base in " + kwargs['name']
     kwargs['n_out'] = 1
-    kwargs.setdefault("layer_class", self.layer_class)
     super(BaseInterpolationLayer, self).__init__(**kwargs)
     self.set_attr('base', ",".join([b.name for b in base]))
     self.set_attr('method', method)
@@ -141,7 +136,6 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
   def __init__(self, chunk_size=1, **kwargs):
     assert chunk_size >= 1
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) * chunk_size
-    kwargs.setdefault("layer_class", self.layer_class)
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
     z = T.concatenate([s.output for s in self.sources], axis=2) # BTD
@@ -166,7 +160,6 @@ class ConvPoolLayer(ForwardLayer):
   layer_class = "convpool"
 
   def __init__(self, dx, dy, fx, fy, **kwargs):
-    kwargs.setdefault("layer_class", self.layer_class)
     kwargs['n_out'] = fx * fy
     super(ConvPoolLayer, self).__init__(**kwargs)
     self.set_attr('dx', dx) # receptive fields
