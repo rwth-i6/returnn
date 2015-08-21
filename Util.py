@@ -318,6 +318,7 @@ def interrupt_main():
     raise KeyboardInterrupt
   else:
     thread.interrupt_main()
+    sys.exit(1)  # And exit the thread.
 
 
 def try_run(func, args=(), catch_exc=Exception, default=None):
