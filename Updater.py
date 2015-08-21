@@ -498,8 +498,9 @@ class Updater:
           upd[param] += self.learning_rate_var * dx_new
         else:
           upd[param] += - self.learning_rate_var * deltas
-        #if self.momentum > 0:
-        #  updates.append((self.deltas[target][param], upd))
+        if self.momentum > 0:
+          updates.append((self.deltas[target][param], upd[param]))
+          upd[param] += self.deltas[target][param] * self.momentum
       #if upd:
         #updates.append((param, self.norm_constraint(param + upd, 1.0)))
         #updates.append((param, param + upd))
