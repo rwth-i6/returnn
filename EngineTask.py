@@ -532,6 +532,7 @@ class TrainTaskThread(TaskThread):
         # consensus via average
         for i in xrange(nparams):
           num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])
           #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
           if num_updates:
