@@ -165,6 +165,8 @@ def getDevicesInitArgs(config):
     tags = sorted(device_tags.keys())
     if multiproc:
       assert len(tags) > 0
+      if len(tags) > 1:
+        tags = [ tag.replace('X','Z') for tag in tags ]
       devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
       import TaskSystem
       if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
