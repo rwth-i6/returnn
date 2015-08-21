@@ -207,3 +207,33 @@ class DummyDataset(GeneratingDataset):
     targets = numpy.array(range(i1, i2))
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
+
+class StaticDataset(GeneratingDataset):
+
+  def __init__(self, data, output_dim=None):
+    """
+    :type data: list[dict[str,numpy.ndarray]]
+    """
+    assert len(data) > 0
+    self.data = data
+    num_seqs = len(data)
+    first_data = data[0]
+    assert "data" in first_data
+    assert "classes" in first_data
+    first_data_input = first_data["data"]
+    assert len(first_data_input.shape) == 2  # (time,dim)
+    input_dim = first_data_input.shape[1]
+    first_data_output = first_data["classes"]
+    assert len(first_data_output.shape) <= 2  # (time[,dim])
+    if len(first_data_output.shape) == 1:
+      assert output_dim
+    else:
+      if output_dim:
+        assert output_dim == first_data_output.shape[1]
+      else:
+        output_dim = first_data_output.shape[1]
+    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
+
+  def generate_seq(self, seq_idx):
+    data = self.data[seq_idx]
+    return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data["classes"])

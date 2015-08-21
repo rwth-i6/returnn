@@ -83,7 +83,7 @@ def collect_stats(options, iter_corpus):
   def cb(frame_len, orth):
     if frame_len >= options.max_seq_frame_len:
       return
-    
+
     Stats.total_frame_len += frame_len
 
     orth_syms = parse_orthography(orth)
@@ -130,7 +130,7 @@ def init(configFilename=None):
   print >> log.v3, "CRNN collect-orth-symbols starting up."
   rnn.initFaulthandler()
   if configFilename:
-    rnn.initConfigJson()
+    rnn.initConfigJsonNetwork()
     rnn.initData()
     rnn.printTaskProperties()
 

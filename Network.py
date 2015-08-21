@@ -61,6 +61,8 @@ class LayerNetwork(object):
     :rtype: dict[str]
     """
     json_content = None
+    if config.has("network") and config.is_typed("network"):
+      json_content = config.value()
     if config.network_topology_json:
       try:
         json_content = json.loads(config.network_topology_json)
