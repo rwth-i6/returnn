@@ -90,6 +90,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     {
       epsilon = %(DY)s;
       delta = %(H)s;
+      Py_XINCREF(delta);
     }
     else
     {
@@ -113,14 +114,11 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
     }
 
-    %(DZ)s = CudaNdarray_uninitialized_like(%(H)s);
     %(DV_h)s = CudaNdarray_uninitialized_like(%(V_h)s);
     //DV_h = Y[0..end-1]^T * delta[1..end]
     affine_global(%(Y)s, delta, %(DV_h)s, true, false, 1, 0.0f);
 
-    //TODO!
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(DZ)s), CudaNdarray_DEV_DATA(delta),
-      H_dim[0]*H_dim[1]*H_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    %(DZ)s = delta;
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
     const int * Y_dim = CudaNdarray_HOST_DIMS(%(Y)s);
@@ -130,14 +128,13 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     if(!%(inplace)s)
     {
       Py_XDECREF(epsilon);
-      Py_XDECREF(delta);
     }
 
     """ % locals()
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 1
+  def c_code_cache_version(self):
+    return 1, 2
 
 LSTMOpGradNoInplaceInstance = LSTMOpGrad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOpGrad(inplace=True)
@@ -267,8 +264,8 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     return [Z_shape, H_shape, D_shape]
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 1
+  def c_code_cache_version(self):
+    return 1, 2
 
 LSTMOpInstance = LSTMOp(inplace=False)
 LSTMOpInplaceInstance = LSTMOp(inplace=True)
