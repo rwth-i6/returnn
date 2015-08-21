@@ -202,14 +202,14 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
 LSTMOpGradNoInplaceInstance = LSTMOp2Grad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOp2Grad(inplace=True)
 
-LSTMOp2InlaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
+LSTMOp2InplaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
 
 #TODO: why is this called twice??
 #hack to avoid this
-if not hasattr(optdb, 'LSTMOp2InlaceOpt_registered'):
-  optdb.register('LSTMOp2InlaceOpt', theano.gof.TopoOptimizer(LSTMOp2InlaceOpt),
+if not hasattr(optdb, 'LSTMOp2InplaceOpt_registered'):
+  optdb.register('LSTMOp2InplaceOpt', theano.gof.TopoOptimizer(LSTMOp2InplaceOpt),
                  50.0, 'fast_run', 'inplace', 'gpuarray')
-  optdb.LSTMOp2InlaceOpt_registered = True
+  optdb.LSTMOp2InplaceOpt_registered = True
 
 
 #------------------------
