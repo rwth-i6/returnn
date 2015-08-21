@@ -399,8 +399,10 @@ def executeMainTask():
     engine.forward_to_hdf(eval_data, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano.printing
+    engine.start_epoch = 1
     engine.init_network_from_config(config)
     for task in config.list('theano_graph.task', ['train']):
+      theano.printing.debugprint(engine.devices[-1].get_compute_func(task))
       theano.printing.pydotprint(engine.devices[-1].get_compute_func(task), format = 'png', var_with_name_simple = True,
                                  outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
   elif task == 'analyze':
