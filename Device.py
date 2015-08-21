@@ -468,6 +468,11 @@ class Device(object):
 
     return output, outputs_format
 
+  def get_compute_func(self, task):
+    if task == "train":
+      return self.trainer
+    raise NotImplementedError("for task: %r" % task)
+
   def fast_check_model_is_broken_from_result(self, output, outputs_format):
     if not outputs_format:  # In train, we should always have this.
       return

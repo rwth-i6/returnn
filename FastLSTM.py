@@ -196,20 +196,20 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 1
+  def c_code_cache_version(self):
+    return 1, 2
 
 LSTMOpGradNoInplaceInstance = LSTMOp2Grad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOp2Grad(inplace=True)
 
-LSTMOp2InlaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
+LSTMOp2InplaceOpt = OpSub(LSTMOpGradNoInplaceInstance, LSTMOpGradInplaceInstance)
 
 #TODO: why is this called twice??
 #hack to avoid this
-if not hasattr(optdb, 'LSTMOp2InlaceOpt_registered'):
-  optdb.register('LSTMOp2InlaceOpt', theano.gof.TopoOptimizer(LSTMOp2InlaceOpt),
+if not hasattr(optdb, 'LSTMOp2InplaceOpt_registered'):
+  optdb.register('LSTMOp2InplaceOpt', theano.gof.TopoOptimizer(LSTMOp2InplaceOpt),
                  50.0, 'fast_run', 'inplace', 'gpuarray')
-  optdb.LSTMOp2InlaceOpt_registered = True
+  optdb.LSTMOp2InplaceOpt_registered = True
 
 
 #------------------------
@@ -372,8 +372,8 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return [Z_shape, H_shape, d_shape]
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 1
+  def c_code_cache_version(self):
+    return 1, 2
 
 LSTMOp2Instance = LSTMOp2()
 
