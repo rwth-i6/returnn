@@ -436,9 +436,9 @@ class RecurrentUnitLayer(Layer):
         outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:
         if s == 0:
-          self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]
-        else:
-          self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
+          #self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]
+          self.act = [  T.alloc(numpy.cast['float32'](0), self.index.shape[0], self.index.shape[1], n_out) for act in outputs ]
+         self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
       else:
         self.act = outputs
     self.make_output(self.act[0][::direction or 1])

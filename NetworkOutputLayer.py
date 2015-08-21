@@ -96,7 +96,8 @@ class OutputLayer(Layer):
       else:
         return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
     elif self.y.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
+      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
+      #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
       #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i])
@@ -161,7 +162,7 @@ class FramewiseOutputLayer(OutputLayer):
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
         #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
-        return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i])), known_grads
+        return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
         #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
