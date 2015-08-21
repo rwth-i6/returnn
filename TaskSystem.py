@@ -369,12 +369,7 @@ class ExecingProcess:
         self.pipe_p2c[1].close()
         py_mod_file = os.path.splitext(__file__)[0] + ".py"
         assert os.path.exists(py_mod_file)
-        binary = "python"
-        full_binary_paths = [os.path.join(path, binary)
-                             for path in os.environ["PATH"].split(os.pathsep)]
-        full_binary_paths = filter(lambda path: os.access(path, os.X_OK), full_binary_paths)
-        assert full_binary_paths, "%r not found in PATH %r" % (binary, os.environ["PATH"])
-        args = [full_binary_paths[0],
+        args = [sys.executable,
                 py_mod_file,
                 "--forkExecProc",
                 str(self.pipe_c2p[1].fileno()),
