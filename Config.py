@@ -124,8 +124,9 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
-      assert isinstance(value, (tuple,list))
-      return value
+      if not isinstance(value, (tuple,list)):
+        value = [value]
+      return list(value)
     if key not in self.dict:
       return default
     return self.dict[key]
@@ -135,7 +136,8 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
-      assert isinstance(value, (tuple,list))
+      if not isinstance(value, (tuple,list)):
+        value = [value]
       for x in value:
         assert isinstance(x, int)
       return list(value)
@@ -146,7 +148,8 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
-      assert isinstance(value, (tuple,list))
+      if not isinstance(value, (tuple,list)):
+        value = [value]
       for x in value:
         assert isinstance(x, (float,int))
       return list(value)
@@ -159,7 +162,8 @@ class Config:
       return default
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
-      assert isinstance(value, (tuple,list))
+      if not isinstance(value, (tuple,list)):
+        value = (value, value)
       assert len(value) == 2
       for x in value:
         assert isinstance(x, int)
