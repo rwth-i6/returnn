@@ -62,13 +62,22 @@ class Config:
     :type index: int | None
     :rtype: str | T
     """
-    if key not in self.dict:
-      return default
-    l = self.dict[key]
-    if index is None:
-      return ",".join(l)
-    else:
-      return l[index]
+    if key in self.typed_dict:
+      l = self.typed_dict[key]
+      if index is None:
+        if isinstance(l, (list,tuple)):
+          return ",".join([str(v) for v in l])
+        else:
+          return str(l)
+      else:
+        return str(l[index])
+    if key in self.dict:
+      l = self.dict[key]
+      if index is None:
+        return ",".join(l)
+      else:
+        return l[index]
+    return default
 
   def typed_value(self, key, default=None, index=None):
     value = self.typed_dict.get(key, default)
