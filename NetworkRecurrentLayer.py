@@ -66,7 +66,7 @@ class Unit(Container):
   def __init__(self, n_units, depth, n_in, n_out, n_re, n_act):
     # number of cells, depth, cell fan in, cell fan out, recurrent fan in, number of outputs
     self.n_units, self.depth, self.n_in, self.n_out, self.n_re, self.n_act = n_units, depth, n_in, n_out, n_re, n_act
-    self.slice = T.constant(self.n_units)
+    self.slice = T.constant(self.n_units, dtype='int32')
     self.params = {}
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
@@ -74,6 +74,7 @@ class Unit(Container):
       xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
       xc = z if not x else T.concatenate(x, axis = -1)
+
     outputs, _ = theano.scan(step,
                              #strict = True,
                              truncate_gradient = truncate_gradient,
@@ -103,7 +104,7 @@ class LSTME(Unit):
     r_t = GF(z[:,1 * self.slice:2 * self.slice])
     b_t = GO(z[:,2 * self.slice:3 * self.slice])
     a_t = CI(z[:,3 * self.slice:])
-    s_t = (a_t * u_t) # + s_p * r_t)
+    s_t = a_t * u_t + s_p * r_t
     h_t = CO(s_t) * b_t
     #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
     return [ h_t, s_t ]
@@ -146,7 +147,7 @@ class GRU(Unit):
     u_t = GU(z_t[:,:self.slice] + z_p[:,:self.slice])
     r_t = GR(z_t[:,self.slice:2*self.slice] + z_p[:,self.slice:2*self.slice])
     h_c = CI(z_t[:,2*self.slice:] + self.dot(r_t * h_p, self.W_reset))
-    return [ u_t * h_p + (1 - u_t) * h_c ]
+    return u_t * h_p + (1 - u_t) * h_c
 
 
 class SRU(Unit):
@@ -157,8 +158,8 @@ class SRU(Unit):
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     u_t = GU(z_t[:,:self.slice] + z_p[:,:self.slice])
     r_t = GR(z_t[:,self.slice:2*self.slice] + z_p[:,self.slice:2*self.slice])
-    h_c = CI(z_t[:,2*self.slice:] + r_t * z_p[:,2*self.slice:])
-    return [ u_t * h_p + (1 - u_t) * h_c ]
+    h_c = CI(z_t[:,2*self.slice:3*self.slice] + r_t * z_p[:,2*self.slice:3*self.slice])
+    return  u_t * h_p + (1 - u_t) * h_c
 
 
 class RecurrentUnitLayer(Layer):
@@ -235,7 +236,7 @@ class RecurrentUnitLayer(Layer):
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      value[unit.n_out:2*unit.n_out] = -1
+      value[unit.n_units:2*unit.n_units] = -5
     self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
     self.W_in = []
@@ -256,9 +257,11 @@ class RecurrentUnitLayer(Layer):
       else:
         z += self.dot(self.mass * m * x_t.output, W)
     if self.depth > 1:
+      assert False
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
     num_batches = self.index.shape[1]
     if direction == 0:
+      assert False # this is broken
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
       #q = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], num_batches*2, z.shape[2])
       #z = z.repeat(2, axis = 1)
@@ -351,6 +354,7 @@ class RecurrentUnitLayer(Layer):
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
         else:
+          assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
       def step(x_t, z_t, i_t, *args):
@@ -363,10 +367,11 @@ class RecurrentUnitLayer(Layer):
           args = args[:-1]
         h_p = args[0]
         if self.depth == 1:
-          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out))
+          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), self.attrs['n_out']))
         else:
+          assert False
           h_p = self.make_consensus(h_p, axis = 1)
-          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), n_out)).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
+          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), self.attrs['n_out'])).dimshuffle(0, 'x', 1).repeat(self.depth, axis=1)
         for W in self.Wp:
           h_p = pact(T.dot(h_p, W))
         if self.attrs['lm']:
@@ -376,7 +381,7 @@ class RecurrentUnitLayer(Layer):
           z_t += self.W_lm_out[T.argmax(c_p,axis=1)] * T.all(T.eq(z_t,0),axis=1,keepdims=True)
         if not self.W_in:
           z_t += self.b
-        z_p = self.dot(h_p, W_re)
+        z_p = T.dot(h_p, W_re)
         if self.depth > 1:
           assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
