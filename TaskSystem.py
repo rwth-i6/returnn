@@ -481,11 +481,15 @@ class ExecingProcess_ConnectionWrapper(object):
   This is needed to use our own Pickler.
   """
 
-  def __init__(self, fd=None):
+  def __init__(self, fd=None, conn=None):
     self.fd = fd
     if self.fd:
       from _multiprocessing import Connection
       self.conn = Connection(fd)
+    elif conn:
+      self.conn = conn
+    else:
+      self.conn = None
 
   def __getstate__(self): return self.fd
   def __setstate__(self, state): self.__init__(state)
@@ -561,6 +565,66 @@ def ExecingProcess_Pipe():
   return c1, c2
 
 
+def Pipe_ConnectionWrapper(*args, **kwargs):
+  from multiprocessing import Pipe
+  c1, c2 = Pipe(*args, **kwargs)
+  c1 = ExecingProcess_ConnectionWrapper(conn=c1)
+  c2 = ExecingProcess_ConnectionWrapper(conn=c2)
+  return c1, c2
+
+
+if sys.platform == "win32":
+  from multiprocessing.forking import Popen as mp_Popen
+
+  class Win32_mp_Popen_wrapper:
+    def __init__(self, env):
+      self.env = env
+
+    class Popen(mp_Popen):
+      # noinspection PyMissingConstructor
+      def __init__(self, process_obj, env):
+        # No super init call by intention!
+
+        from multiprocessing.forking import duplicate, get_command_line, _python_exe, close, get_preparation_data, HIGHEST_PROTOCOL, dump
+        import msvcrt
+        import _subprocess
+
+        # create pipe for communication with child
+        rfd, wfd = os.pipe()
+
+        # get handle for read end of the pipe and make it inheritable
+        rhandle = duplicate(msvcrt.get_osfhandle(rfd), inheritable=True)
+        os.close(rfd)
+
+        # start process
+        cmd = get_command_line() + [rhandle]
+        cmd = ' '.join('"%s"' % x for x in cmd)
+        hp, ht, pid, tid = _subprocess.CreateProcess(
+          _python_exe, cmd, None, None, 1, 0, env, None, None
+        )
+        ht.Close()
+        close(rhandle)
+
+        # set attributes of self
+        self.pid = pid
+        self.returncode = None
+        self._handle = hp
+
+        # send information to child
+        prep_data = get_preparation_data(process_obj._name)
+        to_child = os.fdopen(wfd, 'wb')
+        mp_Popen._tls.process_handle = int(hp)
+        try:
+          dump(prep_data, to_child, HIGHEST_PROTOCOL)
+          dump(process_obj, to_child, HIGHEST_PROTOCOL)
+        finally:
+          del mp_Popen._tls.process_handle
+          to_child.close()
+
+    def __call__(self, process_obj):
+      return self.Popen(process_obj, self.env)
+
+
 isFork = False  # fork() without exec()
 isMainProcess = True
 
@@ -596,13 +660,14 @@ class AsyncTask:
       self.Pipe = ExecingProcess_Pipe
       proc_args["env_update"] = env_update
     else:
-      assert not env_update, "not supported if not mustExec"
       from multiprocessing import Process, Pipe
       self.Process = Process
-      self.Pipe = Pipe
+      self.Pipe = Pipe_ConnectionWrapper
     self.parent_conn, self.child_conn = self.Pipe()
     self.proc = self.Process(**proc_args)
     self.proc.daemon = True
+    if sys.platform == 'win32':
+      self.proc._Popen = Win32_mp_Popen_wrapper(env=env_update)
     self.proc.start()
     self.child_conn.close()
     self.child_pid = self.proc.pid
