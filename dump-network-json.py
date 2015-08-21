@@ -17,7 +17,7 @@ def init(configFilename, commandLineOptions):
   config.set("log", [])
   rnn.initLog()
   print >> log.v3, "CRNN dump-dataset starting up."
-  rnn.initConfigJson()
+  rnn.initConfigJsonNetwork()
 
 
 def main(argv):

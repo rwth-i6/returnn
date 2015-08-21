@@ -312,7 +312,7 @@ def initBase(configfile=None, targetMode=None):
     rnn.initConfig(configfile, [])
     config = rnn.config
     rnn.initLog()
-    rnn.initConfigJson()
+    rnn.initConfigJsonNetwork()
 
   if targetMode:
     setTargetMode(targetMode)

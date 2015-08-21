@@ -59,7 +59,7 @@ def init(configFilename, commandLineOptions):
   rnn.initLog()
   print >> log.v3, "CRNN demo-dataset starting up"
   rnn.initFaulthandler()
-  rnn.initConfigJson()
+  rnn.initConfigJsonNetwork()
   rnn.initData()
   rnn.printTaskProperties()
 

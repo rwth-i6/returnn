@@ -77,7 +77,7 @@ def initConfig(configFilename, commandLineOptions):
   options = vars(options)
   for opt in options.keys():
     if options[opt] != None:
-      config.set(opt, options[opt])
+      config.add_line(opt, options[opt])
   assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
   for i in range(0, len(args), 2):
     key, value = args[i:i+2]
@@ -91,7 +91,7 @@ def initLog():
   log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
 
 
-def initConfigJson():
+def initConfigJsonNetwork():
   # initialize postprocess config file
   if config.has('initialize_from_json'):
     json_file = config.value('initialize_from_json', '')
@@ -359,7 +359,7 @@ def init(configFilename, commandLineOptions):
   initFaulthandler()
   if config.bool('ipython', False):
     initIPythonKernel()
-  initConfigJson()
+  initConfigJsonNetwork()
   maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
   if needData():
