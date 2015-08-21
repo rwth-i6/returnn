@@ -103,7 +103,7 @@ class LSTME(Unit):
     r_t = GF(z[:,1 * self.slice:2 * self.slice])
     b_t = GO(z[:,2 * self.slice:3 * self.slice])
     a_t = CI(z[:,3 * self.slice:])
-    s_t = (a_t * u_t + s_p * r_t)
+    s_t = (a_t * u_t) # + s_p * r_t)
     h_t = CO(s_t) * b_t
     #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
     return [ h_t, s_t ]
@@ -377,7 +377,8 @@ class RecurrentUnitLayer(Layer):
         if not self.W_in:
           z_t += self.b
         z_p = self.dot(h_p, W_re)
-        if self.depth > 1: # this is broken
+        if self.depth > 1:
+          assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:

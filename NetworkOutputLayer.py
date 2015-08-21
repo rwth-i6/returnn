@@ -63,7 +63,8 @@ class OutputLayer(Layer):
     if self.y.dtype.startswith('int'):
       self.i = (self.index.flatten() > 0).nonzero()
     elif self.y.dtype.startswith('float'):
-      self.i = (self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2).flatten() > 0).nonzero()
+      self.i = (self.index.flatten() > 0).nonzero()
+      #self.i = (self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2).flatten() > 0).nonzero()
     self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
@@ -96,7 +97,7 @@ class OutputLayer(Layer):
       else:
         return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
     elif self.y.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
+      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
       #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
@@ -115,7 +116,7 @@ class FramewiseOutputLayer(OutputLayer):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     nreps = T.switch(T.eq(self.output.shape[0], 1), self.index.shape[0], 1)
     output = self.output.repeat(nreps,axis=0)
-    self.y_m = output.flatten() if self.y.dtype.startswith('float') else output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
+    self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
     #if self.loss == 'ce':
     #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
