@@ -491,8 +491,15 @@ class ExecingProcess_ConnectionWrapper(object):
     else:
       self.conn = None
 
-  def __getstate__(self): return self.fd
-  def __setstate__(self, state): self.__init__(state)
+  def __getstate__(self):
+    if self.fd is not None:
+      return {"fd": self.fd}
+    elif self.conn is not None:
+      return {"conn": self.conn}  # Try to pickle the connection.
+    else:
+      return {}
+  def __setstate__(self, state):
+    self.__init__(**state)
 
   def __getattr__(self, attr): return getattr(self.conn, attr)
 
@@ -577,8 +584,9 @@ if sys.platform == "win32":
   from multiprocessing.forking import Popen as mp_Popen
 
   class Win32_mp_Popen_wrapper:
-    def __init__(self, env):
-      self.env = env
+    def __init__(self, env_update):
+      self.env = os.environ.copy()
+      self.env.update(env_update)
 
     class Popen(mp_Popen):
       # noinspection PyMissingConstructor
@@ -667,7 +675,7 @@ class AsyncTask:
     self.proc = self.Process(**proc_args)
     self.proc.daemon = True
     if sys.platform == 'win32':
-      self.proc._Popen = Win32_mp_Popen_wrapper(env=env_update)
+      self.proc._Popen = Win32_mp_Popen_wrapper(env_update=env_update)
     self.proc.start()
     self.child_conn.close()
     self.child_pid = self.proc.pid
