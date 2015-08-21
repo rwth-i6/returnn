@@ -194,6 +194,7 @@ class Device(object):
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
     except ProcConnectionDied:
+      print >>log.v3, "Device proc died"
       interrupt_main()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
