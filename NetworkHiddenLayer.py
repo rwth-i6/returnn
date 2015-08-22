@@ -131,11 +131,12 @@ class CentroidLayer2(ForwardLayer):
     super(CentroidLayer2, self).__init__(**kwargs)
     self.set_attr('centroids', centroids.name)
     self.set_attr('output_scores', output_scores)
+    self.z = self.output
     diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1)) # TBQD
     if output_scores:
-      self.make_output(T.sum(diff, axis=3))
+      self.make_output(T.cast(T.argmin(T.sqrt(T.sum(diff, axis=3)),axis=2,keepdims=True),'float32'))
     else:
-      self.make_output(centroids.z[T.argmin(T.sum(diff, axis=3), axis=2)])
+      self.make_output(centroids.z[T.argmin(T.sqrt(T.sum(diff, axis=3)), axis=2)])
 
     if 'dual' in centroids.attrs:
       self.act = [ T.tanh(self.output), self.output ]
