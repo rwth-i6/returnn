@@ -721,6 +721,7 @@ class Device(object):
       assert self.output_queue.recv() == "end-get-net-train-params"
       vars = network.get_all_params_vars()
       res = []
+      assert len(vars) == len(raw)
       for p,q in zip(vars, raw):
         res.append(numpy.fromstring(q, dtype='float32').reshape(p.get_value().shape))
       return res
