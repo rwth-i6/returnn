@@ -32,7 +32,7 @@ class LayerNetwork(object):
     self.train_param_args = None; """ :type: dict[str] """
     self.recurrent = False  # any of the from_...() functions will set this
     self.objective = {}
-    self.output = {}
+    self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.cost = {}
     self.errors = {}
 
