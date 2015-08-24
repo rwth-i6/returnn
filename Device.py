@@ -289,7 +289,7 @@ class Device(object):
               gparam = 0
           if gparam == 0:
             exclude.append(param)
-            print >> log.v4, "exclude:", self.name, param.name
+            print >> log.v4, "exclude:", self.name, target, param.name
             gparams.append(T.constant(0))
             continue
           #update_specs['layers'].append(param.layer.name)
