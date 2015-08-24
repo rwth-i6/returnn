@@ -78,8 +78,9 @@ def test_multi_target_old_init():
   })
   config.network_topology_json = """
   {
-  "out1": {"class": "softmax", "loss": "ce", "target": "t1"},
-  "out2": {"class": "softmax", "loss": "ce", "target": "t2"}
+  "fw0": {"class": "hidden", "activation": "identity", "n_out": 3},
+  "out1": {"class": "softmax", "loss": "ce", "target": "t1", "from": ["fw0"]},
+  "out2": {"class": "softmax", "loss": "ce", "target": "t2", "from": ["fw0"]}
   }
   """
 
@@ -88,11 +89,12 @@ def test_multi_target_old_init():
   assert_true(device.testnet, "test network initialized")
   param_vars = device.trainnet.get_all_params_vars()
   print "params:", param_vars
-  assert_equal(len(param_vars), 4, "W, b vars for each out")
+  assert_equal(len(param_vars), 6, "W, b vars for each out, and fw")
   num_params = get_num_params(param_vars)
-  assert_equal(num_params, 3 * 4 + 4 + 3 * 5 + 5, "W, b for each out")
-  assert_in("out1",  device.testnet.output)
-  assert_in("out2",  device.testnet.output)
+  assert_equal(num_params, (3 * 3 + 3) + (3 * 4 + 4) + (3 * 5 + 5), "W, b for each out, and fw")
+  assert_in("fw0", device.testnet.hidden)
+  assert_in("out1", device.testnet.output)
+  assert_in("out2", device.testnet.output)
   assert_is(device.testnet.j, device.testnet.output["out1"].index)
   assert_true(device.updater)
   update_list = device.updater.getUpdateList()
@@ -100,21 +102,31 @@ def test_multi_target_old_init():
   pprint(update_list)
   update_dict = dict(update_list)
   assert_equal(len(update_dict), len(update_list), "all params in update list only once")
+  assert_in("fw0", device.trainnet.hidden)
+  assert_equal(len(device.trainnet.hidden), 1)
+  assert_in("W_in_data_fw0", device.trainnet.hidden["fw0"].params)
+  assert_in("b_fw0", device.trainnet.hidden["fw0"].params)
+  assert_equal(len(device.trainnet.hidden["fw0"].params), 2)
   assert_in("out1", device.trainnet.output)
-  assert_in("W_in_data_out1", device.trainnet.output["out1"].params)
+  assert_equal(len(device.trainnet.output), 2)
+  assert_in("W_in_fw0_out1", device.trainnet.output["out1"].params)
   assert_in("b_out1", device.trainnet.output["out1"].params)
   assert_equal(len(device.trainnet.output["out1"].params), 2)
-  assert_in(device.trainnet.output["out1"].params["W_in_data_out1"], update_dict)
+  assert_in(device.trainnet.hidden["fw0"].params["W_in_data_fw0"], update_dict)
+  assert_in(device.trainnet.hidden["fw0"].params["b_fw0"], update_dict)
+  assert_in(device.trainnet.output["out1"].params["W_in_fw0_out1"], update_dict)
   assert_in(device.trainnet.output["out1"].params["b_out1"], update_dict)
-  assert_in(device.trainnet.output["out2"].params["W_in_data_out2"], update_dict)
+  assert_in(device.trainnet.output["out2"].params["W_in_fw0_out2"], update_dict)
   assert_in(device.trainnet.output["out2"].params["b_out2"], update_dict)
-  assert_equal(len(update_dict), 4)
+  assert_equal(len(update_dict), 6)
 
   # Set net params.
   net_params = {
-    "out1": {"W_in_data_out1": numpy.arange(0.0, 1.2, 0.1).reshape((3, 4)),
+    "fw0": {"W_in_data_fw0": numpy.identity(3, dtype="float32"),
+            "b_fw0": numpy.zeros((3,))},
+    "out1": {"W_in_fw0_out1": numpy.arange(0.0, 1.2, 0.1).reshape((3, 4)),
              "b_out1": numpy.arange(0.0, 4)},
-    "out2": {"W_in_data_out2": numpy.arange(0.0, 1.5, 0.1).reshape((3, 5)),
+    "out2": {"W_in_fw0_out2": numpy.arange(0.0, 1.5, 0.1).reshape((3, 5)),
              "b_out2": numpy.arange(0.0, 5)}
   }
   device.trainnet.set_params_by_dict(net_params)
@@ -205,13 +217,19 @@ def test_multi_target_old_init():
   # Get net params.
   params = device.get_net_train_params(device.trainnet)
   references_params = {
-    "W_in_data_out1":
+    "W_in_data_fw0":
+      numpy.array([[  1.00055406e+00,   5.54056978e-04,   5.54056978e-04],
+                   [  1.10811396e-03,   1.00110811e+00,   1.10811396e-03],
+                   [ -1.66217093e-03,  -1.66217093e-03,   9.98337829e-01]]),
+    "b_fw0":
+      numpy.array([ 0.00554057,  0.00554057,  0.00554057]),
+    "W_in_fw0_out1":
       numpy.array([[-0.00320586,  0.09128557,  0.27631172,  0.23560857],
                    [ 0.39358828,  0.48257114,  0.75262344,  0.57121715],
                    [ 0.80961758,  0.9261433 ,  0.77106485,  1.29317428]]),
     "b_out1":
       numpy.array([-0.0320586 ,  0.91285568,  2.76311718,  2.35608574]),
-    "W_in_data_out2":
+    "W_in_fw0_out2":
       numpy.array([[ -1.16562310e-03,   9.68315079e-02,   1.91387146e-01,
                       2.76587834e-01,   4.36359135e-01],
                    [  4.97668754e-01,   5.93663016e-01,   6.82774291e-01,
