@@ -420,7 +420,11 @@ class DatasetSeq:
 
   @property
   def default_target(self):
-    return self.targets.get("classes", None)
+    target_keys = sorted(self.targets.keys())
+    if target_keys:
+      return self.targets[target_keys[0]]
+    else:
+      return None
 
   @property
   def num_frames(self):
