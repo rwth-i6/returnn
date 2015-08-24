@@ -174,7 +174,7 @@ class Updater:
     assert self.pid == os.getpid()
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
-    upd = { p: 0 for p in self.net_train_param_deltas.values()[0] }
+    upd = { p: 0 for ps in self.net_train_param_deltas.values() for p in ps }
     for target in self.net_train_param_deltas:
       eps = 1e-7
       if self.adasecant:
