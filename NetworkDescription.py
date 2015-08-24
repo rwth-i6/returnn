@@ -136,7 +136,20 @@ class LayerNetworkDescription:
     """
     num_inputs = config.int('num_inputs', 0)
     target = config.value('target', 'classes')
-    num_outputs = {target: [config.int('num_outputs', 0), 1]} if config.has('num_outputs') else None
+    if config.is_typed('num_outputs'):
+      num_outputs = config.typed_value('num_outputs')
+      if not isinstance(num_outputs, dict):
+        num_outputs = {target: num_outputs}
+      for target, value in num_outputs.items():
+        if not isinstance(value, (tuple,list)):
+          value = [value, 1]
+        for v in value:
+          assert isinstance(v, int)
+        num_outputs[target] = value
+    elif config.has('num_outputs'):
+      num_outputs = {target: [config.int('num_outputs', 0), 1]}
+    else:
+      num_outputs = None
     if config.list('train') and ":" not in config.value('train', ''):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
