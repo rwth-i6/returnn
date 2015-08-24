@@ -210,7 +210,7 @@ class DummyDataset(GeneratingDataset):
 
 class StaticDataset(GeneratingDataset):
 
-  def __init__(self, data, output_dim=None):
+  def __init__(self, data, target_list=None, output_dim=None):
     """
     :type data: list[dict[str,numpy.ndarray]]
     """
@@ -218,22 +218,44 @@ class StaticDataset(GeneratingDataset):
     self.data = data
     num_seqs = len(data)
     first_data = data[0]
-    assert "data" in first_data
-    assert "classes" in first_data
+    assert "data" in first_data  # input
+    if target_list is None:
+      target_list = []
+      for target in first_data.keys():
+        if target == "data": continue
+        target_list.append(target)
+    else:
+      for target in target_list:
+        assert target in first_data
+    self.target_list = target_list
+
     first_data_input = first_data["data"]
     assert len(first_data_input.shape) == 2  # (time,dim)
     input_dim = first_data_input.shape[1]
-    first_data_output = first_data["classes"]
-    assert len(first_data_output.shape) <= 2  # (time[,dim])
-    if len(first_data_output.shape) == 1:
-      assert output_dim
-    else:
-      if output_dim:
-        assert output_dim == first_data_output.shape[1]
+
+    if isinstance(output_dim, int):
+      assert "classes" in target_list
+      output_dim = {"classes": output_dim}
+    if output_dim is None:
+      output_dim = {}
+    for target in target_list:
+      first_data_output = first_data[target]
+      assert len(first_data_output.shape) <= 2  # (time[,dim])
+      if len(first_data_output.shape) == 1:
+        assert target in output_dim
       else:
-        output_dim = first_data_output.shape[1]
+        if target in output_dim:
+          assert output_dim[target] == first_data_output.shape[1]
+        else:
+          output_dim[target] = first_data_output.shape[1]
+
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
 
   def generate_seq(self, seq_idx):
     data = self.data[seq_idx]
-    return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data["classes"])
+    return DatasetSeq(seq_idx=seq_idx,
+                      features=data["data"],
+                      targets={target: data[target] for target in self.target_list})
+
+  def get_target_list(self):
+    return self.target_list
