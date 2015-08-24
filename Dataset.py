@@ -411,9 +411,8 @@ class DatasetSeq:
     if isinstance(targets, numpy.ndarray):  # old format
       targets = {"classes": targets}
     assert isinstance(targets, dict)
-    if targets:
-      assert "classes" in targets
-      assert isinstance(targets["classes"], numpy.ndarray)
+    for target_values in targets.values():
+      assert isinstance(target_values, numpy.ndarray)
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
