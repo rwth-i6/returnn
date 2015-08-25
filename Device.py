@@ -119,7 +119,6 @@ class Device(object):
     self.update_total_time = 0
     self.num_frames = 0
     self.num_updates = 0
-    self.tot_cost = 0
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})

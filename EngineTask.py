@@ -256,7 +256,6 @@ class TaskThread(threading.Thread):
             assert outputs_format == outputs_format_new, "We expect to always get the same output format."
           outputs_format = outputs_format_new
           device_results.append(result)
-          device.tot_cost += result[0]
         return device_results, outputs_format
 
       def device_mem_usage_str(self, devices):
@@ -338,7 +337,6 @@ class TaskThread(threading.Thread):
         device.start_epoch_stats()
         device.num_frames = 0
         device.num_updates = 0
-        device.tot_cost = 0
         device.tot = 0
 
       num_device_runs = 1 if self.share_batches else len(self.devices)
@@ -382,7 +380,6 @@ class TaskThread(threading.Thread):
             for device in self.devices:
               device.num_frames = 0
               device.num_updates = 0
-              device.tot_cost = 0
             if not self.batches.has_more():
               break
           else:
