@@ -247,7 +247,7 @@ def test_multi_target_old_init():
     numpy.testing.assert_almost_equal(references_params[p.name], v)
 
 
-def _test_multi_target_init():
+def test_multi_target_init():
   config = Config()
   config.update({
     "multiprocessing": False,
