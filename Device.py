@@ -269,7 +269,7 @@ class Device(object):
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
       exclude = []
-      self.gradients = { k : {} for k in self.y }
+      self.gradients = { k : {} for k in self.trainnet.objective.keys() }
       if config.bool('debug_gradient_norm', False):
         # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
         # See self.fast_check_model_is_broken_from_result().
@@ -1056,7 +1056,7 @@ class Device(object):
       #y_given = [ (network.y[k], self.y[k][:,i:j].reshape([self.y[k].get_value().shape[0]*(j-i), self.y[k].get_value().shape[2]])) for k in self.y ]
       y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=2)) for k in self.y ]
       y_given = []
-      for k in network.objective:
+      for k in network.used_targets:
         y = self.y[k][:,i:j] # TB
         shape = self.y[k].get_value().shape
         if len(shape) == 3:

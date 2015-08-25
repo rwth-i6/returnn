@@ -42,6 +42,7 @@ class TaskThread(threading.Thread):
       self.elapsed = 0
       self.finalized = False
       self.score = None
+      self.error = None
       self.results = {}
       self.num_frames = 0
       self.batch_idx = None; " :type: int | None "
@@ -145,14 +146,21 @@ class TaskThread(threading.Thread):
       pass
     def reduce(self, num_frames):
       pass
+    def epoch_norm_factor_for_result(self, key):
+      if key.startswith("error:"):
+        if self.network.loss in ('ctc', 'ce_ctc'):
+          assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
+          return 1.0 / self.data.num_running_chars
+      # Default: Normalize by number of frames.
+      return 1.0 / self.num_frames
     def finalize(self):
       assert self.num_frames > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
-        self.results[key] /= float(self.num_frames)
-      # Total score.
-      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")]) / \
-                   float(self.num_frames)
+        self.results[key] *= self.epoch_norm_factor_for_result(key)
+      # Total score/error.
+      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")])
+      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
 
     class DeviceBatchRun(threading.Thread):
@@ -230,10 +238,8 @@ class TaskThread(threading.Thread):
             self.parent.updater.setNetParamDeltas(gparams)
             self.parent.updater.update()
             self.alloc_devices[i].set_net_params(self.parent.network)
-        else:
-          output_results = device_results
 
-        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.result = { 'batchess': self.devices_batches, 'results': device_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
         self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
@@ -599,19 +605,9 @@ class EvalTaskThread(TaskThread):
       super(EvalTaskThread, self).__init__('eval', network, devices, data=data, batches=batches, **kwargs)
 
     def initialize(self):
-      self.score = 0
-      self.error = 0
+      super(EvalTaskThread, self).initialize()
       for device in self.devices:
         device.set_net_params(self.network)
-
-    def finalize(self):
-      super(EvalTaskThread, self).finalize()
-      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
-      if self.network.loss in ('ctc', 'ce_ctc'):
-        assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
-        self.error /= float(self.data.num_running_chars)
-      else:
-        self.error /= float(self.num_frames)
 
 
 class SprintCacheForwardTaskThread(TaskThread):

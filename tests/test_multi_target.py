@@ -162,7 +162,7 @@ def test_multi_target_old_init():
 
   # Forward test.
   device.update_data()
-  device.testnet.cost["t1"].name = "t1_cost"  # nice in the func graph
+  device.testnet.cost["out1"].name = "out1_cost"  # nice in the func graph
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
@@ -171,9 +171,9 @@ def test_multi_target_old_init():
     inputs=[device.block_start, device.block_end],
     outputs=[
       device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
-      device.testnet.cost["t1"],
+      device.testnet.cost["out1"],
       device.testnet.output["out1"].p_y_given_x,
-      device.testnet.cost["t2"],
+      device.testnet.cost["out2"],
       device.testnet.output["out2"].p_y_given_x],
     givens=device.make_givens(device.testnet),
     no_default_updates=True,
@@ -210,9 +210,9 @@ def test_multi_target_old_init():
   assert_true(outputs_format, "for train, we should always get the format")
   outputs = Device.make_result_dict(output_list, outputs_format)
   pprint(outputs)
-  assert_in("cost:t1", outputs)
-  assert_greater(outputs["cost:t1"], 0)
-  assert_almost_equal(outputs["cost:t1"], t1_cost)  # default t1 cost via config
+  assert_in("cost:out1", outputs)
+  assert_greater(outputs["cost:out1"], 0)
+  assert_almost_equal(outputs["cost:out1"], t1_cost)  # default t1 cost via config
 
   # Get net params.
   params = device.get_net_train_params(device.trainnet)
@@ -344,7 +344,7 @@ def test_multi_target_init():
 
   # Forward test.
   device.update_data()
-  device.testnet.cost["t1"].name = "t1_cost"  # nice in the func graph
+  device.testnet.cost["out1"].name = "out1_cost"  # nice in the func graph
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
@@ -353,9 +353,9 @@ def test_multi_target_init():
     inputs=[device.block_start, device.block_end],
     outputs=[
       device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
-      device.testnet.cost["t1"],
+      device.testnet.cost["out1"],
       device.testnet.output["out1"].p_y_given_x,
-      device.testnet.cost["t2"],
+      device.testnet.cost["out2"],
       device.testnet.output["out2"].p_y_given_x],
     givens=device.make_givens(device.testnet),
     no_default_updates=True,
@@ -392,9 +392,9 @@ def test_multi_target_init():
   assert_true(outputs_format, "for train, we should always get the format")
   outputs = Device.make_result_dict(output_list, outputs_format)
   pprint(outputs)
-  assert_in("cost:t1", outputs)
-  assert_greater(outputs["cost:t1"], 0)
-  assert_almost_equal(outputs["cost:t1"], t1_cost)  # default t1 cost via config
+  assert_in("cost:out1", outputs)
+  assert_greater(outputs["cost:out1"], 0)
+  assert_almost_equal(outputs["cost:out1"], t1_cost)
 
   # Get net params.
   params = device.get_net_train_params(device.trainnet)
