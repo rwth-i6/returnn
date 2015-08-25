@@ -967,18 +967,8 @@ class Device(object):
     :type output: list[numpy.ndarray]
     :type outputs_format: list[str]
     """
-    d = {}; " :type: dict[str] "
-    for i, attrib in enumerate(outputs_format):
-      if attrib.endswith("..."):
-        attrib = attrib[:-3]
-        assert i < len(output)
-        assert i == len(outputs_format) - 1
-        d[attrib] = output
-        return d
-      d[attrib] = output[0]
-      output = output[1:]
-    assert len(output) == 0
-    return d
+    assert len(output) == len(outputs_format)
+    return dict(zip(outputs_format, output))
 
   def result(self):
     """
