@@ -52,7 +52,7 @@ class TaskThread(threading.Thread):
       self.start()
 
     def assign_dev_data(self, device, batches):
-      return assign_dev_data(device, self.data, batches, self.pad_batches)
+      return assign_dev_data(device, self.data, batches)
 
     def allocate_device(self, device):
       batches = self.batches.peek_next_n(device.num_batches)

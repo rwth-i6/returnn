@@ -4,12 +4,11 @@ from EngineBatch import Batch
 from Log import log
 
 
-def assign_dev_data(device, dataset, batches, pad_batches=False):
+def assign_dev_data(device, dataset, batches):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
   :type batches: list[EngineBatch.Batch]
-  :type pad_batches: bool
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
