@@ -119,7 +119,6 @@ class Device(object):
     self.update_total_time = 0
     self.num_frames = 0
     self.num_updates = 0
-    self.tot_cost = 0
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
@@ -326,8 +325,8 @@ class Device(object):
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
-      self.train_outputs_format = ["cost"]
-      outputs = [self.trainnet.cost[config.value('target', 'classes')]]
+      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.cost.keys())]
+      outputs = [self.trainnet.cost[out] for out in sorted(self.trainnet.cost.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -346,7 +345,12 @@ class Device(object):
                                        no_default_updates=exclude,
                                        name="train_and_updater")
       else:
-        self.train_outputs_format += ["gparams..."]
+        gparams_outputs_format = []
+        for target in self.trainnet.objective:
+          for param in self.trainnet.train_params_vars:
+            gparams_outputs_format += ["gparam:%s:%s" % (target, param.name)]
+        assert len(gparams_outputs_format) == gparams
+        self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
@@ -355,8 +359,12 @@ class Device(object):
                                        on_unused_input='warn',
                                        name="train_distributed")
 
+      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.cost.keys())]
+      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
+      test_outputs = [self.testnet.cost[out] for out in sorted(self.testnet.cost.keys())]
+      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
-                                    outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
+                                    outputs=test_outputs,
                                     givens=test_givens,
                                     on_unused_input='warn',
                                     no_default_updates=True,
@@ -460,6 +468,8 @@ class Device(object):
     outputs_format = None
     if task.startswith("train"):
       outputs_format = self.train_outputs_format
+    elif task == "eval":
+      outputs_format = self.test_outputs_format
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
@@ -924,7 +934,6 @@ class Device(object):
     # Reinit if needed.
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
-    self.targetkeys = network.cost.keys()
     if self.blocking:
       if self.updater:
         self.updater.reset()
@@ -959,18 +968,8 @@ class Device(object):
     :type output: list[numpy.ndarray]
     :type outputs_format: list[str]
     """
-    d = {}; " :type: dict[str] "
-    for i, attrib in enumerate(outputs_format):
-      if attrib.endswith("..."):
-        attrib = attrib[:-3]
-        assert i < len(output)
-        assert i == len(outputs_format) - 1
-        d[attrib] = output
-        return d
-      d[attrib] = output[0]
-      output = output[1:]
-    assert len(output) == 0
-    return d
+    assert len(output) == len(outputs_format)
+    return dict(zip(outputs_format, output))
 
   def result(self):
     """

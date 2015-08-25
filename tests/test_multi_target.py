@@ -210,9 +210,9 @@ def test_multi_target_old_init():
   assert_true(outputs_format, "for train, we should always get the format")
   outputs = Device.make_result_dict(output_list, outputs_format)
   pprint(outputs)
-  assert_in("cost", outputs)
-  assert_greater(outputs["cost"], 0)
-  assert_almost_equal(outputs["cost"], t1_cost)  # default t1 cost via config
+  assert_in("cost:t1", outputs)
+  assert_greater(outputs["cost:t1"], 0)
+  assert_almost_equal(outputs["cost:t1"], t1_cost)  # default t1 cost via config
 
   # Get net params.
   params = device.get_net_train_params(device.trainnet)
@@ -247,7 +247,7 @@ def test_multi_target_old_init():
     numpy.testing.assert_almost_equal(references_params[p.name], v)
 
 
-def _test_multi_target_init():
+def test_multi_target_init():
   config = Config()
   config.update({
     "multiprocessing": False,
@@ -392,9 +392,9 @@ def _test_multi_target_init():
   assert_true(outputs_format, "for train, we should always get the format")
   outputs = Device.make_result_dict(output_list, outputs_format)
   pprint(outputs)
-  assert_in("cost", outputs)
-  assert_greater(outputs["cost"], 0)
-  assert_almost_equal(outputs["cost"], t1_cost)  # default t1 cost via config
+  assert_in("cost:t1", outputs)
+  assert_greater(outputs["cost:t1"], 0)
+  assert_almost_equal(outputs["cost:t1"], t1_cost)  # default t1 cost via config
 
   # Get net params.
   params = device.get_net_train_params(device.trainnet)
