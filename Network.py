@@ -33,6 +33,7 @@ class LayerNetwork(object):
     self.recurrent = False  # any of the from_...() functions will set this
     self.objective = {}
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
+    self.used_targets = set(); " :type: set[str] "
     self.cost = {}
     self.errors = {}
 
@@ -360,10 +361,11 @@ class LayerNetwork(object):
     self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
     self.output[name].set_attr('dtype', dtype)
     if target != "null":
-      self.errors[target] = self.output[name].errors()
+      self.used_targets.add(target)
+      self.errors[name] = self.output[name].errors()
       self.declare_train_params()
       cost = self.output[name].cost()
-      self.cost[target], self.known_grads = cost[:2]
+      self.cost[name], self.known_grads = cost[:2]
       if len(cost) > 2:
         self.ctc_priors = cost[2]
         assert self.ctc_priors is not None
@@ -371,7 +373,7 @@ class LayerNetwork(object):
         self.ctc_priors = None
       #self.objective[target] = self.cost[target] / self.x.shape[1] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
       #self.objective[target] = self.cost[target] / T.sum(self.j) + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
+      self.objective[name] = self.cost[name] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
     #if hasattr(LstmLayer, 'sharpgates'):
       #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
     #self.jacobian = T.jacobian(self.output.z, self.x)
