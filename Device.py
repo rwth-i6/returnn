@@ -793,7 +793,7 @@ class Device(object):
     else:
       return self.testnet
 
-  def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0, pad=False):
+  def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0):
     """
     :param list[int] input_shape: format (time,batch,features)
     :type targets: list[str]

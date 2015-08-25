@@ -30,8 +30,7 @@ def assign_dev_data(device, dataset, batches, pad_batches=False):
   device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window],
                     output_shape=output_shape,
                     targets=dataset.get_target_list(),
-                    max_ctc_length=dataset.get_max_ctc_length(),
-                    pad=pad_batches)
+                    max_ctc_length=dataset.get_max_ctc_length())
   ts = time.time()
   offset_slice = 0
 
