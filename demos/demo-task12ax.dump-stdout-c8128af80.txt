@@ -1,0 +1,25 @@
+CRNN starting up, pid 63237
+pynvml not available, memory information missing
+Device cpu0 proc starting up, pid 63284
+Train data:
+  input: 9 x 1
+  output: {'classes': 2}
+  Task12AXDataset, sequences: 1000, frames: unknown
+Dev data:
+  Task12AXDataset, sequences: 100, frames: unknown
+Devices:
+  cpu0: cpu0 (units: 1 clock: 2.00Ghz memory: 2.0GB) working on 1 batch (update on device)
+Network layer topology:
+  input #: 9
+  lstm_opt hidden_0 #: 10
+  output #: {'classes': [2, 1]}
+net params #: 822
+net trainable params: [W_in_data_hidden_0, W_re_hidden_0, b_hidden_0, W_in_hidden_0_output, b_output]
+start training at epoch 1 and batch 0
+epoch 1 score: 0.322261584505 elapsed: 0:00:03 dev: score 0.218911383375 error 0.139259824494 
+epoch 2 score: 0.193211514649 elapsed: 0:00:03 dev: score 0.144859796537 error 0.0428106936416 
+epoch 3 score: 0.0979802540249 elapsed: 0:00:03 dev: score 0.0807170429845 error 0.0310429680106 
+epoch 4 score: 0.0398100272416 elapsed: 0:00:03 dev: score 0.0278002391763 error 0.00565743269606 
+epoch 5 score: 0.0249811768057 elapsed: 0:00:03 dev: score 0.0182777757816 error 0.00291385904207 
+elapsed: 18.184492
+finished. deleting models.
