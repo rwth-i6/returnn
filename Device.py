@@ -470,7 +470,7 @@ class Device(object):
       outputs_format = self.train_outputs_format
     elif task == "eval":
       outputs_format = self.test_outputs_format
-    
+
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
     #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
