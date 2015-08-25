@@ -13,7 +13,7 @@ from math import ceil
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, share_batches = False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, share_batches = False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -21,7 +21,6 @@ class TaskThread(threading.Thread):
       :type data: Dataset.Dataset
       :type batches: EngineBatch.BatchSetGenerator
       :type start_batch: int
-      :type pad_batches: bool
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
@@ -31,7 +30,6 @@ class TaskThread(threading.Thread):
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
       self.start_batch = start_batch
-      self.pad_batches = pad_batches
       self.devices = devices
       self.network = network
       self.batches = batches
