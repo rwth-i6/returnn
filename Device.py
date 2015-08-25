@@ -934,7 +934,6 @@ class Device(object):
     # Reinit if needed.
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
-    self.targetkeys = network.cost.keys()
     if self.blocking:
       if self.updater:
         self.updater.reset()
