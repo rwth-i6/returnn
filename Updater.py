@@ -84,7 +84,7 @@ class Updater:
       self.net_train_param_deltas = {k: {p : theano.shared(numpy.zeros(p.get_value(borrow=True,
                                                                               return_internal_type=True).shape,
                                                                   dtype=theano.config.floatX))
-                                     for p in network.train_params_vars} for k in network.cost}
+                                     for p in network.train_params_vars} for k in network.costs}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0))
     " :type: theano.compile.sharedvalue.SharedVariable "
@@ -94,7 +94,7 @@ class Updater:
                      value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
-                     for p in network.train_params_vars} for k in self.network.cost}
+                     for p in network.train_params_vars} for k in self.network.costs}
     if self.adagrad:
       self.accu = {}
       for p in self.net_train_param_deltas[self.net_train_param_deltas.keys()[0]]:

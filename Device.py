@@ -327,8 +327,8 @@ class Device(object):
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
-      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.cost.keys())]
-      outputs = [self.trainnet.cost[out] for out in sorted(self.trainnet.cost.keys())]
+      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
+      outputs = [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -361,9 +361,9 @@ class Device(object):
                                        on_unused_input='warn',
                                        name="train_distributed")
 
-      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.cost.keys())]
+      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = [self.testnet.cost[out] for out in sorted(self.testnet.cost.keys())]
+      test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
@@ -390,7 +390,7 @@ class Device(object):
           feat = T.log(feat)
           source.append(feat)
         elif extract == "ce-errsig":
-          feat = T.grad(self.testnet.cost, self.testnet.output['output'].z) #TODO
+          feat = T.grad(self.testnet.costs, self.testnet.output['output'].z) #TODO
           source.append(feat)
           givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:

@@ -222,11 +222,11 @@ class TaskThread(threading.Thread):
             for p, q in zip(vars, devnet):
               p.set_value(q)
             gparams = {}
-            for k in self.parent.network.cost:
+            for k in self.parent.network.costs:
               gparams[k] = {}
               for p in vars:
                 gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-            for i,k in enumerate(self.parent.network.cost):
+            for i,k in enumerate(self.parent.network.costs):
               for p in vars: # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
                 q = res["gparam:%s:%s" % (k, p.name)]
                 if q.shape == p.get_value().shape:

@@ -162,7 +162,7 @@ def test_multi_target_old_init():
 
   # Forward test.
   device.update_data()
-  device.testnet.cost["out1"].name = "out1_cost"  # nice in the func graph
+  device.testnet.costs["out1"].name = "out1_cost"  # nice in the func graph
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
@@ -171,9 +171,9 @@ def test_multi_target_old_init():
     inputs=[device.block_start, device.block_end],
     outputs=[
       device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
-      device.testnet.cost["out1"],
+      device.testnet.costs["out1"],
       device.testnet.output["out1"].p_y_given_x,
-      device.testnet.cost["out2"],
+      device.testnet.costs["out2"],
       device.testnet.output["out2"].p_y_given_x],
     givens=device.make_givens(device.testnet),
     no_default_updates=True,
@@ -344,7 +344,7 @@ def test_multi_target_init():
 
   # Forward test.
   device.update_data()
-  device.testnet.cost["out1"].name = "out1_cost"  # nice in the func graph
+  device.testnet.costs["out1"].name = "out1_cost"  # nice in the func graph
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
@@ -353,9 +353,9 @@ def test_multi_target_init():
     inputs=[device.block_start, device.block_end],
     outputs=[
       device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
-      device.testnet.cost["out1"],
+      device.testnet.costs["out1"],
       device.testnet.output["out1"].p_y_given_x,
-      device.testnet.cost["out2"],
+      device.testnet.costs["out2"],
       device.testnet.output["out2"].p_y_given_x],
     givens=device.make_givens(device.testnet),
     no_default_updates=True,
