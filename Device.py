@@ -776,7 +776,7 @@ class Device(object):
 
   def _generic_exec_on_dev(self, func_name, *args, **kwargs):
     if self.is_device_proc():
-      return self._generic_exec(self, func_name, args, kwargs)
+      return self._generic_exec(func_name, args, kwargs)
     self.input_queue.send("generic-exec")
     self.input_queue.send((func_name, args, kwargs))
     r = self.output_queue.recv()
