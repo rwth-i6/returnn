@@ -207,33 +207,29 @@ class TaskThread(threading.Thread):
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
         if outputs_format and any([k.startswith("gparam:") for k in outputs_format]):
-          output_results = []
+          # WARNING: this code is untested and likely broken!
           for i in xrange(len(self.alloc_devices)):
             res = Device.make_result_dict(device_results[i], outputs_format)
-            if "gparams" in res:
-              self.alloc_devices[i].sync_net_train_params()
-              devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
-              vars = self.parent.network.get_all_params_vars()
-              for p, q in zip(vars, devnet):
-                p.set_value(q)
-              gparams = {}
-              for k in self.parent.network.cost:
-                gparams[k] = {}
-                for p in vars:
-                  gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-              res_gparams = res["gparams"]
-              for i,k in enumerate(self.parent.network.cost):
-                for p, q in zip(vars, res_gparams): # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
-                  if q.shape == p.get_value().shape:
-                    gparams[k][p] = q
-                  elif q.shape:
-                    print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
-              self.parent.updater.setNetParamDeltas(gparams)
-              self.parent.updater.update()
-              self.alloc_devices[i].set_net_params(self.parent.network)
-              res.pop('gparams', None)
-            output_results.append([res[k] for k in res if k != 'gparams'])
-          outputs_format.remove('gparams')
+            self.alloc_devices[i].sync_net_train_params()
+            devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
+            vars = self.parent.network.get_all_params_vars()
+            for p, q in zip(vars, devnet):
+              p.set_value(q)
+            gparams = {}
+            for k in self.parent.network.cost:
+              gparams[k] = {}
+              for p in vars:
+                gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+            for i,k in enumerate(self.parent.network.cost):
+              for p in vars: # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
+                q = res["gparam:%s:%s" % (k, p.name)]
+                if q.shape == p.get_value().shape:
+                  gparams[k][p] = q
+                elif q.shape:
+                  print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
+            self.parent.updater.setNetParamDeltas(gparams)
+            self.parent.updater.update()
+            self.alloc_devices[i].set_net_params(self.parent.network)
         else:
           output_results = device_results
 
