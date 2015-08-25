@@ -230,10 +230,8 @@ class TaskThread(threading.Thread):
             self.parent.updater.setNetParamDeltas(gparams)
             self.parent.updater.update()
             self.alloc_devices[i].set_net_params(self.parent.network)
-        else:
-          output_results = device_results
 
-        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.result = { 'batchess': self.devices_batches, 'results': device_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
         self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
