@@ -22,7 +22,6 @@ config.update({
   "num_epochs": 1,
   "num_inputs": 3,
   "num_outputs": 2,
-  "target": "t1",
 })
 config.network_topology_json = """
 {
@@ -118,10 +117,8 @@ class DummyDeviceBatchRun(TaskThread.DeviceBatchRun):
     self.devices_batches = [None] * len(self.alloc_devices)
     self.num_frames = 13
     batch_dim = 1
-    self.alloc_devices[0].alloc_data(
-      input_shape=(self.num_frames, batch_dim, config.typed_value("num_inputs")),
-      output_shape={"classes": (self.num_frames, batch_dim)},
-      targets=["classes"])
+    self.alloc_devices[0].alloc_data(input_shape=(self.num_frames, batch_dim, config.typed_value("num_inputs")),
+                                     output_shape={"classes": (self.num_frames, batch_dim)})
     self.parent.num_frames += self.num_frames
     self.allocated = True
 

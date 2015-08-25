@@ -20,15 +20,13 @@ def assign_dev_data(device, dataset, batches):
     return False, len(batches)
   assert shape[0] * shape[1] > 0
 
-  output_shape = { k : shape[:] for k in dataset.get_target_list() }
+  output_shape = { k : shape[:] for k in device.used_targets }
   for k in output_shape:
     if dataset.get_target_type(k) != 'int32':
       output_shape[k] += [dataset.get_target_dim(k)]
   import time
   ts = time.time()
-  device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window],
-                    output_shape=output_shape,
-                    targets=dataset.get_target_list(),
+  device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window], output_shape=output_shape,
                     max_ctc_length=dataset.get_max_ctc_length())
   ts = time.time()
   offset_slice = 0
@@ -47,7 +45,7 @@ def assign_dev_data(device, dataset, batches):
       with dataset.lock:
         data = dataset.get_data(seq.seq_idx)
         device.data[o:o + l[0], q] = data[seq.seq_start_frame[0]:seq.seq_end_frame[0]]
-        for target in dataset.get_target_list():
+        for target in device.used_targets:
           targets = dataset.get_targets(target, seq.seq_idx)
           if targets is not None:
             device.targets[target][o:o + l[1], q] = targets[seq.seq_start_frame[1]:seq.seq_end_frame[1]]

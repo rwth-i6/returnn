@@ -194,6 +194,7 @@ class Device(object):
       self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+      self.sync_used_targets()
     except ProcConnectionDied:
       print >>log.v3, "Device proc died"
       interrupt_main()
@@ -252,6 +253,7 @@ class Device(object):
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
+    self.used_targets = set(self.trainnet.y.keys())
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
@@ -793,17 +795,29 @@ class Device(object):
     else:
       return self.testnet
 
-  def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0):
+  def _host__get_used_targets(self):
+    assert self.is_device_proc()
+    return self.used_targets
+
+  def sync_used_targets(self):
+    """
+    Updates self.used_targets for the host.
+    """
+    if self.is_device_proc():
+      return  # Nothing to do.
+    self.used_targets = self._generic_exec_on_dev("_host__get_used_targets")
+
+  def alloc_data(self, input_shape, output_shape, max_ctc_length=0):
     """
     :param list[int] input_shape: format (time,batch,features)
-    :type targets: list[str]
     :type max_ctc_length: int
     """
+    assert self.main_pid == os.getpid()
     assert len(input_shape) == 3
     assert all([s > 0 for s in input_shape])
     import theano
     self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
-    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in targets}
+    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in self.used_targets}
     self.ctc_targets = numpy.zeros((output_shape.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.input_index = numpy.zeros(input_shape[0:2], dtype='int8')
     self.output_index = numpy.zeros(input_shape[0:2], dtype='int8')
@@ -920,6 +934,7 @@ class Device(object):
       r = self.output_queue.recv()
       assert r == "reinit-ready"
       r = self.output_queue.recv()
+      self.sync_used_targets()
       return r
 
   def prepare(self, network, updater=None, train_param_args=None):
@@ -1056,7 +1071,7 @@ class Device(object):
       #y_given = [ (network.y[k], self.y[k][:,i:j].reshape([self.y[k].get_value().shape[0]*(j-i), self.y[k].get_value().shape[2]])) for k in self.y ]
       y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=2)) for k in self.y ]
       y_given = []
-      for k in network.used_targets:
+      for k in self.used_targets:
         y = self.y[k][:,i:j] # TB
         shape = self.y[k].get_value().shape
         if len(shape) == 3:
