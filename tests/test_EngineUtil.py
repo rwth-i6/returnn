@@ -79,6 +79,6 @@ def test_assign_dev_data():
                          num_seqs=10)
   recurrent = False
   batches = [generate_batch(0, dataset), generate_batch(1, dataset)]
-  success, num_batches = assign_dev_data(device, dataset, batches, recurrent)
+  success, num_batches = assign_dev_data(device, dataset, batches)
   assert_true(success)
   assert_equal(num_batches, len(batches))
