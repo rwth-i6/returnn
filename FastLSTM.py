@@ -338,6 +338,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     #TODO
     WS_raw = [W.owner.inputs[0] for W in WS]
     V_h_raw = V_h.owner.inputs[0]
+    #TODO: check
     c_raw = c.owner.inputs[0].owner.inputs[0]
     b_raw = b.owner.inputs[0]
     #we have to make sure that this in only computed once!
@@ -376,64 +377,3 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return 1, 2
 
 LSTMOp2Instance = LSTMOp2()
-
-if __name__ == '__main__':
-  #this is a test for the implementation
-
-  X = T.ftensor3('X')
-  W = T.fmatrix('W')
-  V_h = T.fmatrix('V_h')
-  b = T.fvector('b')
-  c = T.fmatrix('c') #initial state
-  i = T.matrix('i',dtype='int8')
-  Z, H = LSTMOp2Instance(X, W, V_h, c, b, i)
-  DX = T.grad(Z.sum(), X)
-  DW = T.grad(Z.sum(), W)
-  DV_h = T.grad(Z.sum(), V_h)
-  Db = T.grad(Z.sum(), b)
-  Dc = T.grad(Z.sum(), c)
-  f = theano.function(inputs=[X, W, V_h, c, b], outputs=[Z, DX, DW, DV_h, Dc, Db])
-  #g = theano.function(inputs=[X, W, V_h, b], outputs=[Z,H])
-
-  X_val_mat0 = 0.1 * numpy.array([[1,2,3], [4,5,6]], dtype='float32')
-  X_val_mat1 = 0.1 * numpy.array([[5,1,8], [7,0,1]], dtype='float32')
-  X_val_mat2 = 0.1 * numpy.array([[2,1,1], [-7,0,-1]], dtype='float32')
-  X_val = numpy.zeros((3,2,3), dtype='float32')
-  X_val[0, :, :] = X_val_mat0
-  X_val[1, :, :] = X_val_mat1
-  X_val[2, :, :] = X_val_mat2
-  #should be divisable by 4 for lstm, attention: note the .T
-  W_val = 0.1 * numpy.array([[3,1,2], [4,8,0], [7,7,1], [4,2,-5],
-                             [6,-1,-2], [-4,8,0], [-7,2,1], [4,-2,-5],
-                             [6,5,-2], [-4,8,-6], [-7,3,-1], [4,2,-5]], dtype='float32').T
-  #(for lstm) size 1/4th
-  V_h_val = 0.1 * numpy.array([[1,3,5], [2,-1,-1], [4, 8,-5], [0,-2,3],
-                               [7,7,7], [1,2,3], [5,2,1], [-4,8,-4],
-                               [-3,7,-7], [2,-2,-3], [-5,2,1], [-4,-5,-4]],
-                              dtype='float32').T
-  b_val = 0.1 * numpy.array([1,2,3,4,5,6,7,8,9,10,11,12], dtype='float32')
-  c_val = numpy.zeros((2,3), dtype='float32')
-
-  #print "calling g"
-  #Z_val, H_val = g(X_val, W_val, V_h_val, b_val)
-  #print numpy.asarray(Z_val), '\n', numpy.asarray(H_val)
-  #print "done calling g"
-
-  print "calling f"
-  Z_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(X_val, W_val, V_h_val, c_val, b_val)
-  print numpy.asarray(Z_val), '\n', numpy.asarray(DX_val), '\n', \
-    numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
-  print "done calling f"
-
-  print "verifying grad..."
-
-  #def testOp_only_b(b):
-  #  return TestOp()(X_val, W_val, V_h_val, b)[0]
-  #theano.tests.unittest_tools.verify_grad(testOp_only_b, [b_val])
-
-  def LSTMOp2_Z(X, W, V_h, c, b):
-    return LSTMOp2Instance(X, W, V_h, c, b)[0]
-
-  theano.tests.unittest_tools.verify_grad(LSTMOp2_Z, [X_val, W_val, V_h_val, c_val, b_val])
-
-  print "success"

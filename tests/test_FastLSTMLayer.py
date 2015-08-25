@@ -160,7 +160,7 @@ def test_compatible_with_other_implementation():
   V_h_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   b_val = numpy.random.ranf((4 * n_cells,)).astype('float32')
   c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
-  #c_val = numpy.zeros((n_batch, n_cells), dtype='float32')
+  y0_val = numpy.zeros((n_batch, n_cells), dtype='float32')
   i_val = numpy.ones((n_T, n_batch), dtype='int8')
 
   def _step(x_t, c_tm1, y_tm1):
@@ -175,7 +175,7 @@ def test_compatible_with_other_implementation():
     return c_t, y_t
 
   [state, Y2], _ = theano.scan(_step, sequences=[X],
-                          outputs_info=[c, c])
+                          outputs_info=[c, y0_val])
 
   DX2 = T.grad(Y2.sum(), X)
   DW2 = T.grad(Y2.sum(), W)
@@ -190,7 +190,7 @@ def test_compatible_with_other_implementation():
 
   names = ["Y_val", "DX_val", "DW_val", "DV_h_val", "Db_val"]
   for f, s, n in zip(vals_fast, vals_simple, names):
-    assert numpy.allclose(f, s), (n, f, s)
+    assert numpy.allclose(f, s, rtol=3e-5), (n, f, s)
 
   print "sucess"
 
