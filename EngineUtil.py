@@ -4,7 +4,7 @@ from EngineBatch import Batch
 from Log import log
 
 
-def assign_dev_data(device, dataset, batches, pad_batches=False, exclude=None):
+def assign_dev_data(device, dataset, batches, pad_batches=False):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
@@ -13,7 +13,6 @@ def assign_dev_data(device, dataset, batches, pad_batches=False, exclude=None):
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
-  if not exclude: exclude = []
   # The final device.data.shape is in format (time,batch,feature).
   shape = [0, 0]  # time,batch
   for batch in batches:
