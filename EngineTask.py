@@ -42,6 +42,7 @@ class TaskThread(threading.Thread):
       self.elapsed = 0
       self.finalized = False
       self.score = None
+      self.results = {}
       self.num_frames = 0
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
@@ -105,12 +106,53 @@ class TaskThread(threading.Thread):
       :returns some score or None
       :rtype: dict[str] | None
       """
-      pass
+      assert results
+      assert result_format  # train should always have the format
+      assert num_frames > 0
+
+      # We can get info such as "cost:..." and more info such as gradient_norm.
+      # See Device.initialize().
+      # We might also get gparams or ctc_priors or so. We will filter them out below when not needed.
+      results = [Device.make_result_dict(res, result_format) for res in results]
+
+      batch_norm_fact = 1 if not self.share_batches else 1.0 / len(self.devices)
+      summed_results = {}
+      for key in results[0].keys():
+        summed_results[key] = sum([res[key] for res in results]) * batch_norm_fact
+
+      # Accumulate for epoch stats.
+      for key, value in summed_results.items():
+        if key.startswith("gparam:"): continue
+        if key not in self.results:
+          self.results[key] = value
+        else:
+          self.results[key] += value
+
+      # Prepare eval info stats for this (multiple-)batch run.
+      eval_info = {}
+      for key, value in summed_results.items():
+        if key.startswith("gparam:"): continue
+        if key == "ctc_priors": continue
+        eval_info[key] = value / float(num_frames)
+
+      #if numpy.isinf(score) or numpy.isnan(score):
+      #  for i, res in enumerate(results):
+      #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
+      #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
+      #  assert False  # Should not get here.
+      return eval_info
     def initialize(self):
       pass
     def reduce(self, num_frames):
       pass
     def finalize(self):
+      assert self.num_frames > 0
+      # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
+      for key, value in self.results.items():
+        self.results[key] /= float(self.num_frames)
+      # Total score.
+      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")]) / \
+                   float(self.num_frames)
       self.finalized = True
 
     class DeviceBatchRun(threading.Thread):
@@ -164,7 +206,7 @@ class TaskThread(threading.Thread):
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
-        if outputs_format and "gparams..." in outputs_format:
+        if outputs_format and any([k.startswith("gparam:") for k in outputs_format]):
           output_results = []
           for i in xrange(len(self.alloc_devices)):
             res = Device.make_result_dict(device_results[i], outputs_format)
@@ -441,9 +483,8 @@ class TrainTaskThread(TaskThread):
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
+    super(TrainTaskThread, self).initialize()
     self.score = 0
-    if self.do_ctc_priors:
-      self.ctc_priors = numpy.zeros(shape=(self.network.n_out,), dtype=theano.config.floatX)
     for device in self.devices:
       device.set_learning_rate(self.learning_rate)
     if not self.updater.isInitialized:
@@ -551,44 +592,10 @@ class TrainTaskThread(TaskThread):
 
     #pipe.copy_to_device(self.network)
 
-  def evaluate(self, batchess, results, result_format, num_frames):
-    """
-    :param list[list[EngineBatch.Batch]] batchess: batches per device
-    :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
-    :param list[str]|None result_format: describes what we have in a result list
-    :type num_frames: int
-    """
-    assert results
-    assert result_format  # train should always have the format
-    assert num_frames > 0
-    if self.share_batches:
-      num_frames *= len(self.devices)
-    results = [Device.make_result_dict(res, result_format) for res in results]
-    cost = [res["cost"] for res in results]
-    score = sum(cost)
-    #if numpy.isinf(score) or numpy.isnan(score):
-    #  for i, res in enumerate(results):
-    #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
-    #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
-    #  assert False  # Should not get here.
-    if self.do_ctc_priors:
-      for res in results:
-        self.ctc_priors += res["ctc_priors"]
-    self.score += score if not self.share_batches else score / len(self.devices)
-    eval_info = {"score": score / num_frames}
-    # Maybe we got some more info such as gradient_norm.
-    # See Device.initialize().
-    for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
-      eval_info[attrib] = sum([res[attrib] for res in results])
-    return eval_info
-
   def finalize(self):
-    assert self.num_frames > 0
-    # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
-    self.score /= float(self.num_frames)
-    if self.do_ctc_priors:
-      self.ctc_priors /= float(self.num_frames)
     super(TrainTaskThread, self).finalize()
+    if self.do_ctc_priors:
+      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames)
 
 
 class EvalTaskThread(TaskThread):
@@ -601,23 +608,9 @@ class EvalTaskThread(TaskThread):
       for device in self.devices:
         device.set_net_params(self.network)
 
-    def evaluate(self, batchess, results, result_format, num_frames):
-      """
-      :param list[list[EngineBatch.Batch]] batchess: batches per device
-      :param list[list[numpy.ndarray]] results: results per device
-      :type num_frames: int
-      """
-      assert results
-      assert num_frames > 0
-      score = sum([res[0] for res in results])
-      error = sum([res[1] for res in results])
-      self.score += score
-      self.error += error
-      return {"score": score / num_frames, "error": float(error) / num_frames}
-
     def finalize(self):
-      assert self.num_frames > 0
-      self.score /= float(self.num_frames)
+      super(EvalTaskThread, self).finalize()
+      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
       if self.network.loss in ('ctc', 'ce_ctc'):
         assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
         self.error /= float(self.data.num_running_chars)

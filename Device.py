@@ -325,8 +325,8 @@ class Device(object):
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
-      self.train_outputs_format = ["cost"]
-      outputs = [self.trainnet.cost[config.value('target', 'classes')]]
+      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.cost.keys())]
+      outputs = [self.trainnet.cost[out] for out in sorted(self.trainnet.cost.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -345,7 +345,12 @@ class Device(object):
                                        no_default_updates=exclude,
                                        name="train_and_updater")
       else:
-        self.train_outputs_format += ["gparams..."]
+        gparams_outputs_format = []
+        for target in self.trainnet.objective:
+          for param in self.trainnet.train_params_vars:
+            gparams_outputs_format += ["gparam:%s:%s" % (target, param.name)]
+        assert len(gparams_outputs_format) == gparams
+        self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
@@ -354,8 +359,12 @@ class Device(object):
                                        on_unused_input='warn',
                                        name="train_distributed")
 
+      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.cost.keys())]
+      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
+      test_outputs = [self.testnet.cost[out] for out in sorted(self.testnet.cost.keys())]
+      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
-                                    outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
+                                    outputs=test_outputs,
                                     givens=test_givens,
                                     on_unused_input='warn',
                                     no_default_updates=True,
