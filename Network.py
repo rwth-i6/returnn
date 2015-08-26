@@ -36,6 +36,7 @@ class LayerNetwork(object):
     self.costs = {}
     self.total_cost = T.constant(0)
     self.errors = {}
+    self.ctc_priors = None
 
     for target in self.n_out:
       if self.n_out[target][1] == 1:
@@ -341,10 +342,10 @@ class LayerNetwork(object):
     if cost[1]:
       self.known_grads.update(cost[1])
     if len(cost) > 2:
+      if self.ctc_priors:
+        raise Exception("multiple ctc_priors, second one from layer %s" % layer.name)
       self.ctc_priors = cost[2]
       assert self.ctc_priors is not None
-    else:
-      self.ctc_priors = None
 
   def make_classifier(self, name='output', target='classes', **kwargs):
     """
