@@ -132,9 +132,8 @@ class Updater:
 
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
-    for k in net_param_deltas:
-      for p in net_param_deltas[k]:
-        self.net_train_param_deltas[k][p].set_value(net_param_deltas[k][p], borrow=True)
+    for p in net_param_deltas:
+      self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
 
   def norm_constraint(self, tensor_var, max_norm, norm_axes=None, epsilon=1e-7):
     ndim = tensor_var.ndim
