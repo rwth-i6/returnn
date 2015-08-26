@@ -23,7 +23,7 @@ from NetworkRecurrentLayer import RecurrentLayer
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, cost_scale=1.0, copy_input=None, **kwargs):
+  def __init__(self, loss, y, copy_input=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -32,8 +32,6 @@ class OutputLayer(Layer):
     self.y = y
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
-    if cost_scale != 1:
-      self.set_attr("cost_scale", cost_scale)
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -130,6 +128,10 @@ class FramewiseOutputLayer(OutputLayer):
     self.output = self.p_y_given_x
 
   def cost(self):
+    """
+    :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
+    :returns: cost, known_grads
+    """
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
       if self.y.type == T.ivector().type:

@@ -329,8 +329,22 @@ class LayerNetwork(object):
     """
     assert layer.name
     self.hidden[layer.name] = layer
-    self.constraints += layer.make_constraints()
+    self.add_cost_and_constraints(layer)
     return layer.output_index()
+
+  def add_cost_and_constraints(self, layer):
+    self.constraints += layer.make_constraints()
+    cost = layer.cost()
+    if cost[0]:
+      self.costs[layer.name] = cost[0]
+      self.total_cost += self.costs[layer.name] * layer.cost_scale()
+    if cost[1]:
+      self.known_grads.update(cost[1])
+    if len(cost) > 2:
+      self.ctc_priors = cost[2]
+      assert self.ctc_priors is not None
+    else:
+      self.ctc_priors = None
 
   def make_classifier(self, name='output', target='classes', **kwargs):
     """
@@ -368,19 +382,8 @@ class LayerNetwork(object):
     self.output[name].set_attr('dtype', dtype)
     if target != "null":
       self.errors[name] = self.output[name].errors()
-      self.declare_train_params()
-      cost = self.output[name].cost()
-      self.costs[name] = cost[0]
-      if cost[1]:
-        self.known_grads.update(cost[1])
-      if len(cost) > 2:
-        self.ctc_priors = cost[2]
-        assert self.ctc_priors is not None
-      else:
-        self.ctc_priors = None
-      cost_scale = T.constant(self.output[name].attrs.get("cost_scale", 1.0), dtype="float32")
-      self.total_cost += self.costs[name] * cost_scale
-      self.constraints += self.output[name].make_constraints()
+    self.add_cost_and_constraints(self.output[name])
+    self.declare_train_params()
 
   def get_objective(self):
     return self.total_cost + self.constraints
