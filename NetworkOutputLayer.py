@@ -190,7 +190,7 @@ class SequenceOutputLayer(OutputLayer):
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
-  def cost(self, y):
+  def cost(self):
     """
     :param y: shape (time*batch,) -> label
     :return: error scalar, known_grads dict
@@ -215,14 +215,14 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
     elif self.loss == 'ctc':
-      err, grad, priors = CTCOp()(self.p_y_given_x, y, T.sum(self.index, axis=0))
+      err, grad, priors = CTCOp()(self.p_y_given_x, self.y, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'ce_ctc':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x = T.nnet.softmax(y_m)
       #pcx = p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
-      pcx = p_y_given_x[self.i, y[self.i]]
+      pcx = p_y_given_x[self.i, self.y[self.i]]
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
     elif self.loss == 'ctc2':
@@ -230,7 +230,7 @@ class SequenceOutputLayer(OutputLayer):
       max_time = self.z.shape[0]
       num_batches = self.z.shape[1]
       time_mask = self.index.reshape((max_time, num_batches))
-      y_batches = y.reshape((max_time, num_batches))
+      y_batches = self.y.reshape((max_time, num_batches))
       targets, seq_lens = uniq_with_lengths(y_batches, time_mask)
       log_pcx = self.z - log_sum(self.z, axis=0, keepdims=True)
       err = ctc_cost(log_pcx, time_mask, targets, seq_lens)
@@ -240,7 +240,7 @@ class SequenceOutputLayer(OutputLayer):
     if self.loss in ('ctc', 'ce_ctc'):
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, self.y, T.sum(self.index, axis=0)))
     else:
-      return super(SequenceOutputLayer, self).errors(self.y)
+      return super(SequenceOutputLayer, self).errors()
 
 class LstmOutputLayer(RecurrentLayer):
   def __init__(self, n_out, n_units, y, sharpgates='none', encoder = None, loss = 'cedec', loop = -1, n_dec = 0, n_proto = 0, **kwargs):
