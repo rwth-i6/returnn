@@ -90,7 +90,6 @@ class OutputLayer(Layer):
 
   def errors(self):
     """
-    :type y: theano.Variable
     :rtype: theano.Variable
     """
     if self.y.dtype.startswith('int'):
