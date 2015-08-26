@@ -32,6 +32,7 @@ class LayerNetwork(object):
     self.train_param_args = None; """ :type: dict[str] """
     self.recurrent = False  # any of the from_...() functions will set this
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
+    self.known_grads = {}; " :type: dict[theano.Variable,theano.Variable]"
     self.costs = {}
     self.total_cost = T.constant(0)
     self.errors = {}
@@ -369,7 +370,9 @@ class LayerNetwork(object):
       self.errors[name] = self.output[name].errors()
       self.declare_train_params()
       cost = self.output[name].cost()
-      self.costs[name], self.known_grads = cost[:2]
+      self.costs[name] = cost[0]
+      if cost[1]:
+        self.known_grads.update(cost[1])
       if len(cost) > 2:
         self.ctc_priors = cost[2]
         assert self.ctc_priors is not None
