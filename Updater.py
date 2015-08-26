@@ -100,8 +100,8 @@ class Updater:
       for p in self.net_train_param_deltas[self.net_train_param_deltas.keys()[0]]:
         shape = p.get_value(borrow=True, return_internal_type=True).shape
         scale = numpy.sqrt(12. / numpy.sum(shape))
-        values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
-        values = p.get_value()
+        #values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
+        #values = p.get_value()
         values = numpy.zeros(shape, dtype=theano.config.floatX)
         self.accu[p] = theano.shared(value=values)
 
