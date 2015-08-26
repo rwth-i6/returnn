@@ -14,7 +14,8 @@ class LayerNetwork(object):
   def __init__(self, n_in, n_out):
     """
     :param int n_in: input dim of the network
-    :param dict[str,(int,int)] n_out: output dim of the network
+    :param dict[str,(int,int)] n_out: output dim of the network.
+      first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = {} #T.ivector('y'); """ :type: theano.Variable """
