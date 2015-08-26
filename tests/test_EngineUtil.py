@@ -77,7 +77,6 @@ def test_assign_dev_data():
   dataset = DummyDataset(input_dim=config.int("num_inputs", 0),
                          output_dim=config.int("num_outputs", 0),
                          num_seqs=10)
-  recurrent = False
   batches = [generate_batch(0, dataset), generate_batch(1, dataset)]
   success, num_batches = assign_dev_data(device, dataset, batches)
   assert_true(success)
