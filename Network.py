@@ -62,8 +62,10 @@ class LayerNetwork(object):
     """
     json_content = None
     if config.has("network") and config.is_typed("network"):
-      json_content = config.value()
-    if config.network_topology_json:
+      json_content = config.typed_value("network")
+      assert isinstance(json_content, dict)
+      assert json_content
+    elif config.network_topology_json:
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
@@ -72,14 +74,15 @@ class LayerNetwork(object):
         print >> log.v4, "------ END JSON CONTENT ------"
         assert False, "invalid json content, %r" % e
       assert isinstance(json_content, dict)
+      if 'network' in json_content:
+        json_content = json_content['network']
+      assert json_content
     if not json_content:
       if not mask:
         if sum(config.float_list('dropout', [0])) > 0.0:
           mask = "dropout"
       description = LayerNetworkDescription.from_config(config)
       json_content = description.to_json_content(mask=mask)
-    if 'network' in json_content:
-      json_content = json_content['network']
     return json_content
 
   @classmethod
