@@ -31,9 +31,9 @@ class LayerNetwork(object):
     self.description = None; """ :type: LayerNetworkDescription | None """
     self.train_param_args = None; """ :type: dict[str] """
     self.recurrent = False  # any of the from_...() functions will set this
-    self.objective = {}
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.costs = {}
+    self.total_cost = T.constant(0)
     self.errors = {}
 
     for target in self.n_out:
@@ -372,12 +372,12 @@ class LayerNetwork(object):
         assert self.ctc_priors is not None
       else:
         self.ctc_priors = None
-      #self.objective[target] = self.cost[target] / self.x.shape[1] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      #self.objective[target] = self.cost[target] / T.sum(self.j) + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      self.objective[name] = self.costs[name] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-    #if hasattr(LstmLayer, 'sharpgates'):
-      #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
-    #self.jacobian = T.jacobian(self.output.z, self.x)
+      loss_scale = T.constant(self.output[name].attrs.get("loss_scale", 1.0), dtype="float32")
+      self.total_cost += self.costs[name] * loss_scale
+      self.constraints += self.output[name].make_constraints()
+
+  def get_objective(self):
+    return self.total_cost + self.constraints
 
   def get_params_vars(self, hidden_layer_selection, with_output):
     """

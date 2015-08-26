@@ -271,33 +271,29 @@ class Device(object):
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
       exclude = []
-      self.gradients = { k : {} for k in self.trainnet.objective.keys() }
+      self.gradients = {}
       if config.bool('debug_gradient_norm', False):
         # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
         # See self.fast_check_model_is_broken_from_result().
         self.gradient_norm = 0
       else:
         self.gradient_norm = None
-      for target in self.trainnet.objective:
-        for pi, param in enumerate(self.trainnet.train_params_vars):
-          if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-          if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
-            gparam = 0
-          else:
-            try:
-              gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
-            except theano.gradient.DisconnectedInputError:
-              gparam = 0
-          if gparam == 0:
-            exclude.append(param)
-            print >> log.v4, "exclude:", self.name, target, param.name
-            gparams.append(T.constant(0))
-            continue
-          #update_specs['layers'].append(param.layer.name)
-          self.gradients[target][param] = gparam
-          gparams.append(theano.Out(gparam, borrow = True))
-          if self.gradient_norm is not None:
-            self.gradient_norm += T.sum(gparam ** 2)
+      for pi, param in enumerate(self.trainnet.train_params_vars):
+        if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
+        if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
+          gparam = 0
+        else:
+          gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+        if gparam == 0:
+          exclude.append(param)
+          print >> log.v4, "exclude:", self.name, param.name
+          gparams.append(T.constant(0))
+          continue
+        #update_specs['layers'].append(param.layer.name)
+        self.gradients[param] = gparam
+        gparams.append(theano.Out(gparam, borrow = True))
+        if self.gradient_norm is not None:
+          self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
 
     # initialize functions
@@ -348,9 +344,8 @@ class Device(object):
                                        name="train_and_updater")
       else:
         gparams_outputs_format = []
-        for target in self.trainnet.objective:
-          for param in self.trainnet.train_params_vars:
-            gparams_outputs_format += ["gparam:%s:%s" % (target, param.name)]
+        for param in self.trainnet.train_params_vars:
+          gparams_outputs_format += ["gparam:%s" % param.name]
         assert len(gparams_outputs_format) == gparams
         self.train_outputs_format += gparams_outputs_format
         outputs += gparams

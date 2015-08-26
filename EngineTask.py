@@ -226,13 +226,12 @@ class TaskThread(threading.Thread):
               gparams[k] = {}
               for p in vars:
                 gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-            for i,k in enumerate(self.parent.network.costs):
-              for p in vars: # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
-                q = res["gparam:%s:%s" % (k, p.name)]
-                if q.shape == p.get_value().shape:
-                  gparams[k][p] = q
-                elif q.shape:
-                  print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
+            for p in vars:
+              q = res["gparam:%s" % p.name]
+              if q.shape == p.get_value().shape:
+                gparams[k][p] = q
+              elif q.shape:
+                print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
             self.parent.updater.setNetParamDeltas(gparams)
             self.parent.updater.update()
             self.alloc_devices[i].set_net_params(self.parent.network)
