@@ -375,8 +375,8 @@ class LayerNetwork(object):
         assert self.ctc_priors is not None
       else:
         self.ctc_priors = None
-      loss_scale = T.constant(self.output[name].attrs.get("loss_scale", 1.0), dtype="float32")
-      self.total_cost += self.costs[name] * loss_scale
+      cost_scale = T.constant(self.output[name].attrs.get("cost_scale", 1.0), dtype="float32")
+      self.total_cost += self.costs[name] * cost_scale
       self.constraints += self.output[name].make_constraints()
 
   def get_objective(self):
