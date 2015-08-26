@@ -5,8 +5,6 @@ from ActivationFunctions import strtoact
 
 
 class HiddenLayer(Layer):
-  recurrent = False
-
   def __init__(self, activation="tanh", **kwargs):
     """
     :type activation: str | list[str]
@@ -39,6 +37,42 @@ class ForwardLayer(HiddenLayer):
         self.z += self.dot(self.mass * m * s.output, W_in)
     if not any(s.attrs['sparse'] for s in self.sources):
       self.z += self.b
+    self.make_output(self.z if self.activation is None else self.activation(self.z))
+
+
+class CopyLayer(Layer):
+  layer_class = "copy"
+
+  def __init__(self, activation=None, **kwargs):
+    # The base class will already have a matrix, a bias and an activation function.
+    # We will reset all this.
+    # This is easier for now than to refactor the ForwardLayer.
+    kwargs['n_out'] = 1  # This is a hack so that the super init is fast. Will be reset later.
+    super(CopyLayer, self).__init__(**kwargs)
+    self.params = {}  # Reset all params.
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+    self.set_attr('n_out', sum([s.attrs['n_out'] for s in self.sources]))
+    if activation:
+      self.set_attr('activation', activation.encode("utf8"))
+      self.activation = strtoact(activation)
+    else:
+      self.activation = None
+
+    assert len(self.sources) == len(self.masks)
+    zs = []
+    for s, m in zip(self.sources, self.masks):
+      if m is None:
+        zs += [s.output]
+      else:
+        zs += [self.mass * m * s.output]
+    if len(zs) > 1:
+      # We get (time,batch,dim) input shape.
+      # Concat over dimension, axis=2.
+      self.z = T.concatenate(zs, axis=2)
+    elif len(zs) == 1:
+      self.z = zs[0]
+    else:
+      raise Exception("CopyLayer needs at least one source")
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
 
