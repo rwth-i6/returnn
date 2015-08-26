@@ -15,8 +15,26 @@ class Config:
     self.typed_dict = {}; """ :type: dict[str] """  # could be loaded via JSON or so
     self.network_topology_json = None; """ :type: str | None """
 
-  def load_file(self, filename):
-    for line in open(filename).readlines():
+  def load_file(self, f):
+    if isinstance(f, str):
+      content = open(f).read()
+    else:
+      # assume stream-like
+      content = f.read()
+    content = content.strip()
+    if content.startswith("{"):  # assume JSON
+      import json
+      from Util import json_remove_comments
+      content = json_remove_comments(content)
+      try:
+        json_content = json.loads(content)
+      except ValueError as e:
+        raise Exception("config looks like JSON but invalid json content, %r" % e)
+      assert isinstance(json_content, dict)
+      self.update(json_content)
+      return
+    # old line-based format
+    for line in content.splitlines():
       if "#" in line:  # Strip away comment.
         line = line[:line.index("#")]
       line = line.strip()
