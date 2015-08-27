@@ -59,7 +59,7 @@ class Engine:
     return file_list
 
   @classmethod
-  def get_last_epoch_model(cls, config):
+  def get_epoch_model(cls, config):
     """
     :type config: Config.Config
     :returns (epoch, modelFilename)
@@ -118,7 +118,7 @@ class Engine:
       start_batch_config = None
     else:
       start_batch_config = int(start_batch_mode)
-    last_epoch, _ = cls.get_last_epoch_model(config)
+    last_epoch, _ = cls.get_epoch_model(config)
     if last_epoch is None:
       start_epoch = 1
       start_batch = start_batch_config or 0
@@ -165,15 +165,15 @@ class Engine:
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
 
-    last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
+    epoch, model_epoch_filename = self.get_epoch_model(config)
 
-    if not last_model_epoch_filename and self.start_epoch in (1, None):
-      last_model_epoch_filename = config.value('load', '')
-    assert last_model_epoch_filename or self.start_epoch
+    if not model_epoch_filename and self.start_epoch in (1, None):
+      model_epoch_filename = config.value('load', '')
+    assert model_epoch_filename or self.start_epoch
 
-    if last_model_epoch_filename:
-      print >> log.v1, "loading weights from", last_model_epoch_filename
-      last_model_hdf = h5py.File(last_model_epoch_filename, "r")
+    if model_epoch_filename:
+      print >> log.v1, "loading weights from", model_epoch_filename
+      last_model_hdf = h5py.File(model_epoch_filename, "r")
     else:
       last_model_hdf = None
 
@@ -186,7 +186,7 @@ class Engine:
       if self.pretrain:
         # This would be obsolete if we don't want to load an existing model.
         # In self.init_train_epoch(), we initialize a new model.
-        network = self.pretrain.get_network_for_epoch(last_epoch or self.start_epoch)
+        network = self.pretrain.get_network_for_epoch(epoch or self.start_epoch)
       else:
         network = LayerNetwork.from_config_topology(config)
 
