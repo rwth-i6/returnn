@@ -80,26 +80,26 @@ class Engine:
     existing_models = cls.get_existing_models(config)
 
     if existing_models:
-      last = existing_models[-1]
+      epoch_model = existing_models[-1]
 
     elif load_model_epoch_filename:
       assert os.path.exists(load_model_epoch_filename)
-      last = (None, None)
+      epoch_model = (None, None)
 
     else:
-      last = (None, None)
+      epoch_model = (None, None)
 
     if start_epoch == 1:
-      if last[0]:
-        print >> log.v4, "warning: there is an existing model: %s" % (last,)
-        last = (None, None)
+      if epoch_model[0]:
+        print >> log.v4, "warning: there is an existing model: %s" % (epoch_model,)
+        epoch_model = (None, None)
     elif start_epoch > 1:
-      if last[0] != start_epoch - 1:
-        print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, last)
-        last = (start_epoch - 1, existing_models[start_epoch - 1])
+      if epoch_model[0] != start_epoch - 1:
+        print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, epoch_model)
+        epoch_model = (start_epoch - 1, existing_models[start_epoch - 1])
 
-    cls._epoch_model = last
-    return last
+    cls._epoch_model = epoch_model
+    return epoch_model
 
   @classmethod
   def get_train_start_epoch_batch(cls, config):
