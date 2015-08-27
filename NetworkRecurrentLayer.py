@@ -79,7 +79,7 @@ class Unit(Container):
                              #strict = True,
                              truncate_gradient = truncate_gradient,
                              go_backwards = go_backwards,
-                             sequences = [xc,z,i],
+                             sequences = [xc,z,i,T.arange(i.shape[0])],
                              non_sequences = non_sequences,
                              outputs_info = outputs_info)
     return outputs
@@ -179,6 +179,8 @@ class RecurrentUnitLayer(Layer):
                unit = 'lstm', # cell type
                n_dec = 0, # number of time steps to decode
                attention = False, # soft-attention
+               attention_step = 0, # soft attention step
+               attention_beam = -1, # soft attention context window
                base = None,
                lm = False, # language model
                droplm = 0.0, # language model drop during training
@@ -209,6 +211,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('lm', lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
+    self.set_attr('attention_step', attention_step)
+    self.set_attr('attention_beam', attention_beam)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -283,9 +287,12 @@ class RecurrentUnitLayer(Layer):
       assert encoder, "attention networks are only defined for decoder networks"
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
       src = []
+      src_names = []
       for e in base:
-        src += [s.output for s in e.sources]
-        n_in += sum([s.attrs['n_out'] for s in e.sources])
+        src_base = [ s for s in e.sources if s.name not in src_names ]
+        src_names += [ s.name for s in e.sources ]
+        src += [s.output for s in src_base]
+        n_in += sum([s.attrs['n_out'] for s in src_base])
       self.xc = T.concatenate(src, axis=-1)
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
 
@@ -305,6 +312,10 @@ class RecurrentUnitLayer(Layer):
       self.add_param(self.W_att_in, name = "W_att_in")
 
       non_sequences += [self.xc, self.zc]
+      if attention_step > 0:
+        attention_step = T.constant(attention_step, 'int32')
+        if attention_beam == -1: attention_beam = attention_step
+        attention_beam = T.constant(attention_beam, 'int32')
 
     if self.attrs['lm']:
       if not 'target' in self.attrs:
@@ -349,7 +360,7 @@ class RecurrentUnitLayer(Layer):
         #  for j in xrange(unit.n_act):
         #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
         #  offset += encoder[i].attrs['n_out']
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=-1) for i in xrange(unit.n_act) ]
+        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             if self.attrs['lm']:
@@ -369,7 +380,7 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      def step(x_t, z_t, i_t, *args):
+      def step(x_t, z_t, i_t, t, *args):
         if self.attrs['attention']:
           xc = args[-2]
           zc = args[-1]
@@ -401,11 +412,12 @@ class RecurrentUnitLayer(Layer):
         else:
           if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
             #f_t = T.dot(T.concatenate([h_p.dimshuffle('x',0,1).repeat(xc.shape[0], axis=0),xc], axis = 2), self.W_att).reshape((xc.shape[0],h_p.shape[0]))
-            f_t = zc + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
+            att = zc if attention_step == 0 else zc[ T.max(t * attention_step - attention_beam,0) : T.min(t * attention_step + attention_beam,zc.shape[0]) ]
+            f_t = att + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
             #f_t = z_t + T.dot(h_p, self.W_att_re)
             #f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
             f_e = T.exp(f_t)
-            w_t = (f_e / T.sum(f_e, axis=0)).dimshuffle(0,1,'x') # T.nnet.softmax gives weird results when cudnn is installed
+            w_t = (f_e / T.sum(f_e, axis=0, keepdims=True)).dimshuffle(0,1,'x') # T.nnet.softmax gives weird results when cudnn is installed
             #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
