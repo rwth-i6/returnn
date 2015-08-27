@@ -419,13 +419,13 @@ class ConvPoolLayer(ForwardLayer):
 class LossLayer(Layer):
   layer_class = "loss"
 
-  def __init__(self, loss, y, copy_input=None, **kwargs):
+  def __init__(self, loss, copy_input=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
     """
     super(LossLayer, self).__init__(**kwargs)
-    self.y = y
+    y = self.y_in
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
     if not copy_input:
@@ -445,59 +445,58 @@ class LossLayer(Layer):
           self.z += self.dot(self.mass * m * source.output, W)
     else:
       self.z = copy_input.output
-    assert self.z.ndim == 3
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     if self.y.dtype.startswith('int'):
-      self.i = (self.index.flatten() > 0).nonzero()
+      i = (self.index.flatten() > 0).nonzero()
     elif self.y.dtype.startswith('float'):
-      self.i = (self.index.flatten() > 0).nonzero()
+      i = (self.index.flatten() > 0).nonzero()
     self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
-    if self.loss == 'priori':
-      self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
     n_reps = T.switch(T.eq(self.z.shape[0], 1), self.index.shape[0], 1)
     output = self.output.repeat(n_reps,axis=0)
     y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     self.known_grads = None
-    if loss == 'ce' or loss == 'priori':
+    if loss == 'ce':
       if self.y.type == T.ivector().type:
-        # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
-        # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[i], y_idx=y[i])
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
+        pcx = T.nnet.softmax(y_m[i])
+        nll = -T.dot(T.log(T.clip(pcx, 1.e-38, 1.e20)), y[i].T)
       self.constraints += T.sum(nll)
+      self.make_output(pcx.reshape(output.shape))
     elif loss == 'entropy':
       h_e = T.exp(self.y_m) #(TB)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD
       ee = self.index * -T.sum(pcx * T.log(pcx)) # TB
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y) # TB
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y) # TB
       ce = nll.reshape(self.index.shape) * self.index # TB
       y = self.y.reshape(self.index.shape) * self.index # TB
       f = T.any(T.gt(y,0), axis=0) # B
       self.constraints += T.sum(f * T.sum(ce, axis=0) + (1-f) * T.sum(ee, axis=0))
+      self.make_output(pcx.reshape(output.shape))
     elif loss == 'priori':
-      pcx = self.p_y_given_x[self.i, self.y[self.i]]
+      pcx = T.nnet.softmax(y_m)[i, y[i]]
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
       self.constraints += -T.sum(T.log(pcx))
+      self.make_output(pcx.reshape(output.shape))
     elif loss == 'sse':
       if self.y.dtype.startswith('int'):
-        y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
+        y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
         y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
-        self.constraints += T.mean(T.sqr(self.y_m[self.i] - y_oh[self.i]))
+        self.constraints += T.mean(T.sqr(y_m[i] - y_oh[i]))
       else:
-        self.constraints += T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
+        self.constraints += T.sum(T.sqr(y_m[i] - y.reshape(y_m.shape)[i]))
+      self.make_output(y_m[i].reshape(output.shape))
     else:
-      assert False, "unknown loss: %s" % loss
+      raise NotImplementedError()
 
-  def errors(self):
-    if self.y.dtype.startswith('int'):
-      if self.y.type == T.ivector().type:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y[self.i]))
+    if y.dtype.startswith('int'):
+      if y.type == T.ivector().type:
+        self.error = T.sum(T.neq(T.argmax(y_m[i], axis=-1), y[i]))
       else:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
-    elif self.y.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
+        self.error = T.sum(T.neq(T.argmax(y_m[i], axis=-1), T.argmax(y[i], axis = -1)))
+    elif y.dtype.startswith('float'):
+      self.error = T.sum(T.sqr(y_m[i] - y.reshape(y_m.shape)[i]))
     else:
       raise NotImplementedError()
