@@ -22,7 +22,7 @@ import time
 
 class Engine:
 
-  _last_epoch_model = None; """ :type: (int|None,str|None) """  # See get_last_epoch_model().
+  _epoch_model = None; """ :type: (int|None,str|None) """  # See get_epoch_model().
 
   def __init__(self, devices):
     """
@@ -59,17 +59,20 @@ class Engine:
     return file_list
 
   @classmethod
-  def get_last_epoch_model(cls, config):
+  def get_epoch_model(cls, config):
     """
     :type config: Config.Config
     :returns (epoch, modelFilename)
     :rtype: (int|None, str|None)
     """
     # XXX: We cache it, although this is wrong if we have changed the config.
-    if cls._last_epoch_model:
-      return cls._last_epoch_model
+    if cls._epoch_model:
+      return cls._epoch_model
 
     load_model_epoch_filename = config.value('load', '')
+    if load_model_epoch_filename:
+      assert os.path.exists(load_model_epoch_filename)
+
     start_epoch_mode = config.value('start_epoch', 'auto')
     if start_epoch_mode == 'auto':
       start_epoch = None
@@ -79,27 +82,40 @@ class Engine:
 
     existing_models = cls.get_existing_models(config)
 
-    if existing_models:
-      last = existing_models[-1]
+    # Only use this when we don't train.
+    # For training, we first consider existing models before we take the 'load' into account.
+    if load_model_epoch_filename and config.value('task', 'train') != 'train':
+      # Ignore the epoch. To keep it consistent with the case below.
+      epoch_model = (None, load_model_epoch_filename)
 
+    # In case of training, always first consider existing models.
+    # This is because we reran CRNN training, we usually don't want to train from scratch
+    # but resume where we stopped last time.
+    elif existing_models:
+      epoch_model = existing_models[-1]
+      if load_model_epoch_filename:
+        print >> log.v4, "note: there is a 'load' which we ignore because of existing model"
+
+    # Now, consider this also in the case when we train, as an initial model import.
     elif load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename)
-      last = (None, None)
+      # Don't use the model epoch as the start epoch in training.
+      # We use this as an import for training.
+      epoch_model = (None, load_model_epoch_filename)
 
     else:
-      last = (None, None)
+      epoch_model = (None, None)
 
     if start_epoch == 1:
-      if last[0]:
-        print >> log.v4, "warning: there is an existing model: %s" % (last,)
-        last = (None, None)
+      if epoch_model[0]:  # existing model
+        print >> log.v4, "warning: there is an existing model: %s" % (epoch_model,)
+        epoch_model = (None, None)
     elif start_epoch > 1:
-      if last[0] != start_epoch - 1:
-        print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, last)
-        last = (start_epoch - 1, existing_models[start_epoch - 1])
+      if epoch_model[0]:
+        assert epoch_model[0] == start_epoch - 1, \
+          "warning: start_epoch %i but there is %s" % (start_epoch, epoch_model)
 
-    cls._last_epoch_model = last
-    return last
+    cls._epoch_model = epoch_model
+    return epoch_model
 
   @classmethod
   def get_train_start_epoch_batch(cls, config):
@@ -118,7 +134,7 @@ class Engine:
       start_batch_config = None
     else:
       start_batch_config = int(start_batch_mode)
-    last_epoch, _ = cls.get_last_epoch_model(config)
+    last_epoch, _ = cls.get_epoch_model(config)
     if last_epoch is None:
       start_epoch = 1
       start_batch = start_batch_config or 0
@@ -165,15 +181,12 @@ class Engine:
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
 
-    last_epoch, last_model_epoch_filename = self.get_last_epoch_model(config)
+    epoch, model_epoch_filename = self.get_epoch_model(config)
+    assert model_epoch_filename or self.start_epoch
 
-    if not last_model_epoch_filename and self.start_epoch in (1, None):
-      last_model_epoch_filename = config.value('load', '')
-    assert last_model_epoch_filename or self.start_epoch
-
-    if last_model_epoch_filename:
-      print >> log.v1, "loading weights from", last_model_epoch_filename
-      last_model_hdf = h5py.File(last_model_epoch_filename, "r")
+    if model_epoch_filename:
+      print >> log.v1, "loading weights from", model_epoch_filename
+      last_model_hdf = h5py.File(model_epoch_filename, "r")
     else:
       last_model_hdf = None
 
@@ -186,11 +199,13 @@ class Engine:
       if self.pretrain:
         # This would be obsolete if we don't want to load an existing model.
         # In self.init_train_epoch(), we initialize a new model.
-        network = self.pretrain.get_network_for_epoch(last_epoch or self.start_epoch)
+        network = self.pretrain.get_network_for_epoch(epoch or self.start_epoch)
       else:
         network = LayerNetwork.from_config_topology(config)
 
     # We have the parameters randomly initialized at this point.
+    # In training, as an initialization, we can copy over the params of an imported model,
+    # where our topology might slightly differ from the imported model.
     if config.bool('copy_from_initial_loaded_model', False) and self.start_epoch == 1:
       assert last_model_hdf, "need 'load' in config for copy_from_initial_loaded_model"
       old_network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
