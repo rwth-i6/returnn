@@ -11,7 +11,6 @@ import shutil
 import numpy
 
 
-sys.stderr = sys.stdout
 log.initialize()
 
 def install_sigint_handler():

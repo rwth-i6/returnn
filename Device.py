@@ -119,7 +119,6 @@ class Device(object):
     self.update_total_time = 0
     self.num_frames = 0
     self.num_updates = 0
-    self.tot_cost = 0
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
@@ -173,7 +172,7 @@ class Device(object):
       import random
       theano_flags["compiledir_format"] += "-%s" % ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(5))
     elif self.name[-1] == 'Z':
-      self.name[-1] = 'X'
+      self.name = self.name[:-1] + 'X'
     # Set device via flags.
     if self.name == "cpuX":
       theano_flags["device"] = "cpu"
@@ -195,6 +194,7 @@ class Device(object):
       self.id = self.output_queue.recv(); """ :type: int """
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
+      self.sync_used_targets()
     except ProcConnectionDied:
       print >>log.v3, "Device proc died"
       interrupt_main()
@@ -253,6 +253,7 @@ class Device(object):
     # initialize batch
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
+    self.used_targets = set(self.trainnet.y.keys())
     for k in self.trainnet.y:
       if self.trainnet.y[k].type == T.ivector().type:
         self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
@@ -270,33 +271,29 @@ class Device(object):
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
       exclude = []
-      self.gradients = { k : {} for k in self.y }
+      self.gradients = {}
       if config.bool('debug_gradient_norm', False):
         # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
         # See self.fast_check_model_is_broken_from_result().
         self.gradient_norm = 0
       else:
         self.gradient_norm = None
-      for target in self.trainnet.objective:
-        for pi, param in enumerate(self.trainnet.train_params_vars):
-          if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-          if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
-            gparam = 0
-          else:
-            try:
-              gparam = T.grad(self.trainnet.objective[target], param, known_grads = self.trainnet.known_grads)
-            except theano.gradient.DisconnectedInputError:
-              gparam = 0
-          if gparam == 0:
-            exclude.append(param)
-            print >> log.v4, "exclude:", self.name, param.name
-            gparams.append(T.constant(0))
-            continue
-          #update_specs['layers'].append(param.layer.name)
-          self.gradients[target][param] = gparam
-          gparams.append(theano.Out(gparam, borrow = True))
-          if self.gradient_norm is not None:
-            self.gradient_norm += T.sum(gparam ** 2)
+      for pi, param in enumerate(self.trainnet.train_params_vars):
+        if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
+        if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
+          gparam = 0
+        else:
+          gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+        if gparam == 0:
+          exclude.append(param)
+          print >> log.v4, "exclude:", self.name, param.name
+          gparams.append(T.constant(0))
+          continue
+        #update_specs['layers'].append(param.layer.name)
+        self.gradients[param] = gparam
+        gparams.append(theano.Out(gparam, borrow = True))
+        if self.gradient_norm is not None:
+          self.gradient_norm += T.sum(gparam ** 2)
     if log.verbose[4]: progress_bar()
 
     # initialize functions
@@ -326,8 +323,8 @@ class Device(object):
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
-      self.train_outputs_format = ["cost"]
-      outputs = [self.trainnet.cost[config.value('target', 'classes')]]
+      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
+      outputs = [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -346,7 +343,11 @@ class Device(object):
                                        no_default_updates=exclude,
                                        name="train_and_updater")
       else:
-        self.train_outputs_format += ["gparams..."]
+        gparams_outputs_format = []
+        for param in self.trainnet.train_params_vars:
+          gparams_outputs_format += ["gparam:%s" % param.name]
+        assert len(gparams_outputs_format) == gparams
+        self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
@@ -355,8 +356,12 @@ class Device(object):
                                        on_unused_input='warn',
                                        name="train_distributed")
 
+      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
+      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
+      test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
+      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
-                                    outputs=[self.testnet.cost[config.value('target', 'classes')], self.testnet.errors[config.value('target', 'classes')]],
+                                    outputs=test_outputs,
                                     givens=test_givens,
                                     on_unused_input='warn',
                                     no_default_updates=True,
@@ -380,7 +385,7 @@ class Device(object):
           feat = T.log(feat)
           source.append(feat)
         elif extract == "ce-errsig":
-          feat = T.grad(self.testnet.cost, self.testnet.output['output'].z) #TODO
+          feat = T.grad(self.testnet.costs, self.testnet.output['output'].z) #TODO
           source.append(feat)
           givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
@@ -460,6 +465,8 @@ class Device(object):
     outputs_format = None
     if task.startswith("train"):
       outputs_format = self.train_outputs_format
+    elif task == "eval":
+      outputs_format = self.test_outputs_format
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
@@ -721,6 +728,7 @@ class Device(object):
       assert self.output_queue.recv() == "end-get-net-train-params"
       vars = network.get_all_params_vars()
       res = []
+      assert len(vars) == len(raw)
       for p,q in zip(vars, raw):
         res.append(numpy.fromstring(q, dtype='float32').reshape(p.get_value().shape))
       return res
@@ -765,7 +773,7 @@ class Device(object):
 
   def _generic_exec_on_dev(self, func_name, *args, **kwargs):
     if self.is_device_proc():
-      return self._generic_exec(self, func_name, args, kwargs)
+      return self._generic_exec(func_name, args, kwargs)
     self.input_queue.send("generic-exec")
     self.input_queue.send((func_name, args, kwargs))
     r = self.output_queue.recv()
@@ -782,17 +790,29 @@ class Device(object):
     else:
       return self.testnet
 
-  def alloc_data(self, input_shape, output_shape, targets, max_ctc_length=0, pad=False):
+  def _host__get_used_targets(self):
+    assert self.is_device_proc()
+    return self.used_targets
+
+  def sync_used_targets(self):
+    """
+    Updates self.used_targets for the host.
+    """
+    if self.is_device_proc():
+      return  # Nothing to do.
+    self.used_targets = self._generic_exec_on_dev("_host__get_used_targets")
+
+  def alloc_data(self, input_shape, output_shape, max_ctc_length=0):
     """
     :param list[int] input_shape: format (time,batch,features)
-    :type targets: list[str]
     :type max_ctc_length: int
     """
+    assert self.main_pid == os.getpid()
     assert len(input_shape) == 3
     assert all([s > 0 for s in input_shape])
     import theano
     self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
-    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in targets}
+    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in self.used_targets}
     self.ctc_targets = numpy.zeros((output_shape.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.input_index = numpy.zeros(input_shape[0:2], dtype='int8')
     self.output_index = numpy.zeros(input_shape[0:2], dtype='int8')
@@ -909,6 +929,7 @@ class Device(object):
       r = self.output_queue.recv()
       assert r == "reinit-ready"
       r = self.output_queue.recv()
+      self.sync_used_targets()
       return r
 
   def prepare(self, network, updater=None, train_param_args=None):
@@ -923,7 +944,6 @@ class Device(object):
     # Reinit if needed.
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
-    self.targetkeys = network.cost.keys()
     if self.blocking:
       if self.updater:
         self.updater.reset()
@@ -958,18 +978,8 @@ class Device(object):
     :type output: list[numpy.ndarray]
     :type outputs_format: list[str]
     """
-    d = {}; " :type: dict[str] "
-    for i, attrib in enumerate(outputs_format):
-      if attrib.endswith("..."):
-        attrib = attrib[:-3]
-        assert i < len(output)
-        assert i == len(outputs_format) - 1
-        d[attrib] = output
-        return d
-      d[attrib] = output[0]
-      output = output[1:]
-    assert len(output) == 0
-    return d
+    assert len(output) == len(outputs_format)
+    return dict(zip(outputs_format, output))
 
   def result(self):
     """
@@ -1056,7 +1066,7 @@ class Device(object):
       #y_given = [ (network.y[k], self.y[k][:,i:j].reshape([self.y[k].get_value().shape[0]*(j-i), self.y[k].get_value().shape[2]])) for k in self.y ]
       y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=2)) for k in self.y ]
       y_given = []
-      for k in network.objective:
+      for k in self.used_targets:
         y = self.y[k][:,i:j] # TB
         shape = self.y[k].get_value().shape
         if len(shape) == 3:

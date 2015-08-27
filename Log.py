@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import StringIO
 from threading import RLock
 
@@ -37,6 +38,9 @@ class Log:
             'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS')
           }
     self.v = [ logging.getLogger('v' + str(v)) for v in xrange(6) ]
+    for l in self.v:
+      # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
+      l.handlers = []
     if not 'stdout' in logs:
       logs.append('stdout')
     for i in xrange(len(logs)):
@@ -49,7 +53,7 @@ class Log:
       assert v <= 5, "invalid verbosity: " + str(v)
       f = fmt['default'] if i >= len(formatter) or not fmt.has_key(formatter[i]) else fmt[formatter[i]]
       if t == 'stdout':
-        handler = logging.StreamHandler()
+        handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
         handler = logging.FileHandler(t)

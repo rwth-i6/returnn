@@ -57,6 +57,6 @@ def test_assign_dev_data():
   batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=512)
   batches = batch_generator.peek_next_n(2)
   assert_equal(len(batches), 2)
-  success, num_batches = assign_dev_data(device, dataset, batches, recurrent)
+  success, num_batches = assign_dev_data(device, dataset, batches)
   assert_true(success)
   assert_equal(num_batches, len(batches))

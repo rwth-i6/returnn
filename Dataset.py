@@ -411,9 +411,8 @@ class DatasetSeq:
     if isinstance(targets, numpy.ndarray):  # old format
       targets = {"classes": targets}
     assert isinstance(targets, dict)
-    if targets:
-      assert "classes" in targets
-      assert isinstance(targets["classes"], numpy.ndarray)
+    for target_values in targets.values():
+      assert isinstance(target_values, numpy.ndarray)
     self.seq_idx = seq_idx
     self.features = features
     self.targets = targets
@@ -421,7 +420,11 @@ class DatasetSeq:
 
   @property
   def default_target(self):
-    return self.targets.get("classes", None)
+    target_keys = sorted(self.targets.keys())
+    if target_keys:
+      return self.targets[target_keys[0]]
+    else:
+      return None
 
   @property
   def num_frames(self):

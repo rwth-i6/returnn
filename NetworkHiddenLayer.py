@@ -1,12 +1,10 @@
 
 from theano import tensor as T
 from NetworkBaseLayer import Layer
-from ActivationFunctions import strtoact
+from ActivationFunctions import strtoact, strtoact_single_joined
 
 
 class HiddenLayer(Layer):
-  recurrent = False
-
   def __init__(self, activation="tanh", **kwargs):
     """
     :type activation: str | list[str]
@@ -40,6 +38,83 @@ class ForwardLayer(HiddenLayer):
     if not any(s.attrs['sparse'] for s in self.sources):
       self.z += self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
+
+
+class _NoOpLayer(Layer):
+  """
+  Use this as a base class if you want to remove all params by the Layer base class.
+  Note that this overwrites n_out, so take care of that yourself.
+  """
+  def __init__(self, **kwargs):
+    # The base class will already have a bias.
+    # We will reset all this.
+    # This is easier for now than to refactor the ForwardLayer.
+    kwargs['n_out'] = 1  # This is a hack so that the super init is fast. Will be reset later.
+    super(_NoOpLayer, self).__init__(**kwargs)
+    self.params = {}  # Reset all params.
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+
+
+class CopyLayer(_NoOpLayer):
+  layer_class = "copy"
+
+  def __init__(self, activation=None, **kwargs):
+    super(CopyLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', sum([s.attrs['n_out'] for s in self.sources]))
+    if activation:
+      self.set_attr('activation', activation.encode("utf8"))
+    act_f = strtoact_single_joined(activation)
+
+    assert len(self.sources) == len(self.masks)
+    zs = []
+    for s, m in zip(self.sources, self.masks):
+      if m is None:
+        zs += [s.output]
+      else:
+        zs += [self.mass * m * s.output]
+    if len(zs) > 1:
+      # We get (time,batch,dim) input shape.
+      # Concat over dimension, axis=2.
+      self.z = T.concatenate(zs, axis=2)
+    elif len(zs) == 1:
+      self.z = zs[0]
+    else:
+      raise Exception("CopyLayer needs at least one source")
+    self.make_output(act_f(self.z))
+
+
+class BinOpLayer(_NoOpLayer):
+  layer_class = "bin_op"
+
+  def __init__(self, op=None, **kwargs):
+    """
+    :type op: str
+    """
+    super(BinOpLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
+    s1, s2 = self.sources
+    assert s1.attrs["n_out"] == s2.attrs["n_out"]
+    assert op
+    self.set_attr('op', op.encode("utf8"))
+    if ":" in op:
+      op, act = op.split(":", 1)
+    else:
+      act = None
+    op_f = self.get_bin_op(op)
+    act_f = strtoact_single_joined(act)
+    self.make_output(act_f(op_f(s1.output, s2.output)))
+
+  @staticmethod
+  def get_bin_op(op):
+    """
+    :type op: str
+    :rtype: theano.Op
+    """
+    m = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
+    if op in m:
+      op = m[op]
+    # Assume it's in theano.tensor.
+    return getattr(T, op)
 
 
 class DualStateLayer(ForwardLayer):

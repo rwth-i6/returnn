@@ -154,7 +154,6 @@ class Engine:
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
     self.max_seqs = config.int('max_seqs', -1)
     self.updater = Updater.initFromConfig(config)
-    self.pad_batches = config.bool("pad", False)
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     self.exclude = config.int_list('exclude', [])
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
@@ -389,7 +388,7 @@ class Engine:
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
                               learning_rate=self.learning_rate, updater=self.updater,
                               eval_batch_size=self.update_batch_size,
-                              start_batch=start_batch, pad_batches=self.pad_batches, share_batches=self.share_batches,
+                              start_batch=start_batch, share_batches=self.share_batches,
                               exclude=self.exclude,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
     trainer.join()
@@ -417,7 +416,6 @@ class Engine:
     for dataset_name, dataset in self.get_eval_datasets().items():
       batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
-                              pad_batches=self.pad_batches,
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()
       eval_dump_str += ["  %s: score %s error %s" % (dataset_name, tester.score, tester.error)]

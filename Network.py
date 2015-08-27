@@ -14,7 +14,8 @@ class LayerNetwork(object):
   def __init__(self, n_in, n_out):
     """
     :param int n_in: input dim of the network
-    :param dict[str,(int,int)] n_out: output dim of the network
+    :param dict[str,(int,int)] n_out: output dim of the network.
+      first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = {} #T.ivector('y'); """ :type: theano.Variable """
@@ -31,10 +32,12 @@ class LayerNetwork(object):
     self.description = None; """ :type: LayerNetworkDescription | None """
     self.train_param_args = None; """ :type: dict[str] """
     self.recurrent = False  # any of the from_...() functions will set this
-    self.objective = {}
-    self.output = {}
-    self.cost = {}
+    self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
+    self.known_grads = {}; " :type: dict[theano.Variable,theano.Variable]"
+    self.costs = {}
+    self.total_cost = T.constant(0)
     self.errors = {}
+    self.ctc_priors = None
 
     for target in self.n_out:
       if self.n_out[target][1] == 1:
@@ -62,8 +65,10 @@ class LayerNetwork(object):
     """
     json_content = None
     if config.has("network") and config.is_typed("network"):
-      json_content = config.value()
-    if config.network_topology_json:
+      json_content = config.typed_value("network")
+      assert isinstance(json_content, dict)
+      assert json_content
+    elif config.network_topology_json:
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
@@ -72,14 +77,15 @@ class LayerNetwork(object):
         print >> log.v4, "------ END JSON CONTENT ------"
         assert False, "invalid json content, %r" % e
       assert isinstance(json_content, dict)
+      if 'network' in json_content:
+        json_content = json_content['network']
+      assert json_content
     if not json_content:
       if not mask:
         if sum(config.float_list('dropout', [0])) > 0.0:
           mask = "dropout"
       description = LayerNetworkDescription.from_config(config)
       json_content = description.to_json_content(mask=mask)
-    if 'network' in json_content:
-      json_content = json_content['network']
     return json_content
 
   @classmethod
@@ -302,7 +308,7 @@ class LayerNetwork(object):
                    'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight']:
+        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:
@@ -325,8 +331,22 @@ class LayerNetwork(object):
     """
     assert layer.name
     self.hidden[layer.name] = layer
-    self.constraints += layer.make_constraints()
+    self.add_cost_and_constraints(layer)
     return layer.output_index()
+
+  def add_cost_and_constraints(self, layer):
+    self.constraints += layer.make_constraints()
+    cost = layer.cost()
+    if cost[0]:
+      self.costs[layer.name] = cost[0]
+      self.total_cost += self.costs[layer.name] * layer.cost_scale()
+    if cost[1]:
+      self.known_grads.update(cost[1])
+    if len(cost) > 2:
+      if self.ctc_priors:
+        raise Exception("multiple ctc_priors, second one from layer %s" % layer.name)
+      self.ctc_priors = cost[2]
+      assert self.ctc_priors is not None
 
   def make_classifier(self, name='output', target='classes', **kwargs):
     """
@@ -342,39 +362,33 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
 
-    if 'dtype' in kwargs and kwargs['dtype'].startswith('float'):
-      if self.n_out[target][1] == 1:
-        self.y[target] = T.fvector('y')
-      else:
-        self.y[target] = T.fmatrix('y')
-      self.y[target].n_out = self.n_out[target][0]
+    if target != "null":
+      if 'dtype' in kwargs and kwargs['dtype'].startswith('float'):
+        if self.n_out[target][1] == 1:
+          self.y[target] = T.fvector('y')
+        else:
+          self.y[target] = T.fmatrix('y')
+        self.y[target].n_out = self.n_out[target][0]
     dtype = kwargs.pop('dtype', 'int32')
 
     if 'n_symbols' in kwargs:
       targets = T.ivector()
-      kwargs['n_out'] = kwargs.pop('n_symbols', 0)
-    else:
-      kwargs['n_out'] = self.n_out[target][0]
+      kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
+    elif target != "null":
+      kwargs.setdefault('n_out', self.n_out[target][0])
       targets = self.c if self.loss == 'ctc' else self.y[target]
+    else:
+      targets = None
     kwargs['index'] = self.j
     self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
     self.output[name].set_attr('dtype', dtype)
     if target != "null":
-      self.errors[target] = self.output[name].errors()
-      self.declare_train_params()
-      cost = self.output[name].cost()
-      self.cost[target], self.known_grads = cost[:2]
-      if len(cost) > 2:
-        self.ctc_priors = cost[2]
-        assert self.ctc_priors is not None
-      else:
-        self.ctc_priors = None
-      #self.objective[target] = self.cost[target] / self.x.shape[1] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      #self.objective[target] = self.cost[target] / T.sum(self.j) + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-      self.objective[target] = self.cost[target] + self.constraints + self.output[name].make_constraints() #+ entropy * self.output.entropy()
-    #if hasattr(LstmLayer, 'sharpgates'):
-      #self.objective += entropy * (LstmLayer.sharpgates ** 2).sum()
-    #self.jacobian = T.jacobian(self.output.z, self.x)
+      self.errors[name] = self.output[name].errors()
+    self.add_cost_and_constraints(self.output[name])
+    self.declare_train_params()
+
+  def get_objective(self):
+    return self.total_cost + self.constraints
 
   def get_params_vars(self, hidden_layer_selection, with_output):
     """

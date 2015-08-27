@@ -13,7 +13,7 @@ from math import ceil
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, pad_batches=False, share_batches = False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, share_batches = False, report_prefix=None, exclude=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -21,7 +21,6 @@ class TaskThread(threading.Thread):
       :type data: Dataset.Dataset
       :type batches: EngineBatch.BatchSetGenerator
       :type start_batch: int
-      :type pad_batches: bool
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
@@ -31,7 +30,6 @@ class TaskThread(threading.Thread):
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
       self.start_batch = start_batch
-      self.pad_batches = pad_batches
       self.devices = devices
       self.network = network
       self.batches = batches
@@ -42,6 +40,8 @@ class TaskThread(threading.Thread):
       self.elapsed = 0
       self.finalized = False
       self.score = None
+      self.error = None
+      self.results = {}
       self.num_frames = 0
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
@@ -50,7 +50,7 @@ class TaskThread(threading.Thread):
       self.start()
 
     def assign_dev_data(self, device, batches):
-      return assign_dev_data(device, self.data, batches, self.network.recurrent, self.pad_batches, self.exclude)
+      return assign_dev_data(device, self.data, batches)
 
     def allocate_device(self, device):
       batches = self.batches.peek_next_n(device.num_batches)
@@ -105,12 +105,60 @@ class TaskThread(threading.Thread):
       :returns some score or None
       :rtype: dict[str] | None
       """
-      pass
+      assert results
+      assert result_format  # train should always have the format
+      assert num_frames > 0
+
+      # We can get info such as "cost:..." and more info such as gradient_norm.
+      # See Device.initialize().
+      # We might also get gparams or ctc_priors or so. We will filter them out below when not needed.
+      results = [Device.make_result_dict(res, result_format) for res in results]
+
+      batch_norm_fact = 1 if not self.share_batches else 1.0 / len(self.devices)
+      summed_results = {}
+      for key in results[0].keys():
+        summed_results[key] = sum([res[key] for res in results]) * batch_norm_fact
+
+      # Accumulate for epoch stats.
+      for key, value in summed_results.items():
+        if key.startswith("gparam:"): continue
+        if key not in self.results:
+          self.results[key] = value
+        else:
+          self.results[key] += value
+
+      # Prepare eval info stats for this (multiple-)batch run.
+      eval_info = {}
+      for key, value in summed_results.items():
+        if key.startswith("gparam:"): continue
+        if key == "ctc_priors": continue
+        eval_info[key] = value / float(num_frames)
+
+      #if numpy.isinf(score) or numpy.isnan(score):
+      #  for i, res in enumerate(results):
+      #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
+      #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
+      #  assert False  # Should not get here.
+      return eval_info
     def initialize(self):
       pass
     def reduce(self, num_frames):
       pass
+    def epoch_norm_factor_for_result(self, key):
+      if key.startswith("error:"):
+        if self.network.loss in ('ctc', 'ce_ctc'):
+          assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
+          return 1.0 / self.data.num_running_chars
+      # Default: Normalize by number of frames.
+      return 1.0 / self.num_frames
     def finalize(self):
+      assert self.num_frames > 0
+      # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
+      for key, value in self.results.items():
+        self.results[key] *= self.epoch_norm_factor_for_result(key)
+      # Total score/error.
+      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")])
+      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
 
     class DeviceBatchRun(threading.Thread):
@@ -164,38 +212,29 @@ class TaskThread(threading.Thread):
           return False
         assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
 
-        if outputs_format and "gparams..." in outputs_format:
-          output_results = []
+        if outputs_format and any([k.startswith("gparam:") for k in outputs_format]):
+          # WARNING: this code is untested and likely broken!
           for i in xrange(len(self.alloc_devices)):
             res = Device.make_result_dict(device_results[i], outputs_format)
-            if "gparams" in res:
-              self.alloc_devices[i].sync_net_train_params()
-              devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
-              vars = self.parent.network.get_all_params_vars()
-              for p, q in zip(vars, devnet):
-                p.set_value(q)
-              gparams = {}
-              for k in self.parent.network.cost:
-                gparams[k] = {}
-                for p in vars:
-                  gparams[k][p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
-              res_gparams = res["gparams"]
-              for i,k in enumerate(self.parent.network.cost):
-                for p, q in zip(vars, res_gparams): # TODO #[i * len(self.parent.network.train_params_vars):(i+1) * len(self.parent.network.train_params_vars)]):
-                  if q.shape == p.get_value().shape:
-                    gparams[k][p] = q
-                  elif q.shape:
-                    print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
-              self.parent.updater.setNetParamDeltas(gparams)
-              self.parent.updater.update()
-              self.alloc_devices[i].set_net_params(self.parent.network)
-              res.pop('gparams', None)
-            output_results.append([res[k] for k in res if k != 'gparams'])
-          outputs_format.remove('gparams')
-        else:
-          output_results = device_results
+            self.alloc_devices[i].sync_net_train_params()
+            devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
+            vars = self.parent.network.get_all_params_vars()
+            for p, q in zip(vars, devnet):
+              p.set_value(q)
+            gparams = {}
+            for p in vars:
+              gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+            for p in vars:
+              q = res["gparam:%s" % p.name]
+              if q.shape == p.get_value().shape:
+                gparams[p] = q
+              elif q.shape:
+                print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
+            self.parent.updater.setNetParamDeltas(gparams)
+            self.parent.updater.update()
+            self.alloc_devices[i].set_net_params(self.parent.network)
 
-        self.result = { 'batchess': self.devices_batches, 'results': output_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.result = { 'batchess': self.devices_batches, 'results': device_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
         self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
@@ -256,7 +295,6 @@ class TaskThread(threading.Thread):
             assert outputs_format == outputs_format_new, "We expect to always get the same output format."
           outputs_format = outputs_format_new
           device_results.append(result)
-          device.tot_cost += result[0]
         return device_results, outputs_format
 
       def device_mem_usage_str(self, devices):
@@ -338,7 +376,6 @@ class TaskThread(threading.Thread):
         device.start_epoch_stats()
         device.num_frames = 0
         device.num_updates = 0
-        device.tot_cost = 0
         device.tot = 0
 
       num_device_runs = 1 if self.share_batches else len(self.devices)
@@ -382,7 +419,6 @@ class TaskThread(threading.Thread):
             for device in self.devices:
               device.num_frames = 0
               device.num_updates = 0
-              device.tot_cost = 0
             if not self.batches.has_more():
               break
           else:
@@ -444,9 +480,8 @@ class TrainTaskThread(TaskThread):
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
+    super(TrainTaskThread, self).initialize()
     self.score = 0
-    if self.do_ctc_priors:
-      self.ctc_priors = numpy.zeros(shape=(self.network.n_out,), dtype=theano.config.floatX)
     for device in self.devices:
       device.set_learning_rate(self.learning_rate)
     if not self.updater.isInitialized:
@@ -554,44 +589,10 @@ class TrainTaskThread(TaskThread):
 
     #pipe.copy_to_device(self.network)
 
-  def evaluate(self, batchess, results, result_format, num_frames):
-    """
-    :param list[list[EngineBatch.Batch]] batchess: batches per device
-    :param list[(float,params...)] results: result[i] is result for batch + i, result[i][0] is score
-    :param list[str]|None result_format: describes what we have in a result list
-    :type num_frames: int
-    """
-    assert results
-    assert result_format  # train should always have the format
-    assert num_frames > 0
-    if self.share_batches:
-      num_frames *= len(self.devices)
-    results = [Device.make_result_dict(res, result_format) for res in results]
-    cost = [res["cost"] for res in results]
-    score = sum(cost)
-    #if numpy.isinf(score) or numpy.isnan(score):
-    #  for i, res in enumerate(results):
-    #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
-    #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
-    #  assert False  # Should not get here.
-    if self.do_ctc_priors:
-      for res in results:
-        self.ctc_priors += res["ctc_priors"]
-    self.score += score if not self.share_batches else score / len(self.devices)
-    eval_info = {"score": score / num_frames}
-    # Maybe we got some more info such as gradient_norm.
-    # See Device.initialize().
-    for attrib in set(results[0].keys()).difference(["cost", "ctc_priors", "gparams"]):
-      eval_info[attrib] = sum([res[attrib] for res in results])
-    return eval_info
-
   def finalize(self):
-    assert self.num_frames > 0
-    # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
-    self.score /= float(self.num_frames)
-    if self.do_ctc_priors:
-      self.ctc_priors /= float(self.num_frames)
     super(TrainTaskThread, self).finalize()
+    if self.do_ctc_priors:
+      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames)
 
 
 class EvalTaskThread(TaskThread):
@@ -599,33 +600,9 @@ class EvalTaskThread(TaskThread):
       super(EvalTaskThread, self).__init__('eval', network, devices, data=data, batches=batches, **kwargs)
 
     def initialize(self):
-      self.score = 0
-      self.error = 0
+      super(EvalTaskThread, self).initialize()
       for device in self.devices:
         device.set_net_params(self.network)
-
-    def evaluate(self, batchess, results, result_format, num_frames):
-      """
-      :param list[list[EngineBatch.Batch]] batchess: batches per device
-      :param list[list[numpy.ndarray]] results: results per device
-      :type num_frames: int
-      """
-      assert results
-      assert num_frames > 0
-      score = sum([res[0] for res in results])
-      error = sum([res[1] for res in results])
-      self.score += score
-      self.error += error
-      return {"score": score / num_frames, "error": float(error) / num_frames}
-
-    def finalize(self):
-      assert self.num_frames > 0
-      self.score /= float(self.num_frames)
-      if self.network.loss in ('ctc', 'ce_ctc'):
-        assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
-        self.error /= float(self.data.num_running_chars)
-      else:
-        self.error /= float(self.num_frames)
 
 
 class SprintCacheForwardTaskThread(TaskThread):

@@ -181,6 +181,8 @@ class RecurrentUnitLayer(Layer):
                attention = False, # soft-attention
                base = None,
                lm = False, # language model
+               droplm = 0.0, # language model drop during training
+               dropconnect = 0.0, # recurrency dropout
                depth = 1,
                **kwargs):
     # if on cpu, we need to fall back to the theano version of the LSTM Op
@@ -205,6 +207,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('carry_time', carry_time)
     self.set_attr('attention', attention)
     self.set_attr('lm', lm)
+    self.set_attr('droplm', droplm)
+    self.set_attr('dropconnect', dropconnect)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -313,11 +317,19 @@ class RecurrentUnitLayer(Layer):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
       self.add_param(self.W_lm_out, name = "W_lm_out")
-
-      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      lmmask = T.cast(srng.binomial(n=1, p=0.05, size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2) * int(self.train_flag)
+      if self.attrs['droplm'] > 0.0 and self.train_flag: 
+        srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+        lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
+      else:
+        lmmask = 1
       #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
 
+    if self.attrs['dropconnect'] > 0.0:
+      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(self.index.shape[1], unit.n_re)), theano.config.floatX)
+      connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
+    else:
+      connectmask, connectmass = 1, 1
     self.out_dec = self.index.shape[0]
     #if encoder and 'n_dec' in encoder[0].attrs:
     #  self.out_dec = encoder[0].out_dec
@@ -381,7 +393,7 @@ class RecurrentUnitLayer(Layer):
           z_t += self.W_lm_out[T.argmax(c_p,axis=1)] * T.all(T.eq(z_t,0),axis=1,keepdims=True)
         if not self.W_in:
           z_t += self.b
-        z_p = T.dot(h_p, W_re)
+        z_p = T.dot(h_p * connectmass * connectmask, W_re)
         if self.depth > 1:
           assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]

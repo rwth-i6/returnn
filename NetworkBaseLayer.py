@@ -261,7 +261,9 @@ class SourceLayer(Container):
 
 
 class Layer(Container):
-  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, **kwargs):
+  recurrent = False
+
+  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, cost_scale=1.0, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -287,6 +289,8 @@ class Layer(Container):
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
+    if cost_scale != 1:
+      self.set_attr("cost_scale", cost_scale)
     self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
     self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
     self.masks = [None] * len(self.sources)
@@ -405,3 +409,16 @@ class Layer(Container):
     attrs = super(Layer, self).to_json()
     attrs['class'] = self.layer_class
     return attrs
+
+  def cost(self):
+    """
+    :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
+    :returns: cost, known_grads
+    """
+    return None, None
+
+  def cost_scale(self):
+    """
+    :rtype: theano.Variable
+    """
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
