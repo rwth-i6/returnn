@@ -337,7 +337,7 @@ class RecurrentUnitLayer(Layer):
         #  for j in xrange(unit.n_act):
         #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
         #  offset += encoder[i].attrs['n_out']
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis = -1) for i in xrange(unit.n_act) ]
+        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=-1) for i in xrange(unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             if self.attrs['lm']:

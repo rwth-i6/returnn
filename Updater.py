@@ -204,8 +204,8 @@ class Updater:
           self.use_corrected_grad = True  #True
           self.decay = 0.9 #0.95
           ### default
-          self.delta_clip = 50.0
-          self.outlier_detection = False # True #True
+          self.delta_clip = 25.0
+          self.outlier_detection = True # True #True
           self.gamma_clip = None #1.8
           ### aggressive
           #self.delta_clip = None

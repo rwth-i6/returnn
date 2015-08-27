@@ -81,7 +81,7 @@ class StateToAct(ForwardLayer):
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
-    if dual:
+    if dual and len(self.act) > 1:
       self.make_output(self.act[1])
       self.act[0] = T.tanh(self.act[1])
     else:
@@ -172,6 +172,49 @@ class CentroidLayer(ForwardLayer):
       self.act = [ T.tanh(self.output), self.output ]
     else:
       self.act = [ self.output, self.output ]
+
+
+class CentroidEyeLayer(ForwardLayer):
+  recurrent=True
+  layer_class="eye"
+
+  def __init__(self, n_clusters, output_scores=False, entropy_weight=0.0, **kwargs):
+    centroids = T.eye(n_clusters)
+    kwargs['n_out'] = n_clusters
+    super(CentroidEyeLayer, self).__init__(**kwargs)
+    self.set_attr('n_clusters', n_clusters)
+    self.set_attr('output_scores', output_scores)
+    self.set_attr('entropy_weight', entropy_weight)
+    W_att_ce = self.add_param(self.create_forward_weights(n_clusters, 1), name = "W_att_ce_%s" % self.name)
+    W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
+
+    zc = centroids.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1) # TBQD
+    ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(n_clusters,axis=2)) # TBQ1
+    att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
+    if output_scores:
+      self.make_output(att.flatten(ndim=3))
+    else:
+      self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
+      #self.make_output(centroids[T.argmax(att.reshape((att.shape[0],att.shape[1],att.shape[2])), axis=2)])
+
+    self.constraints += entropy_weight * -T.sum(att * T.log(att))
+    self.act = [ T.tanh(self.output), self.output ]
+
+
+class ProtoLayer(ForwardLayer):
+  recurrent=True
+  layer_class="proto"
+
+  def __init__(self, train_proto=True, output_scores=False, **kwargs):
+    super(ProtoLayer, self).__init__(**kwargs)
+    W_proto = self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'])
+    if train_proto:
+      self.add_param(W_proto, name = "W_proto_%s" % self.name)
+    if output_scores:
+      self.make_output(T.cast(T.argmax(self.z,axis=-1,keepdims=True),'float32'))
+    else:
+      self.make_output(W_proto[T.argmax(self.z,axis=-1)])
+    self.act = [ T.tanh(self.output), self.output ]
 
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
