@@ -22,7 +22,7 @@ import time
 
 class Engine:
 
-  _last_epoch_model = None; """ :type: (int|None,str|None) """  # See get_last_epoch_model().
+  _epoch_model = None; """ :type: (int|None,str|None) """  # See get_epoch_model().
 
   def __init__(self, devices):
     """
@@ -66,8 +66,8 @@ class Engine:
     :rtype: (int|None, str|None)
     """
     # XXX: We cache it, although this is wrong if we have changed the config.
-    if cls._last_epoch_model:
-      return cls._last_epoch_model
+    if cls._epoch_model:
+      return cls._epoch_model
 
     load_model_epoch_filename = config.value('load', '')
     start_epoch_mode = config.value('start_epoch', 'auto')
@@ -98,7 +98,7 @@ class Engine:
         print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, last)
         last = (start_epoch - 1, existing_models[start_epoch - 1])
 
-    cls._last_epoch_model = last
+    cls._epoch_model = last
     return last
 
   @classmethod
