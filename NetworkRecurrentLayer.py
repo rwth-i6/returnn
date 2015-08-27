@@ -337,10 +337,10 @@ class RecurrentUnitLayer(Layer):
 
     if self.attrs['dropconnect'] > 0.0:
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(self.index.shape[1], unit.n_re)), theano.config.floatX)
+      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(unit.n_out,)), theano.config.floatX)
       connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
-    else:
-      connectmask, connectmass = 1, 1
+      non_sequences += [connectmask, connectmass]
+
     self.out_dec = self.index.shape[0]
     #if encoder and 'n_dec' in encoder[0].attrs:
     #  self.out_dec = encoder[0].out_dec
@@ -381,6 +381,11 @@ class RecurrentUnitLayer(Layer):
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
       def step(x_t, z_t, i_t, t, *args):
+        mask,mass = 1,1
+        if self.attrs['dropconnect'] > 0.0:
+          mask = args[-2]
+          mass = args[-1]
+          args = args[:-2]
         if self.attrs['attention']:
           xc = args[-2]
           zc = args[-1]
@@ -404,7 +409,7 @@ class RecurrentUnitLayer(Layer):
           z_t += self.W_lm_out[T.argmax(c_p,axis=1)] * T.all(T.eq(z_t,0),axis=1,keepdims=True)
         if not self.W_in:
           z_t += self.b
-        z_p = T.dot(h_p * connectmass * connectmask, W_re)
+        z_p = T.dot(h_p * mass * mask, W_re)
         if self.depth > 1:
           assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]

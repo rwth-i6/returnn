@@ -231,6 +231,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
       }
       float * d_ptr = (x == X_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x, %(i)s);
+
     }
     """ % locals()
 
