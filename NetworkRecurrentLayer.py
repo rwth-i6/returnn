@@ -348,6 +348,7 @@ class RecurrentUnitLayer(Layer):
         #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
         #  offset += encoder[i].attrs['n_out']
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+        #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             if self.attrs['attention'] and attention_step != 0:
@@ -415,10 +416,10 @@ class RecurrentUnitLayer(Layer):
             if attention_step != 0:
               #focus_end = T.switch(T.ge(focus + attention_beam,zc.shape[0]), zc.shape[0], focus + attention_beam)
               #focus_start = T.switch(T.lt(focus - attention_beam,0), 0, focus - attention_beam)
-              focus_start = T.max([focus - attention_beam, T.zeros_like(focus)],axis=-1)
+              focus_start = 0 #T.max([focus - attention_beam, T.zeros_like(focus)],axis=-1)
               focus_end = T.min([focus + attention_beam, T.ones_like(focus) * zc.shape[0]],axis=-1)
-              focus_start = 0 #focus
-              focus_end = focus_start + 2
+              #focus_start = 0 #focus
+              #focus_end = focus_start + 2
               #att_z = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, zc.shape[1], zc.shape[2])[:focus_end - focus_start],zc[focus_start:focus_end])
               #att_x = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, xc.shape[1], xc.shape[2])[:focus_end - focus_start],xc[focus_start:focus_end])
               att_z = zc[focus_start:focus_end]
