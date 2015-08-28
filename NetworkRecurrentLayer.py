@@ -7,6 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
+from OpLSTMCell import LSTMOpCellInstance
 from FastLSTM import LSTMOp2Instance
 
 class RecurrentLayer(HiddenLayer):
@@ -70,6 +71,13 @@ class Unit(Container):
     self.params = {}
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    self.outputs_info = outputs_info
+    self.non_sequences = non_sequences
+    self.W_re = W_re
+    self.W_in = W_in
+    self.b = b
+    self.go_backwards = go_backwards
+    self.truncate_gradient = truncate_gradient
     try:
       xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
@@ -89,7 +97,7 @@ class VANILLA(Unit):
   def __init__(self, n_units, depth):
     super(VANILLA, self).__init__(n_units, depth, n_units, n_units, n_units, 1)
 
-  def step(self, x_t, z_t, z_p, h_p):
+  def step(self, i_t, x_t, z_t, z_p, h_p):
     return [ T.tanh(z_t + z_p) ]
 
 
@@ -97,7 +105,7 @@ class LSTME(Unit):
   def __init__(self, n_units, depth):
     super(LSTME, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
-  def step(self, x_t, z_t, z_p, h_p, s_p):
+  def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     z = z_t + z_p
     u_t = GI(z[:,0 * self.slice:1 * self.slice])
@@ -133,6 +141,22 @@ class LSTMP(Unit):
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 
+class LSTMQ(Unit):
+  def __init__(self, n_units, depth):
+    super(LSTMQ, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
+
+  def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
+    #result = LSTMOpCellInstance(z_t+z_p,self.W_re,s_p,i_t)
+    #return [ result[0], result[2] ]
+
+    #proxy = LSTMP(self.n_units, self.depth)
+    #res = proxy.scan(self.step, x_t.dimshuffle('x',0,1), z_t.dimshuffle('x',0,1), self.non_sequences, i_t.dimshuffle('x',0), [h_p,s_p], self.W_re, self.W_in, self.b, self.go_backwards, self.truncate_gradient)
+
+    res = LSTMOpInstance((z_t+z_p).dimshuffle('x',0,1), self.W_re, s_p, i_t.dimshuffle('x',0))
+    return [res[0][-1],res[2]]
+
+
+
 class GRU(Unit):
   def __init__(self, n_units, depth):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
@@ -143,7 +167,7 @@ class GRU(Unit):
     self.W_reset = theano.shared(value=values, borrow=True, name = "W_reset")
     self.params['W_reset'] = self.W_reset
 
-  def step(self, x_t, z_t, z_p, h_p):
+  def step(self, i_t, x_t, z_t, z_p, h_p):
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     u_t = GU(z_t[:,:self.slice] + z_p[:,:self.slice])
     r_t = GR(z_t[:,self.slice:2*self.slice] + z_p[:,self.slice:2*self.slice])
@@ -155,7 +179,7 @@ class SRU(Unit):
   def __init__(self, n_units, depth):
     super(SRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 3, 1)
 
-  def step(self, x_t, z_t, z_p, h_p):
+  def step(self, i_t, x_t, z_t, z_p, h_p):
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     u_t = GU(z_t[:,:self.slice] + z_p[:,:self.slice])
     r_t = GR(z_t[:,self.slice:2*self.slice] + z_p[:,self.slice:2*self.slice])
@@ -330,8 +354,6 @@ class RecurrentUnitLayer(Layer):
       non_sequences += [connectmask, connectmass]
 
     self.out_dec = self.index.shape[0]
-    #if encoder and 'n_dec' in encoder[0].attrs:
-    #  self.out_dec = encoder[0].out_dec
     # scan over sequence
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -372,7 +394,7 @@ class RecurrentUnitLayer(Layer):
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
       def step(x_t, z_t, i_t, *args):
-        mask,mass = 1,1
+        mask,mass = 0,0
         if self.attrs['dropconnect'] > 0.0:
           mask = args[-2]
           mass = args[-1]
@@ -389,7 +411,7 @@ class RecurrentUnitLayer(Layer):
           args = args[:-1]
         h_p = args[0]
         if self.depth == 1:
-          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), self.attrs['n_out']))
+          i = i_t.dimshuffle(0,'x').repeat(self.attrs['n_out'],axis=1)
         else:
           assert False
           h_p = self.make_consensus(h_p, axis = 1)
@@ -403,9 +425,10 @@ class RecurrentUnitLayer(Layer):
           result.append(c_t)
           #z_t += T.dot(c_p, self.W_lm_out) * T.all(T.eq(z_t,0),axis=1,keepdims=True)
           z_t += self.W_lm_out[T.argmax(c_p,axis=1)] * T.all(T.eq(z_t,0),axis=1,keepdims=True)
-        if not self.W_in:
-          z_t += self.b
-        z_p = T.dot(h_p * mass * mask, W_re)
+        if mass:
+          z_p = T.dot(h_p * mass * mask, W_re)
+        else:
+          z_p = T.dot(h_p, W_re)
         if self.depth > 1:
           assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
@@ -418,8 +441,9 @@ class RecurrentUnitLayer(Layer):
               #focus_start = T.switch(T.lt(focus - attention_beam,0), 0, focus - attention_beam)
               focus_start = T.max([focus - attention_beam, T.zeros_like(focus)],axis=-1)
               focus_end = T.min([focus + attention_beam, T.ones_like(focus) * zc.shape[0]],axis=-1)
-              focus_start = 0 #focus
+              focus_start = focus
               focus_end = focus_start + 2
+              focus_sel = T.arange(focus_start, focus_end)
               #att_z = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, zc.shape[1], zc.shape[2])[:focus_end - focus_start],zc[focus_start:focus_end])
               #att_x = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, xc.shape[1], xc.shape[2])[:focus_end - focus_start],xc[focus_start:focus_end])
               att_z = zc[focus_start:focus_end]
@@ -446,7 +470,7 @@ class RecurrentUnitLayer(Layer):
               result = [focus] + result
             elif attention_step > 0:
               result = [focus+attention_step] + result
-          act = unit.step(x_t, z_t, z_p, *args)
+          act = unit.step(i_t, x_t, z_t, z_p, *args)
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ] + result
 
       index_f = T.cast(index, theano.config.floatX)
