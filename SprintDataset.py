@@ -305,7 +305,7 @@ class SprintDataset(Dataset):
         # Some monotonic increasing function in [0,1] which never reaches 1.
         return max(1.e-20, 1.0 - math.exp(-seq_idx * 1000))
 
-  def get_seq_length(self, sorted_seq_idx):
+  def get_seq_length_2d(self, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).num_frames

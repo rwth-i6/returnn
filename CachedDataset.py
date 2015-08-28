@@ -116,7 +116,7 @@ class CachedDataset(Dataset):
     cached_bytes = 0
     for i in xrange(self.num_seqs):
       if i == num_cached:
-        nbytes = self.get_seq_length(i)[0] * self.nbytes
+        nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
         if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
           num_cached = i + 1
           cached_bytes += nbytes
@@ -165,7 +165,7 @@ class CachedDataset(Dataset):
     gc.collect()
     # Load as much as we can so that we fill up the cache.
     while end < self.num_seqs:
-      num_needed_cache_frames = self.get_seq_length(end)[0]
+      num_needed_cache_frames = self.get_seq_length_2d(end)[0]
       if self.cache_num_frames_free - num_needed_cache_frames < 0:
         break
       self.cache_num_frames_free -= num_needed_cache_frames
@@ -176,7 +176,7 @@ class CachedDataset(Dataset):
       start = self.num_seqs_cached_at_start
       end = start
       while end < start:
-        num_needed_cache_frames = self.get_seq_length(end)[0]
+        num_needed_cache_frames = self.get_seq_length_2d(end)[0]
         if self.cache_num_frames_free - num_needed_cache_frames < 0:
           break
         self.cache_num_frames_free -= num_needed_cache_frames
@@ -415,7 +415,7 @@ class CachedDataset(Dataset):
         assert False
     return False
 
-  def get_seq_length(self, sorted_seq_idx):
+  def get_seq_length_2d(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
     :rtype: (int,int)
@@ -432,7 +432,7 @@ class CachedDataset(Dataset):
 
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
-    seq_len = self.get_seq_length(sorted_seq_idx)[0]
+    seq_len = self.get_seq_length_2d(sorted_seq_idx)[0]
     return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_data(self, sorted_seq_idx):
@@ -441,7 +441,7 @@ class CachedDataset(Dataset):
     alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]
     o = self.get_seq_start(sorted_seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
     assert o >= 0
-    l = self.get_seq_length(sorted_seq_idx)[0]
+    l = self.get_seq_length_2d(sorted_seq_idx)[0]
     assert alloc_data.shape[0] >= o + l
     return alloc_data[o:o + l]
 
@@ -450,7 +450,7 @@ class CachedDataset(Dataset):
 
   def get_targets(self, target, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[1]
-    seq_len = self.get_seq_length(sorted_seq_idx)[1]
+    seq_len = self.get_seq_length_2d(sorted_seq_idx)[1]
     return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_target_list(self):

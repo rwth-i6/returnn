@@ -57,7 +57,7 @@ def assign_dev_data(device, dataset, batches):
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
         if dataset.has_ctc_targets() and not chunking_active:
-          assert dataset.get_seq_length(seq.seq_idx) == l  # Full seq.
+          assert dataset.get_seq_length_2d(seq.seq_idx) == l  # Full seq.
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
@@ -85,7 +85,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=numpy.array([0,0]), length=dataset.get_seq_length(seq))
+  batch.add_frames(seq_idx=seq, seq_start_frame=numpy.array([0,0]), length=dataset.get_seq_length_2d(seq))
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 

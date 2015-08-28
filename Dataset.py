@@ -93,7 +93,7 @@ class Dataset(object):
     assert start < end
     return False
 
-  def get_seq_length(self, sorted_seq_idx):
+  def get_seq_length_2d(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
     :rtype: numpy.array[int,int]
@@ -318,7 +318,7 @@ class Dataset(object):
     """
     s = 0
     while self.is_less_than_num_seqs(s):
-      length = self.get_seq_length(s)
+      length = self.get_seq_length_2d(s)
       if chunk_size == 0:
         yield (s, numpy.array([0,0]), length)
       else:

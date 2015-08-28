@@ -90,7 +90,7 @@ class GeneratingDataset(Dataset):
   def num_seqs(self):
     return self._num_seqs
 
-  def get_seq_length(self, sorted_seq_idx):
+  def get_seq_length_2d(self, sorted_seq_idx):
     # get_seq_length() can be called before the seq is loaded via load_seqs().
     # Thus, we just call load_seqs() ourselves here.
     assert sorted_seq_idx >= self.expected_load_seq_start

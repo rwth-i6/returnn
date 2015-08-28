@@ -77,7 +77,7 @@ class NumpyDumpDataset(Dataset):
   def get_ctc_targets(self, seq_idx):
     assert False, "No CTC targets."
 
-  def get_seq_length(self, seq_idx):
+  def get_seq_length_2d(self, seq_idx):
     # This is different from the other get_* functions.
     # load_seqs() might not have been called before.
     if not self._have_cache_seq(seq_idx):
