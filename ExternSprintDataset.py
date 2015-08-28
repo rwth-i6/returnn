@@ -31,6 +31,7 @@ class ExternSprintDataset(SprintDataset):
     self._num_seqs = None
     self.child_pid = None
     self.parent_pid = os.getpid()
+    self.seq_list_file = None
     self.useMultipleEpochs()
     # There is no generic way to see whether Python is exiting.
     # This is our workaround. We check for it in self.run_inner().
@@ -115,7 +116,8 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
-    return [self.sprintTrainerExecPath] + [
+    args = [
+      self.sprintTrainerExecPath,
       "--*.seed=%i" % (self.crnnEpoch or 1),
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
@@ -124,9 +126,19 @@ class ExternSprintDataset(SprintDataset):
       "--*.trainer=python-trainer",
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=SprintExternInterface",
-      "--*.pymod-config=action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (self.pipe_c2p[1].fileno(),
-                                                                           self.pipe_p2c[0].fileno())] + \
-      self.sprintConfig
+      "--*.pymod-config=action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (
+        self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())]
+    if self.predefined_seq_list_order:
+      import tempfile
+      self.seq_list_file = tempfile.mktemp(prefix="crnn-sprint-predefined-seq-list")
+      with open(self.seq_list_file, "w") as f:
+        for tag in self.predefined_seq_list_order:
+          f.write(tag)
+          f.write("\n")
+        f.close()
+      args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
+    args += self.sprintConfig
+    return args
 
   def _read_next_raw(self):
     dataType, args = Unpickler(self.pipe_c2p[0]).load()
@@ -177,6 +189,14 @@ class ExternSprintDataset(SprintDataset):
           else:
             assert False, "not handled: (%r, %r)" % (dataType, args)
 
+      if self.seq_list_file:
+        try:
+          os.remove(self.seq_list_file)
+        except Exception as e:
+          print >> log.v5, "ExternSprintDataset: error when removing %r: %r" % (self.seq_list_file, e)
+        finally:
+          self.seq_list_file = None
+
       if not self.python_exit:
         with self.lock:
           self.finishSprintEpoch()
@@ -202,18 +222,18 @@ class ExternSprintDataset(SprintDataset):
     self.python_exit = True
     self._exit_child(wait_thread=False)
 
-  def init_epoch(self, epoch=None):
+  def init_epoch(self, epoch=None, seq_list=None):
     if epoch is None:
       epoch = 1
     with self.lock:
       if epoch == self.crnnEpoch:
         return
-      super(ExternSprintDataset, self).init_seq_order(epoch=epoch)
+      super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._exit_child()
     self._start_child(epoch)
 
-  def init_seq_order(self, epoch=None):
-    self.init_epoch(epoch)
+  def init_seq_order(self, epoch=None, seq_list=None):
+    self.init_epoch(epoch=epoch, seq_list=seq_list)
 
   @property
   def num_seqs(self):
@@ -231,10 +251,3 @@ class ExternSprintDataset(SprintDataset):
       if self._num_seqs is not None:
         return float(seq_idx + 1) / self._num_seqs
       return super(ExternSprintDataset, self).get_complete_frac(seq_idx)
-
-  def len_info(self):
-    with self.lock:
-      if self._num_seqs is not None:
-        return "ExternSprintDataset, %i seqs" % self._num_seqs
-      else:
-        return "ExternSprintDataset, unknown number of seqs"

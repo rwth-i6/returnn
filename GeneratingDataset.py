@@ -18,12 +18,14 @@ class GeneratingDataset(Dataset):
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
 
-  def init_seq_order(self, epoch=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
+    :param seq_list: predefined order. doesn't make sense here
     This is called when we start a new epoch, or at initialization.
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
+    assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
     self.random.seed(epoch or 1)
     self._num_timesteps = 0
     self.reached_final_seq = False

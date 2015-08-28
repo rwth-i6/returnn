@@ -192,7 +192,7 @@ class Dataset(object):
       pass  # Keep order as-is.
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
-      seq_index.sort(key=lambda x: get_seq_len(x)[0])  # sort by length
+      seq_index.sort(key=get_seq_len)  # sort by length
     elif self.seq_ordering.startswith('random'):
       tmp = self.seq_ordering.split(':')
       nth = int(tmp[1]) if len(tmp) > 1 else 1
@@ -204,9 +204,11 @@ class Dataset(object):
       assert False, "invalid batching specified: " + self.seq_ordering
     return seq_index
 
-  def init_seq_order(self, epoch=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """

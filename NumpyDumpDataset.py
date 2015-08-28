@@ -55,8 +55,9 @@ class NumpyDumpDataset(Dataset):
 
   # ------------ Dataset API --------------
 
-  def init_seq_order(self, epoch=None):
-    super(NumpyDumpDataset, self).init_seq_order(epoch)
+  def init_seq_order(self, epoch=None, seq_list=None):
+    super(NumpyDumpDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if seq_list: raise NotImplementedError
     if self.seq_ordering == "sorted":  # not supported atm
       self.seq_ordering = "default"
     self._seq_index = [i + self.start_seq for i in self.get_seq_order_for_epoch(epoch, self.num_seqs)]

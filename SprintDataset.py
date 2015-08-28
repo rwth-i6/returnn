@@ -37,7 +37,8 @@ class SprintDataset(Dataset):
     self.multiple_epochs = False
     self._complete_frac = None
     self.sprintEpoch = None  # in SprintInterface.getSegmentList()
-    self.crnnEpoch = None  # in CRNN train thread, Engine.train()
+    self.crnnEpoch = None  # in CRNN train thread, Engine.train(). set via init_seq_order
+    self.predefined_seq_list_order = None  # via init_seq_order
     self.sprintFinalized = False
     assert self.shuffle_frames_of_nseqs == 0  # Currently broken. But just use Sprint itself to do this.
 
@@ -91,13 +92,14 @@ class SprintDataset(Dataset):
       self.sprintFinalized = True
       self.cond.notify_all()
 
-  def init_seq_order(self, epoch=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     """
     Called by CRNN train thread when we enter a new epoch.
     """
     super(SprintDataset, self).init_seq_order()
     with self.lock:
       self.crnnEpoch = epoch
+      self.predefined_seq_list_order = seq_list
       self.cond.notify_all()
       # No need to wait/check for Sprint thread here.
       # SprintInterface.getSegmentList() will wait for us.
@@ -226,6 +228,11 @@ class SprintDataset(Dataset):
       assert not self.sprintFinalized
 
       seq_idx = self.next_seq_to_be_added
+
+      if self.predefined_seq_list_order:
+        # Note: Only in ExternSprintDataset, we can reliably set the seq order for now.
+        assert self.predefined_seq_list_order[seq_idx] == segmentName, "seq-order not as expected"
+
       self.next_seq_to_be_added += 1
       self._num_timesteps += T
       self.cond.notify_all()
@@ -264,6 +271,8 @@ class SprintDataset(Dataset):
   @property
   def num_seqs(self):
     with self.lock:
+      if self.predefined_seq_list_order:
+        return len(self.predefined_seq_list_order)
       assert self.reached_final_seq
       return self.next_seq_to_be_added
 
@@ -273,9 +282,6 @@ class SprintDataset(Dataset):
         return True
       self._waitForSeq(0)
       return self.next_seq_to_be_added > 0
-
-  def len_info(self):
-    return "Sprint dataset, no len info"
 
   def is_less_than_num_seqs(self, n):
     with self.lock:
@@ -294,7 +300,9 @@ class SprintDataset(Dataset):
 
   def get_complete_frac(self, seq_idx):
     with self.lock:
-      if self._complete_frac is not None:
+      if self.predefined_seq_list_order:
+        return float(seq_idx + 1) / len(self.predefined_seq_list_order)
+      elif self._complete_frac is not None:
         if not self.next_seq_to_be_added:
           return self._complete_frac
         else:

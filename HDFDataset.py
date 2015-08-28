@@ -21,7 +21,6 @@ class HDFDataset(CachedDataset):
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
-    self.tags = []; """ :type: list[str] """
     self.target_type = {}
 
   def add_file(self, filename):
@@ -55,6 +54,8 @@ class HDFDataset(CachedDataset):
     self.tags += tags
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
+    for i in range(nseqs):
+      self.tag_idx[tags[i]] = i + self._num_seqs
     self._num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)

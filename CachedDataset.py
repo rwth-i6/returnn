@@ -24,6 +24,8 @@ class CachedDataset(Dataset):
     self._seq_start = [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
+    self.tags = []; """ :type: list[str] """  # uses real seq idx
+    self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
     self.targets = {}
 
   def initialize(self):
@@ -40,13 +42,17 @@ class CachedDataset(Dataset):
                      ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
                      max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0)
 
-  def init_seq_order(self, epoch=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
+    :param list[str] | None seq_list: In case we want to set a predefined order.
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, self._seq_lengths.__getitem__)
+    if seq_list:
+      seq_index = [self.tag_idx[tag] for tag in seq_list]
+    else:
+      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
 
     if self._seq_index == seq_index:
       return
