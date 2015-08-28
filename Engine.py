@@ -83,8 +83,8 @@ class Engine:
     existing_models = cls.get_existing_models(config)
 
     # Only use this when we don't train.
-    # For training, we first consider existing models before we take the 'load' into account.
-    if load_model_epoch_filename and config.value('task', 'train') != 'train':
+    # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
+    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch_mode != 'auto'):
       # Ignore the epoch. To keep it consistent with the case below.
       epoch_model = (None, load_model_epoch_filename)
 
@@ -111,8 +111,9 @@ class Engine:
         epoch_model = (None, None)
     elif start_epoch > 1:
       if epoch_model[0]:
-        assert epoch_model[0] == start_epoch - 1, \
-          "warning: start_epoch %i but there is %s" % (start_epoch, epoch_model)
+        if epoch_model[0] != start_epoch - 1:
+          print >> log.v4, "warning: start_epoch %i but there is %s" % (start_epoch, epoch_model)
+        epoch_model = existing_models[start_epoch-1]
 
     cls._epoch_model = epoch_model
     return epoch_model

@@ -156,7 +156,7 @@ class StateToAct(ForwardLayer):
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
-    if dual:
+    if dual and len(self.act) > 1:
       self.make_output(self.act[1])
       self.act[0] = T.tanh(self.act[1])
     else:
@@ -247,6 +247,49 @@ class CentroidLayer(ForwardLayer):
       self.act = [ T.tanh(self.output), self.output ]
     else:
       self.act = [ self.output, self.output ]
+
+
+class CentroidEyeLayer(ForwardLayer):
+  recurrent=True
+  layer_class="eye"
+
+  def __init__(self, n_clusters, output_scores=False, entropy_weight=0.0, **kwargs):
+    centroids = T.eye(n_clusters)
+    kwargs['n_out'] = n_clusters
+    super(CentroidEyeLayer, self).__init__(**kwargs)
+    self.set_attr('n_clusters', n_clusters)
+    self.set_attr('output_scores', output_scores)
+    self.set_attr('entropy_weight', entropy_weight)
+    W_att_ce = self.add_param(self.create_forward_weights(n_clusters, 1), name = "W_att_ce_%s" % self.name)
+    W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
+
+    zc = centroids.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1) # TBQD
+    ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(n_clusters,axis=2)) # TBQ1
+    att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
+    if output_scores:
+      self.make_output(att.flatten(ndim=3))
+    else:
+      self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
+      #self.make_output(centroids[T.argmax(att.reshape((att.shape[0],att.shape[1],att.shape[2])), axis=2)])
+
+    self.constraints += entropy_weight * -T.sum(att * T.log(att))
+    self.act = [ T.tanh(self.output), self.output ]
+
+
+class ProtoLayer(ForwardLayer):
+  recurrent=True
+  layer_class="proto"
+
+  def __init__(self, train_proto=True, output_scores=False, **kwargs):
+    super(ProtoLayer, self).__init__(**kwargs)
+    W_proto = self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'])
+    if train_proto:
+      self.add_param(W_proto, name = "W_proto_%s" % self.name)
+    if output_scores:
+      self.make_output(T.cast(T.argmax(self.z,axis=-1,keepdims=True),'float32'))
+    else:
+      self.make_output(W_proto[T.argmax(self.z,axis=-1)])
+    self.act = [ T.tanh(self.output), self.output ]
 
 
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
@@ -371,3 +414,89 @@ class ConvPoolLayer(ForwardLayer):
 
     # create theano function to compute filtered images
     f = theano.function([input], output)
+
+
+class LossLayer(Layer):
+  layer_class = "loss"
+
+  def __init__(self, loss, copy_input=None, **kwargs):
+    """
+    :param theano.Variable index: index for batches
+    :param str loss: e.g. 'ce'
+    """
+    super(LossLayer, self).__init__(**kwargs)
+    y = self.y_in
+    if copy_input:
+      self.set_attr("copy_input", copy_input.name)
+    if not copy_input:
+      self.z = self.b
+      self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
+                                                              name="W_in_%s_%s" % (source.name, self.name)))
+                   for source in self.sources]
+
+      assert len(self.sources) == len(self.masks) == len(self.W_in)
+      assert len(self.sources) > 0
+      for source, m, W in zip(self.sources, self.masks, self.W_in):
+        if source.attrs['sparse']:
+          self.z += W[T.cast(source.output[:,:,0], 'int32')]
+        elif m is None:
+          self.z += self.dot(source.output, W)
+        else:
+          self.z += self.dot(self.mass * m * source.output, W)
+    else:
+      self.z = copy_input.output
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+    if self.y.dtype.startswith('int'):
+      i = (self.index.flatten() > 0).nonzero()
+    elif self.y.dtype.startswith('float'):
+      i = (self.index.flatten() > 0).nonzero()
+    self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
+    loss = loss.encode("utf8")
+    self.attrs['loss'] = self.loss
+    n_reps = T.switch(T.eq(self.z.shape[0], 1), self.index.shape[0], 1)
+    output = self.output.repeat(n_reps,axis=0)
+    y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
+    self.known_grads = None
+    if loss == 'ce':
+      if self.y.type == T.ivector().type:
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[i], y_idx=y[i])
+      else:
+        pcx = T.nnet.softmax(y_m[i])
+        nll = -T.dot(T.log(T.clip(pcx, 1.e-38, 1.e20)), y[i].T)
+      self.constraints += T.sum(nll)
+      self.make_output(pcx.reshape(output.shape))
+    elif loss == 'entropy':
+      h_e = T.exp(self.y_m) #(TB)
+      pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD
+      ee = self.index * -T.sum(pcx * T.log(pcx)) # TB
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y) # TB
+      ce = nll.reshape(self.index.shape) * self.index # TB
+      y = self.y.reshape(self.index.shape) * self.index # TB
+      f = T.any(T.gt(y,0), axis=0) # B
+      self.constraints += T.sum(f * T.sum(ce, axis=0) + (1-f) * T.sum(ee, axis=0))
+      self.make_output(pcx.reshape(output.shape))
+    elif loss == 'priori':
+      pcx = T.nnet.softmax(y_m)[i, y[i]]
+      pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
+      self.constraints += -T.sum(T.log(pcx))
+      self.make_output(pcx.reshape(output.shape))
+    elif loss == 'sse':
+      if self.y.dtype.startswith('int'):
+        y_f = T.cast(T.reshape(y, (y.shape[0] * y.shape[1]), ndim=1), 'int32')
+        y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
+        self.constraints += T.mean(T.sqr(y_m[i] - y_oh[i]))
+      else:
+        self.constraints += T.sum(T.sqr(y_m[i] - y.reshape(y_m.shape)[i]))
+      self.make_output(y_m[i].reshape(output.shape))
+    else:
+      raise NotImplementedError()
+
+    if y.dtype.startswith('int'):
+      if y.type == T.ivector().type:
+        self.error = T.sum(T.neq(T.argmax(y_m[i], axis=-1), y[i]))
+      else:
+        self.error = T.sum(T.neq(T.argmax(y_m[i], axis=-1), T.argmax(y[i], axis = -1)))
+    elif y.dtype.startswith('float'):
+      self.error = T.sum(T.sqr(y_m[i] - y.reshape(y_m.shape)[i]))
+    else:
+      raise NotImplementedError()
