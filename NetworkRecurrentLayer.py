@@ -326,7 +326,7 @@ class RecurrentUnitLayer(Layer):
 
     if self.attrs['dropconnect'] > 0.0:
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(self.index.shape[1], unit.n_re)), theano.config.floatX)
+      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(self.index.shape[1], unit.n_out)), theano.config.floatX)
       connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
     else:
       connectmask, connectmass = 1, 1
