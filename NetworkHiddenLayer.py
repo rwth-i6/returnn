@@ -363,7 +363,7 @@ class ConvPoolLayer(ForwardLayer):
     x_in  = T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(0,1,2,'x').reshape(self.sources[0].shape[0], self.sources[0].shape[1],dx, dy)
     range = 1.0 / numpy.sqrt(dx*dy)
     self.W = self.add_param(theano.shared( numpy.asarray(self.rng.uniform(low=-range,high=range,size=(2,1,fx,fy)), dtype = theano.config.floatX), name = "W_%s" % self.name), name = "W_%s" % self.name)
-    conv_out = conv.conv2d(input, W)
+    conv_out = conv.conv2d(x_in, self.W)
 
     # initialize shared variable for weights.
     w_shp = (2, 3, 9, 9)
