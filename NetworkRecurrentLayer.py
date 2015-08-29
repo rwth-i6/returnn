@@ -453,7 +453,7 @@ class RecurrentUnitLayer(Layer):
             z_t += T.dot(T.sum(att_x * w_t.repeat(att_x.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             if attention_step == -1:
-              focus = T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
+              focus = T.cast(T.argmax(w_t,axis=0).flatten(),'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
               result = [focus] + result
             elif attention_step > 0:
               result = [focus+attention_step] + result
