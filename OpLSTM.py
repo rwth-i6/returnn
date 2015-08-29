@@ -20,7 +20,6 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK
       #TODO
       self.destroy_map = {0: [4], 1: [6]}
-      #self.destroy_map = {0: [4]}
 
   def __eq__(self, other):
     return type(self) == type(other) and self.inplace == other.inplace
@@ -54,9 +53,9 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
     return theano.Apply(self, [V_h, c, idx, Dd, DY, Y, H], [H.type(), V_h.type(), c.type()])
 
-  #def infer_shape(self, node, input_shapes):
-  #  V_hs, cs, idxs, Dds, DYs, Ys, Hs = input_shapes
-  #  return [Hs, V_hs, cs]
+  def infer_shape(self, node, input_shapes):
+    V_hs, cs, idxs, Dds, DYs, Ys, Hs = input_shapes
+    return [Hs, V_hs, cs]
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -200,10 +199,9 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     Z, H, d = output_names
     fail = sub['fail']
     return """
-
     if(%(Z)s || %(H)s || %(d)s)
     {
-      //printf("Z or H already exist\\n");
+      printf("Z or H already exist\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(Z)s);
       Py_XDECREF(%(H)s);

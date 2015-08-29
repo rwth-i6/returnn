@@ -315,7 +315,7 @@ class RecurrentUnitLayer(Layer):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], 1)), dtype=theano.config.floatX)
       self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
       self.add_param(self.W_att_re, name = "W_att_re")
-      self.zc = T.dot(self.xc, self.W_att_xc).reshape((self.xc.shape[0], self.xc.shape[1]))
+      self.zc = T.dot(self.xc, self.W_att_xc) #.reshape((self.xc.shape[0], self.xc.shape[1]))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
       self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
       self.add_param(self.W_att_in, name = "W_att_in")
@@ -435,36 +435,23 @@ class RecurrentUnitLayer(Layer):
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
-            #f_t = T.dot(T.concatenate([h_p.dimshuffle('x',0,1).repeat(xc.shape[0], axis=0),xc], axis = 2), self.W_att).reshape((xc.shape[0],h_p.shape[0]))
             if attention_step != 0:
-              #focus_end = T.switch(T.ge(focus + attention_beam,zc.shape[0]), zc.shape[0], focus + attention_beam)
-              #focus_start = T.switch(T.lt(focus - attention_beam,0), 0, focus - attention_beam)
-              focus_start = T.max([focus - attention_beam, T.zeros_like(focus)],axis=-1)
-              focus_end = T.min([focus + attention_beam, T.ones_like(focus) * zc.shape[0]],axis=-1)
-              focus_start = focus
-              focus_end = focus_start + 2
-              focus_sel = T.arange(focus_start, focus_end)
-              #att_z = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, zc.shape[1], zc.shape[2])[:focus_end - focus_start],zc[focus_start:focus_end])
-              #att_x = T.inc_subtensor(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, xc.shape[1], xc.shape[2])[:focus_end - focus_start],xc[focus_start:focus_end])
+              focus_end = T.max(T.switch(T.ge(focus + attention_beam,zc.shape[0]), zc.shape[0], focus + attention_beam))
+              focus_start = T.min(T.switch(T.lt(focus - attention_beam,0), 0, focus - attention_beam))
               att_z = zc[focus_start:focus_end]
               att_x = xc[focus_start:focus_end]
-              #att_z = zc[focus_start:focus_end]
-              #att_x = xc[focus_start:focus_end]
             else:
               att_z = zc
               att_x = xc
-              #att = zc[ : -1 ]
-            f_t = att_z + T.dot(h_p, self.W_att_re).flatten() # (time,batch)
-            #f_t = z_t + T.dot(h_p, self.W_att_re)
-            #f_t = T.dot(T.concatenate([z_p.dimshuffle('x',0,1).repeat(self.xc.shape[0], axis=0),self.xc], axis = 2), self.W_attention).reshape((self.xc.shape[0],z_p.shape[0])).dimshuffle(1,0)
-            f_e = T.exp(f_t)
-            w_t = (f_e / T.sum(f_e, axis=0, keepdims=True)).dimshuffle(0,1,'x') # T.nnet.softmax gives weird results when cudnn is installed
+            f_e = T.exp(att_z + T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
+            w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
             #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
             #w_t = f_t.dimshuffle(0,1,'x')
             #z_t = T.dot(self.xc.dimshuffle(1,2,0), w_t).dimshuffle(2,0,1).reshape(z_p.shape)
-            z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
+            z_t += T.dot(T.sum(att_x * w_t.repeat(att_x.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
+            #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             if attention_step == -1:
               focus = T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
               result = [focus] + result
