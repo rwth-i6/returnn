@@ -371,6 +371,7 @@ class RecurrentUnitLayer(Layer):
         #    outputs_info[j] = T.set_subtensor(outputs_info[j][:,offset:offset+encoder[i].attrs['n_out']], encoder[i].act[j][-1])
         #  offset += encoder[i].attrs['n_out']
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+        #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
             if self.attrs['attention'] and attention_step != 0:
