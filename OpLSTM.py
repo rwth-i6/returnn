@@ -197,6 +197,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     Z, V_h, c, i = input_names
     Y, H, d = output_names
     fail = sub['fail']
+    inplace = "true" if self.inplace else "false"
     return """
     if(%(Y)s || %(H)s || %(d)s)
     {
@@ -208,7 +209,6 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     }
 
     const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
-    //we can't use the modulo operator easily as it should not be replaced
     const int dims_Y[] = {Z_dim[0], Z_dim[1], Z_dim[2] / 4};
     const int dims_H[] = {Z_dim[0], Z_dim[1], Z_dim[2]};
     const int dims_d[] = {Z_dim[1], Z_dim[2] / 4};
@@ -216,9 +216,17 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
 
     %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Y);
     %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
-    %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H); //CudaNdarray_uninitialized_like(%(Z)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
+    if(%(inplace)s)
+    {
+      %(H)s = %(Z)s;
+      Py_INCREF(%(Z)s);
+    }
+    else
+    {
+      %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+      cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    }
 
     int y = 0;
     for(int x = 0; x < Z_dim[0]; ++x)
@@ -264,7 +272,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 3
+    return 1, 5
 
 LSTMOpInstance = LSTMOp(inplace=False)
 LSTMOpInplaceInstance = LSTMOp(inplace=True)
