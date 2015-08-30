@@ -224,7 +224,7 @@ class RecurrentUnitLayer(Layer):
                **kwargs):
     # if on cpu, we need to fall back to the theano version of the LSTM Op
     unit_given = unit
-    if str(theano.config.device).startswith('cpu') and (unit == 'lstm' or unit == 'lstmp'):
+    if (str(theano.config.device).startswith('cpu') or attention == 'default') and (unit == 'lstm' or unit == 'lstmp'):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
     unit = eval(unit.upper())(n_out, depth)
@@ -311,7 +311,6 @@ class RecurrentUnitLayer(Layer):
       assert base, "attention networks are only defined for decoder networks"
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
       if self.attrs['attention'] == 'default': # attention over dot product of base outputs and time dependent activation
-        assert unit_given != "lstmp", "default attention model not yet implemented for lstmp"
         n_in = sum([e.attrs['n_out'] for e in base])
         src = [e.output for e in base]
         l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
