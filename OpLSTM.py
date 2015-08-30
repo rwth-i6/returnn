@@ -1,4 +1,3 @@
-import numpy
 import theano
 import theano.gradient
 import theano.tensor as T
@@ -134,7 +133,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 2
+    return 1, 3
 
 LSTMOpGradNoInplaceInstance = LSTMOpGrad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOpGrad(inplace=True)
@@ -195,42 +194,50 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    X, V_h, c, i = input_names
-    Z, H, d = output_names
+    Z, V_h, c, i = input_names
+    Y, H, d = output_names
     fail = sub['fail']
+    inplace = "true" if self.inplace else "false"
     return """
-    if(%(Z)s || %(H)s || %(d)s)
+    if(%(Y)s || %(H)s || %(d)s)
     {
-      printf("Z or H already exist\\n");
+      printf("Y or H or d already exist\\n");
       //TODO check if we can reuse it
-      Py_XDECREF(%(Z)s);
+      Py_XDECREF(%(Y)s);
       Py_XDECREF(%(H)s);
       Py_XDECREF(%(d)s);
     }
 
-    const int * X_dim = CudaNdarray_HOST_DIMS(%(X)s);
-    //we can't use the modulo operator easily as it should not be replaced
-    const int dims_Z[] = {X_dim[0], X_dim[1], X_dim[2] / 4};
-    const int dims_H[] = {X_dim[0], X_dim[1], X_dim[2]};
-    const int dims_d[] = {X_dim[1], X_dim[2] / 4};
-    int size_d = X_dim[1] * X_dim[2] / 4;
+    const int * Z_dim = CudaNdarray_HOST_DIMS(%(Z)s);
+    const int dims_Y[] = {Z_dim[0], Z_dim[1], Z_dim[2] / 4};
+    const int dims_H[] = {Z_dim[0], Z_dim[1], Z_dim[2]};
+    const int dims_d[] = {Z_dim[1], Z_dim[2] / 4};
+    int size_d = Z_dim[1] * Z_dim[2] / 4;
 
-    %(Z)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Z);
+    %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Y);
     %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
-    %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H); //CudaNdarray_uninitialized_like(%(X)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(X)s),
+    if(%(inplace)s)
+    {
+      %(H)s = %(Z)s;
+      Py_INCREF(%(Z)s);
+    }
+    else
+    {
+      %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+      cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    }
 
     int y = 0;
-    for(int x = 0; x < X_dim[0]; ++x)
+    for(int x = 0; x < Z_dim[0]; ++x)
     {
       if(x > 0)
       {
-        //H += Z[x-1]*V_h
-        affine_y_x(y, x-1, %(Z)s, y, x, %(V_h)s, y, x, %(H)s);
+        //H += Y[x-1]*V_h
+        affine_y_x(y, x-1, %(Y)s, y, x, %(V_h)s, y, x, %(H)s);
       }
-      float * d_ptr = (x == X_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
-      do_lstm(%(H)s, %(Z)s, %(c)s, d_ptr, y, x, %(i)s);
+      float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
+      do_lstm(%(H)s, %(Y)s, %(c)s, d_ptr, y, x, %(i)s);
     }
     """ % locals()
 
@@ -246,33 +253,33 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H, d = LSTMOpInstance(Z_raw, V_h_raw, c_raw, i_raw)
+    Y, H, d = LSTMOpInstance(Z_raw, V_h_raw, c_raw, i_raw)
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    DZ, DV_h, Dc = LSTMOpGradNoInplaceInstance(V_h, c, i, Dd, DY, Z, H)
+    DZ, DV_h, Dc = LSTMOpGradNoInplaceInstance(V_h, c, i, Dd, DY, Y, H)
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
     return [DZ, DV_h, Dc, Di]
 
   def infer_shape(self, node, input_shapes):
-    Xs, V_hs, cs, idxs = input_shapes
-    Z_shape = (Xs[0], Xs[1], Xs[2] / 4)
-    H_shape = (Xs[0], Xs[1], Xs[2])
-    D_shape = (Xs[1], Xs[2] / 4)
-    return [Z_shape, H_shape, D_shape]
+    Zs, V_hs, cs, idxs = input_shapes
+    Y_shape = (Zs[0], Zs[1], Zs[2] / 4)
+    H_shape = (Zs[0], Zs[1], Zs[2])
+    d_shape = (Zs[1], Zs[2] / 4)
+    return [Y_shape, H_shape, d_shape]
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 2
+    return 1, 5
 
 LSTMOpInstance = LSTMOp(inplace=False)
 LSTMOpInplaceInstance = LSTMOp(inplace=True)
 
 LSTMOpInplaceOpt = OpSub(LSTMOpInstance, LSTMOpInplaceInstance)
 
-#hack to avoid begin aclled twice
+#hack to avoid begin called twice
 if not hasattr(optdb, 'LSTMOpInplaceOpt_registered'):
   optdb.register('LSTMOpInplaceOpt', theano.gof.TopoOptimizer(LSTMOpInplaceOpt),
                  50.0, 'fast_run', 'inplace', 'gpuarray')
