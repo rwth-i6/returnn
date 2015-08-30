@@ -301,18 +301,21 @@ class RecurrentUnitLayer(Layer):
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
       src = []
       src_names = []
-      for e in base:
-        src_base = [ s for s in e.sources if s.name not in src_names ]
-        src_names += [ s.name for s in e.sources ]
-        src += [s.output for s in src_base]
-        n_in += sum([s.attrs['n_out'] for s in src_base])
-      self.xc = T.concatenate(src, axis=-1)
+      #for e in base:
+      #  src_base = [ s for s in e.sources if s.name not in src_names ]
+      #  src_names += [ s.name for s in e.sources ]
+      #  src += [s.output for s in src_base]
+      #  n_in += sum([s.attrs['n_out'] for s in src_base])
+      #self.xc = T.concatenate(src, axis=-1)
+      n_in = sum([e.attrs['n_out'] for e in base])
+      self.xb = self.add_param(self.create_bias(n_in), 'b_att')
+      self.xc = T.concatenate([e.output for e in base], axis=2) + self.xb
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
 
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
       self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-      self.add_param(self.W_att_xc, name = "W_att_xc")
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], 1)), dtype=theano.config.floatX)
+      #self.add_param(self.W_att_xc, name = "W_att_xc")
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
       self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
       self.add_param(self.W_att_re, name = "W_att_re")
       self.zc = T.dot(self.xc, self.W_att_xc) #.reshape((self.xc.shape[0], self.xc.shape[1]))
@@ -320,7 +323,7 @@ class RecurrentUnitLayer(Layer):
       self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
       self.add_param(self.W_att_in, name = "W_att_in")
 
-      non_sequences += [self.xc, self.zc]
+      non_sequences += [self.xc]
       if attention_step > 0:
         if attention_beam == 0:
           attention_beam = attention_step
@@ -403,9 +406,10 @@ class RecurrentUnitLayer(Layer):
           mass = args[-1]
           args = args[:-2]
         if self.attrs['attention']:
-          xc = args[-2]
-          zc = args[-1]
-          args = args[:-2]
+          #xc = args[-2]
+          xc = args[-1]
+          #args = args[:-2]
+          args = args[:-1]
           if attention_step != 0:
             focus = args[-2]
             beam = args[-1]
@@ -439,28 +443,30 @@ class RecurrentUnitLayer(Layer):
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
-            att_z = zc
+            #att_z = zc
             att_x = xc
             if attention_step != 0:
               focus_i = T.switch(T.ge(focus + beam,zc.shape[0]), zc.shape[0], focus + beam)
               focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
               focus_end = T.max(focus_i)
               focus_start = T.min(focus_j)
-              att_z = zc[focus_start:focus_end]
+              #att_z = zc[focus_start:focus_end]
               att_x = xc[focus_start:focus_end]
-            f_e = T.exp(att_z + T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
+            #f_e = T.exp(att_z * T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
+            f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0), axis=2, keepdims=True)
+            f_e = T.exp(f_z)
             w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
             #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
             #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
             #w_t = f_t.dimshuffle(0,1,'x')
             #z_t = T.dot(self.xc.dimshuffle(1,2,0), w_t).dimshuffle(2,0,1).reshape(z_p.shape)
-            z_t += T.dot(T.sum(att_x * w_t.repeat(att_x.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
+            z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             if attention_step == -1:
               #focus = focus_start + T.cast(T.mean(w_t,axis=0).flatten() * (focus_end - focus_start), 'int32')
-              focus = T.cast(T.sum(w_t*self.index_range[focus_start:focus_end],axis=0).flatten(),'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
-              beam = T.cast(T.exp(T.sum(-T.log(w_t)*w_t,axis=0)).flatten(),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
+              focus = T.cast(T.sum(w_t*self.index_range[focus_start:focus_end],axis=0).flatten() + 1,'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
+              beam = T.cast(T.max([0.5 * T.exp(-T.sum(T.log(w_t)*w_t,axis=0)).flatten(),T.ones_like(beam)],axis=0),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
               result = [focus,beam] + result
             elif attention_step > 0:
               result = [focus+attention_step,beam] + result
@@ -484,7 +490,6 @@ class RecurrentUnitLayer(Layer):
         outputs = [outputs]
 
       if self.attrs['lm'] and self.train_flag:
-
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
         j = (self.index[:-1].flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C
@@ -500,7 +505,9 @@ class RecurrentUnitLayer(Layer):
         #self.constraints += T.sum(nll)
         outputs = outputs[:-1]
       if self.attrs['attention'] and attention_step != 0:
-        outputs = outputs[:-1]
+        self.focus = outputs[-2]
+        self.beam = outputs[-1]
+        outputs = outputs[:-2]
       if self.attrs['sampling'] > 1:
         if s == 0:
           #self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]

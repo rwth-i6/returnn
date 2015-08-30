@@ -53,9 +53,9 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
     return theano.Apply(self, [V_h, c, idx, Dd, DY, Y, H], [H.type(), V_h.type(), c.type()])
 
-  def infer_shape(self, node, input_shapes):
-    V_hs, cs, idxs, Dds, DYs, Ys, Hs = input_shapes
-    return [Hs, V_hs, cs]
+  #def infer_shape(self, node, input_shapes):
+  #  V_hs, cs, idxs, Dds, DYs, Ys, Hs = input_shapes
+  #  return [Hs, V_hs, cs]
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
