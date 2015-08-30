@@ -5,14 +5,14 @@
 
 
 # Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met: 
-# 
+# modification, are permitted provided that the following conditions are met:
+#
 # 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer. 
+#    list of conditions and the following disclaimer.
 # 2. Redistributions in binary form must reproduce the above copyright notice,
 #    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution. 
-# 
+#    and/or other materials provided with the distribution.
+#
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 # ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 # WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -153,7 +153,7 @@ def simple_debug_shell(globals, locals):
 				except Exception:
 					print("Error printing return value of %r" % s)
 					better_exchook(*sys.exc_info(), autodebugshell=False)
-		
+
 def debug_shell(user_ns, user_global_ns, execWrapper=None):
 	ipshell = None
 	try:
@@ -173,9 +173,7 @@ def debug_shell(user_ns, user_global_ns, execWrapper=None):
 	if ipshell:
 		ipshell()
 	else:
-		simple_debug_shell(user_global_ns, user_ns)						
-
-def output(s): print(s)
+		simple_debug_shell(user_global_ns, user_ns)
 
 def output_limit():
 	return 300
@@ -200,7 +198,7 @@ def pp_extra_info(obj, depthlimit = 3):
 					s += ["_[0]: {" + extra_info + "}"]
 		except Exception: pass
 	return ", ".join(s)
-	
+
 def pretty_print(obj):
 	s = repr(obj)
 	limit = output_limit()
@@ -217,23 +215,26 @@ def fallback_findfile(filename):
 	if altfn[-4:-1] == ".py": altfn = altfn[:-1] # *.pyc or whatever
 	return altfn
 
-def print_traceback(tb=None, allLocals=None, allGlobals=None):
+def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False):
+	out = []
+	def output(ln): out.append(ln + "\n")
 	if tb is None:
 		try:
 			tb = sys._getframe()
 			assert tb
 		except Exception:
-			output("print_traceback: tb is None and sys._getframe() failed")
-			return
+			output("format_tb: tb is None and sys._getframe() failed")
+			return out
 	import inspect
 	isframe = inspect.isframe
-	if isframe(tb): output('Traceback (most recent call first)')
-	else: output('Traceback (most recent call last):') # expect traceback-object (or compatible)
+	if withTitle:
+		if isframe(tb): output('Traceback (most recent call first)')
+		else: output('Traceback (most recent call last):') # expect traceback-object (or compatible)
 	try:
 		import linecache
-		limit = None
-		if hasattr(sys, 'tracebacklimit'):
-			limit = sys.tracebacklimit
+		if limit is None:
+			if hasattr(sys, 'tracebacklimit'):
+				limit = sys.tracebacklimit
 		n = 0
 		_tb = tb
 		def _resolveIdentifier(namespace, id):
@@ -292,19 +293,28 @@ def print_traceback(tb=None, allLocals=None, allGlobals=None):
 		output("ERROR: cannot get more detailed exception info because:")
 		import traceback
 		for l in traceback.format_exc().split("\n"): output("   " + l)
-		output("simple traceback:")
-		if isframe(tb): traceback.print_stack(tb)
-		else: traceback.print_tb(tb)
-	
 
-def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True):
+	return out
+
+def print_tb(tb, file=None, **kwargs):
+	if file is None:
+		file = sys.stderr
+	for l in format_tb(tb=tb, **kwargs):
+		file.write(l)
+	file.flush()
+
+
+def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file=None):
+	if file is None:
+		file = sys.stderr
+	def output(ln): file.write(ln + "\n")
 	output("EXCEPTION")
 	allLocals,allGlobals = {},{}
 	if tb is not None:
-		print_traceback(tb, allLocals=allLocals, allGlobals=allGlobals)
+		print_tb(tb, allLocals=allLocals, allGlobals=allGlobals, file=file, withTitle=True)
 	else:
 		output("better_exchook: traceback unknown")
-	
+
 	import types
 	def _some_str(value):
 		try: return str(value)
@@ -329,14 +339,19 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True):
 	if debugshell:
 		output("---------- DEBUG SHELL -----------")
 		debug_shell(user_ns=allLocals, user_global_ns=allGlobals)
-		
+	file.flush()
+
 def install():
 	sys.excepthook = better_exchook
-	
+
+def replace_traceback_format_tb():
+	import traceback
+	traceback.format_tb = format_tb
+
 if __name__ == "__main__":
 	# some examples
 	# this code produces this output: https://gist.github.com/922622
-	
+
 	try:
 		x = {1:2, "a":"b"}
 		def f():
