@@ -202,7 +202,7 @@ class RecurrentUnitLayer(Layer):
                pdepth = 1, # depth of projection
                unit = 'lstm', # cell type
                n_dec = 0, # number of time steps to decode
-               attention = False, # soft attention
+               attention = "none", # soft attention (none, input, time)
                attention_step = 0, # soft attention step (-1 for weighted index)
                attention_beam = 0, # soft attention context window
                base = None,
@@ -230,10 +230,10 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('truncation', truncation)
     self.set_attr('sampling', sampling)
     self.set_attr('direction', direction)
-    self.set_attr('attention', attention)
     self.set_attr('lm', lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
+    self.set_attr('attention', attention)
     self.set_attr('attention_step', attention_step)
     self.set_attr('attention_beam', attention_beam)
     if encoder:
@@ -296,34 +296,48 @@ class RecurrentUnitLayer(Layer):
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
 
     non_sequences = []
-    if self.attrs['attention']:
-      assert encoder, "attention networks are only defined for decoder networks"
+    if self.attrs['attention'] != "none":
+      assert base, "attention networks are only defined for decoder networks"
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
-      src = []
-      src_names = []
-      #for e in base:
-      #  src_base = [ s for s in e.sources if s.name not in src_names ]
-      #  src_names += [ s.name for s in e.sources ]
-      #  src += [s.output for s in src_base]
-      #  n_in += sum([s.attrs['n_out'] for s in src_base])
-      #self.xc = T.concatenate(src, axis=-1)
-      n_in = sum([e.attrs['n_out'] for e in base])
-      self.xb = self.add_param(self.create_bias(n_in), 'b_att')
-      self.xc = T.concatenate([e.output for e in base], axis=2) + self.xb
-      l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
+      if self.attrs['attention'] == 'default': # attention over dot product of base outputs and time dependent activation
+        assert unit_given != "lstmp", "default attention model not yet implemented for lstmp"
+        n_in = sum([e.attrs['n_out'] for e in base])
+        src = [e.output for e in base]
+        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
+        self.xb = self.add_param(self.create_bias(n_in), 'b_att')
+        self.xc = T.concatenate(src, axis=2) + self.xb
+        if n_in != unit.n_out:
+          values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
+          self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
+          self.add_param(self.W_att_proj, name = "W_att_proj")
+          self.xc = T.dot(self.xc, self.W_att_proj)
+          n_in = unit.n_units
+        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
+        self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
+        self.add_param(self.W_att_re, name = "W_att_re")
+        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+        self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
+        self.add_param(self.W_att_in, name = "W_att_in")
+        non_sequences += [self.xc]
+      elif self.attrs['attention'] == 'pooled': # attention is just a sequence dependent bias (lstmp compatible)
+        src = []
+        src_names = []
+        for e in base:
+          src_base = [ s for s in e.sources if s.name not in src_names ]
+          src_names += [ s.name for s in e.sources ]
+          src += [s.output for s in src_base]
+          n_in += sum([s.attrs['n_out'] for s in src_base])
+        self.xc = T.concatenate(src, axis=2)
+        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
+        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
+        self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
+        self.add_param(self.W_att_xc, name = "W_att_xc")
+        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+        self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
+        self.add_param(self.W_att_in, name = "W_att_in")
+        zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
+        self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
 
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-      self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-      #self.add_param(self.W_att_xc, name = "W_att_xc")
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
-      self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
-      self.add_param(self.W_att_re, name = "W_att_re")
-      self.zc = T.dot(self.xc, self.W_att_xc) #.reshape((self.xc.shape[0], self.xc.shape[1]))
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-      self.add_param(self.W_att_in, name = "W_att_in")
-
-      non_sequences += [self.xc]
       if attention_step > 0:
         if attention_beam == 0:
           attention_beam = attention_step
@@ -378,8 +392,7 @@ class RecurrentUnitLayer(Layer):
         #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            if self.attrs['attention'] and attention_step != 0:
-              #outputs_info.append(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, self.index.shape[1], 1))
+            if self.attrs['attention'] != 'none' and attention_step != 0:
               outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # focus (B)
               outputs_info.append(T.cast(T.alloc(numpy.cast['int32'](0), index.shape[1]) + attention_beam,'int32')) # beam (B)
             if self.attrs['lm']:
@@ -389,9 +402,9 @@ class RecurrentUnitLayer(Layer):
               sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * lmmask
               outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
-              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b
+              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'pooled' else 0)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'pooled' else 0)
       else:
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
@@ -405,11 +418,10 @@ class RecurrentUnitLayer(Layer):
           mask = args[-2]
           mass = args[-1]
           args = args[:-2]
-        if self.attrs['attention']:
-          #xc = args[-2]
-          xc = args[-1]
-          #args = args[:-2]
-          args = args[:-1]
+        if self.attrs['attention'] != 'none':
+          if self.attrs['attention'] == 'default':
+            xc = args[-1]
+            args = args[:-1]
           if attention_step != 0:
             focus = args[-2]
             beam = args[-1]
@@ -442,7 +454,7 @@ class RecurrentUnitLayer(Layer):
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
-          if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
+          if self.attrs['attention'] == 'default':
             #att_z = zc
             att_x = xc
             if attention_step != 0:
@@ -456,11 +468,6 @@ class RecurrentUnitLayer(Layer):
             f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0), axis=2, keepdims=True)
             f_e = T.exp(f_z)
             w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-            #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
-            #w_t = T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
-            #w_t = (f_t / f_t.norm(L=1,axis=0)).dimshuffle(0,1,'x') #T.nnet.sigmoid(f_t).dimshuffle(0,1,'x')
-            #w_t = f_t.dimshuffle(0,1,'x')
-            #z_t = T.dot(self.xc.dimshuffle(1,2,0), w_t).dimshuffle(2,0,1).reshape(z_p.shape)
             z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             if attention_step == -1:
