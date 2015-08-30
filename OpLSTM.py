@@ -133,7 +133,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 2
+    return 1, 3
 
 LSTMOpGradNoInplaceInstance = LSTMOpGrad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOpGrad(inplace=True)
@@ -245,12 +245,12 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Z, H, d = LSTMOpInstance(Z_raw, V_h_raw, c_raw, i_raw)
+    Y, H, d = LSTMOpInstance(Z_raw, V_h_raw, c_raw, i_raw)
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    DZ, DV_h, Dc = LSTMOpGradNoInplaceInstance(V_h, c, i, Dd, DY, Z, H)
+    DZ, DV_h, Dc = LSTMOpGradNoInplaceInstance(V_h, c, i, Dd, DY, Y, H)
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
     return [DZ, DV_h, Dc, Di]
