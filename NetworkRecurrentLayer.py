@@ -221,7 +221,7 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("depth", depth)
     kwargs.pop("activation", None)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
-    self.set_attr('from', ",".join([s.name for s in self.sources]))
+    self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)
     self.set_attr('unit', unit_given.encode("utf8"))
     self.set_attr('psize', psize)
@@ -326,6 +326,7 @@ class RecurrentUnitLayer(Layer):
           attention_beam = attention_step
       elif attention_step == -1:
         assert attention_beam > 0
+        self.index_range = T.arange(self.index.shape[0], dtype='float32').dimshuffle(0,'x','x').repeat(self.index.shape[1],axis=1)
       else:
         assert attention_beam == 0
 
@@ -376,7 +377,8 @@ class RecurrentUnitLayer(Layer):
           if self.depth == 1:
             if self.attrs['attention'] and attention_step != 0:
               #outputs_info.append(T.alloc(numpy.cast[theano.config.floatX](0), attention_beam, self.index.shape[1], 1))
-              outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # B
+              outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # focus (B)
+              outputs_info.append(T.cast(T.alloc(numpy.cast['int32'](0), index.shape[1]) + attention_beam,'int32')) # beam (B)
             if self.attrs['lm']:
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
@@ -404,9 +406,10 @@ class RecurrentUnitLayer(Layer):
           xc = args[-2]
           zc = args[-1]
           args = args[:-2]
-          if attention_step:
-            focus = args[-1]
-            args = args[:-1]
+          if attention_step != 0:
+            focus = args[-2]
+            beam = args[-1]
+            args = args[:-2]
         if self.attrs['lm']:
           c_p = args[-1]
           args = args[:-1]
@@ -436,14 +439,15 @@ class RecurrentUnitLayer(Layer):
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.attrs['attention'] and unit_given != 'lstm' and unit_given != 'lstmp':
+            att_z = zc
+            att_x = xc
             if attention_step != 0:
-              focus_end = T.max(T.switch(T.ge(focus + attention_beam,zc.shape[0]), zc.shape[0], focus + attention_beam))
-              focus_start = T.min(T.switch(T.lt(focus - attention_beam,0), 0, focus - attention_beam))
+              focus_i = T.switch(T.ge(focus + beam,zc.shape[0]), zc.shape[0], focus + beam)
+              focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
+              focus_end = T.max(focus_i)
+              focus_start = T.min(focus_j)
               att_z = zc[focus_start:focus_end]
               att_x = xc[focus_start:focus_end]
-            else:
-              att_z = zc
-              att_x = xc
             f_e = T.exp(att_z + T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
             w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
             #w_t = T.tanh(f_t).dimshuffle(0,1,'x') #T.nnet.softmax(f_t.dimshuffle(1, 0)).dimshuffle(1,0,'x')
@@ -454,10 +458,12 @@ class RecurrentUnitLayer(Layer):
             z_t += T.dot(T.sum(att_x * w_t.repeat(att_x.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
             if attention_step == -1:
-              focus = T.cast(T.argmax(w_t,axis=0).flatten(),'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
-              result = [focus] + result
+              #focus = focus_start + T.cast(T.mean(w_t,axis=0).flatten() * (focus_end - focus_start), 'int32')
+              focus = T.cast(T.sum(w_t*self.index_range[focus_start:focus_end],axis=0).flatten(),'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
+              beam = T.cast(T.exp(T.sum(-T.log(w_t)*w_t,axis=0)).flatten(),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
+              result = [focus,beam] + result
             elif attention_step > 0:
-              result = [focus+attention_step] + result
+              result = [focus+attention_step,beam] + result
           act = unit.step(i_t, x_t, z_t, z_p, *args)
         return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ] + result
 
