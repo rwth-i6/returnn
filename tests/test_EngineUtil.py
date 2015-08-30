@@ -8,6 +8,8 @@ from Config import Config
 from GeneratingDataset import GeneratingDataset
 from Dataset import DatasetSeq
 import numpy as np
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 dummyconfig_dict = {

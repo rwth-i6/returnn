@@ -11,6 +11,8 @@ from ExternSprintDataset import ExternSprintDataset
 import numpy as np
 import os
 import sys
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 dummyconfig_dict = {

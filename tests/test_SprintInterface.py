@@ -9,25 +9,26 @@ from Config import Config
 from Log import log
 import shutil
 import numpy
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 log.initialize()
 
 def install_sigint_handler():
-  import better_exchook
   import signal
   import Util
 
   def signal_handler(signal, frame):
     print "\nSIGINT at:"
-    better_exchook.print_traceback(frame)
+    better_exchook.print_tb(frame)
     print ""
 
     # It's likely that SIGINT was caused by Util.interrupt_main().
     # We might have a stacktrace from there.
     if hasattr(sys, "exited_frame"):
       print "interrupt_main via:"
-      better_exchook.print_traceback(sys.exited_frame)
+      better_exchook.print_tb(sys.exited_frame)
       print ""
     else:
       print "\nno sys.exited_frame\n"
