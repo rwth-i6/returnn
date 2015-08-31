@@ -476,10 +476,7 @@ class LayerNetwork(object):
       outattrs = self.output[name].attrs.copy()
       outattrs['from'] = outattrs['from'].split(',')
       outattrs['class'] = 'softmax'
-      if ',' in outattrs:
-        out[name] = outattrs.split(',')
-      else:
-        out[name] = outattrs
+      out[name] = outattrs
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
     return out
