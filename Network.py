@@ -129,19 +129,22 @@ class LayerNetwork(object):
     network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    def traverse(content, layer_name, network, index):
+    def traverse(content, layer_name, network, output_index):
       source = []
       obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
+      index = output_index
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
+        index = network.i
       elif obj['from']:
         if not isinstance(obj['from'], list):
           obj['from'] = [ obj['from'] ]
         for prev in obj['from']:
           if prev == 'data':
             source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+            index = network.i
           elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
               index = traverse(content, prev, network, index)
@@ -179,7 +182,7 @@ class LayerNetwork(object):
                  'network': network }
       params.update(obj)
       params["mask"] = mask # overwrite
-      params['index'] = index if not 'encoder' in obj else network.j
+      params['index'] = index if not 'encoder' in obj else output_index
       params['y_in'] = network.y
       if cl == 'softmax':
         if not 'target' in params:
@@ -192,9 +195,12 @@ class LayerNetwork(object):
           network.recurrent = True
         return network.add_layer(layer_class(**params))
     for layer_name in json_content:
-      if layer_name == 'output' and not 'target' in json_content[layer_name]:
-        json_content[layer_name]['target'] = 'classes'
-      traverse(json_content, layer_name, network, network.i[json_content[layer_name]['target']])
+      target = 'classes'
+      if 'target' in json_content[layer_name]:
+        target = json_content[layer_name]['target']
+      if layer_name == 'output' or 'target' in json_content[layer_name]:
+        network.j.setdefault(target, T.bmatrix('j_%s' % target))
+        traverse(json_content, layer_name, network, network.j[target])
     return network
 
   @classmethod
@@ -214,7 +220,8 @@ class LayerNetwork(object):
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
-    def traverse(model, layer_name, network, index):
+    def traverse(model, layer_name, network, output_index):
+      index = output_index
       mask = input_mask
       if not input_mask and 'mask' in model[layer_name].attrs:
         mask = model[layer_name].attrs['mask']
@@ -297,7 +304,7 @@ class LayerNetwork(object):
                    'carry' : model[layer_name].attrs['carry'],
                    'depth' : model[layer_name].attrs['depth'],
                    'network': network,
-                   'index' : index if not 'encoder' in model[layer_name].attrs else network.j }
+                   'index' : index if not 'encoder' in model[layer_name].attrs else output_index }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
         for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
@@ -313,8 +320,12 @@ class LayerNetwork(object):
           network.recurrent = True
         return network.add_layer(layer_class(**params))
     for layer_name in model:
+      target = 'classes'
+      if 'target' in model[layer_name].attrs:
+        target = model[layer_name].attrs
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
-        traverse(model, layer_name, network, network.i)
+        network.j.setdefault(target, T.bmatrix('j_%s' % target))
+        traverse(model, layer_name, network, network.j[target])
     return network
 
   def add_layer(self, layer):
