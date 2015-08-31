@@ -19,10 +19,8 @@ class LayerNetwork(object):
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
     self.y = {} #T.ivector('y'); """ :type: theano.Variable """
-    self.l = T.ivector('l'); """ :type: theano.Variable """
-    self.c = {} #T.imatrix('c'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    self.j = T.bmatrix('j'); """ :type: theano.Variable """
+    self.j = {} #T.bmatrix('j'); """ :type: theano.Variable """
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -38,13 +36,6 @@ class LayerNetwork(object):
     self.total_cost = T.constant(0)
     self.errors = {}
     self.ctc_priors = None
-
-    for target in self.n_out:
-      if self.n_out[target][1] == 1:
-        self.y[target] = T.ivector('y')
-      else:
-        self.y[target] = T.imatrix('y')
-      self.y[target].n_out = self.n_out[target][0]
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -362,24 +353,31 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
 
-    if target != "null":
+    if target != "null" and target not in self.y:
+      assert target in self.n_out
       if 'dtype' in kwargs and kwargs['dtype'].startswith('float'):
         if self.n_out[target][1] == 1:
-          self.y[target] = T.fvector('y')
+          self.y[target] = T.fvector('y_%s' % target)
         else:
-          self.y[target] = T.fmatrix('y')
-        self.y[target].n_out = self.n_out[target][0]
+          self.y[target] = T.fmatrix('y_%s' % target)
+      else:
+        if self.n_out[target][1] == 1:
+          self.y[target] = T.ivector('y_%s' % target)
+        else:
+          self.y[target] = T.imatrix('y_%s' % target)
+      self.y[target].n_out = self.n_out[target][0]
+    if target != "null":
+      targets = self.y[target]
+    else:
+      targets = None
     dtype = kwargs.pop('dtype', 'int32')
 
     if 'n_symbols' in kwargs:
-      targets = T.ivector()
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
       kwargs.setdefault('n_out', self.n_out[target][0])
-      targets = self.c if self.loss == 'ctc' else self.y[target]
-    else:
-      targets = None
-    kwargs['index'] = self.j
+    if target != "null":
+      kwargs['index'] = self.j.setdefault(target, T.bmatrix('j_%s' % target))
     self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
     self.output[name].set_attr('dtype', dtype)
     if target != "null":

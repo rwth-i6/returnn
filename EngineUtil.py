@@ -2,6 +2,7 @@
 import numpy
 from EngineBatch import Batch
 from Log import log
+from Util import NumbersDict
 
 
 def assign_dev_data(device, dataset, batches):
@@ -13,20 +14,21 @@ def assign_dev_data(device, dataset, batches):
   :rtype: (bool,int)
   """
   # The final device.data.shape is in format (time,batch,feature).
-  shape = [0, 0]  # time,batch
+  shape = [NumbersDict(0), 0]  # time,batch
   for batch in batches:
-    shape = [max(shape[0], batch.data_shape[0]), shape[1] + batch.data_shape[1]]
+    shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
   if shape[1] == 0:
     return False, len(batches)
-  assert shape[0] * shape[1] > 0
+  assert shape[0].max_value() > 0
 
-  output_shape = { k : shape[:] for k in device.used_targets }
+  output_shape = { k : [shape[0][k]] + shape[1:] for k in device.used_data_keys }
   for k in output_shape:
     if dataset.get_target_type(k) != 'int32':
       output_shape[k] += [dataset.get_target_dim(k)]
   import time
   ts = time.time()
-  device.alloc_data(input_shape=shape + [dataset.num_inputs * dataset.window], output_shape=output_shape,
+  device.alloc_data(input_shape=[shape[0]["data"], shape[1], dataset.num_inputs * dataset.window],
+                    output_shape=output_shape,
                     max_ctc_length=dataset.get_max_ctc_length())
   ts = time.time()
   offset_slice = 0
@@ -34,21 +36,21 @@ def assign_dev_data(device, dataset, batches):
   for batch in batches:
     dataset.load_seqs(batch.start_seq, batch.end_seq)
     device.num_frames += batch.get_total_num_frames()
-    for seq in batch.seqs:
-      o = seq.batch_frame_offset
-      q = seq.batch_slice + offset_slice
-      l = seq.frame_length
-      #assert o + l[0] <= shape[0]
-      assert q < shape[1]
-      device.input_index[o:o + l[0], q] = numpy.ones((l[0],), dtype='int8')
-      device.output_index[o:o + l[1], q] = numpy.ones((l[1],), dtype='int8')
-      with dataset.lock:
+    with dataset.lock:
+      for seq in batch.seqs:
+        o = seq.batch_frame_offset
+        q = seq.batch_slice + offset_slice
+        l = seq.frame_length
+        #assert o + l[0] <= shape[0]
+        #assert q < shape[1]
+        device.input_index[o["data"]:o["data"] + l["data"], q] = numpy.ones((l["data"],), dtype='int8')
         data = dataset.get_data(seq.seq_idx)
-        device.data[o:o + l[0], q] = data[seq.seq_start_frame[0]:seq.seq_end_frame[0]]
-        for target in device.used_targets:
-          targets = dataset.get_targets(target, seq.seq_idx)
+        device.data[o["data"]:o["data"] + l["data"], q] = data[seq.seq_start_frame["data"]:seq.seq_end_frame["data"]]
+        for k in device.used_data_keys:
+          targets = dataset.get_targets(k, seq.seq_idx)
           if targets is not None:
-            device.targets[target][o:o + l[1], q] = targets[seq.seq_start_frame[1]:seq.seq_end_frame[1]]
+            device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
+            device.targets[k][o[k]:o[k] + l[k], q] = targets[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
             #if exclude:
             #  for i in xrange(l[1]):
             #    if device.targets[target][o + i, q] in exclude:
@@ -57,7 +59,7 @@ def assign_dev_data(device, dataset, batches):
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
         if dataset.has_ctc_targets() and not chunking_active:
-          assert dataset.get_seq_length_2d(seq.seq_idx) == l  # Full seq.
+          #assert dataset.get_seq_length_2d(seq.seq_idx) == l  # Full seq.
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
@@ -85,7 +87,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=numpy.array([0,0]), length=dataset.get_seq_length_2d(seq))
+  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
   success, _ = assign_dev_data(device, dataset, [batch])
   return success
 

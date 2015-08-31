@@ -17,7 +17,7 @@ import theano
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
-from Util import try_run
+from Util import try_run, NumbersDict
 
 
 class Dataset(object):
@@ -100,8 +100,23 @@ class Dataset(object):
     :returns the len of the input features and the len of the target sequence.
     For multiple target seqs, it is expected that they all have the same len.
     We support different input/target len for seq2seq/ctc and other models.
+    Note: This is deprecated, better use get_seq_length().
     """
-    raise NotImplementedError
+    l = self.get_seq_length(sorted_seq_idx)
+    targets = self.get_target_list()
+    if targets:
+      return numpy.array([l["data"], l[targets[0]]])
+    else:
+      return numpy.array([l["data"], 0])
+
+  def get_seq_length(self, seq_idx):
+    """
+    :rtype: NumbersDict
+    """
+    input_len, output_len = self.get_seq_length_2d(seq_idx)
+    d = {"data": input_len}
+    d.update({k: output_len for k in self.get_target_list()})
+    return NumbersDict(d)
 
   def get_num_timesteps(self):
     assert self._num_timesteps > 0
@@ -314,18 +329,18 @@ class Dataset(object):
     :type chunk_size: int
     :type chunk_step: int
     :return: index, and seq start, seq end
-    :rtype: list[(int,numpy.array[int,int],numpy.array[int,int])]
+    :rtype: list[(int,NumbersDict,NumbersDict)]
     """
     s = 0
     while self.is_less_than_num_seqs(s):
-      length = self.get_seq_length_2d(s)
+      length = self.get_seq_length(s)
       if chunk_size == 0:
-        yield (s, numpy.array([0,0]), length)
+        yield (s, NumbersDict(0), length)
       else:
         t = 0
-        while t < length[0]:
-          l = min(t + chunk_size, length[0])
-          yield (s, numpy.array([t,t]), numpy.array([l,l]))
+        while t < length.max_value():
+          l = min(t + chunk_size, length.max_value())
+          yield (s, NumbersDict(t), NumbersDict(l))
           t += chunk_step
       s += 1
 
@@ -360,10 +375,10 @@ class Dataset(object):
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
-        if max(length) > batch_size:
-          print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (max(length), batch_size)
+        if length.max_value() > batch_size:
+          print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
         dt, ds = batch.try_sequence_as_slice(length)
-        if ds > 1 and (dt * ds > batch_size or ds > max_seqs):
+        if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
           yield batch
           batch = Batch()
           if batch_variance > 0.0:
@@ -372,12 +387,11 @@ class Dataset(object):
             batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
-        while t_start[0] < t_end[0]:
-          length = t_end[0] - t_start[0]
-          num_frames = min(length, batch_size - batch.get_all_slices_num_frames())
+        while t_start.max_value() < t_end.max_value():
+          length = t_end - t_start
+          num_frames = min(length.max_value(), batch_size - batch.get_all_slices_num_frames())
           assert num_frames > 0
-          batch.add_frames(seq_idx=seq_idx, seq_start_frame=numpy.array(t_start),
-                           length=numpy.array([num_frames, num_frames]))
+          batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch
             batch = Batch()
@@ -419,20 +433,13 @@ class DatasetSeq:
     self.ctc_targets = ctc_targets
 
   @property
-  def default_target(self):
-    target_keys = sorted(self.targets.keys())
-    if target_keys:
-      return self.targets[target_keys[0]]
-    else:
-      return None
-
-  @property
   def num_frames(self):
     """
-    :rtype: numpy.array[int,int]
-    :returns the features frame len, and the target frame len
+    :rtype: NumbersDict
     """
-    return numpy.array([self.features.shape[0], self.default_target.shape[0] if self.default_target is not None else 0])
+    d = {"data": self.features.shape[0]}
+    d.update({k: self.targets[k].shape[0] for k in self.targets.keys()})
+    return NumbersDict(d)
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx
