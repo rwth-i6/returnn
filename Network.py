@@ -187,6 +187,7 @@ class LayerNetwork(object):
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
+        params['index'] = output_index
         return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
@@ -195,12 +196,12 @@ class LayerNetwork(object):
           network.recurrent = True
         return network.add_layer(layer_class(**params))
     for layer_name in json_content:
-      target = 'classes'
+      trg = target
       if 'target' in json_content[layer_name]:
-        target = json_content[layer_name]['target']
+        trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        network.j.setdefault(target, T.bmatrix('j_%s' % target))
-        traverse(json_content, layer_name, network, network.j[target])
+        network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
+        traverse(json_content, layer_name, network, network.j[trg])
     return network
 
   @classmethod
@@ -285,6 +286,7 @@ class LayerNetwork(object):
           params['copy_input'] = copy_input
         if not 'target' in params:
           params['target'] = target
+        params['index'] = output_index
         params['sources'] = x_in
         params.pop('from', None)
         params.pop('class', None)
@@ -322,7 +324,7 @@ class LayerNetwork(object):
     for layer_name in model:
       target = 'classes'
       if 'target' in model[layer_name].attrs:
-        target = model[layer_name].attrs
+        target = model[layer_name].attrs['target']
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network, network.j[target])
@@ -383,7 +385,6 @@ class LayerNetwork(object):
     else:
       targets = None
     dtype = kwargs.pop('dtype', 'int32')
-
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":

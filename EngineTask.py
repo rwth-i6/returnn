@@ -132,7 +132,8 @@ class TaskThread(threading.Thread):
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
         if key == "ctc_priors": continue
-        eval_info[key] = value / float(num_frames["data"])
+        #eval_info[key] = value / float(num_frames["data"])
+        eval_info[key] = value / float(num_frames["classes"])
 
       #if numpy.isinf(score) or numpy.isnan(score):
       #  for i, res in enumerate(results):
@@ -150,7 +151,8 @@ class TaskThread(threading.Thread):
           assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
           return 1.0 / self.data.num_running_chars
       # Default: Normalize by number of frames.
-      return 1.0 / self.num_frames["data"]
+      #return 1.0 / self.num_frames["data"]
+      return 1.0 / self.num_frames["classes"]
     def finalize(self):
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.

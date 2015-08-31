@@ -1081,7 +1081,7 @@ class Device(object):
           y_given.append((network.y[k], y.flatten()))
 
       return [(network.x, self.x[:,i:j]),
-              (network.i, self.i[:,i:j])] + y_given + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+              (network.i, self.i[:,i:j])] + y_given + [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
     else:
       return [(network.x, self.x),
               (network.i, self.i)] + \
