@@ -329,7 +329,7 @@ class RecurrentUnitLayer(Layer):
         self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
         self.add_param(self.W_att_in, name = "W_att_in")
         non_sequences += [self.xc]
-      elif self.attrs['attention'] == 'pooled': # attention is just a sequence dependent bias (lstmp compatible)
+      elif self.attrs['attention'] == 'input': # attention is just a sequence dependent bias (lstmp compatible)
         src = []
         src_names = []
         for e in base:
@@ -412,9 +412,9 @@ class RecurrentUnitLayer(Layer):
               sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * lmmask
               outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
-              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'pooled' else 0)
+              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'pooled' else 0)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
       else:
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
@@ -468,7 +468,7 @@ class RecurrentUnitLayer(Layer):
             #att_z = zc
             att_x = xc
             if attention_step != 0:
-              focus_i = T.switch(T.ge(focus + beam,zc.shape[0]), zc.shape[0], focus + beam)
+              focus_i = T.switch(T.ge(focus + beam,xc.shape[0]), xc.shape[0], focus + beam)
               focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
               focus_end = T.max(focus_i)
               focus_start = T.min(focus_j)
