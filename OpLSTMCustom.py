@@ -8,32 +8,8 @@ import theano.gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
 
-def make_fwd_fun():
-  #s: state
-  #later also use context as input
-  s = T.ftensor3("s")
-  W_re = T.fmatrix("W_re")
-  #TODO check if we need to cast
-  idx_f = T.fscalar("idx")
-  idx = T.cast(idx_f, "int32")
-  z_re = T.dot(s[idx - 1], W_re)
-  return theano.function(inputs=[s, W_re, idx], outputs=[z_re])
-
-def make_bwd_fun():
-  s = T.ftensor3("s")
-  W_re = T.fmatrix("W_re")
-  idx_f = T.fscalar("idx")
-  idx = T.cast(idx_f, "int32")
-  Dz_re = T.fmatrix("Dz_re")
-
-  z_re = T.dot(s[idx - 1], W_re)
-  known_grads = {z_re: Dz_re}
-  Ds = T.grad(None, s, known_grads=known_grads)
-  DW_re = T.grad(None, W_re, known_grads=known_grads)
-  return theano.function(inputs=[s, W_re, idx, Dz_re], outputs=[Ds, DW_re])
-
-fwd_fun = make_fwd_fun()
-bwd_fun = make_bwd_fun()
+#do not remove this import, it is used in the c code!
+import CustomLSTMFunctions
 
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ()
@@ -64,9 +40,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Y, H, c, i, Dd, DY, W_re], [H.type(), c.type(), W_re.type()])
 
   def c_support_code(self):
-    #TODO: why the hell do we need this?
-    import os
-    from FunctionLoader import make_funloader_code
     crnn_path = os.path.dirname(__file__)
     funloader = make_funloader_code("bwd_fun")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
@@ -78,6 +51,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
+    std::cout << "LSTMCustomOpGrad called" << std::endl;
     if(%(DZ)s || %(Dc)s || %(DW_re)s)
     {
       printf("output storage already exists\\n");
@@ -179,6 +153,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     Y, H, d = output_names
     fail = sub['fail']
     return """
+    std::cout << "LSTMCustomOp called" << std::endl;
     if(%(Y)s || %(H)s || %(d)s)
     {
       printf("Y or H or d already exist\\n");
@@ -201,8 +176,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
     int y = 0;
-    PyArrayObject * idx_fun = (PyArrayObject*) PyArray_SimpleNew(0, 0, NPY_INT32);
-    int * idx_fun_data = (int *) PyArray_DATA(idx_fun);
+    CudaNdarray * idx_fun = (CudaNdarray*) CudaNdarray_NewDims(0, dims_Y); //just pass any dims, it won't be used anyway
+    //int * idx_fun_data = (int *) PyArray_DATA(idx_fun);
     for(int x = 0; x < Z_dim[0]; ++x)
     {
       //TODO: later we also need to handle the first state, but atm we can let it be handled outside
@@ -210,7 +185,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       {
         //affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
         //TODO: call custom function here
-        idx_fun_data[0] = x;
+        //idx_fun_data[0] = x;
         //CudaNdarray * res = (CudaNdarray*) fwd_fun(..., ..., idx_fun);
         //TODO copy to H
       }

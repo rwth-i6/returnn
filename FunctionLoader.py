@@ -14,9 +14,12 @@ struct FunLoader
 
   FunLoader(const char * fn_name)
   {
-    PyObject *mod = PyImport_AddModule("OpLSTMCustom");
+    std::cout << "Loading function..." << std::endl;
+    PyObject *mod = PyImport_AddModule("CustomLSTMFunctions");
+    assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
     Py_DECREF(mod);
+    std::cout << "loaded function" << std::endl;
   }
 
   //TODO: this is never executed, as the programs terminates before
@@ -58,6 +61,7 @@ struct FunLoader
 """
 
 def make_funloader_code(fn_name):
-  return funloader_support_code + """
-  FunLoader %(fn_name)s("%(fn_name)s");
-  """ % locals()
+  #return funloader_support_code + """
+  #FunLoader %(fn_name)s("%(fn_name)s");
+  #""" % locals()
+  return ""
