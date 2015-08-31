@@ -388,8 +388,6 @@ class LayerNetwork(object):
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
       kwargs.setdefault('n_out', self.n_out[target][0])
-    if target != "null":
-      kwargs['index'] = self.j.setdefault(target, T.bmatrix('j_%s' % target))
     self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
     self.output[name].set_attr('dtype', dtype)
     if target != "null":
