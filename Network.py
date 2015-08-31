@@ -192,8 +192,9 @@ class LayerNetwork(object):
           network.recurrent = True
         return network.add_layer(layer_class(**params))
     for layer_name in json_content:
-      if layer_name == 'output' or 'target' in json_content[layer_name]:
-        traverse(json_content, layer_name, network, network.i)
+      if layer_name == 'output' and not 'target' in json_content[layer_name]:
+        json_content[layer_name]['target'] = 'classes'
+      traverse(json_content, layer_name, network, network.i[json_content[layer_name]['target']])
     return network
 
   @classmethod
