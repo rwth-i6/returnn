@@ -11,6 +11,8 @@ from ExternSprintDataset import ExternSprintDataset
 import numpy as np
 import os
 import sys
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 dummyconfig_dict = {
@@ -40,7 +42,7 @@ class DummyDevice(Device):
 
 def generate_batch(seq_idx, dataset):
   batch = Batch()
-  batch.add_frames(seq_idx=seq_idx, seq_start_frame=np.array([0,0]), length=dataset.get_seq_length(seq_idx))
+  batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   return batch
 
 

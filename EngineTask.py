@@ -6,7 +6,7 @@ import time
 import theano
 from EngineUtil import assign_dev_data
 from Log import log
-from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main
+from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
 from Device import Device
 from TaskSystem import ProcConnectionDied
 from math import ceil
@@ -42,7 +42,7 @@ class TaskThread(threading.Thread):
       self.score = None
       self.error = None
       self.results = {}
-      self.num_frames = 0
+      self.num_frames = NumbersDict(0)
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
@@ -101,13 +101,13 @@ class TaskThread(threading.Thread):
       :param list[list[EngineBatch.Batch]] batchess: batches per device
       :param list[list[numpy.ndarray]] results: results per device
       :param list[str]|None result_format: describes what we have in a result list
-      :type num_frames: int
+      :type num_frames: NumbersDict
       :returns some score or None
       :rtype: dict[str] | None
       """
       assert results
       assert result_format  # train should always have the format
-      assert num_frames > 0
+      assert num_frames["data"] > 0
 
       # We can get info such as "cost:..." and more info such as gradient_norm.
       # See Device.initialize().
@@ -132,7 +132,7 @@ class TaskThread(threading.Thread):
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
         if key == "ctc_priors": continue
-        eval_info[key] = value / float(num_frames)
+        eval_info[key] = value / float(num_frames["data"])
 
       #if numpy.isinf(score) or numpy.isnan(score):
       #  for i, res in enumerate(results):
@@ -150,9 +150,9 @@ class TaskThread(threading.Thread):
           assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
           return 1.0 / self.data.num_running_chars
       # Default: Normalize by number of frames.
-      return 1.0 / self.num_frames
+      return 1.0 / self.num_frames["data"]
     def finalize(self):
-      assert self.num_frames > 0
+      assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
         self.results[key] *= self.epoch_norm_factor_for_result(key)
@@ -176,8 +176,8 @@ class TaskThread(threading.Thread):
         self.processing = False
         self.finished = True
         self.crashed = False
-        self.num_frames = 0
-        self.run_frames = 0
+        self.num_frames = NumbersDict(0)
+        self.run_frames = NumbersDict(0)
         self.daemon = True
         self.active = True
         self.result = { 'batchess': [], 'results': [], 'result_format': None, 'num_frames': 0 }
@@ -187,16 +187,16 @@ class TaskThread(threading.Thread):
       def allocate(self):
         self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
         self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
-        self.run_frames = 0
+        self.run_frames = NumbersDict(0)
         for batches, device in zip(self.devices_batches,self.alloc_devices):
           assert batches
           assert batches[0].seqs
-          assert batches[0].seqs[0].frame_length[1] > 0
+          #assert batches[0].seqs[0].frame_length[1] > 0
           device.num_updates += 1 if not device.update_specs['block_size'] else int(ceil(sum([len(batch.seqs) for batch in batches]) / float(device.update_specs['block_size'])))
           self.run_frames += sum([batch.get_total_num_frames() for batch in batches])
         if self.parent.share_batches:
           self.run_frames /= len(self.alloc_devices)
-        assert self.run_frames > 0
+        assert self.run_frames.max_value() > 0
         self.allocated = True
 
       def finish(self):
@@ -381,8 +381,8 @@ class TaskThread(threading.Thread):
       num_device_runs = 1 if self.share_batches else len(self.devices)
       deviceRuns = [ self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices) for i in xrange(num_device_runs) ]
 
-      results = { 'batchess': [], 'results': [], 'num_frames' : 0 }
-      run_frames = 0
+      results = { 'batchess': [], 'results': [], 'num_frames' : NumbersDict(0) }
+      run_frames = NumbersDict(0)
 
       crashed = False
 
@@ -406,14 +406,14 @@ class TaskThread(threading.Thread):
         if crashed:
           break
 
-        if run_frames >= self.eval_batch_size or not self.batches.has_more():
+        if run_frames.max_value() >= self.eval_batch_size or not self.batches.has_more():
           if all(not (dev.finished or dev.allocated or dev.processing) for dev in deviceRuns):
             results['num_frames'] = run_frames
             self.num_frames += run_frames
             if self.share_batches: run_frames *= len(self.devices)
             self.reduce(run_frames)
             self.eval_batch_idx += 1
-            run_frames = 0
+            run_frames = NumbersDict(0)
             results['batchess'] = []
             results['results'] = []
             for device in self.devices:
@@ -425,7 +425,7 @@ class TaskThread(threading.Thread):
             time.sleep(0.01)
 
         match = True
-        while self.batches.has_more() and run_frames < self.eval_batch_size and match:
+        while self.batches.has_more() and run_frames.max_value() < self.eval_batch_size and match:
           self.batch_idx = self.batches.get_current_batch_idx()
           if self.batch_idx < self.start_batch:
             self.batches.advance(1)
@@ -592,7 +592,7 @@ class TrainTaskThread(TaskThread):
   def finalize(self):
     super(TrainTaskThread, self).finalize()
     if self.do_ctc_priors:
-      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames)
+      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames["data"])
 
 
 class EvalTaskThread(TaskThread):

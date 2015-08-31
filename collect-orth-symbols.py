@@ -29,7 +29,7 @@ def iter_dataset(dataset, callback):
   while dataset.is_less_than_num_seqs(seq_idx):
     dataset.load_seqs(seq_idx, seq_idx)
 
-    frame_len = dataset.get_seq_length(seq_idx)[0]
+    frame_len = dataset.get_seq_length(seq_idx)["data"]
     orth = dataset.get_targets("orth", seq_idx)
     callback(frame_len=frame_len, orth=orth)
 

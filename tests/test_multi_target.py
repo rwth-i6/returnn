@@ -95,7 +95,7 @@ def test_multi_target_old_init():
   assert_in("fw0", device.testnet.hidden)
   assert_in("out1", device.testnet.output)
   assert_in("out2", device.testnet.output)
-  assert_is(device.testnet.j, device.testnet.output["out1"].index)
+  assert_is(device.testnet.j["t1"], device.testnet.output["out1"].index)
   assert_true(device.updater)
   update_list = device.updater.getUpdateList()
   print "update list:"
@@ -157,8 +157,8 @@ def test_multi_target_old_init():
   assert_equal(device.targets["t2"].shape, (1, 1))
   assert_equal(device.input_index.shape, (1, 1))
   numpy.testing.assert_equal(device.input_index, numpy.array([[1]]))
-  assert_equal(device.output_index.shape, (1, 1))
-  numpy.testing.assert_equal(device.output_index, numpy.array([[1]]))
+  assert_equal(device.output_index["t1"].shape, (1, 1))
+  numpy.testing.assert_equal(device.output_index["t1"], numpy.array([[1]]))
 
   # Forward test.
   device.update_data()
@@ -170,7 +170,7 @@ def test_multi_target_old_init():
   forward_func = theano.function(
     inputs=[device.block_start, device.block_end],
     outputs=[
-      device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
+      device.testnet.j["t1"], out_i1, out_i1_nonzero[0], nll1, pcx1,
       device.testnet.costs["out1"],
       device.testnet.output["out1"].p_y_given_x,
       device.testnet.costs["out2"],
@@ -277,7 +277,7 @@ def test_multi_target_init():
   assert_in("fw0", device.testnet.hidden)
   assert_in("out1", device.testnet.output)
   assert_in("out2", device.testnet.output)
-  assert_is(device.testnet.j, device.testnet.output["out1"].index)
+  assert_is(device.testnet.j["t1"], device.testnet.output["out1"].index)
   assert_true(device.updater)
   update_list = device.updater.getUpdateList()
   print "update list:"
@@ -339,8 +339,8 @@ def test_multi_target_init():
   assert_equal(device.targets["t2"].shape, (1, 1))
   assert_equal(device.input_index.shape, (1, 1))
   numpy.testing.assert_equal(device.input_index, numpy.array([[1]]))
-  assert_equal(device.output_index.shape, (1, 1))
-  numpy.testing.assert_equal(device.output_index, numpy.array([[1]]))
+  assert_equal(device.output_index["t1"].shape, (1, 1))
+  numpy.testing.assert_equal(device.output_index["t1"], numpy.array([[1]]))
 
   # Forward test.
   device.update_data()
@@ -352,7 +352,7 @@ def test_multi_target_init():
   forward_func = theano.function(
     inputs=[device.block_start, device.block_end],
     outputs=[
-      device.testnet.j, out_i1, out_i1_nonzero[0], nll1, pcx1,
+      device.testnet.j["t1"], out_i1, out_i1_nonzero[0], nll1, pcx1,
       device.testnet.costs["out1"],
       device.testnet.output["out1"].p_y_given_x,
       device.testnet.costs["out2"],

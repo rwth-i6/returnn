@@ -1,4 +1,6 @@
 
+from Util import NumbersDict
+
 
 class BatchSeqCopyPart:
   """
@@ -15,17 +17,20 @@ class BatchSeqCopyPart:
                batch_slice, batch_frame_offset):
     """
     :type seq_idx: int
-    :type seq_start_frame: numpy.array[int,int]
-    :type seq_end_frame: numpy.array[int,int]
+    :type seq_start_frame: NumbersDict | int
+    :type seq_end_frame: NumbersDict | int
       Frame idx are input seq, output seq.
     :type batch_slice: int
-    :type batch_frame_offset: int
+    :type batch_frame_offset: int | NumbersDict
     """
     self.seq_idx = seq_idx
-    self.seq_start_frame = seq_start_frame
-    self.seq_end_frame = seq_end_frame
+    self.seq_start_frame = NumbersDict(seq_start_frame)
+    self.seq_end_frame = NumbersDict(seq_end_frame)
     self.batch_slice = batch_slice
-    self.batch_frame_offset = batch_frame_offset
+    self.batch_frame_offset = NumbersDict(batch_frame_offset)
+    assert self.seq_start_frame.has_values()
+    assert self.seq_end_frame.has_values()
+    assert self.batch_frame_offset.has_values()
 
   @property
   def frame_length(self):
@@ -39,71 +44,60 @@ class Batch:
   """
 
   def __init__(self):
-    self.data_shape = [0, 0]  # format (time,batch/slice)
+    self.max_num_frames_per_slice = NumbersDict(0)
+    self.num_slices = 0
+    # original data_shape = [0, 0], format (time,batch/slice)
+    #          data_shape = [max_num_frames_per_slice, num_slices]
     self.seqs = []; " :type: list[BatchSeqCopyPart] "
 
   def __repr__(self):
-    return "<Batch start_seq:%r data_shape:%r>" % (self.start_seq, self.data_shape)
+    return "<Batch start_seq:%r>" % self.start_seq
 
   def try_sequence_as_slice(self, length):
     """
-    :param numpy.array[int,int] length: number of (time) frames
+    :param NumbersDict length: number of (time) frames
     :return: new shape which covers the old shape and one more data-batch, format (time,batch)
-    :rtype: (int,int)
+    :rtype: (NumbersDict,int)
     """
-    return [max(self.data_shape[0], max(length)), self.data_shape[1] + 1]
+    return [NumbersDict.max([self.max_num_frames_per_slice, length]), self.num_slices + 1]
 
   def add_sequence_as_slice(self, seq_idx, seq_start_frame, length):
     """
     Adds one data-batch in an additional slice.
-    :param numpy.array[int,int] length: number of (time) frames
+    :param NumbersDict length: number of (time) frames
     """
-    self.data_shape = self.try_sequence_as_slice(length)
+    self.max_num_frames_per_slice, self.num_slices = self.try_sequence_as_slice(length)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
-                                   batch_slice=self.data_shape[1] - 1,
+                                   batch_slice=self.num_slices - 1,
                                    batch_frame_offset=0)]
 
   def add_frames(self, seq_idx, seq_start_frame, length):
     """
     Adds frames to all data-batches.
     Will add one data-batch if we don't have one yet.
-    :type seq_start_frame: numpy.array[int,int]
-    :param numpy.array[int,int] length: number of (time) frames
+    :type seq_start_frame: NumbersDict | int
+    :param NumbersDict length: number of (time) frames
     """
-    self.data_shape = [self.data_shape[0] + max(length), max(self.data_shape[1], 1)]
+    self.max_num_frames_per_slice += length
+    self.num_slices = max(self.num_slices, 1)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
-                                   batch_frame_offset=self.data_shape[0] - max(length))]
+                                   batch_frame_offset=self.max_num_frames_per_slice - length)]
 
   def get_all_slices_num_frames(self):
     """
     Note that this is only an upper limit in case of data_shape[1] > 1
     because data_shape[0] is the max frame len of all seqs.
     """
-    return self.data_shape[0] * self.data_shape[1]
+    return self.max_num_frames_per_slice.max_value() * self.num_slices
 
-  @property
-  def max_input_length(self):
-    return max([s.frame_length[0] for s in self.seqs])
-
-  @property
-  def max_output_length(self):
-    return max([s.frame_length[1] for s in self.seqs])
-
-  @property
-  def max_num_frames_per_slice(self):
-    return self.data_shape[0]
-
-  @property
-  def num_slices(self):
-    return self.data_shape[1]
 
   def get_total_num_frames(self):
-    return sum([s.frame_length[1] for s in self.seqs])
+    return sum([s.frame_length for s in self.seqs])
 
   @property
   def start_seq(self):

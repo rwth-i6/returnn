@@ -8,6 +8,7 @@ import sys
 import shlex
 import numpy as np
 import re
+from collections import defaultdict
 
 
 def cmd(s):
@@ -439,3 +440,154 @@ def json_remove_comments(string, strip_space=True):
 
   new_str.append(string[index:])
   return ''.join(new_str)
+
+
+class NumbersDict:
+  """
+  It's mostly like dict[str,float|int] & some optional broadcast default value.
+  It implements the standard math bin ops in a straight-forward way.
+  """
+
+  def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
+    if auto_convert is not None:
+      assert broadcast_value is None
+      assert numbers_dict is None
+      if isinstance(auto_convert, dict):
+        numbers_dict = auto_convert
+      elif isinstance(auto_convert, NumbersDict):
+        numbers_dict = auto_convert.dict
+        broadcast_value = auto_convert.value
+      else:
+        broadcast_value = auto_convert
+    if numbers_dict is None:
+      numbers_dict = {}
+    else:
+      numbers_dict = dict(numbers_dict)  # force copy
+
+    self.dict = numbers_dict
+    self.value = broadcast_value
+    self.max = self.__max_error
+
+  @property
+  def keys_set(self):
+    return set(self.dict.keys())
+
+  def __getitem__(self, key):
+    return self.dict.get(key, self.value)
+
+  def __setitem__(self, key, value):
+    self.dict[key] = value
+
+  def get(self, key, default=None):
+    return self.dict.get(key, default)
+
+  def __iter__(self):
+    # This can potentially cause confusion. So enforce explicitness.
+    # For a dict, we would return the dict keys here.
+    # Also, max(self) would result in a call to self.__iter__(),
+    # which would only make sense for our values, not the dict keys.
+    raise Exception("%s.__iter__ is undefined" % self.__class__.__name__)
+
+  def keys(self):
+    return self.dict.keys()
+
+  def values(self):
+    return list(self.dict.values()) + ([self.value] if self.value is not None else [])
+
+  def has_values(self):
+    return bool(self.dict) or self.value is not None
+
+  @classmethod
+  def bin_op_scalar_optional(cls, self, other, op):
+    if self is None:
+      return other
+    if other is None:
+      return self
+    return op(self, other)
+
+  @classmethod
+  def bin_op(cls, self, other, op, result=None):
+    if not isinstance(self, NumbersDict):
+      self = NumbersDict(self)
+    if not isinstance(other, NumbersDict):
+      other = NumbersDict(other)
+    if result is None:
+      result = NumbersDict()
+    assert isinstance(result, NumbersDict)
+    for k in self.keys_set | other.keys_set:
+      result[k] = cls.bin_op_scalar_optional(self[k], other[k], op=op)
+    result.value = cls.bin_op_scalar_optional(self.value, other.value, op=op)
+    return result
+
+  def __add__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a + b)
+
+  __radd__ = __add__
+
+  def __iadd__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a + b, result=self)
+
+  def __sub__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a - b)
+
+  def __rsub__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: b - a)
+
+  def __isub__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a - b, result=self)
+
+  def __mul__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a * b)
+
+  __rmul__ = __mul__
+
+  def __imul__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a * b, result=self)
+
+  def __div__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a / b)
+
+  def __rdiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: b / a)
+
+  def __idiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a / b, result=self)
+
+  def __cmp__(self, other):
+    # There is no good straight-forward implementation
+    # and it would just confuse.
+    raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
+
+  @classmethod
+  def max(cls, items):
+    """
+    Element-wise maximum for item in items.
+    """
+    if not items:
+      return None
+    if len(items) == 1:
+      return items[0]
+    if len(items) == 2:
+      return cls.bin_op(items[0], items[1], op=np.maximum)
+    return cls.max([items[0], cls.max(items[1:])])
+
+  @staticmethod
+  def __max_error():
+    # Will replace self.max for each instance. To be sure that we don't confuse it with self.max_value.
+    raise Exception("Use max_value instead.")
+
+  def max_value(self):
+    """
+    Maximum of our values.
+    """
+    return max(self.values())
+
+  def __repr__(self):
+    if self.value is None and not self.dict:
+      return "%s()" % self.__class__.__name__
+    if self.value is None and self.dict:
+      return "%s(%r)" % (self.__class__.__name__, self.dict)
+    if not self.dict and self.value is not None:
+      return "%s(%r)" % (self.__class__.__name__, self.value)
+    return "%s(numbers_dict=%r, broadcast_value=%r)" % (
+           self.__class__.__name__, self.dict, self.value)
