@@ -245,7 +245,7 @@ class TaskThread(threading.Thread):
 
       def run(self):
         try:
-          while self.active:
+          while self.active and not getattr(sys, "exited", False):
             if self.allocated and not self.finished:
               self.device_run()
               self.num_frames = self.run_frames
@@ -258,8 +258,9 @@ class TaskThread(threading.Thread):
               time.sleep(0.01)
         except:
           self.crashed = True
-          self.finished = True
           sys.excepthook(*sys.exc_info())
+        finally:
+          self.finished = True
 
       def stop(self):
         self.active = False
@@ -442,6 +443,8 @@ class TaskThread(threading.Thread):
         if not match:
           time.sleep(0.01)
 
+      for run in deviceRuns:
+        run.stop()
       for device in self.devices:
         device.finish_epoch_stats()
       if crashed: return
