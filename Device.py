@@ -839,11 +839,7 @@ class Device(object):
       target_keys = list(sorted(self.used_data_keys))
       self.input_queue.send(target_keys)
       for target in target_keys:
-        if len(self.targets[target].shape) == 3:
-          #numpy.swapaxes(self.targets[target], 1, 2).
-          self.input_queue.send(self.targets[target]) #.reshape(self.targets[target].shape[0] * self.targets[target].shape[1], self.targets[target].shape[2]))
-        else:
-          self.input_queue.send(self.targets[target]) #.flatten())
+        self.input_queue.send(self.targets[target])
       self.input_queue.send(self.input_index)
       for k in target_keys:
         self.input_queue.send(self.output_index[k])
