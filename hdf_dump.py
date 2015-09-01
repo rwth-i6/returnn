@@ -36,7 +36,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
     while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= parser_args.end_seq:
         dataset.load_seqs(seq_idx, seq_idx)
-        nd_data = dataset.get_data(seq_idx)
+        nd_data = dataset.get_input_data(seq_idx)
         for target in dataset.get_target_list():
             nd_targets = dataset.get_targets(target, seq_idx)
 

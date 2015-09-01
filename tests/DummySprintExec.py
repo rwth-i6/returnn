@@ -74,7 +74,7 @@ def main(argv):
     seq_idx = 0
     while dataset.is_less_than_num_seqs(seq_idx):
       dataset.load_seqs(seq_idx, seq_idx + 1)
-      features = dataset.get_data(seq_idx)
+      features = dataset.get_input_data(seq_idx)
       features = features.T  # Sprint-like
       kwargs = {"features": features}
       if targetMode == "target-generic":

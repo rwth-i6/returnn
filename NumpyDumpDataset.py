@@ -68,7 +68,7 @@ class NumpyDumpDataset(Dataset):
       if not self._have_cache_seq(i):
         self._load_numpy_seq(i)
 
-  def get_data(self, seq_idx):
+  def get_input_data(self, seq_idx):
     return self._get_cache_seq(seq_idx).features
 
   def get_targets(self, seq_idx):

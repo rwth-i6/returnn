@@ -97,7 +97,7 @@ class GeneratingDataset(Dataset):
     self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).num_frames
 
-  def get_data(self, sorted_seq_idx):
+  def get_input_data(self, sorted_seq_idx):
     return self._get_seq(sorted_seq_idx).features
 
   def get_targets(self, target, sorted_seq_idx):

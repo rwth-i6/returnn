@@ -310,7 +310,7 @@ class SprintDataset(Dataset):
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).num_frames
 
-  def get_data(self, sorted_seq_idx):
+  def get_input_data(self, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).features

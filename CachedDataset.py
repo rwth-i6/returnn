@@ -435,7 +435,7 @@ class CachedDataset(Dataset):
     seq_len = self.get_seq_length_2d(sorted_seq_idx)[0]
     return self.timestamps[seq_start:seq_start + seq_len]
 
-  def get_data(self, sorted_seq_idx):
+  def get_input_data(self, sorted_seq_idx):
     idi = self.alloc_interval_index(sorted_seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx
     alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]

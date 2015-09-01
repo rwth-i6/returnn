@@ -235,7 +235,7 @@ class Dataset(object):
   def get_times(self, sorted_seq_idx):
     raise NotImplementedError
 
-  def get_data(self, sorted_seq_idx):
+  def get_input_data(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
     :rtype: numpy.ndarray
