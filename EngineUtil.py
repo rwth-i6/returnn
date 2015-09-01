@@ -13,23 +13,12 @@ def assign_dev_data(device, dataset, batches):
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
-  # The final device.data.shape is in format (time,batch,feature).
-  shape = [NumbersDict(0), 0]  # time,batch
-  for batch in batches:
-    shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
-  if shape[1] == 0:
+  shapes = dataset.shapes_for_batches(batches, data_keys=device.used_data_keys)
+  if shapes is None:
     return False, len(batches)
-  assert shape[0].max_value() > 0
-
-  output_shape = { k : [shape[0][k], shape[1]] for k in device.used_data_keys }
-  for k in output_shape:
-    if dataset.get_target_type(k) != 'int32':
-      output_shape[k] += [dataset.get_target_dim(k)]
   import time
   ts = time.time()
-  device.alloc_data(input_shape=[shape[0]["data"], shape[1], dataset.num_inputs * dataset.window],
-                    output_shape=output_shape,
-                    max_ctc_length=dataset.get_max_ctc_length())
+  device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())
   ts = time.time()
   offset_slice = 0
 

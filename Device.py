@@ -799,23 +799,22 @@ class Device(object):
       return  # Nothing to do.
     self.used_data_keys = self._generic_exec_on_dev("_host__get_used_targets")
 
-  def alloc_data(self, input_shape, output_shape, max_ctc_length=0):
+  def alloc_data(self, shapes, max_ctc_length=0):
     """
-    :param list[int] input_shape: format (time,batch,features)
-    :param dict[str,list[int]] output_shape: by data-key
+    :param dict[str,list[int]] shapes: by data-key. format usually (time,batch,features)
     :type max_ctc_length: int
     """
     assert self.main_pid == os.getpid()
-    assert len(input_shape) == 3
-    assert all([s > 0 for s in input_shape])
+    assert len(shapes["data"]) == 3
+    assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
-    self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
-    self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in self.used_data_keys}
-    self.ctc_targets = numpy.zeros((output_shape.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
-    self.input_index = numpy.zeros(input_shape[0:2], dtype='int8')
-    self.output_index = {k: numpy.zeros(output_shape[k][0:2], dtype='int8') for k in self.used_data_keys}
-    self.tags = [None] * input_shape[1]  # TODO
+    self.data = numpy.zeros(shapes["data"], dtype=theano.config.floatX)
+    self.targets = {k: numpy.zeros(shapes[k], dtype=theano.config.floatX) for k in self.used_data_keys}
+    self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
+    self.input_index = numpy.zeros(shapes["data"][0:2], dtype='int8')
+    self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
+    self.tags = [None] * shapes["data"][1]  # TODO
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()

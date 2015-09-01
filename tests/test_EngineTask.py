@@ -117,8 +117,9 @@ class DummyDeviceBatchRun(TaskThread.DeviceBatchRun):
     self.devices_batches = [None] * len(self.alloc_devices)
     self.num_frames = NumbersDict(13)
     batch_dim = 1
-    self.alloc_devices[0].alloc_data(input_shape=(self.num_frames["data"], batch_dim, config.typed_value("num_inputs")),
-                                     output_shape={"classes": (self.num_frames["classes"], batch_dim)})
+    self.alloc_devices[0].alloc_data(shapes={
+      "data": (self.num_frames["data"], batch_dim, config.typed_value("num_inputs")),
+      "classes": (self.num_frames["classes"], batch_dim)})
     self.parent.num_frames += self.num_frames
     self.allocated = True
 

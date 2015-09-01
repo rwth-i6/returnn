@@ -409,6 +409,28 @@ class Dataset(object):
     """
     return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance))
 
+  def shapes_for_batches(self, batches, data_keys):
+    """
+    :type batches: list[EngineBatch.Batch]
+    :rtype: dict[str,list[int]] | None
+    """
+    # The final device.data.shape is in format (time,batch,feature).
+    shape = [NumbersDict(0), 0]  # time,batch
+    for batch in batches:
+      shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
+    if shape[1] == 0:
+      return None
+    assert shape[0].max_value() > 0
+
+    output_shape = {k: [shape[0][k], shape[1]] for k in data_keys}
+    for k in output_shape:
+      if self.get_target_type(k) != 'int32':
+        output_shape[k] += [self.get_target_dim(k)]
+
+    d = {"data": [shape[0]["data"], shape[1], self.num_inputs * self.window]}
+    d.update({k: output_shape[k] for k in data_keys})
+    return d
+
 
 class DatasetSeq:
   def __init__(self, seq_idx, features, targets, ctc_targets=None):
