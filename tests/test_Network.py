@@ -4,6 +4,9 @@ from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true,
 from Config import Config
 from StringIO import StringIO
 from Network import LayerNetwork
+import h5py
+import tempfile
+import os
 
 
 config_enc_dec1_json = """
@@ -38,3 +41,27 @@ def test_enc_dec1_init():
   assert_true(network_json)
   network = LayerNetwork.from_json_and_config(network_json, config)
   assert_true(network)
+
+
+def test_enc_dec1_hdf():
+  filename = tempfile.mktemp(prefix="crnn-model-test")
+  model = h5py.File(filename, "w")
+
+  config = Config()
+  config.load_file(StringIO(config_enc_dec1_json))
+  network_json = LayerNetwork.json_from_config(config)
+  assert_true(network_json)
+  network = LayerNetwork.from_json_and_config(network_json, config)
+  assert_true(network)
+
+  network.save_hdf(model, epoch=42)
+  model.close()
+
+  loaded_model = h5py.File(filename, "r")
+  loaded_net = LayerNetwork.from_hdf_model_topology(loaded_model)
+  assert_true(loaded_net)
+  assert_equal(sorted(network.hidden.keys()), sorted(loaded_net.hidden.keys()))
+  assert_equal(sorted(network.y.keys()), sorted(loaded_net.y.keys()))
+  assert_equal(sorted(network.j.keys()), sorted(loaded_net.j.keys()))
+
+  os.remove(filename)
