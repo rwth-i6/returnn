@@ -433,12 +433,13 @@ class Dataset(object):
 
 
 class DatasetSeq:
-  def __init__(self, seq_idx, features, targets, ctc_targets=None):
+  def __init__(self, seq_idx, features, targets, ctc_targets=None, seq_tag=None):
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray features: format 2d (time,feature) (float)
     :param dict[str,numpy.ndarray] | numpy.ndarray | None targets: name -> format 1d (time) (idx of output-feature)
     :param numpy.ndarray | None ctc_targets: format 1d (time) (idx of output-feature)
+    :param str seq_tag: sequence name / tag
     """
     assert isinstance(seq_idx, int)
     assert isinstance(features, numpy.ndarray)
@@ -450,6 +451,7 @@ class DatasetSeq:
     for target_values in targets.values():
       assert isinstance(target_values, numpy.ndarray)
     self.seq_idx = seq_idx
+    self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
     self.features = features
     self.targets = targets
     self.ctc_targets = ctc_targets

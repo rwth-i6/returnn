@@ -432,7 +432,7 @@ def train(segmentName, features, targets=None):
 
   if sprintDataset.sprintFinalized:
     return
-  sprintDataset.addNewData(features, targets)
+  sprintDataset.addNewData(features, targets, segmentName=segmentName)
 
   # The CRNN train thread started via start() will do the actual training.
 
@@ -474,7 +474,7 @@ def forward(segmentName, features):
   sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
   sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
   sprintDataset.init_seq_order()
-  seq = sprintDataset.addNewData(features)
+  seq = sprintDataset.addNewData(features, segmentName=segmentName)
 
   # Prepare data for device.
   device = engine.devices[0]

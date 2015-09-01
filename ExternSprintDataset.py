@@ -169,8 +169,8 @@ class ExternSprintDataset(SprintDataset):
             break
 
           if dataType == "data":
-            features, targets = args
-            self.addNewData(features, targets)
+            segmentName, features, targets = args
+            self.addNewData(features, targets, segmentName=segmentName)
           elif dataType == "exit":
             haveSeenTheWhole = True
             break

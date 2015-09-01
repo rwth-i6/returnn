@@ -106,6 +106,9 @@ class GeneratingDataset(Dataset):
   def get_ctc_targets(self, sorted_seq_idx):
     assert self._get_seq(sorted_seq_idx).ctc_targets
 
+  def get_tag(self, sorted_seq_idx):
+    return self._get_seq(sorted_seq_idx).seq_tag
+
 
 class Task12AXDataset(GeneratingDataset):
   """

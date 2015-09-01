@@ -99,7 +99,7 @@ def feedInputAndTarget(features, weights=None, segmentName=None,
     targets["classes"] = alignment
   if orthography is not None:
     targets["orth"] = orthography
-  sprintDataset.addNewData(features=features, targets=targets)
+  sprintDataset.addNewData(segmentName=segmentName, features=features, targets=targets)
 
 # End Sprint PythonTrainer interface. }
 
@@ -129,12 +129,12 @@ class ExternSprintDatasetSource:
     Pickler(self.pipe_c2p).dump((dataType, args))
     self.pipe_c2p.flush()
 
-  def addNewData(self, features, targets):
+  def addNewData(self, segmentName, features, targets):
     """
     :param numpy.ndarray features: 2D array, (feature,time)
     :param dict[str,numpy.ndarray] targets: each target is either 1D (time->idx) or 2D (time,class)
     """
-    self._send("data", (features, targets))
+    self._send("data", (segmentName, features, targets))
 
   def close(self):
     self._send("exit")

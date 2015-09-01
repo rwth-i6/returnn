@@ -192,7 +192,7 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
     self._waitForSeq(start, end)
 
-  def addNewData(self, features, targets=None):
+  def addNewData(self, features, targets=None, segmentName=None):
     """
     Adds a new seq.
     This is called via the Sprint main thread.
@@ -237,7 +237,7 @@ class SprintDataset(Dataset):
           assert seq_idx + 1 == self.next_seq_to_be_added
           self.cond.wait()
 
-      self.added_data += [DatasetSeq(seq_idx, features, targets)]
+      self.added_data += [DatasetSeq(seq_idx, features, targets, seq_tag=segmentName)]
       self.cond.notify_all()
       return seq_idx
 
@@ -323,3 +323,7 @@ class SprintDataset(Dataset):
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."
 
+  def get_tag(self, sorted_seq_idx):
+    with self.lock:
+      self._waitForSeq(sorted_seq_idx)
+      return self._getSeq(sorted_seq_idx).seq_tag
