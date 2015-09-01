@@ -129,7 +129,7 @@ class LayerNetwork(object):
     network.recurrent = False
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    def traverse(content, layer_name, network, output_index):
+    def traverse(content, layer_name, output_index):
       source = []
       obj = content[layer_name].copy()
       act = obj.pop('activation', 'logistic')
@@ -147,7 +147,7 @@ class LayerNetwork(object):
             index = network.i
           elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-              index = traverse(content, prev, network, index)
+              index = traverse(content, prev, index)
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
         encoder = []
@@ -155,7 +155,7 @@ class LayerNetwork(object):
           obj['encoder'] = [obj['encoder']]
         for prev in obj['encoder']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, network, index)
+            traverse(content, prev, index)
           encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['encoder'] = encoder
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
@@ -164,14 +164,14 @@ class LayerNetwork(object):
           obj['base'] = [obj['base']]
         for prev in obj['base']:
           if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, network, index)
+            traverse(content, prev, index)
           base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
       if 'copy_input' in obj:
-        index = traverse(content, obj['copy_input'], network, index)
+        index = traverse(content, obj['copy_input'], index)
         obj['copy_input'] = network.hidden[obj['copy_input']] if obj['copy_input'] in network.hidden else network.output[obj['copy_input']]
       if 'centroids' in obj:
-        index = traverse(content, obj['centroids'], network, index)
+        index = traverse(content, obj['centroids'], index)
         obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
 
       obj.pop('from', None)
@@ -201,7 +201,7 @@ class LayerNetwork(object):
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
         network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
-        traverse(json_content, layer_name, network, network.j[trg])
+        traverse(json_content, layer_name, network.j[trg])
     return network
 
   @classmethod
@@ -221,7 +221,7 @@ class LayerNetwork(object):
       n_out = {'classes':[model.attrs['n_out'],1]}
     network = cls(model.attrs['n_in'], n_out)
     network.recurrent = False
-    def traverse(model, layer_name, network, output_index):
+    def traverse(model, layer_name, output_index):
       index = output_index
       mask = input_mask
       if not input_mask and 'mask' in model[layer_name].attrs:
@@ -233,7 +233,7 @@ class LayerNetwork(object):
             x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
-              index = traverse(model, s, network, index)
+              index = traverse(model, s, index)
             x_in.append(network.hidden[s])
           elif s == "":
             assert not s
@@ -244,7 +244,7 @@ class LayerNetwork(object):
               x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
             else:
               if not network.hidden.has_key(s):
-                index = traverse(model, s, network, index)
+                index = traverse(model, s, index)
               # Add just like in NetworkDescription, so that param names are correct.
               x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
@@ -254,20 +254,20 @@ class LayerNetwork(object):
         for s in model[layer_name].attrs['encoder'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              traverse(model, s, network, index)
+              traverse(model, s, index)
             encoder.append(network.hidden[s])
       if 'base' in model[layer_name].attrs: # TODO see json
         base = []
         for s in model[layer_name].attrs['base'].split(','):
           if s != "":
             if not network.hidden.has_key(s):
-              traverse(model, s, network, index)
+              traverse(model, s, index)
             base.append(network.hidden[s])
       if 'copy_input' in model[layer_name].attrs:
-        index = traverse(model, model[layer_name].attrs['copy_input'], network, index)
+        index = traverse(model, model[layer_name].attrs['copy_input'], index)
         copy_input = network.hidden[model[layer_name].attrs['copy_input']]
       if 'centroids' in model[layer_name].attrs:
-        index = traverse(model, model[layer_name].attrs['centroids'], network, index)
+        index = traverse(model, model[layer_name].attrs['centroids'], index)
         centroids = network.hidden[model[layer_name].attrs['centroids']]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
@@ -327,7 +327,7 @@ class LayerNetwork(object):
         target = model[layer_name].attrs['target']
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
-        traverse(model, layer_name, network, network.j[target])
+        traverse(model, layer_name, network.j[target])
     return network
 
   def add_layer(self, layer):
