@@ -3,6 +3,7 @@ import numpy
 from theano import tensor as T
 import theano
 from Log import log
+from TheanoUtil import time_batch_make_flat
 
 __author__ = 'az'
 
@@ -285,7 +286,10 @@ class Layer(Container):
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
     self.set_attr('varreg', varreg)
-    self.y_in = y_in
+    if y_in is not None:
+      self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
+    else:
+      self.y_in = None
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)

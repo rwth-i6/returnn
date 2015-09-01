@@ -65,6 +65,8 @@ def test_single_default_target_init():
 
 
 def test_multi_target_old_init():
+  theano.config.exception_verbosity = "high"
+
   config = Config()
   config.update({
     "multiprocessing": False,
@@ -166,7 +168,7 @@ def test_multi_target_old_init():
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
-                                                y_idx=device.testnet.output["out1"].y[out_i1_nonzero])
+                                                y_idx=device.testnet.output["out1"].y_data_flat[out_i1_nonzero])
   forward_func = theano.function(
     inputs=[device.block_start, device.block_end],
     outputs=[
@@ -348,7 +350,7 @@ def test_multi_target_init():
   out_i1 = device.testnet.output["out1"].index
   out_i1_nonzero = device.testnet.output["out1"].i
   nll1, pcx1 = T.nnet.crossentropy_softmax_1hot(x=device.testnet.output["out1"].y_m[out_i1_nonzero],
-                                                y_idx=device.testnet.output["out1"].y[out_i1_nonzero])
+                                                y_idx=device.testnet.output["out1"].y_data_flat[out_i1_nonzero])
   forward_func = theano.function(
     inputs=[device.block_start, device.block_end],
     outputs=[

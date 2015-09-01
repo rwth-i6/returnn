@@ -255,14 +255,8 @@ class Device(object):
     self.y = {}
     self.used_data_keys = set(self.trainnet.y.keys())
     for k in self.trainnet.y:
-      if self.trainnet.y[k].type == T.ivector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'int32'), borrow=True, name='y_%s' % k)
-      elif self.trainnet.y[k].type == T.fvector().type:
-        self.y[k] = theano.shared(numpy.zeros((1,1), dtype = 'float32'), borrow=True, name='y_%s' % k)
-      elif self.trainnet.y[k].type == T.fmatrix().type:
-        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = 'float32'), borrow=True, name='y_%s' % k)
-      else:
-        self.y[k] = theano.shared(numpy.zeros((1,1,1), dtype = theano.config.floatX), borrow=True, name='y_soft_%s' % k)
+      self.y[k] = theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
+                                borrow=True, name='y_%s' % k)
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
     self.j = {k: theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j_%s' % k) for k in self.trainnet.y.keys()}
     if self.trainnet.loss in ('ctc','ce_ctc'):
@@ -814,6 +808,7 @@ class Device(object):
     assert self.main_pid == os.getpid()
     assert len(input_shape) == 3
     assert all([s > 0 for s in input_shape])
+    # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
     self.data = numpy.zeros(input_shape, dtype=theano.config.floatX)
     self.targets = {k: numpy.zeros(output_shape[k], dtype=theano.config.floatX) for k in self.used_data_keys}
@@ -1069,23 +1064,14 @@ class Device(object):
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
-      #y_given = [ (network.y[k], self.y[k][:,i:j].reshape([self.y[k].get_value().shape[0]*(j-i), self.y[k].get_value().shape[2]])) for k in self.y ]
-      y_given = [ (network.y[k], self.y[k][:,i:j].flatten(ndim=2)) for k in self.y ]
-      y_given = []
-      for k in self.used_data_keys:
-        y = self.y[k][:,i:j] # TB
-        shape = self.y[k].get_value().shape
-        if len(shape) == 3:
-          y_given.append((network.y[k], y.reshape((y.shape[0]*y.shape[1],y.shape[2]))))
-        else:
-          y_given.append((network.y[k], y.flatten()))
-
       return [(network.x, self.x[:,i:j]),
-              (network.i, self.i[:,i:j])] + y_given + [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
+              (network.i, self.i[:,i:j])] + \
+             [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
+             [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
     else:
       return [(network.x, self.x),
               (network.i, self.i)] + \
-             [(network.y[k], self.y[k].flatten()) for k in self.used_data_keys] + \
+             [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
              [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_input_givens(self, network):
     return [(network.x, self.x), (network.i, self.i)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
@@ -1096,7 +1082,7 @@ class Device(object):
            [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_ce_ctc_givens(self, network):
     return [(network.x, self.x),
-            (network.y, self.y.reshape([self.y.shape[0]*self.y.shape[1]] + self.y.shape[2:])),
+            (network.y, self.y),
             (network.c, self.c),
             (network.i, self.i)] + \
            [(network.j[k], self.j[k]) for k in self.used_data_keys]

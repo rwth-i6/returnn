@@ -21,7 +21,7 @@ def assign_dev_data(device, dataset, batches):
     return False, len(batches)
   assert shape[0].max_value() > 0
 
-  output_shape = { k : [shape[0][k]] + shape[1:] for k in device.used_data_keys }
+  output_shape = { k : [shape[0][k], shape[1]] for k in device.used_data_keys }
   for k in output_shape:
     if dataset.get_target_type(k) != 'int32':
       output_shape[k] += [dataset.get_target_dim(k)]

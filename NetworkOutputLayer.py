@@ -7,6 +7,7 @@ from CTC import CTCOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
+from TheanoUtil import time_batch_make_flat
 
 
 #from Accumulator import AccumulatorOpInstance
@@ -29,7 +30,7 @@ class OutputLayer(Layer):
     :param str loss: e.g. 'ce'
     """
     super(OutputLayer, self).__init__(**kwargs)
-    self.y = y
+    self.y_data_flat = time_batch_make_flat(y)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
     if not copy_input:
@@ -60,9 +61,9 @@ class OutputLayer(Layer):
     #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    if self.y.dtype.startswith('int'):
+    if self.y_data_flat.dtype.startswith('int'):
       self.i = (self.index.flatten() > 0).nonzero()
-    elif self.y.dtype.startswith('float'):
+    elif self.y_data_flat.dtype.startswith('float'):
       self.i = (self.index.flatten() > 0).nonzero()
       #self.i = (self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2).flatten() > 0).nonzero()
     self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
@@ -90,13 +91,13 @@ class OutputLayer(Layer):
     """
     :rtype: theano.Variable
     """
-    if self.y.dtype.startswith('int'):
-      if self.y.type == T.ivector().type:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y[self.i]))
+    if self.y_data_flat.dtype.startswith('int'):
+      if self.y_data_flat.type == T.ivector().type:
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
       else:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y[self.i], axis = -1)))
-    elif self.y.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
+        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
+    elif self.y_data_flat.dtype.startswith('float'):
+      return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
       #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
@@ -134,39 +135,39 @@ class FramewiseOutputLayer(OutputLayer):
     """
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
-      if self.y.type == T.ivector().type:
+      if self.y_data_flat.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
         #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
         #nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y[self.i].T)
+        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
       return T.sum(nll), known_grads
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m) #(TB)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD
       ee = self.index * -T.sum(pcx * T.log(pcx)) # TB
       #nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y) # TB
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat) # TB
       ce = nll.reshape(self.index.shape) * self.index # TB
-      y = self.y.reshape(self.index.shape) * self.index # TB
+      y = self.y_data_flat.reshape(self.index.shape) * self.index # TB
       f = T.any(T.gt(y,0), axis=0) # B
       return T.sum(f * T.sum(ce, axis=0) + (1-f) * T.sum(ee, axis=0)), known_grads
       #return T.sum(T.switch(T.gt(T.sum(y,axis=0),0), T.sum(ce, axis=0), -T.sum(ee, axis=0))), known_grads
       #return T.switch(T.gt(T.sum(self.y_m[self.i]),0), T.sum(nll), -T.sum(pcx * T.log(pcx))), known_grads
     elif self.loss == 'priori':
-      pcx = self.p_y_given_x[self.i, self.y[self.i]]
+      pcx = self.p_y_given_x[self.i, self.y_data_flat[self.i]]
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
-      if self.y.dtype.startswith('int'):
-        y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim=1), 'int32')
+      if self.y_data_flat.dtype.startswith('int'):
+        y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim=1), 'int32')
         y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
         #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
-        return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i])), known_grads
+        return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
         #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
@@ -195,7 +196,7 @@ class SequenceOutputLayer(OutputLayer):
     :param y: shape (time*batch,) -> label
     :return: error scalar, known_grads dict
     """
-    y_f = T.cast(T.reshape(self.y, (self.y.shape[0] * self.y.shape[1]), ndim = 1), 'int32')
+    y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
       err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
@@ -215,14 +216,14 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
     elif self.loss == 'ctc':
-      err, grad, priors = CTCOp()(self.p_y_given_x, self.y, T.sum(self.index, axis=0))
+      err, grad, priors = CTCOp()(self.p_y_given_x, self.y_data_flat, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'ce_ctc':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x = T.nnet.softmax(y_m)
       #pcx = p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
-      pcx = p_y_given_x[self.i, self.y[self.i]]
+      pcx = p_y_given_x[self.i, self.y_data_flat[self.i]]
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
     elif self.loss == 'ctc2':
@@ -230,7 +231,7 @@ class SequenceOutputLayer(OutputLayer):
       max_time = self.z.shape[0]
       num_batches = self.z.shape[1]
       time_mask = self.index.reshape((max_time, num_batches))
-      y_batches = self.y.reshape((max_time, num_batches))
+      y_batches = self.y_data_flat.reshape((max_time, num_batches))
       targets, seq_lens = uniq_with_lengths(y_batches, time_mask)
       log_pcx = self.z - log_sum(self.z, axis=0, keepdims=True)
       err = ctc_cost(log_pcx, time_mask, targets, seq_lens)
@@ -238,7 +239,7 @@ class SequenceOutputLayer(OutputLayer):
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
-      return T.sum(BestPathDecodeOp()(self.p_y_given_x, self.y, T.sum(self.index, axis=0)))
+      return T.sum(BestPathDecodeOp()(self.p_y_given_x, self.y_data_flat, T.sum(self.index, axis=0)))
     else:
       return super(SequenceOutputLayer, self).errors()
 

@@ -367,24 +367,19 @@ class LayerNetwork(object):
     else:
       layer_class = FramewiseOutputLayer
 
+    dtype = kwargs.pop('dtype', 'int32')
     if target != "null" and target not in self.y:
       assert target in self.n_out
-      if 'dtype' in kwargs and kwargs['dtype'].startswith('float'):
-        if self.n_out[target][1] == 1:
-          self.y[target] = T.fvector('y_%s' % target)
-        else:
-          self.y[target] = T.fmatrix('y_%s' % target)
+      if self.n_out[target][1] == 1:
+        ndim = 2
       else:
-        if self.n_out[target][1] == 1:
-          self.y[target] = T.ivector('y_%s' % target)
-        else:
-          self.y[target] = T.imatrix('y_%s' % target)
+        ndim = 3
+      self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
       self.y[target].n_out = self.n_out[target][0]
     if target != "null":
       targets = self.y[target]
     else:
       targets = None
-    dtype = kwargs.pop('dtype', 'int32')
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
