@@ -1056,6 +1056,9 @@ class Device(object):
     #return pynvml.nvmlDeviceGetMemoryInfo(handle)
 
   def make_givens(self, network):
+    """
+    :type network: LayerNetwork
+    """
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
