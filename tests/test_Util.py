@@ -1,5 +1,5 @@
 
-from nose.tools import assert_equal, assert_raises
+from nose.tools import assert_equal, assert_raises, assert_true, assert_is
 from Util import *
 import numpy as np
 
@@ -36,3 +36,22 @@ def test_parse_orthography_into_symbols():
 
 def test_parse_orthography():
   assert_equal(list("hi ") + ["HES"] + list(" there") + ["END"], parse_orthography("hi [HES] there "))
+
+
+def test_NumbersDict_minus_1():
+  a = NumbersDict({'classes': 11, 'data': 11})
+  b = NumbersDict(10)
+  r = a - b
+  print(a, b, r)
+  assert_equal(r, NumbersDict(numbers_dict={'classes': 1, 'data': 1}, broadcast_value=-10))
+
+def test_NumbersDict_eq_1():
+  a = NumbersDict({'classes': 11, 'data': 11})
+  b = NumbersDict(11)
+  r1 = a.elem_eq(b)
+  r2 = a == b
+  print(a, b, r1, r2)
+  assert_is(r1.value, None)
+  assert_equal(r1.dict, {'classes': True, 'data': True})
+  assert_equal(r1, NumbersDict({'classes': True, 'data': True}))
+  assert_true(r2)

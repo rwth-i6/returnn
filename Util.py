@@ -498,15 +498,17 @@ class NumbersDict:
     return bool(self.dict) or self.value is not None
 
   @classmethod
-  def bin_op_scalar_optional(cls, self, other, op):
+  def bin_op_scalar_optional(cls, self, other, zero, op):
+    if self is None and other is None:
+      return None
     if self is None:
-      return other
+      self = zero
     if other is None:
-      return self
+      other = zero
     return op(self, other)
 
   @classmethod
-  def bin_op(cls, self, other, op, result=None):
+  def bin_op(cls, self, other, op, zero, result=None):
     if not isinstance(self, NumbersDict):
       self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
@@ -515,47 +517,61 @@ class NumbersDict:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
     for k in self.keys_set | other.keys_set:
-      result[k] = cls.bin_op_scalar_optional(self[k], other[k], op=op)
-    result.value = cls.bin_op_scalar_optional(self.value, other.value, op=op)
+      result[k] = cls.bin_op_scalar_optional(self[k], other[k], zero=zero, op=op)
+    result.value = cls.bin_op_scalar_optional(self.value, other.value, zero=zero, op=op)
     return result
 
   def __add__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a + b)
+    return self.bin_op(self, other, op=lambda a, b: a + b, zero=0)
 
   __radd__ = __add__
 
   def __iadd__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a + b, result=self)
+    return self.bin_op(self, other, op=lambda a, b: a + b, zero=0, result=self)
 
   def __sub__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a - b)
+    return self.bin_op(self, other, op=lambda a, b: a - b, zero=0)
 
   def __rsub__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: b - a)
+    return self.bin_op(self, other, op=lambda a, b: b - a, zero=0)
 
   def __isub__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a - b, result=self)
+    return self.bin_op(self, other, op=lambda a, b: a - b, zero=0, result=self)
 
   def __mul__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a * b)
+    return self.bin_op(self, other, op=lambda a, b: a * b, zero=1)
 
   __rmul__ = __mul__
 
   def __imul__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a * b, result=self)
+    return self.bin_op(self, other, op=lambda a, b: a * b, zero=1, result=self)
 
   def __div__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a / b)
+    return self.bin_op(self, other, op=lambda a, b: a / b, zero=1)
 
   def __rdiv__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: b / a)
+    return self.bin_op(self, other, op=lambda a, b: b / a, zero=1)
 
   def __idiv__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: a / b, result=self)
+    return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  def elem_eq(self, other, result_with_default=False):
+    """
+    Element-wise equality check with other.
+    Note about broadcast default value: Consider some key which is neither in self nor in other.
+      This means that self[key] == self.default, other[key] == other.default.
+      Thus, in case that self.default != other.default, we get res.default == False.
+      Then, all(res.values()) == False, even when all other values are True.
+      This is often not what we want.
+      You can control the behavior via result_with_default.
+    """
+    res = self.bin_op(self, other, op=lambda a, b: a == b, zero=None)
+    if not result_with_default:
+      res.value = None
+    return res
 
   def __eq__(self, other):
-    res = self.bin_op(self, other, op=lambda a, b: a == b)
-    return all(res.values())
+    return all(self.elem_eq(other).values())
 
   def __ne__(self, other):
     return not (self == other)
@@ -575,7 +591,8 @@ class NumbersDict:
     if len(items) == 1:
       return items[0]
     if len(items) == 2:
-      return cls.bin_op(items[0], items[1], op=np.maximum)
+      # max(x, None) == x, so this works.
+      return cls.bin_op(items[0], items[1], op=max, zero=None)
     return cls.max([items[0], cls.max(items[1:])])
 
   @staticmethod
