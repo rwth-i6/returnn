@@ -39,7 +39,7 @@ class Dataset(object):
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
 
   @classmethod
-  def from_config(cls, config, chunking=None, seq_ordering=None, shuffle_frames_of_nseqs=None, **kwargs):
+  def from_config(cls, config, **kwargs):
     """
     :type config: Config.Config
     :type chunking: str
