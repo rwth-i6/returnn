@@ -22,6 +22,22 @@ from Util import try_run, NumbersDict
 
 class Dataset(object):
 
+  @staticmethod
+  def kwargs_update_from_config(config, kwargs):
+    """
+    :type config: Config.Config
+    :type kwargs: dict[str]
+    """
+    def set_or_remove(key, value):
+      if key in kwargs and kwargs[key] is None:
+        del kwargs[key]
+      if value is not None and key not in kwargs:
+        kwargs[key] = value
+    set_or_remove("window", None)
+    set_or_remove("chunking", config.value("chunking", None))
+    set_or_remove("seq_ordering", config.value("batching", None))
+    set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
+
   @classmethod
   def from_config(cls, config, chunking=None, seq_ordering=None, shuffle_frames_of_nseqs=None, **kwargs):
     """
@@ -30,16 +46,8 @@ class Dataset(object):
     :type seq_ordering: str
     :rtype: Dataset
     """
-    window = config.int('window', 1)
-    if chunking is None:
-      chunking = config.value("chunking", "0")
-    if seq_ordering is None:
-      seq_ordering = config.value("batching", 'default')
-    if shuffle_frames_of_nseqs is None:
-      shuffle_frames_of_nseqs = config.int('shuffle_frames_of_nseqs', 0)
-    return cls(window=window, chunking=chunking,
-               seq_ordering=seq_ordering, shuffle_frames_of_nseqs=shuffle_frames_of_nseqs,
-               **kwargs)
+    cls.kwargs_update_from_config(config, kwargs)
+    return cls(**kwargs)
 
   def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0):
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
@@ -469,3 +477,35 @@ class DatasetSeq:
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx
+
+
+def get_dataset_class(name):
+  from importlib import import_module
+  # Only those modules which make sense to be loaded by the user,
+  # because this function is only used for such cases.
+  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset"]
+  for mod_name in mod_names:
+    mod = import_module(mod_name)
+    if name in vars(mod):
+      clazz = getattr(mod, name)
+      assert issubclass(clazz, Dataset)
+      return clazz
+  return None
+
+
+def init_dataset(kwargs):
+  """
+  :type kwargs: dict[str]
+  :rtype: Dataset
+  """
+  assert "class" in kwargs
+  clazz_name = kwargs.pop("class")
+  clazz = get_dataset_class(clazz_name)
+  if not clazz:
+    raise Exception("Dataset class %r not found" % clazz_name)
+  files = kwargs.pop("files", [])
+  obj = clazz(**kwargs)
+  for f in files:
+    obj.add_file(f)
+  obj.initialize()
+  return obj

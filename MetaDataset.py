@@ -1,5 +1,5 @@
 
-from Dataset import Dataset, DatasetSeq
+from Dataset import Dataset, DatasetSeq, init_dataset
 from Util import NumbersDict, load_json
 
 
@@ -59,7 +59,7 @@ class MetaDataset(Dataset):
       self._num_timesteps = None
 
     # Will only init the needed datasets.
-    self.datasets = {key: _init_dataset(self, datasets[key]) for key in self.dataset_keys}
+    self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
     self.epoch = None
     self.init_seq_order()
@@ -248,32 +248,5 @@ def _select_dtype(key, data_1_of_k, data_dtypes):
   if key == "data":
     return "float32"  # standard for input
   return "int32"  # all targets are likely 1-of-k encoded (for classification)
-
-def _get_dataset_class(name):
-  from importlib import import_module
-  mod_names = ["HDFDataset, ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset"]
-  for mod_name in mod_names:
-    mod = import_module(mod_name)
-    if name in vars(mod):
-      clazz = getattr(mod, name)
-      assert issubclass(clazz, Dataset)
-      return clazz
-  raise Exception("Dataset class %r not found" % name)
-
-def _init_dataset(meta, kwargs):
-  """
-  :type meta: MetaDataset
-  :type kwargs: dict[str]
-  :rtype: Dataset
-  """
-  assert "class" in kwargs
-  clazz_name = kwargs.pop("class")
-  clazz = _get_dataset_class(clazz_name)
-  files = kwargs.pop("files", [])
-  obj = clazz(**kwargs)
-  obj.initialize()
-  for f in files:
-    obj.add_file(f)
-  return obj
 
 

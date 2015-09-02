@@ -13,13 +13,12 @@ import os
 import sys
 import time
 import json
-from importlib import import_module
 from optparse import OptionParser
 from Log import log
 from Device import Device, get_num_devices
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset
+from Dataset import Dataset, init_dataset, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
@@ -257,36 +256,37 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   """
   if not config.has(files_config_key):
     return None, 0
-  config_str = config.value(files_config_key, "")
-  if config_str.startswith("sprint:"):
-    kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
-    sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
-    assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
-    kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
-    from ExternSprintDataset import ExternSprintDataset
-    cls = ExternSprintDataset
-  elif config_str.startswith("numpydump:"):
-    kwargs.update(eval("dict(%s)" % config_str[len("numpydump:"):]))
-    from NumpyDumpDataset import NumpyDumpDataset
-    cls = NumpyDumpDataset
-  elif re.match("^[A-Za-z_][A-Za-z0-9_]*::.*", config_str):
-    mod_name, cls_name, cls_args_s = re.match("^([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(.*)$",
-                                              config_str).groups()
-    mod = import_module(mod_name)
-    cls = getattr(mod, cls_name)
-    cls_args_s = cls_args_s.strip() or "()"
-    cls_args_s = "dict" + cls_args_s
-    cls_args = eval(cls_args_s)
-    kwargs.update(cls_args)
+  if config.is_typed(files_config_key) and isinstance(config.typed_value(files_config_key), dict):
+    new_kwargs = config.typed_value(files_config_key)
+    assert isinstance(new_kwargs, dict)
+    kwargs.update(new_kwargs)
+    if 'cache_byte_size' not in new_kwargs:
+      if kwargs.get('class', None) == 'HDFDataset':
+        kwargs["cache_byte_size"] = cache_byte_size
+    Dataset.kwargs_update_from_config(config, kwargs)
+    data = init_dataset(kwargs)
   else:
-    kwargs["cache_byte_size"] = cache_byte_size
-    cls = HDFDataset
-  data = cls.from_config(config, **kwargs)
-  if isinstance(data, HDFDataset):
-    for f in config.list(files_config_key):
-      assert os.path.exists(f)
-      data.add_file(f)
-  data.initialize()
+    config_str = config.value(files_config_key, "")
+    if config_str.startswith("sprint:"):
+      kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
+      sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
+      assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
+      kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
+      from ExternSprintDataset import ExternSprintDataset
+      cls = ExternSprintDataset
+    elif ":" in config_str:
+      kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
+      class_name = config_str[:config_str.find(":")]
+      cls = get_dataset_class(class_name)
+    else:
+      kwargs["cache_byte_size"] = cache_byte_size
+      cls = HDFDataset
+    data = cls.from_config(config, **kwargs)
+    if isinstance(data, HDFDataset):
+      for f in config.list(files_config_key):
+        assert os.path.exists(f)
+        data.add_file(f)
+    data.initialize()
   cache_leftover = 0
   if isinstance(data, HDFDataset):
     cache_leftover = data.definite_cache_leftover
