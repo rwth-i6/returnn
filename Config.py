@@ -23,13 +23,8 @@ class Config:
       content = f.read()
     content = content.strip()
     if content.startswith("{"):  # assume JSON
-      import json
-      from Util import json_remove_comments
-      content = json_remove_comments(content)
-      try:
-        json_content = json.loads(content)
-      except ValueError as e:
-        raise Exception("config looks like JSON but invalid json content, %r" % e)
+      from Util import load_json
+      json_content = load_json(content=content)
       assert isinstance(json_content, dict)
       self.update(json_content)
       return

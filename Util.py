@@ -442,6 +442,20 @@ def json_remove_comments(string, strip_space=True):
   return ''.join(new_str)
 
 
+def load_json(filename=None, content=None):
+  if content:
+    assert not filename
+  else:
+    content = open(filename).read()
+  import json
+  content = json_remove_comments(content)
+  try:
+    json_content = json.loads(content)
+  except ValueError as e:
+    raise Exception("config looks like JSON but invalid json content, %r" % e)
+  return json_content
+
+
 class NumbersDict:
   """
   It's mostly like dict[str,float|int] & some optional broadcast default value.
