@@ -71,8 +71,8 @@ class NumpyDumpDataset(Dataset):
   def get_input_data(self, seq_idx):
     return self._get_cache_seq(seq_idx).features
 
-  def get_targets(self, seq_idx):
-    return self._get_cache_seq(seq_idx).targets
+  def get_targets(self, target, seq_idx):
+    return self._get_cache_seq(seq_idx).targets.get(target, None)
 
   def get_ctc_targets(self, seq_idx):
     assert False, "No CTC targets."
