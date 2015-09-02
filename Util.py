@@ -553,6 +553,13 @@ class NumbersDict:
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, result=self)
 
+  def __eq__(self, other):
+    res = self.bin_op(self, other, op=lambda a, b: a == b)
+    return all(res.values())
+
+  def __ne__(self, other):
+    return not (self == other)
+
   def __cmp__(self, other):
     # There is no good straight-forward implementation
     # and it would just confuse.
