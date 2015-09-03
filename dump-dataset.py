@@ -26,7 +26,7 @@ def dump_dataset(dataset, options):
   seq_idx = options.startseq
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx)
-    data = dataset.get_input_data(seq_idx)
+    data = dataset.get_data(seq_idx, "data")
     if options.type == "numpy":
       numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     elif options.type == "stdout":

@@ -245,6 +245,19 @@ class Dataset(object):
   def get_times(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def get_data(self, seq_idx, key):
+    """
+    :param int seq_idx: sorted seq idx
+    :param str key: data-key, e.g. "data" or "classes"
+    :rtype: numpy.ndarray
+    :returns features or targets: format 2d (time,feature) (float)
+    """
+    # Fallback implementation for old-style subclasses.
+    if key == "data":
+      return self.get_input_data(seq_idx)
+    else:
+      return self.get_targets(key, seq_idx)
+
   def get_input_data(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
@@ -259,7 +272,8 @@ class Dataset(object):
     :rtype: numpy.ndarray
     :returns targets: format 1d (time) (int: idx of output-feature)
     """
-    raise NotImplementedError
+    # For new-style subclasses, which just provide get_data.
+    return self.get_data(sorted_seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
     raise NotImplementedError

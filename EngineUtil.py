@@ -33,10 +33,10 @@ def assign_dev_data(device, dataset, batches):
         #assert o + l[0] <= shape[0]
         #assert q < shape[1]
         device.input_index[o["data"]:o["data"] + l["data"], q] = numpy.ones((l["data"],), dtype='int8')
-        data = dataset.get_input_data(seq.seq_idx)
+        data = dataset.get_data(seq.seq_idx, "data")
         device.data[o["data"]:o["data"] + l["data"], q] = data[seq.seq_start_frame["data"]:seq.seq_end_frame["data"]]
         for k in device.used_data_keys:
-          targets = dataset.get_targets(k, seq.seq_idx)
+          targets = dataset.get_data(seq.seq_idx, k)
           if targets is not None:
             device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
             device.targets[k][o[k]:o[k] + l[k], q] = targets[seq.seq_start_frame[k]:seq.seq_end_frame[k]]

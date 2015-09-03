@@ -152,9 +152,7 @@ class MetaDataset(Dataset):
     """
     dataset_key, dataset_data_key = self.data_map[data_key]
     dataset = self.datasets[dataset_key]; ":type: Dataset"
-    if dataset_data_key == "data":
-      return dataset.get_input_data(seq_idx)
-    return dataset.get_targets(dataset_data_key, seq_idx)
+    return dataset.get_data(seq_idx, dataset_data_key)
 
   def _collect_single_seq(self, seq_idx):
     """
