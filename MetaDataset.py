@@ -152,9 +152,7 @@ class MetaDataset(Dataset):
     """
     dataset_key, dataset_data_key = self.data_map[data_key]
     dataset = self.datasets[dataset_key]; ":type: Dataset"
-    if dataset_data_key == "data":
-      return dataset.get_input_data(seq_idx)
-    return dataset.get_targets(dataset_data_key, seq_idx)
+    return dataset.get_data(seq_idx, dataset_data_key)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -189,18 +187,18 @@ class MetaDataset(Dataset):
   def get_target_list(self):
     return self.target_list
 
-  def get_target_dim(self, target):
+  def get_data_dim(self, key):
     """
-    :type target: str
+    :type key: str
     :return: 1 for hard labels, num_outputs[target] for soft labels
     """
-    if self.data_1_of_k[target]:
+    if self.data_1_of_k[key]:
       return 1
     else:
-      return self.data_dims[target]
+      return self.data_dims[key]
 
-  def get_target_type(self, target):
-    return self.data_dtypes[target]
+  def get_data_dtype(self, key):
+    return self.data_dtypes[key]
 
   def get_tag(self, sorted_seq_idx):
     return self.seq_list_ordered[sorted_seq_idx]

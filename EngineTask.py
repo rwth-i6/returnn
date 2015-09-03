@@ -64,7 +64,6 @@ class TaskThread(threading.Thread):
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
       This sets:
-        device.data
         device.targets
         device.ctc_targets
         device.tags
@@ -270,10 +269,10 @@ class TaskThread(threading.Thread):
         assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
-            print >> log.v5, "running", device.data.shape[1], \
-                             "sequence slices (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
+            print >> log.v5, "running", device.targets["data"].shape[1], \
+                             "sequence slices (%i nts)" % (device.targets["data"].shape[0] * device.targets["data"].shape[1]),
           else:
-            print >> log.v5, "running", device.data.shape[0] * device.data.shape[1], "frames",
+            print >> log.v5, "running", device.targets["data"].shape[0] * device.targets["data"].shape[1], "frames",
           if device.num_batches == 1:
             print >> log.v5, "of batch %i" % batch_idx,
           else:

@@ -18,13 +18,14 @@ class LayerNetwork(object):
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
-    self.y = {} #T.ivector('y'); """ :type: theano.Variable """
+    self.y = {"data": self.x} #T.ivector('y'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    self.j = {} #T.bmatrix('j'); """ :type: theano.Variable """
+    self.j = {"data": self.i} #T.bmatrix('j'); """ :type: theano.Variable """
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
+    self.n_out["data"] = (n_in, n_in)  # small hack: support input-data as target
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """

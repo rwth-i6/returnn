@@ -245,6 +245,19 @@ class Dataset(object):
   def get_times(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def get_data(self, seq_idx, key):
+    """
+    :param int seq_idx: sorted seq idx
+    :param str key: data-key, e.g. "data" or "classes"
+    :rtype: numpy.ndarray
+    :returns features or targets: format 2d (time,feature) (float)
+    """
+    # Fallback implementation for old-style subclasses.
+    if key == "data":
+      return self.get_input_data(seq_idx)
+    else:
+      return self.get_targets(key, seq_idx)
+
   def get_input_data(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
@@ -259,7 +272,8 @@ class Dataset(object):
     :rtype: numpy.ndarray
     :returns targets: format 1d (time) (int: idx of output-feature)
     """
-    raise NotImplementedError
+    # For new-style subclasses, which just provide get_data.
+    return self.get_data(sorted_seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
     raise NotImplementedError
@@ -286,17 +300,24 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def get_data_keys(self):
+    return ["data"] + self.get_target_list()
+
   def get_target_list(self):
     return ["classes"]
 
-  def get_target_dim(self, target):
+  def get_data_dim(self, key):
     """
-    :type target: str
+    :type key: str
     :return: 1 for hard labels, num_outputs[target] for soft labels
     """
+    if key == "data":
+      return self.num_inputs * self.window
     return 1
 
-  def get_target_type(self, target):
+  def get_data_dtype(self, key):
+    if key == "data":
+      return "float32"
     return 'int32'
 
   def have_seqs(self):
@@ -432,13 +453,10 @@ class Dataset(object):
       return None
     assert shape[0].max_value() > 0
 
-    output_shape = {k: [shape[0][k], shape[1]] for k in data_keys}
-    for k in output_shape:
-      if self.get_target_type(k) != 'int32':
-        output_shape[k] += [self.get_target_dim(k)]
-
-    d = {"data": [shape[0]["data"], shape[1], self.num_inputs * self.window]}
-    d.update({k: output_shape[k] for k in data_keys})
+    d = {k: [shape[0][k], shape[1]] for k in (set(data_keys) | {"data"})}
+    for k in d:
+      if self.get_data_dtype(k) != 'int32':
+        d[k] += [self.get_data_dim(k)]
     return d
 
 

@@ -36,7 +36,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
     while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= parser_args.end_seq:
         dataset.load_seqs(seq_idx, seq_idx)
-        nd_data = dataset.get_input_data(seq_idx)
+        nd_data = dataset.get_data(seq_idx, "data")
         for target in dataset.get_target_list():
             nd_targets = dataset.get_targets(target, seq_idx)
 
@@ -51,7 +51,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     hdf_dataset["outputs"] = targets
 
     hdf_dataset.attrs[HDFDataset.attr_inputPattSize] = dataset.num_inputs
-    hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.get_target_dim("classes")
+    hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.get_data_dim("classes")
     hdf_dataset.attrs[HDFDataset.attr_seqLengths] = num_seqs
 
 def hdf_close(hdf_dataset):
