@@ -174,6 +174,8 @@ class LayerNetwork(object):
         index = traverse(content, obj['centroids'], index)
         obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
 
+      if 'encoder' in obj:
+        index = output_index
       obj.pop('from', None)
       params = { 'sources': source,
                  'dropout' : 0.0,
@@ -182,7 +184,7 @@ class LayerNetwork(object):
                  'network': network }
       params.update(obj)
       params["mask"] = mask # overwrite
-      params['index'] = index if not 'encoder' in obj else output_index
+      params['index'] = index
       params['y_in'] = network.y
       if cl == 'softmax':
         if not 'target' in params:

@@ -344,7 +344,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class CorruptionLayer(ForwardLayer): # x = x + noise
   layer_class = "corruption"
-  rng = theano.tensor.shared_randomstreams.RandomStreams(hash(layer_class))
+  rng = T.shared_randomstreams.RandomStreams(hash(layer_class) % 4294967295)
 
   def __init__(self, noise='gaussian', p=0.0, **kwargs):
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
