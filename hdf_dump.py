@@ -51,7 +51,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     hdf_dataset["outputs"] = targets
 
     hdf_dataset.attrs[HDFDataset.attr_inputPattSize] = dataset.num_inputs
-    hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.get_target_dim("classes")
+    hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.get_data_dim("classes")
     hdf_dataset.attrs[HDFDataset.attr_seqLengths] = num_seqs
 
 def hdf_close(hdf_dataset):

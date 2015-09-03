@@ -137,8 +137,10 @@ class HDFDataset(CachedDataset):
     ids = self._seq_index[sorted_seq_idx]
     return self.tags[ids]
 
-  def get_target_type(self, target):
-    return self.target_type[target]
+  def get_data_dtype(self, key):
+    if key == "data":
+      return "float32"
+    return self.target_type[key]
 
   def len_info(self):
     return ", ".join(["HDF dataset",

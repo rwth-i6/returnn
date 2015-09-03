@@ -306,14 +306,18 @@ class Dataset(object):
   def get_target_list(self):
     return ["classes"]
 
-  def get_target_dim(self, target):
+  def get_data_dim(self, key):
     """
-    :type target: str
+    :type key: str
     :return: 1 for hard labels, num_outputs[target] for soft labels
     """
+    if key == "data":
+      return self.num_inputs * self.window
     return 1
 
-  def get_target_type(self, target):
+  def get_data_dtype(self, key):
+    if key == "data":
+      return "float32"
     return 'int32'
 
   def have_seqs(self):
@@ -449,13 +453,10 @@ class Dataset(object):
       return None
     assert shape[0].max_value() > 0
 
-    output_shape = {k: [shape[0][k], shape[1]] for k in data_keys}
-    for k in output_shape:
-      if self.get_target_type(k) != 'int32':
-        output_shape[k] += [self.get_target_dim(k)]
-
-    d = {"data": [shape[0]["data"], shape[1], self.num_inputs * self.window]}
-    d.update({k: output_shape[k] for k in data_keys})
+    d = {k: [shape[0][k], shape[1]] for k in (set(data_keys) | {"data"})}
+    for k in d:
+      if self.get_data_dtype(k) != 'int32':
+        d[k] += [self.get_data_dim(k)]
     return d
 
 

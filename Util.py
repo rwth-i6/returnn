@@ -171,7 +171,7 @@ class ObjAsDict:
   def __getitem__(self, item):
     try:
       return getattr(self.__obj, item)
-    except AttributeError, e:
+    except AttributeError as e:
       raise KeyError(e)
 
 

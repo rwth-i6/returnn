@@ -125,11 +125,11 @@ def test_multi_target_old_init():
   # Set net params.
   net_params = {
     "fw0": {"W_in_data_fw0": numpy.identity(3, dtype="float32"),
-            "b_fw0": numpy.zeros((3,))},
-    "out1": {"W_in_fw0_out1": numpy.arange(0.0, 1.2, 0.1).reshape((3, 4)),
-             "b_out1": numpy.arange(0.0, 4)},
-    "out2": {"W_in_fw0_out2": numpy.arange(0.0, 1.5, 0.1).reshape((3, 5)),
-             "b_out2": numpy.arange(0.0, 5)}
+            "b_fw0": numpy.zeros((3,), dtype="float32")},
+    "out1": {"W_in_fw0_out1": numpy.arange(0.0, 1.2, 0.1, dtype="float32").reshape((3, 4)),
+             "b_out1": numpy.arange(0.0, 4, dtype="float32")},
+    "out2": {"W_in_fw0_out2": numpy.arange(0.0, 1.5, 0.1, dtype="float32").reshape((3, 5)),
+             "b_out2": numpy.arange(0.0, 5, dtype="float32")}
   }
   device.trainnet.set_params_by_dict(net_params)
   device.testnet.set_params_by_dict(net_params)
@@ -141,7 +141,7 @@ def test_multi_target_old_init():
 
   # Init dataset.
   dataset = StaticDataset(data=[{
-    "data": numpy.array([[0.1, 0.2, -0.3]]),
+    "data": numpy.array([[0.1, 0.2, -0.3]], dtype="float32"),
     "t1": numpy.array([2]),
     "t2": numpy.array([4])
   }], output_dim=config.typed_value("num_outputs"))
@@ -152,7 +152,7 @@ def test_multi_target_old_init():
   assert_true(success, "failed to allocate & assign data")
 
   # Check allocated data.
-  assert_equal(device.data.shape, (1, 1, 3))  # input shape. (time,batch,dim)
+  assert_equal(device.targets["data"].shape, (1, 1, 3))  # input shape. (time,batch,dim)
   assert_in("t1", device.targets)
   assert_in("t2", device.targets)
   assert_equal(device.targets["t1"].shape, (1, 1))
@@ -199,10 +199,10 @@ def test_multi_target_old_init():
   assert_equal(out_i1_nz_val, numpy.array([0]))
   assert_almost_equal(nll1_val, numpy.array([t1_cost]))
   numpy.testing.assert_almost_equal(t1_y, pcx1_val)
-  assert_almost_equal(t1_cost, 1.440189698561195)
-  assert_almost_equal(t2_cost, 0.45191439593759336)
-  numpy.testing.assert_almost_equal(t1_y, numpy.array([[ 0.0320586 ,  0.08714432,  0.23688282,  0.64391426]]))
-  numpy.testing.assert_almost_equal(t2_y, numpy.array([[ 0.01165623,  0.03168492,  0.08612854,  0.23412166,  0.63640865]]))
+  assert_almost_equal(t1_cost, 1.440189698561195, places=6)
+  assert_almost_equal(t2_cost, 0.45191439593759336, places=6)
+  numpy.testing.assert_almost_equal(t1_y, numpy.array([[ 0.0320586 ,  0.08714432,  0.23688282,  0.64391426]]), decimal=6)
+  numpy.testing.assert_almost_equal(t2_y, numpy.array([[ 0.01165623,  0.03168492,  0.08612854,  0.23412166,  0.63640865]]), decimal=6)
 
   # One train step.
   device.set_learning_rate(config.typed_value("learning_rate"))
@@ -246,7 +246,7 @@ def test_multi_target_old_init():
     print "%s:" % p
     pprint(v)
     assert_true(p.name)
-    numpy.testing.assert_almost_equal(references_params[p.name], v)
+    numpy.testing.assert_almost_equal(references_params[p.name], v, decimal=6)
 
 
 def test_multi_target_init():
@@ -307,11 +307,11 @@ def test_multi_target_init():
   # Set net params.
   net_params = {
     "fw0": {"W_in_data_fw0": numpy.identity(3, dtype="float32"),
-            "b_fw0": numpy.zeros((3,))},
-    "out1": {"W_in_fw0_out1": numpy.arange(0.0, 1.2, 0.1).reshape((3, 4)),
-             "b_out1": numpy.arange(0.0, 4)},
-    "out2": {"W_in_fw0_out2": numpy.arange(0.0, 1.5, 0.1).reshape((3, 5)),
-             "b_out2": numpy.arange(0.0, 5)}
+            "b_fw0": numpy.zeros((3,), dtype="float32")},
+    "out1": {"W_in_fw0_out1": numpy.arange(0.0, 1.2, 0.1, dtype="float32").reshape((3, 4)),
+             "b_out1": numpy.arange(0.0, 4, dtype="float32")},
+    "out2": {"W_in_fw0_out2": numpy.arange(0.0, 1.5, 0.1, dtype="float32").reshape((3, 5)),
+             "b_out2": numpy.arange(0.0, 5, dtype="float32")}
   }
   device.trainnet.set_params_by_dict(net_params)
   device.testnet.set_params_by_dict(net_params)
@@ -323,7 +323,7 @@ def test_multi_target_init():
 
   # Init dataset.
   dataset = StaticDataset(data=[{
-    "data": numpy.array([[0.1, 0.2, -0.3]]),
+    "data": numpy.array([[0.1, 0.2, -0.3]], dtype="float32"),
     "t1": numpy.array([2]),
     "t2": numpy.array([4])
   }], output_dim=config.typed_value("num_outputs"))
@@ -334,7 +334,7 @@ def test_multi_target_init():
   assert_true(success, "failed to allocate & assign data")
 
   # Check allocated data.
-  assert_equal(device.data.shape, (1, 1, 3))  # input shape. (time,batch,dim)
+  assert_equal(device.targets["data"].shape, (1, 1, 3))  # input shape. (time,batch,dim)
   assert_in("t1", device.targets)
   assert_in("t2", device.targets)
   assert_equal(device.targets["t1"].shape, (1, 1))
@@ -381,10 +381,10 @@ def test_multi_target_init():
   assert_equal(out_i1_nz_val, numpy.array([0]))
   assert_almost_equal(nll1_val, numpy.array([t1_cost]))
   numpy.testing.assert_almost_equal(t1_y, pcx1_val)
-  assert_almost_equal(t1_cost, 1.440189698561195)
-  assert_almost_equal(t2_cost, 0.45191439593759336)
-  numpy.testing.assert_almost_equal(t1_y, numpy.array([[ 0.0320586 ,  0.08714432,  0.23688282,  0.64391426]]))
-  numpy.testing.assert_almost_equal(t2_y, numpy.array([[ 0.01165623,  0.03168492,  0.08612854,  0.23412166,  0.63640865]]))
+  assert_almost_equal(t1_cost, 1.440189698561195, places=6)
+  assert_almost_equal(t2_cost, 0.45191439593759336, places=6)
+  numpy.testing.assert_almost_equal(t1_y, numpy.array([[ 0.0320586 ,  0.08714432,  0.23688282,  0.64391426]]), decimal=6)
+  numpy.testing.assert_almost_equal(t2_y, numpy.array([[ 0.01165623,  0.03168492,  0.08612854,  0.23412166,  0.63640865]]), decimal=6)
 
   # One train step.
   device.set_learning_rate(config.typed_value("learning_rate"))
@@ -428,4 +428,4 @@ def test_multi_target_init():
     print "%s:" % p
     pprint(v)
     assert_true(p.name)
-    numpy.testing.assert_almost_equal(references_params[p.name], v)
+    numpy.testing.assert_almost_equal(references_params[p.name], v, decimal=6)

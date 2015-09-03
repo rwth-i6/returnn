@@ -125,7 +125,6 @@ class Device(object):
     update_specs.setdefault('layers', [])
     update_specs.setdefault('block_size', 0)
     self.update_specs = update_specs
-    self.data = None
     self.main_pid = os.getpid()
 
     if blocking:
@@ -254,9 +253,10 @@ class Device(object):
     self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
     self.y = {}
     self.used_data_keys = set(self.trainnet.y.keys())
-    for k in self.trainnet.y:
+    for k in self.trainnet.y.keys():
       self.y[k] = theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
                                 borrow=True, name='y_%s' % k)
+    self.y["data"] = self.x
     self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
     self.j = {k: theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j_%s' % k) for k in self.trainnet.y.keys()}
     if self.trainnet.loss in ('ctc','ce_ctc'):
@@ -634,7 +634,6 @@ class Device(object):
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
-        x = input_queue.recv()
         t = {}
         target_keys = input_queue.recv()
         for k in target_keys:
@@ -650,7 +649,7 @@ class Device(object):
           self.cp.set_value(c)
         if SprintCommunicator.instance is not None:
           SprintCommunicator.instance.segments = self.tags
-        self.x.set_value(x.astype('float32'), borrow = True)
+        # self.x == self.y["data"], will be set also here.
         for k in target_keys:
           self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
@@ -809,7 +808,6 @@ class Device(object):
     assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
-    self.data = numpy.zeros(shapes["data"], dtype=theano.config.floatX)
     self.targets = {k: numpy.zeros(shapes[k], dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.input_index = numpy.zeros(shapes["data"][0:2], dtype='int8')
@@ -820,7 +818,7 @@ class Device(object):
     # self.data is set in Engine.allocate_devices()
     if self.blocking:
       update_start_time = time.time()
-      self.x.set_value(self.data, borrow = True)
+      self.x.set_value(self.targets["data"], borrow = True)
       #self.t.set_value(self.targets, borrow = True)
       for target in self.used_data_keys:
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
@@ -835,7 +833,6 @@ class Device(object):
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("update-data")
-      self.input_queue.send(self.data)
       target_keys = list(sorted(self.used_data_keys))
       self.input_queue.send(target_keys)
       for target in target_keys:
@@ -1059,28 +1056,21 @@ class Device(object):
     """
     :type network: LayerNetwork
     """
+    # self.i == self.j["data"], self.x == self.y["data"]
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
-      return [(network.x, self.x[:,i:j]),
-              (network.i, self.i[:,i:j])] + \
-             [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
+      return [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
              [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
     else:
-      return [(network.x, self.x),
-              (network.i, self.i)] + \
-             [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
+      return [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
              [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_input_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    # self.i == self.j["data"]
+    return [(network.x, self.x)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_sprint_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_input_givens(network)
   def make_ctc_givens(self, network):
-    return [(network.x, self.x), (network.c, self.c), (network.i, self.i)] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_input_givens(network) + [(network.c, self.c)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x),
-            (network.y, self.y),
-            (network.c, self.c),
-            (network.i, self.i)] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_givens(network) + [(network.c, self.c)]
