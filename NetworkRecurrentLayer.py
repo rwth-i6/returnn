@@ -315,7 +315,7 @@ class RecurrentUnitLayer(Layer):
         n_in = sum([e.attrs['n_out'] for e in base])
         src = [e.output for e in base]
         l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
-        self.xb = self.add_param(self.create_bias(n_in), 'b_att')
+        self.xb = self.add_param(self.create_bias(n_in, name='b_att'))
         self.xc = T.concatenate(src, axis=2) + self.xb
         if n_in != unit.n_out:
           values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)

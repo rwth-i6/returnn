@@ -74,8 +74,9 @@ class OutputLayer(Layer):
     #self.make_output(self.z, collapse = False)
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
 
-  def create_bias(self, n, prefix='b'):
-    name = "%s_%s" % (prefix, self.name)
+  def create_bias(self, n, prefix='b', name=""):
+    if not name:
+      name = "%s_%s" % (prefix, self.name)
     assert n > 0
     bias = numpy.log(1.0 / n)  # More numerical stable.
     value = numpy.zeros((n,), dtype=theano.config.floatX) + bias

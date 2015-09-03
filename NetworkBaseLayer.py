@@ -142,12 +142,13 @@ class Container(object):
   def set_attr(self, name, value):
     self.attrs[name] = value
 
-  def create_bias(self, n, prefix='b'):
+  def create_bias(self, n, prefix='b', name=""):
     """
     :param int n: output dimension
     :rtype: theano.shared
     """
-    name = "%s_%s" % (prefix, self.name)
+    if not name:
+      name = "%s_%s" % (prefix, self.name)
     if self.depth > 1:
       size = (self.depth, n)
     else:
