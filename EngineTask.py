@@ -39,8 +39,8 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.finalized = False
-      self.score = None
-      self.error = None
+      self.score = {}
+      self.error = {}
       self.results = {}
       self.num_frames = NumbersDict(0)
       self.batch_idx = None; " :type: int | None "
@@ -158,8 +158,8 @@ class TaskThread(threading.Thread):
       for key, value in self.results.items():
         self.results[key] *= self.epoch_norm_factor_for_result(key)
       # Total score/error.
-      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")])
-      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
+      self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
+      self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
 
     class DeviceBatchRun(threading.Thread):

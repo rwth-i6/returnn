@@ -244,7 +244,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('lm', lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
-    self.set_attr('attention', attention)
+    self.set_attr('attention', attention.encode("utf8"))
     self.set_attr('attention_step', attention_step)
     self.set_attr('attention_beam', attention_beam)
     if encoder:
