@@ -267,13 +267,13 @@ class RecurrentUnitLayer(Layer):
         n_re *= self.depth
       self.Wp = []
       if psize:
-        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1), name = "Wp_0_%s"%self.name) ]
+        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1)) ]
         for i in xrange(1, pdepth):
-          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
+          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1)))
         W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
       else:
         W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re + unit.n_in, name="W_re_%s" % self.name)
-      self.add_param(W_re, W_re.name)
+      self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
@@ -288,7 +288,7 @@ class RecurrentUnitLayer(Layer):
                                              s.attrs['n_out'] + unit.n_in + unit.n_re,
                                              name="W_in_%s_%s" % (s.name, self.name), depth = 1)
       self.W_in.append(W)
-      self.params["W_in_%s_%s" % (s.name, self.name)] = W
+      self.params[W.name] = W
     # make input
     z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
@@ -320,15 +320,15 @@ class RecurrentUnitLayer(Layer):
         if n_in != unit.n_out:
           values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
           self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
-          self.add_param(self.W_att_proj, name = "W_att_proj")
+          self.add_param(self.W_att_proj)
           self.xc = T.dot(self.xc, self.W_att_proj)
           n_in = unit.n_units
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
         self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
-        self.add_param(self.W_att_re, name = "W_att_re")
+        self.add_param(self.W_att_re)
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
         self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-        self.add_param(self.W_att_in, name = "W_att_in")
+        self.add_param(self.W_att_in)
         non_sequences += [self.xc]
       elif self.attrs['attention'] == 'input': # attention is just a sequence dependent bias (lstmp compatible)
         src = []
@@ -342,10 +342,10 @@ class RecurrentUnitLayer(Layer):
         l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
         self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-        self.add_param(self.W_att_xc, name = "W_att_xc")
+        self.add_param(self.W_att_xc)
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
         self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-        self.add_param(self.W_att_in, name = "W_att_in")
+        self.add_param(self.W_att_in)
         zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
         self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
 
@@ -364,11 +364,11 @@ class RecurrentUnitLayer(Layer):
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
       self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
-      self.add_param(self.W_lm_in, name = "W_lm_in")
+      self.add_param(self.W_lm_in)
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
-      self.add_param(self.W_lm_out, name = "W_lm_out")
+      self.add_param(self.W_lm_out)
       if self.attrs['droplm'] > 0.0 and self.train_flag:
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
         lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
