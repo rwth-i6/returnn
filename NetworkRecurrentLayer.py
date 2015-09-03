@@ -228,6 +228,7 @@ class RecurrentUnitLayer(Layer):
       #print "%s: falling back to theano cell implementation" % kwargs['name']
       unit = "lstme"
     unit = eval(unit.upper())(n_out, depth)
+    assert isinstance(unit, Unit)
     kwargs.setdefault("n_out", unit.n_out)
     kwargs.setdefault("depth", depth)
     kwargs.pop("activation", None)
