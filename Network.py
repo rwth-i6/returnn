@@ -25,6 +25,7 @@ class LayerNetwork(object):
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
+    self.n_out["data"] = (n_in, n_in)  # small hack: support input-data as target
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """

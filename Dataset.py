@@ -300,6 +300,9 @@ class Dataset(object):
   def num_seqs(self):
     raise NotImplementedError
 
+  def get_data_keys(self):
+    return ["data"] + self.get_target_list()
+
   def get_target_list(self):
     return ["classes"]
 
