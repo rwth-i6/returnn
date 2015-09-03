@@ -811,7 +811,7 @@ class Device(object):
     self.targets = {k: numpy.zeros(shapes[k], dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.input_index = numpy.zeros(shapes["data"][0:2], dtype='int8')
-    self.output_index = {k: numpy.zeros(shapes["data"][0:2], dtype='int8') for k in self.used_data_keys}
+    self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # TODO
 
   def update_data(self):

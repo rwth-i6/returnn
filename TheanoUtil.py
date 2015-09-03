@@ -14,5 +14,4 @@ def time_batch_make_flat(val):
   newshape = [s0] + [val.shape[i] for i in range(2, val.ndim)]
   return T.reshape(val,
                    newshape,
-                   ndim=val.ndim - 1,
                    name="flat_%s" % val.name)

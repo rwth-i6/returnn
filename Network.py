@@ -149,6 +149,8 @@ class LayerNetwork(object):
           elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
               index = traverse(content, prev, index)
+            else:
+              index = network.hidden[prev].index if prev in network.hidden else network.output[prev].index
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
         encoder = []
@@ -203,7 +205,8 @@ class LayerNetwork(object):
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
+        if not trg in network.j:
+          network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
         traverse(json_content, layer_name, network.j[trg])
     return network
 
@@ -237,6 +240,8 @@ class LayerNetwork(object):
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
               index = traverse(model, s, index)
+            else:
+              index = network.hidden[s].index
             x_in.append(network.hidden[s])
           elif s == "":
             assert not s
@@ -248,6 +253,8 @@ class LayerNetwork(object):
             else:
               if not network.hidden.has_key(s):
                 index = traverse(model, s, index)
+              else:
+                index = network.hidden[s].index
               # Add just like in NetworkDescription, so that param names are correct.
               x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
@@ -272,6 +279,8 @@ class LayerNetwork(object):
       if 'centroids' in model[layer_name].attrs:
         index = traverse(model, model[layer_name].attrs['centroids'], index)
         centroids = network.hidden[model[layer_name].attrs['centroids']]
+      if 'encoder' in model[layer_name].attrs:
+        index = output_index
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
@@ -309,7 +318,7 @@ class LayerNetwork(object):
                    'carry' : model[layer_name].attrs['carry'],
                    'depth' : model[layer_name].attrs['depth'],
                    'network': network,
-                   'index' : index if not 'encoder' in model[layer_name].attrs else output_index }
+                   'index' : index }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
         for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
