@@ -368,7 +368,7 @@ class RecurrentUnitLayer(Layer):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
       self.add_param(self.W_lm_out, name = "W_lm_out")
-      if self.attrs['droplm'] > 0.0 and self.train_flag: 
+      if self.attrs['droplm'] > 0.0 and self.train_flag:
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
         lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
