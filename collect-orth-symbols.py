@@ -37,7 +37,10 @@ def iter_dataset(dataset, callback):
 
 
 def iter_bliss(filename, frame_time, callback):
-  corpus_file = gzip.GzipFile(fileobj=open(filename, 'rb'))
+  corpus_file = open(filename, 'rb')
+  if filename.endswith(".gz"):
+    corpus_file = gzip.GzipFile(fileobj=corpus_file)
+
   def getelements(tag):
     """Yield *tag* elements from *filename_or_file* xml incrementaly."""
     context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
@@ -137,12 +140,17 @@ def init(configFilename=None):
 
 def is_bliss(filename):
   try:
-    corpus_file = gzip.GzipFile(fileobj=open(filename, 'rb'))
+    corpus_file = open(filename, 'rb')
+    if filename.endswith(".gz"):
+      corpus_file = gzip.GzipFile(fileobj=corpus_file)
     context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context)  # get root element
-  except IOError:  # 'Not a gzipped file'
-    return False
-  return True
+    return True
+  except IOError:  # 'Not a gzipped file' or so
+    pass
+  except etree.ParseError:  # 'syntax error' or so
+    pass
+  return False
 
 
 def main(argv):
