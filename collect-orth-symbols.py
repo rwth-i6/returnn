@@ -8,6 +8,9 @@ import argparse
 from Util import hms, parse_orthography, parse_orthography_into_symbols
 import gzip
 import xml.etree.ElementTree as etree
+from pprint import pprint
+import wave
+import time
 
 
 def found_sub_seq(sub_seq, seq):
@@ -36,6 +39,14 @@ def iter_dataset(dataset, callback):
     seq_idx += 1
 
 
+def get_wav_time_len(filename):
+  f = wave.open(filename)
+  num_frames = f.getnframes()
+  framerate = f.getframerate()
+  f.close()
+  return num_frames / float(framerate)
+
+
 def iter_bliss(filename, frame_time, callback):
   corpus_file = open(filename, 'rb')
   if filename.endswith(".gz"):
@@ -45,14 +56,26 @@ def iter_bliss(filename, frame_time, callback):
     """Yield *tag* elements from *filename_or_file* xml incrementaly."""
     context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context) # get root element
+    tree = [root]
     for event, elem in context:
+      if event == "start":
+        tree += [elem]
+      elif event == "end":
+        assert tree[-1] is elem
+        tree = tree[:-1]
       if event == 'end' and elem.tag == tag:
-        yield elem
+        yield tree, elem
         root.clear() # free memory
 
-  for elem in getelements("segment"):
-    start = float(elem.attrib['start'])
-    end = float(elem.attrib['end'])
+  for tree, elem in getelements("segment"):
+    start = float(elem.attrib.get('start', 0))
+    if "end" in elem.attrib:
+      end = float(elem.attrib['end'])
+    else:
+      rec_elem = tree[-1]
+      assert rec_elem.tag == "recording"
+      wav_filename = rec_elem.attrib["audio"]
+      end = get_wav_time_len(wav_filename)
     assert end > start
     frame_len = (end - start) * (1000.0 / frame_time)
     elem_orth = elem.find("orth")
@@ -72,6 +95,8 @@ def collect_stats(options, iter_corpus):
     assert not os.path.exists(orth_symbols_filename)
 
   class Stats:
+    count = 0
+    process_last_time = time.time()
     total_frame_len = 0
     total_orth_len = 0
     orth_syms_set = set()
@@ -87,6 +112,7 @@ def collect_stats(options, iter_corpus):
     if frame_len >= options.max_seq_frame_len:
       return
 
+    Stats.count += 1
     Stats.total_frame_len += frame_len
 
     orth_syms = parse_orthography(orth)
@@ -101,6 +127,10 @@ def collect_stats(options, iter_corpus):
         print >> log.v3, "Found orth:", "".join(orth_syms)
     Stats.orth_syms_set.update(orth_syms)
     Stats.total_orth_len += len(orth_syms)
+
+    if time.time() - Stats.process_last_time > 2:
+      Stats.process_last_time = time.time()
+      print >> log.v3, "Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
 
   iter_corpus(cb)
 
