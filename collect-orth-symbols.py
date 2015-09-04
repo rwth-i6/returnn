@@ -4,8 +4,9 @@ import os
 import sys
 import rnn
 from Log import log
+from Config import Config
 import argparse
-from Util import hms, parse_orthography, parse_orthography_into_symbols
+from Util import hms, human_size, parse_orthography, parse_orthography_into_symbols
 import gzip
 import xml.etree.ElementTree as etree
 from pprint import pprint
@@ -94,6 +95,22 @@ def iter_bliss(filename, options, callback):
     callback(frame_len=frame_len, orth=orth)
 
 
+def iter_txt(filename, options, callback):
+  f = open(filename, 'rb')
+  if filename.endswith(".gz"):
+    f = gzip.GzipFile(fileobj=f)
+
+  if options.collect_time:
+    print >> log.v3, "No time-info in txt."
+    options.collect_time = False
+
+  for l in f:
+    l = l.strip()
+    if not l: continue
+
+    callback(frame_len=0, orth=l)
+
+
 def collect_stats(options, iter_corpus):
   """
   :param options: argparse.Namespace
@@ -136,9 +153,13 @@ def collect_stats(options, iter_corpus):
     Stats.orth_syms_set.update(orth_syms)
     Stats.total_orth_len += len(orth_syms)
 
+    # Show some progress if it takes long.
     if time.time() - Stats.process_last_time > 2:
       Stats.process_last_time = time.time()
-      print >> log.v3, "Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
+      if options.collect_time:
+        print >> log.v3, "Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
+      else:
+        print >> log.v3, "Collect process, total orth len so far:", human_size(Stats.total_orth_len)
 
   iter_corpus(cb)
 
@@ -150,7 +171,7 @@ def collect_stats(options, iter_corpus):
     print >> log.v3, "Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
   else:
     print >> log.v3, "No time stats (--collect_time False)."
-  print >> log.v3, "Total orth len:", Stats.total_orth_len,
+  print >> log.v3, "Total orth len:", Stats.total_orth_len, "(%s)" % human_size(Stats.total_orth_len),
   if options.collect_time:
     print >> log.v3, "fraction:", float(Stats.total_orth_len) / Stats.total_frame_len
   else:
@@ -198,9 +219,21 @@ def is_bliss(filename):
   return False
 
 
+def is_crnn_config(filename):
+  if filename.endswith(".gz"):
+    return False
+  try:
+    config = Config()
+    config.load_file(filename)
+    return True
+  except Exception:
+    pass
+  return False
+
+
 def main(argv):
   argparser = argparse.ArgumentParser(description='Collect orth symbols.')
-  argparser.add_argument('input', help="either crnn config or Bliss xml")
+  argparser.add_argument('input', help="CRNN config, Corpus Bliss XML or just txt-data")
   argparser.add_argument('--frame_time', type=int, default=10, help='time (in ms) per frame. not needed for Corpus Bliss XML')
   argparser.add_argument('--collect_time', type=int, default=True, help="collect time info. can be slow in some cases")
   argparser.add_argument('--dump_orth_syms', action='store_true', help="dump all orthographies")
@@ -214,16 +247,21 @@ def main(argv):
   argparser.add_argument('--output', help='where to store the symbols (default: dont store)')
   args = argparser.parse_args(argv[1:])
 
+  bliss_filename = None
+  crnn_config_filename = None
+  txt_filename = None
   if is_bliss(args.input):
     bliss_filename = args.input
-    crnn_config_filename = None
-  else:
-    bliss_filename = None
+  elif is_crnn_config(args.input):
     crnn_config_filename = args.input
+  else:  # treat just as txt
+    txt_filename = args.input
   init(configFilename=crnn_config_filename)
 
   if bliss_filename:
     iter_corpus = lambda cb: iter_bliss(bliss_filename, options=args, callback=cb)
+  elif txt_filename:
+    iter_corpus = lambda cb: iter_txt(txt_filename, options=args, callback=cb)
   else:
     iter_corpus = lambda cb: iter_dataset(rnn.train_data, options=args, callback=cb)
   collect_stats(args, iter_corpus)

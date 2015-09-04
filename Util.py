@@ -107,6 +107,15 @@ def hms(s):
   h, m = divmod(m, 60)
   return "%d:%02d:%02d" % (h, m, s)
 
+def human_size(n, factor=1000, frac=0.8, prec=1):
+  postfixs = ["", "K", "M", "G", "T"]
+  i = 0
+  while i < len(postfixs) - 1 and n > (factor ** (i + 1)) * frac:
+    i += 1
+  if i == 0:
+    return str(n)
+  return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
+
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys
