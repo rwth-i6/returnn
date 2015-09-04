@@ -5,12 +5,14 @@ from Config import Config
 from Engine import Engine
 from Device import Device
 from Log import log
-from GeneratingDataset import StaticDataset
+from GeneratingDataset import StaticDataset, DummyDataset
 from EngineUtil import assign_dev_data_single_seq
 import numpy
 from pprint import pprint
 import theano
 from theano import tensor as T
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 log.initialize()
@@ -330,3 +332,98 @@ def test_combi_auto_enc():
   assert_not_in("cost:auto-enc", outputs)
   assert_almost_equal(outputs["cost:output"], expected_cost_output)
   assert_equal(outputs["cost:output"], exact_cost_output)
+
+
+def test_combi_auto_enc_longer():
+  config = Config()
+  config.update({
+    "multiprocessing": False,
+    "blocking": True,
+    "device": "cpu",
+    "num_epochs": 1,
+    "num_inputs": 3,
+    "num_outputs": {"classes": 2},
+    "learning_rate": 1.0,
+    "adadelta": True,
+    "network": {
+      "output": {"class": "softmax", "loss": "ce", "target": "classes"},
+      "auto-enc": {"class": "softmax", "loss": "sse", "dtype": "float32", "target": "data"}
+    }
+  })
+
+  device = Device("cpu", config=config, blocking=True)
+
+  # Set net params.
+  def get_net_params(with_auto_enc=True):
+    d = {
+      "output": {"W_in_data_output": numpy.arange(0.1, 0.7, 0.1, dtype="float32").reshape((3, 2)),
+                 "b_output": numpy.arange(0.0, 2, dtype="float32")}
+    }
+    if with_auto_enc:
+      d["auto-enc"] = {"W_in_data_auto-enc": numpy.arange(0.1, 1.0, 0.1, dtype="float32").reshape((3, 3)),
+                       "b_auto-enc": numpy.arange(0.0, 3, dtype="float32")}
+    return d
+  device.trainnet.set_params_by_dict(get_net_params())
+  device.testnet.set_params_by_dict(get_net_params())
+
+  # Show params.
+  for p in device.trainnet.get_all_params_vars():
+    print "init %s:" % p
+    pprint(p.get_value())
+
+  # Init dataset.
+  dataset = DummyDataset(input_dim=config.typed_value("num_inputs"),
+                         output_dim=config.typed_value("num_outputs"),
+                         num_seqs=10)
+  dataset.init_seq_order()
+
+  cost_output_sum = 0.0
+  for seq_idx in range(dataset.num_seqs):
+    # Copy to device allocation.
+    success = assign_dev_data_single_seq(device, dataset, seq_idx)
+    assert_true(success, "failed to allocate & assign data")
+
+    # One train step.
+    device.set_learning_rate(config.typed_value("learning_rate"))
+    device.run("train")
+    output_list, outputs_format = device.result()
+    assert_is_instance(output_list, list)
+    assert_true(outputs_format, "for train, we should always get the format")
+    outputs = Device.make_result_dict(output_list, outputs_format)
+    print("seq %i" % seq_idx)
+    pprint(outputs)
+    assert_in("cost:output", outputs)
+    assert_in("cost:auto-enc", outputs)
+    cost_output_sum += outputs["cost:output"]
+
+  # Now, drop the auto-enc from the network, and redo the same thing.
+  del config.typed_value("network")["auto-enc"]
+  device = Device("cpu", config=config, blocking=True)
+  device.trainnet.set_params_by_dict(get_net_params(with_auto_enc=False))
+  device.testnet.set_params_by_dict(get_net_params(with_auto_enc=False))
+  for p in device.trainnet.get_all_params_vars():
+    print "second run, init %s:" % p
+    pprint(p.get_value())
+  dataset.init_seq_order()  # reset
+
+  cost2_output_sum = 0.0
+  for seq_idx in range(dataset.num_seqs):
+    # Copy to device allocation.
+    success = assign_dev_data_single_seq(device, dataset, seq_idx)
+    assert_true(success, "failed to allocate & assign data")
+
+    # One train step.
+    device.set_learning_rate(config.typed_value("learning_rate"))
+    device.run("train")
+    output_list, outputs_format = device.result()
+    assert_is_instance(output_list, list)
+    assert_true(outputs_format, "for train, we should always get the format")
+    outputs = Device.make_result_dict(output_list, outputs_format)
+    print("seq %i" % seq_idx)
+    pprint(outputs)
+    assert_in("cost:output", outputs)
+    assert_not_in("cost:auto-enc", outputs)
+    cost2_output_sum += outputs["cost:output"]
+
+  assert_equal(cost_output_sum, cost2_output_sum)
+  assert_almost_equal(cost_output_sum, 16.028842568397522, places=6)
