@@ -388,7 +388,7 @@ def parse_orthography_into_symbols(orthography):
   return ret
 
 
-def parse_orthography(orthography, end_symbol="[END]"):
+def parse_orthography(orthography, prefix=(), postfix=("[END]",)):
   """
   For Speech. Full processing.
   Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"].
@@ -396,7 +396,7 @@ def parse_orthography(orthography, end_symbol="[END]"):
   :rtype: list[str]
   """
   orthography = orthography.strip()
-  return parse_orthography_into_symbols(orthography) + [end_symbol]
+  return list(prefix) + parse_orthography_into_symbols(orthography) + list(postfix)
 
 
 def json_remove_comments(string, strip_space=True):
