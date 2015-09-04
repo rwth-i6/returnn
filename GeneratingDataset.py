@@ -197,9 +197,6 @@ class Task12AXDataset(GeneratingDataset):
 class DummyDataset(GeneratingDataset):
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2):
-    assert input_dim > 0
-    assert output_dim > 0
-    assert num_seqs > 0
     super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
     self.seq_len = seq_len
 
@@ -209,7 +206,7 @@ class DummyDataset(GeneratingDataset):
     i2 = i1 + seq_len * self.num_inputs
     features = numpy.array(range(i1, i2)).reshape((seq_len, self.num_inputs))
     i1, i2 = i2, i2 + seq_len
-    targets = numpy.array(range(i1, i2))
+    targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)])
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
