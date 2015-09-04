@@ -358,7 +358,7 @@ def uniq(seq):
   return seq[idx]
 
 
-def parse_orthography_into_symbols(orthography):
+def parse_orthography_into_symbols(orthography, upper_case_special=True):
   """
   For Speech.
   Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there ").
@@ -377,6 +377,8 @@ def parse_orthography_into_symbols(orthography):
       if c == "]":
         ret[-1] += "]"
         in_special = False
+      elif upper_case_special:
+        ret[-1] += c.upper()
       else:
         ret[-1] += c
     else:  # not in_special
@@ -388,7 +390,7 @@ def parse_orthography_into_symbols(orthography):
   return ret
 
 
-def parse_orthography(orthography, prefix=(), postfix=("[END]",)):
+def parse_orthography(orthography, prefix=(), postfix=("[END]",), **kwargs):
   """
   For Speech. Full processing.
   Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"].
@@ -396,7 +398,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",)):
   :rtype: list[str]
   """
   orthography = orthography.strip()
-  return list(prefix) + parse_orthography_into_symbols(orthography) + list(postfix)
+  return list(prefix) + parse_orthography_into_symbols(orthography, **kwargs) + list(postfix)
 
 
 def json_remove_comments(string, strip_space=True):
