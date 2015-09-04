@@ -303,8 +303,9 @@ def test_combi_auto_enc():
   pprint(outputs)
   assert_in("cost:output", outputs)
   assert_in("cost:auto-enc", outputs)
-  cost_output = 0.3132616877555847
-  assert_almost_equal(outputs["cost:output"], cost_output)
+  expected_cost_output = 0.3132616877555847
+  assert_almost_equal(outputs["cost:output"], expected_cost_output)
+  exact_cost_output = outputs["cost:output"]
   assert_almost_equal(outputs["cost:auto-enc"], 5.263200283050537)
 
   # Now, drop the auto-enc from the network, and redo the same thing.
@@ -327,4 +328,5 @@ def test_combi_auto_enc():
   pprint(outputs)
   assert_in("cost:output", outputs)
   assert_not_in("cost:auto-enc", outputs)
-  assert_almost_equal(outputs["cost:output"], cost_output)
+  assert_almost_equal(outputs["cost:output"], expected_cost_output)
+  assert_equal(outputs["cost:output"], exact_cost_output)
