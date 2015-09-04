@@ -136,6 +136,8 @@ def collect_stats(options, iter_corpus):
   def cb(frame_len, orth):
     if frame_len >= options.max_seq_frame_len:
       return
+    if len(orth) >= options.max_seq_orth_len:
+      return
 
     Stats.count += 1
     Stats.total_frame_len += frame_len
@@ -176,6 +178,7 @@ def collect_stats(options, iter_corpus):
     print >> log.v3, "fraction:", float(Stats.total_orth_len) / Stats.total_frame_len
   else:
     print >> log.v3, ""
+  print >> log.v3, "Average orth len:", float(Stats.total_orth_len) / Stats.count
   print >> log.v3, "Num symbols:", len(Stats.orth_syms_set)
 
   if orth_symbols_filename:
@@ -239,7 +242,8 @@ def main(argv):
   argparser.add_argument('--dump_orth_syms', action='store_true', help="dump all orthographies")
   argparser.add_argument('--filter_orth_sym', help="dump orthographies which match this filter")
   argparser.add_argument('--filter_orth_syms_seq', help="dump orthographies which match this filter")
-  argparser.add_argument('--max_seq_frame_len', type=int, default=float('inf'), help="collect only orthographies <= this max len")
+  argparser.add_argument('--max_seq_frame_len', type=int, default=float('inf'), help="collect only orthographies <= this max frame len")
+  argparser.add_argument('--max_seq_orth_len', type=int, default=float('inf'), help="collect only orthographies <= this max orth len")
   argparser.add_argument('--add_numbers', type=int, default=True, help="add chars 0-9 to orth symbols")
   argparser.add_argument('--add_lower_alphabet', type=int, default=True, help="add chars a-z to orth symbols")
   argparser.add_argument('--add_upper_alphabet', type=int, default=True, help="add chars A-Z to orth symbols")
