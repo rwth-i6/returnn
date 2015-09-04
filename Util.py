@@ -390,14 +390,21 @@ def parse_orthography_into_symbols(orthography, upper_case_special=True):
   return ret
 
 
-def parse_orthography(orthography, prefix=(), postfix=("[END]",), **kwargs):
+def parse_orthography(orthography, prefix=(), postfix=("[END]",),
+                      remove_chars="(){}", collapse_spaces=True, final_strip=True,
+                      **kwargs):
   """
   For Speech. Full processing.
   Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"].
   :param str orthography: e.g. "hello [HESITATION] there "
   :rtype: list[str]
   """
-  orthography = orthography.strip()
+  for c in remove_chars:
+    orthography = orthography.replace(c, "")
+  if collapse_spaces:
+    orthography = " ".join(orthography.split())
+  if final_strip:
+    orthography = orthography.strip()
   return list(prefix) + parse_orthography_into_symbols(orthography, **kwargs) + list(postfix)
 
 
