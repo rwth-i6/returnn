@@ -196,17 +196,25 @@ class Task12AXDataset(GeneratingDataset):
 
 class DummyDataset(GeneratingDataset):
 
-  def __init__(self, input_dim, output_dim, num_seqs, seq_len=2):
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
+               input_max_value=10.0, input_shift=None, input_scale=None):
     super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
     self.seq_len = seq_len
+    self.input_max_value = input_max_value
+    if input_shift is None: input_shift = -input_max_value / 2.0
+    self.input_shift = input_shift
+    if input_scale is None: input_scale = 1.0 / self.input_max_value
+    self.input_scale = input_scale
 
   def generate_seq(self, seq_idx):
     seq_len = self.seq_len
     i1 = seq_idx
     i2 = i1 + seq_len * self.num_inputs
-    features = numpy.array(range(i1, i2)).reshape((seq_len, self.num_inputs))
+    features = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
+                            for i in range(i1, i2)]).reshape((seq_len, self.num_inputs))
     i1, i2 = i2, i2 + seq_len
-    targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)])
+    targets = numpy.array([i % self.num_outputs["classes"][0]
+                           for i in range(i1, i2)])
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
