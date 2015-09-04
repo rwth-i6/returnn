@@ -21,7 +21,7 @@ def found_sub_seq(sub_seq, seq):
   return False
 
 
-def iter_dataset(dataset, callback):
+def iter_dataset(dataset, options, callback):
   """
   :type dataset: Dataset.Dataset
   """
@@ -47,7 +47,7 @@ def get_wav_time_len(filename):
   return num_frames / float(framerate)
 
 
-def iter_bliss(filename, frame_time, callback):
+def iter_bliss(filename, options, callback):
   corpus_file = open(filename, 'rb')
   if filename.endswith(".gz"):
     corpus_file = gzip.GzipFile(fileobj=corpus_file)
@@ -67,17 +67,25 @@ def iter_bliss(filename, frame_time, callback):
         yield tree, elem
         root.clear() # free memory
 
+  time_via_wav = False
+
   for tree, elem in getelements("segment"):
-    start = float(elem.attrib.get('start', 0))
-    if "end" in elem.attrib:
-      end = float(elem.attrib['end'])
+    if options.collect_time:
+      start = float(elem.attrib.get('start', 0))
+      if "end" in elem.attrib:
+        end = float(elem.attrib['end'])
+      else:
+        if not time_via_wav:
+          time_via_wav = True
+          print >>log.v3, "Time will be read from WAV recordings. Can be slow. Maybe use `--collect_time False`."
+        rec_elem = tree[-1]
+        assert rec_elem.tag == "recording"
+        wav_filename = rec_elem.attrib["audio"]
+        end = get_wav_time_len(wav_filename)
+      assert end > start
+      frame_len = (end - start) * (1000.0 / options.frame_time)
     else:
-      rec_elem = tree[-1]
-      assert rec_elem.tag == "recording"
-      wav_filename = rec_elem.attrib["audio"]
-      end = get_wav_time_len(wav_filename)
-    assert end > start
-    frame_len = (end - start) * (1000.0 / frame_time)
+      frame_len = 0
     elem_orth = elem.find("orth")
     orth_raw = elem_orth.text  # should be unicode
     orth_split = orth_raw.split()
@@ -138,8 +146,15 @@ def collect_stats(options, iter_corpus):
     filter_syms = parse_orthography_into_symbols(options.remove_symbols)
     Stats.orth_syms_set -= set(filter_syms)
 
-  print >> log.v3, "Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
-  print >> log.v3, "Total orth len:", Stats.total_orth_len, "fraction:", float(Stats.total_orth_len) / Stats.total_frame_len
+  if options.collect_time:
+    print >> log.v3, "Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
+  else:
+    print >> log.v3, "No time stats (--collect_time False)."
+  print >> log.v3, "Total orth len:", Stats.total_orth_len,
+  if options.collect_time:
+    print >> log.v3, "fraction:", float(Stats.total_orth_len) / Stats.total_frame_len
+  else:
+    print >> log.v3, ""
   print >> log.v3, "Num symbols:", len(Stats.orth_syms_set)
 
   if orth_symbols_filename:
@@ -186,14 +201,15 @@ def is_bliss(filename):
 def main(argv):
   argparser = argparse.ArgumentParser(description='Collect orth symbols.')
   argparser.add_argument('input', help="either crnn config or Bliss xml")
-  argparser.add_argument('--frame_time', type=int, default=10, help='time (in ms) per frame')
+  argparser.add_argument('--frame_time', type=int, default=10, help='time (in ms) per frame. not needed for Corpus Bliss XML')
+  argparser.add_argument('--collect_time', type=int, default=True, help="collect time info. can be slow in some cases")
   argparser.add_argument('--dump_orth_syms', action='store_true', help="dump all orthographies")
   argparser.add_argument('--filter_orth_sym', help="dump orthographies which match this filter")
   argparser.add_argument('--filter_orth_syms_seq', help="dump orthographies which match this filter")
   argparser.add_argument('--max_seq_frame_len', type=int, default=float('inf'), help="collect only orthographies <= this max len")
-  argparser.add_argument('--add_numbers', type=bool, default=True, help="add chars 0-9 to orth symbols")
-  argparser.add_argument('--add_lower_alphabet', type=bool, default=True, help="add chars a-z to orth symbols")
-  argparser.add_argument('--add_upper_alphabet', type=bool, default=True, help="add chars A-Z to orth symbols")
+  argparser.add_argument('--add_numbers', type=int, default=True, help="add chars 0-9 to orth symbols")
+  argparser.add_argument('--add_lower_alphabet', type=int, default=True, help="add chars a-z to orth symbols")
+  argparser.add_argument('--add_upper_alphabet', type=int, default=True, help="add chars A-Z to orth symbols")
   argparser.add_argument('--remove_symbols', default="(){}$", help="remove these chars from orth symbols")
   argparser.add_argument('--output', help='where to store the symbols (default: dont store)')
   args = argparser.parse_args(argv[1:])
@@ -207,9 +223,9 @@ def main(argv):
   init(configFilename=crnn_config_filename)
 
   if bliss_filename:
-    iter_corpus = lambda cb: iter_bliss(bliss_filename, frame_time=args.frame_time, callback=cb)
+    iter_corpus = lambda cb: iter_bliss(bliss_filename, options=args, callback=cb)
   else:
-    iter_corpus = lambda cb: iter_dataset(rnn.train_data, callback=cb)
+    iter_corpus = lambda cb: iter_dataset(rnn.train_data, options=args, callback=cb)
   collect_stats(args, iter_corpus)
 
   if crnn_config_filename:
