@@ -176,7 +176,6 @@ class LayerNetwork(object):
       if 'centroids' in obj:
         index = traverse(content, obj['centroids'], index)
         obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
-
       if 'encoder' in obj:
         index = output_index
       obj.pop('from', None)

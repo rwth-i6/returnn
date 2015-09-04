@@ -109,10 +109,10 @@ class LSTME(Unit):
   def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
     z = z_t + z_p
-    u_t = GI(z[:,0 * self.slice:1 * self.slice])
-    r_t = GF(z[:,1 * self.slice:2 * self.slice])
-    b_t = GO(z[:,2 * self.slice:3 * self.slice])
-    a_t = CI(z[:,3 * self.slice:])
+    u_t = GI(z[:,0 * self.slice:1 * self.slice]) # input gate
+    r_t = GF(z[:,1 * self.slice:2 * self.slice]) # forget gate
+    b_t = GO(z[:,2 * self.slice:3 * self.slice]) # output gate
+    a_t = CI(z[:,3 * self.slice:]) # net input
     s_t = a_t * u_t + s_p * r_t
     h_t = CO(s_t) * b_t
     #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
@@ -198,6 +198,35 @@ class SRU(Unit):
     return  u_t * h_p + (1 - u_t) * h_c
 
 
+class RecurrentComponent(Container):
+  def __init__(self):
+    self.params = {}
+
+  def init_state(self):
+    return []
+
+  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    self.outputs_info = outputs_info
+    self.non_sequences = non_sequences
+    self.W_re = W_re
+    self.W_in = W_in
+    self.b = b
+    self.go_backwards = go_backwards
+    self.truncate_gradient = truncate_gradient
+    try:
+      xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
+    except Exception:
+      xc = z if not x else T.concatenate(x, axis = -1)
+
+    outputs, _ = theano.scan(step,
+                             #strict = True,
+                             truncate_gradient = truncate_gradient,
+                             go_backwards = go_backwards,
+                             sequences = [xc,z,i],
+                             non_sequences = non_sequences,
+                             outputs_info = outputs_info)
+    return outputs
+
 class RecurrentUnitLayer(Layer):
   recurrent = True
   layer_class = "rec"
@@ -279,7 +308,7 @@ class RecurrentUnitLayer(Layer):
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      value[unit.n_units:2*unit.n_units] = -5
+      #value[unit.n_units:2*unit.n_units] = -5
     self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
     self.W_in = []
@@ -442,7 +471,8 @@ class RecurrentUnitLayer(Layer):
           args = args[:-1]
         h_p = args[0]
         if self.depth == 1:
-          i = i_t.dimshuffle(0,'x').repeat(self.attrs['n_out'],axis=1)
+          #i = i_t.dimshuffle(0,'x').repeat(self.attrs['n_out'],axis=1)
+          i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), self.attrs['n_out']))
         else:
           assert False
           h_p = self.make_consensus(h_p, axis = 1)
@@ -489,7 +519,7 @@ class RecurrentUnitLayer(Layer):
             elif attention_step > 0:
               result = [focus+attention_step,beam] + result
           act = unit.step(i_t, x_t, z_t, z_p, *args)
-        return [ act[j] * i + args[j] * (1 - i) for j in xrange(unit.n_act) ] + result
+        return [ act[j] * i + args[j] * (1-i) for j in xrange(unit.n_act) ] + result
 
       index_f = T.cast(index, theano.config.floatX)
       outputs = unit.scan(step,
@@ -522,7 +552,7 @@ class RecurrentUnitLayer(Layer):
         #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j,self.y_in[self.attrs['target']][j]], y_idx=)
         #self.constraints += T.sum(nll)
         outputs = outputs[:-1]
-      if self.attrs['attention'] and attention_step != 0:
+      if self.attrs['attention'] != "none" and attention_step != 0:
         self.focus = outputs[-2]
         self.beam = outputs[-1]
         outputs = outputs[:-2]
