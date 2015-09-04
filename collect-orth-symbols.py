@@ -136,13 +136,13 @@ def collect_stats(options, iter_corpus):
   def cb(frame_len, orth):
     if frame_len >= options.max_seq_frame_len:
       return
-    if len(orth) >= options.max_seq_orth_len:
+    orth_syms = parse_orthography(orth)
+    if len(orth_syms) >= options.max_seq_orth_len:
       return
 
     Stats.count += 1
     Stats.total_frame_len += frame_len
 
-    orth_syms = parse_orthography(orth)
     if options.dump_orth_syms:
       print >> log.v3, "Orth:", "".join(orth_syms)
     if options.filter_orth_sym:
