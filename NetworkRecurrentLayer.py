@@ -71,7 +71,7 @@ class Unit(Container):
     self.slice = T.constant(self.n_units, dtype='int32')
     self.params = {}
 
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards=False, truncate_gradient=-1):
     self.outputs_info = outputs_info
     self.non_sequences = non_sequences
     self.W_re = W_re
@@ -302,7 +302,7 @@ class RecurrentUnitLayer(Layer):
           self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1)))
         W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
       else:
-        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re + unit.n_in, name="W_re_%s" % self.name)
+        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
       self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
@@ -310,15 +310,16 @@ class RecurrentUnitLayer(Layer):
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
       value[unit.n_units:2*unit.n_units] = 5
-    self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
-    self.params["b_%s"%self.name] = self.b
+    #self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
+    #self.params["b_%s"%self.name] = self.b
+    self.b.set_value(value)
     self.W_in = []
     for s in self.sources:
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
                                              s.attrs['n_out'] + unit.n_in + unit.n_re,
                                              name="W_in_%s_%s" % (s.name, self.name), depth = 1)
       self.W_in.append(W)
-      self.params[W.name] = W
+      self.add_param(W)
     # make input
     z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
@@ -326,7 +327,6 @@ class RecurrentUnitLayer(Layer):
         z += W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         z += T.dot(x_t.output, W)
-        #z, _ = theano.foldl(lambda x, z: z + T.dot(x,W), sequences = [x_t.output], outputs_info = [z])
       else:
         z += self.dot(self.mass * m * x_t.output, W)
     if self.depth > 1:
@@ -448,7 +448,7 @@ class RecurrentUnitLayer(Layer):
             sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
       else:
         if self.depth == 1:
-          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
         else:
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
@@ -526,9 +526,10 @@ class RecurrentUnitLayer(Layer):
         z_p = T.dot(args[0], W_re)
         #i_x = i_t.dimshuffle(0,'x').repeat(z_p.shape[1],axis=1)
         act = unit.step(i_t, x_t, z_t, z_p, *args)
-        i = i_t.dimshuffle(0,'x').repeat(unit.n_units,axis=1)
-        #i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), unit.n_units))
-        return [ act[0] * i ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
+        #i = i_t.dimshuffle(0,'x').repeat(unit.n_units,axis=1)
+        i_a = T.outer(i_t, T.alloc(numpy.cast['float32'](1), unit.n_units))
+        #return [ act[0] * i ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
+        return [ act[0] * i_a ] + [  act[j] * i_a for j in xrange(1,unit.n_act) ]
         #return [ theano.gradient.grad_clip(act[0] * i,T.sum(i*500),T.sum(i*500)) ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
         #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
 
@@ -553,7 +554,6 @@ class RecurrentUnitLayer(Layer):
         j = (self.index[:-1].flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C
         #y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
-        #self.constraints += -T.sum(T.log(self.y_m[j,y_f[j]]))
         #self.constraints += T.mean(T.sqr(self.y_m[j] - y_f[j]))
 
         h_y = (self.y_in[self.attrs['target']].reshape(index.shape)).flatten()
