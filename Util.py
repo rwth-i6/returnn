@@ -371,19 +371,22 @@ def parse_orthography_into_symbols(orthography, upper_case_special=True):
   :rtype: list[str]
   """
   ret = []
-  in_special = False
+  in_special = 0
   for c in orthography:
     if in_special:
-      if c == "]":
+      if c == "[":  # special-special
+        in_special += 1
+        ret[-1] += "["
+      elif c == "]":
+        in_special -= 1
         ret[-1] += "]"
-        in_special = False
       elif upper_case_special:
         ret[-1] += c.upper()
       else:
         ret[-1] += c
     else:  # not in_special
       if c == "[":
-        in_special = True
+        in_special = 1
         ret += ["["]
       else:
         ret += c

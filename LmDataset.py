@@ -4,31 +4,56 @@ from Dataset import Dataset
 from GeneratingDataset import GeneratingDataset, StaticDataset
 import gzip
 import xml.etree.ElementTree as etree
-from Util import parse_orthography
+from Util import parse_orthography, parse_orthography_into_symbols, load_json
 from Log import log
 import numpy
+import time
 
 
 class LmDataset(StaticDataset):
 
-  def __init__(self, corpus_file, orth_symbols_file, **kwargs):
+  def __init__(self, corpus_file, orth_symbols_file, replace_map_file=None, **kwargs):
     self.orth_symbols = open(orth_symbols_file).read().splitlines()
+    if replace_map_file:
+      self.replace_map = load_json(filename=replace_map_file)
+      assert isinstance(self.replace_map, dict)
+      self.replace_map = {key: parse_orthography_into_symbols(v)
+                          for (key, v) in self.replace_map.items()}
+    else:
+      self.replace_map = {}
+    orth_symbols_map = {sym: i for (i, sym) in enumerate(self.orth_symbols)}
 
     if len(self.orth_symbols) <= 256:
       self.dtype = "int8"
     else:
       self.dtype = "int32"
 
-    data = []
     if _is_bliss(corpus_file):
       iter_f = _iter_bliss
     else:
       iter_f = _iter_txt
-    def callback(orth):
+    orths = []
+    iter_f(corpus_file, orths.append)
+
+    self.total_len = 0
+    data = []
+    last_log_time = time.time()
+    for i, orth in enumerate(orths):
       orth_syms = parse_orthography(orth)
-      targets = numpy.array([self.orth_symbols.index(s) for s in orth_syms], dtype=self.dtype)
+      orth_syms = sum([self.replace_map.get(s, [s]) for s in orth_syms], [])
+      i = 0
+      while i < len(orth_syms) - 1:
+        if orth_syms[i:i+2] == [" ", " "]:
+          orth_syms[i:i+2] = [" "]  # collapse two spaces
+        else:
+          i += 1
+      targets = numpy.array(map(orth_symbols_map.__getitem__, orth_syms), dtype=self.dtype)
+      self.total_len += len(targets)
       data.append({"data": targets})
-    iter_f(corpus_file, callback)
+      if time.time() - last_log_time > 2.0:
+        last_log_time = time.time()
+        print >> log.v5, "Loading %s progress, %i/%i (%.0f%%) seqs loaded, total syms %i ..." % (
+                         self.__class__.__name__, len(data), len(orths), 100.0 * len(data) / len(orths), self.total_len)
 
     super(LmDataset, self).__init__(data=data, output_dim={"data": len(self.orth_symbols)}, **kwargs)
 
@@ -37,6 +62,9 @@ class LmDataset(StaticDataset):
 
   def get_data_dim(self, key):
     return 1
+
+  def get_num_timesteps(self):
+    return self.total_len
 
 
 def _is_bliss(filename):
@@ -72,7 +100,7 @@ def _iter_bliss(filename, callback):
         tree = tree[:-1]
       if event == 'end' and elem.tag == tag:
         yield tree, elem
-        root.clear() # free memory
+        root.clear()  # free memory
 
   for tree, elem in getelements("segment"):
     elem_orth = elem.find("orth")
@@ -95,7 +123,9 @@ def _iter_txt(filename, callback):
 
 
 def _main(argv):
-  log.initialize()
+  import better_exchook
+  better_exchook.install()
+  log.initialize(verbosity=[5])
   dataset = LmDataset(*argv)
   print >>log.v3, "dataset len:", dataset.len_info()
 
