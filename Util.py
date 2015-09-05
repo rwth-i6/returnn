@@ -8,7 +8,7 @@ import sys
 import shlex
 import numpy as np
 import re
-from collections import defaultdict
+import time
 
 
 def cmd(s):
@@ -136,6 +136,30 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bar = bars + spaces
   sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
   sys.stdout.flush()
+
+
+class _progress_bar_with_time_stats:
+  start_time = None
+  last_complete = None
+
+def progress_bar_with_time(complete=1.0, prefix="", **kwargs):
+  stats = _progress_bar_with_time_stats
+  if stats.start_time is None:
+    stats.start_time = time.time()
+    stats.last_complete = complete
+  if stats.last_complete > complete:
+    stats.start_time = time.time()
+  stats.last_complete = complete
+
+  start_elapsed = time.time() - stats.start_time
+  if complete > 0:
+    total_time_estimated = start_elapsed / complete
+    remaining_estimated = total_time_estimated - start_elapsed
+    if prefix:
+      prefix += ", " + hms(remaining_estimated)
+    else:
+      prefix = hms(remaining_estimated)
+  progress_bar(complete, prefix=prefix, **kwargs)
 
 
 def betterRepr(o):

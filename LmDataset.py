@@ -14,6 +14,7 @@ class LmDataset(StaticDataset):
 
   def __init__(self, corpus_file, orth_symbols_file, replace_map_file=None, **kwargs):
     self.orth_symbols = open(orth_symbols_file).read().splitlines()
+    self.labels = {"data": self.orth_symbols}
     if replace_map_file:
       self.replace_map = load_json(filename=replace_map_file)
       assert isinstance(self.replace_map, dict)
