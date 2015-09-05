@@ -79,6 +79,7 @@ class Unit(Container):
     self.b = b
     self.go_backwards = go_backwards
     self.truncate_gradient = truncate_gradient
+    #z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     try:
       xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
@@ -112,7 +113,7 @@ class LSTME(Unit):
     u_t = GI(z[:,0 * self.slice:1 * self.slice]) # input gate
     r_t = GF(z[:,1 * self.slice:2 * self.slice]) # forget gate
     b_t = GO(z[:,2 * self.slice:3 * self.slice]) # output gate
-    a_t = CI(z[:,3 * self.slice:]) # net input
+    a_t = CI(z[:,3 * self.slice:4 * self.slice]) # net input
     s_t = a_t * u_t + s_p * r_t
     h_t = CO(s_t) * b_t
     #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
@@ -308,7 +309,7 @@ class RecurrentUnitLayer(Layer):
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      #value[unit.n_units:2*unit.n_units] = -5
+      value[unit.n_units:2*unit.n_units] = 5
     self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     self.params["b_%s"%self.name] = self.b
     self.W_in = []
@@ -452,7 +453,7 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      def step(x_t, z_t, i_t, *args):
+      def stepr(x_t, z_t, i_t, *args):
         mask,mass = 0,0
         if self.attrs['dropconnect'] > 0.0:
           mask = args[-2]
@@ -521,6 +522,16 @@ class RecurrentUnitLayer(Layer):
           act = unit.step(i_t, x_t, z_t, z_p, *args)
         return [ act[j] * i + args[j] * (1-i) for j in xrange(unit.n_act) ] + result
 
+      def step(x_t, z_t, i_t, *args):
+        z_p = T.dot(args[0], W_re)
+        #i_x = i_t.dimshuffle(0,'x').repeat(z_p.shape[1],axis=1)
+        act = unit.step(i_t, x_t, z_t, z_p, *args)
+        i = i_t.dimshuffle(0,'x').repeat(unit.n_units,axis=1)
+        #i = T.outer(i_t, T.alloc(numpy.cast['float32'](1), unit.n_units))
+        return [ act[0] * i ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
+        #return [ theano.gradient.grad_clip(act[0] * i,T.sum(i*500),T.sum(i*500)) ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
+        #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
+
       index_f = T.cast(index, theano.config.floatX)
       outputs = unit.scan(step,
                           sources,
@@ -563,5 +574,10 @@ class RecurrentUnitLayer(Layer):
         self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
       else:
         self.act = outputs
+    #T.set_subtensor(self.act[0][(self.index > 0).nonzero()], T.zeros_like(self.act[0][(self.index > 0).nonzero()]))
+    #T.set_subtensor(self.act[1][(self.index > 0).nonzero()], T.zeros_like(self.act[1][(self.index > 0).nonzero()]))
+    #jindex = self.index.dimshuffle(0,1,'x').repeat(unit.n_out,axis=2)
+    #self.act[0] = T.switch(T.lt(jindex, T.ones_like(jindex)), T.zeros_like(self.act[0]), self.act[0])
+    #self.act[1] = T.switch(T.eq(jindex, T.zeros_like(jindex)), T.zeros_like(self.act[1]), self.act[1])
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)

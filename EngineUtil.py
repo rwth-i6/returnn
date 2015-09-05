@@ -16,10 +16,7 @@ def assign_dev_data(device, dataset, batches):
   shapes = dataset.shapes_for_batches(batches, data_keys=device.used_data_keys)
   if shapes is None:
     return False, len(batches)
-  import time
-  ts = time.time()
   device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())
-  ts = time.time()
   offset_slice = 0
 
   for batch in batches:
@@ -37,6 +34,7 @@ def assign_dev_data(device, dataset, batches):
         for k in device.used_data_keys:
           data = dataset.get_data(seq.seq_idx, k)
           if data is not None:
+            #print k,o[k],l[k]
             device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
             device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
             #if exclude:
