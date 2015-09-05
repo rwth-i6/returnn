@@ -18,7 +18,7 @@ from Log import log
 from Device import Device, get_num_devices
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset, init_dataset, get_dataset_class
+from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler
 from Util import initThreadJoinHack
@@ -267,26 +267,7 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
     data = init_dataset(kwargs)
   else:
     config_str = config.value(files_config_key, "")
-    if config_str.startswith("sprint:"):
-      kwargs["sprintConfigStr"] = config.value(files_config_key, "")[len("sprint:"):]
-      sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
-      assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
-      kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
-      from ExternSprintDataset import ExternSprintDataset
-      cls = ExternSprintDataset
-    elif ":" in config_str:
-      kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
-      class_name = config_str[:config_str.find(":")]
-      cls = get_dataset_class(class_name)
-    else:
-      kwargs["cache_byte_size"] = cache_byte_size
-      cls = HDFDataset
-    data = cls.from_config(config, **kwargs)
-    if isinstance(data, HDFDataset):
-      for f in config.list(files_config_key):
-        assert os.path.exists(f)
-        data.add_file(f)
-    data.initialize()
+    data = init_dataset_via_str(config_str, config=config, cache_byte_size=cache_byte_size, **kwargs)
   cache_leftover = 0
   if isinstance(data, HDFDataset):
     cache_leftover = data.definite_cache_leftover
