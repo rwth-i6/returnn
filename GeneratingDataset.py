@@ -6,9 +6,9 @@ import numpy
 
 class GeneratingDataset(Dataset):
 
-  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), *args, **kwargs):
+  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), **kwargs):
     assert window == 1
-    super(GeneratingDataset, self).__init__(window, *args, **kwargs)
+    super(GeneratingDataset, self).__init__(window, **kwargs)
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
@@ -222,7 +222,7 @@ class DummyDataset(GeneratingDataset):
 
 class StaticDataset(GeneratingDataset):
 
-  def __init__(self, data, target_list=None, output_dim=None):
+  def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
     :type data: list[dict[str,numpy.ndarray]]
     """
@@ -242,8 +242,12 @@ class StaticDataset(GeneratingDataset):
     self.target_list = target_list
 
     first_data_input = first_data["data"]
-    assert len(first_data_input.shape) == 2  # (time,dim)
-    input_dim = first_data_input.shape[1]
+    assert len(first_data_input.shape) <= 2  # (time[,dim])
+    if input_dim is None:
+      if "data" in output_dim:
+        input_dim = output_dim["data"]
+      else:
+        input_dim = first_data_input.shape[1]
 
     if isinstance(output_dim, int):
       assert "classes" in target_list
@@ -261,7 +265,7 @@ class StaticDataset(GeneratingDataset):
         else:
           output_dim[target] = first_data_output.shape[1]
 
-    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
+    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 
   def generate_seq(self, seq_idx):
     data = self.data[seq_idx]
