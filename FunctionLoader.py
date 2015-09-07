@@ -61,7 +61,7 @@ struct FunLoader
 """
 
 def make_funloader_code(fn_name):
-  #return funloader_support_code + """
-  #FunLoader %(fn_name)s("%(fn_name)s");
-  #""" % locals()
-  return ""
+  return funloader_support_code + """
+  FunLoader %(fn_name)s("%(fn_name)s");
+  """ % locals()
+
