@@ -453,7 +453,7 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      def stepr(x_t, z_t, i_t, *args):
+      def step(x_t, z_t, i_t, *args):
         mask,mass = 0,0
         if self.attrs['dropconnect'] > 0.0:
           mask = args[-2]
@@ -522,7 +522,7 @@ class RecurrentUnitLayer(Layer):
           act = unit.step(i_t, x_t, z_t, z_p, *args)
         return [ act[j] * i + args[j] * (1-i) for j in xrange(unit.n_act) ] + result
 
-      def step(x_t, z_t, i_t, *args):
+      def stepd(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)
         #i_x = i_t.dimshuffle(0,'x').repeat(z_p.shape[1],axis=1)
         act = unit.step(i_t, x_t, z_t, z_p, *args)
