@@ -11,22 +11,16 @@ import numpy
 #TODO: pass inputs as shared variables to avoid alot of copying
 def make_fwd_fun():
   #TODO later also use context as input
-  Y = T.ftensor3("Y")
+  y_p = T.fmatrix("y_p")
   W_re = T.fmatrix("W_re")
-  idx_f = T.fscalar("idx")
-  idx = T.cast(idx_f, "int32")
-  y_p = Y[idx - 1]
   z_re = T.dot(y_p, W_re)
   out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
   updates = [(out,z_re)]
-  return theano.function(inputs=[Y, W_re, idx_f], outputs=[], updates=updates), out
+  return theano.function(inputs=[y_p, W_re], outputs=[], updates=updates), out
 
 def make_bwd_fun():
-  Y = T.ftensor3("Y")
+  y_p = T.fmatrix("y_p")
   W_re = T.fmatrix("W_re")
-  idx_f = T.fscalar("idx")
-  idx = T.cast(idx_f, "int32")
-  y_p = Y[idx - 1]
   z_re = T.dot(y_p, W_re)
 
   Dz_re = T.fmatrix("Dz_re")
@@ -35,10 +29,10 @@ def make_bwd_fun():
   DW_re = T.grad(None, W_re, known_grads=known_grads)
 
   #TODO
-  out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="bwd_fun_output_shared")
-  out_DW_re = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="bwd_fun_output_shared")
+  out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
+  out_DW_re = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_DW_re")
   updates = [(out_Dy_p,Dy_p), (out_DW_re,DW_re)]
-  return theano.function(inputs=[Y, W_re, idx_f, Dz_re], outputs=[], updates=updates), out_Dy_p, out_DW_re
+  return theano.function(inputs=[y_p, W_re, Dz_re], outputs=[], updates=updates), out_Dy_p, out_DW_re
 
 fwd_fun, fwd_fun_res0 = make_fwd_fun()
 

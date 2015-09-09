@@ -79,9 +79,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     const int * H_dim = CudaNdarray_HOST_DIMS(%(H)s);
 
     int y = 0;
-    const int dims_dummy[] = {0};
-    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_dummy); //just pass dummy dims, they won't be used anyway
-    float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
     for(int x = H_dim[0]-1; x >= 0; --x)
     {
       //add recurrent
@@ -94,25 +91,34 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         //affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
 
         //call custom function here
-        float idx_arr_val[] = {float(x)};
-        cudaMemcpy(idx_arr_data, idx_arr_val, sizeof(float), cudaMemcpyHostToDevice);
+        CudaNdarray * y_p = 0;
+        //TODO: handle leftBorder
+        if(!leftBorder)
+        {
+          PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+          assert(y_p_obj);
+          y_p = (CudaNdarray*) y_p_obj;
+          PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", x+1);
+          assert(delta_x_obj);
+          CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
-        float * epsilon_y_x_data = data_ptr(%(H)s, y, x);
-        std::vector<PyObject*> res_vec = bwd_fun(%(Y)s, %(W_re)s, idx_arr, epsilon_y_x_data);
-        assert(res_vec.size() == 2);
-        CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
-        CudaNdarray * DW_re = (CudaNdarray*) res_vec[1];
+          std::vector<PyObject*> res_vec = bwd_fun(y_p, %(W_re)s, delta_x);
+          assert(res_vec.size() == 2);
+          CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+          CudaNdarray * DW_re_local = (CudaNdarray*) res_vec[1];
 
-        //TODO
+          //TODO
+          //copy to epsilon
+          float * epsilon_x_data = data_ptr(epsilon, y, x);
+          do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
-        Py_XDECREF(Dy_p);
-        Py_XDECREF(DW_re);
+          Py_XDECREF(Dy_p);
+          Py_XDECREF(DW_re_local);
+        }
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
-
     }
-    Py_DECREF(idx_arr);
 
     %(DW_re)s = CudaNdarray_uninitialized_like(%(W_re)s);
     //DW_re = Y[0..end-1]^T * delta[1..end]
@@ -203,35 +209,34 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
-    const int dims_dummy[] = {0};
-    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_dummy); //just pass dummy dims, they won't be used anyway
-    float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
     int y = 0;
     for(int x = 0; x < Z_dim[0]; ++x)
     {
+      bool leftBorder = (x == 0);
       //TODO: later we also need to handle the first state, but atm we can let it be handled outside
-      if(x > 0)
+      if(!leftBorder)
       {
         //affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
 
         //call custom function here
-        float idx_arr_val[] = {float(x)};
-        cudaMemcpy(idx_arr_data, idx_arr_val, sizeof(float), cudaMemcpyHostToDevice);
-        std::vector<PyObject*> res_vec = fwd_fun(%(Y)s, %(W_re)s, idx_arr);
+        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+        assert(y_p_obj);
+        CudaNdarray * y_p = (CudaNdarray*) y_p_obj;
+
+        std::vector<PyObject*> res_vec = fwd_fun(y_p, %(W_re)s);
         assert(res_vec.size() == 1);
         CudaNdarray * res = (CudaNdarray*) res_vec[0];
+        Py_XDECREF(y_p);
 
         //copy to H
         float * H_y_x_data = data_ptr(%(H)s, y, x);
         do_add(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res));
-        //HANDLE_ERROR(cudaMemcpy(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res), cudaMemcpyDeviceToDevice));
 
         Py_XDECREF(res);
       }
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Y)s, %(c)s, d_ptr, y, x, %(i)s);
     }
-    Py_DECREF(idx_arr);
     """ % locals()
 
   def grad(self, inputs, output_grads):
