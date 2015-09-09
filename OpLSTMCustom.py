@@ -190,19 +190,16 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         //affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
 
         //call custom function here
-        float idx_array[] = {float(x)};
-        cudaMemcpy(idx_arr_data, idx_array, sizeof(float), cudaMemcpyHostToDevice);
-        PyObject * res_obj = fwd_fun(idx_arr);
-        CudaNdarray * res = (CudaNdarray*) res_obj;
+        float idx_arr_val[] = {float(x)};
+        cudaMemcpy(idx_arr_data, idx_arr_val, sizeof(float), cudaMemcpyHostToDevice);
+        PyObject * res_obj = fwd_fun(%(Y)s, %(W_re)s, idx_arr);
         //printPyObj(res_obj);
+        CudaNdarray * res = (CudaNdarray*) res_obj;
 
-        //get test value
-        /*float res2[] = {0.0f};
-        HANDLE_ERROR(cudaMemcpy(res2, CudaNdarray_DEV_DATA(res), sizeof(float), cudaMemcpyDeviceToHost));
-        std::cout << "test " << res2[0] << std::endl;*/
-
-        //TODO copy to H
-
+        //copy to H
+        float * H_y_x_data = data_ptr(%(H)s, y, x);
+        do_add(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res));
+        //HANDLE_ERROR(cudaMemcpy(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res), cudaMemcpyDeviceToDevice));
 
         Py_XDECREF(res);
       }

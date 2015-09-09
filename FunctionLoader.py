@@ -44,7 +44,6 @@ struct FunLoader
 
     //this should be the C++ equivalent for the following python code
     //res = res_shared.get_value(borrow=True, return_internal_type=True)
-    //TODO
     PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
     assert(res);
     return res;
@@ -53,20 +52,30 @@ struct FunLoader
   PyObject * operator()(CudaNdarray* x, CudaNdarray* y)
   {
     PyObject* args = PyTuple_Pack(2, x, y);
-    PyObject * res = PyObject_CallObject(fn, args);
+    PyObject_CallObject(fn, args);
     Py_DECREF(args);
+
+    //this should be the C++ equivalent for the following python code
+    //res = res_shared.get_value(borrow=True, return_internal_type=True)
+    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
+    assert(res);
     return res;
   }
 
   PyObject * operator()(CudaNdarray* x, CudaNdarray* y, CudaNdarray* z)
   {
     PyObject* args = PyTuple_Pack(3, x, y, z);
-    PyObject * res = PyObject_CallObject(fn, args);
+    PyObject_CallObject(fn, args);
     Py_DECREF(args);
+
+    //this should be the C++ equivalent for the following python code
+    //res = res_shared.get_value(borrow=True, return_internal_type=True)
+    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
+    assert(res);
     return res;
   }
 
-  //TODO add overloads for more arguements if needed
+  //TODO add overloads for more arguments if needed
   //(variadic template would be better but not widely supported by compilers)
 
 };

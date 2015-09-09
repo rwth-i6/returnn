@@ -2,24 +2,25 @@ import theano
 import theano.tensor as T
 import numpy
 
-def make_fwd_fun():
-  x = T.fscalar()
-  y = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
-  updates = [(y,x)]
-  return theano.function(inputs=[x], outputs=[], updates=updates), y
-
 #def make_fwd_fun():
-#  #s: state
-#  #later also use context as input
-#  s = T.ftensor3("s")
-#  W_re = T.fmatrix("W_re")
-#  #TODO check if we need to cast
-#  idx_f = T.fscalar("idx")
-#  idx = T.cast(idx_f, "int32")
-#  z_re = T.dot(s[idx - 1], W_re)
-#  out = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
-#  updates = [(out,z_re)]
-#  return theano.function(inputs=[s, W_re, idx], outputs=[], updates=updates), out
+#  x = T.fscalar()
+#  y = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
+#  updates = [(y,x)]
+#  return theano.function(inputs=[x], outputs=[], updates=updates), y
+
+#TODO: pass inputs as shared variables to avoid alot of copying
+def make_fwd_fun():
+  #s: state
+  #later also use context as input
+  Y = T.ftensor3("Y")
+  W_re = T.fmatrix("W_re")
+  #TODO check if we need to cast
+  idx_f = T.fscalar("idx")
+  idx = T.cast(idx_f, "int32")
+  z_re = T.dot(Y[idx - 1], W_re)
+  out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
+  updates = [(out,z_re)]
+  return theano.function(inputs=[Y, W_re, idx_f], outputs=[], updates=updates), out
 
 def make_bwd_fun():
   s = T.ftensor3("s")
