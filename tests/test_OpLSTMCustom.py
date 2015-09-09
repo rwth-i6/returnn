@@ -98,9 +98,9 @@ def test_bwd_pass_compatible_with_OpLSTM():
   print "success"
 
 if __name__ == '__main__':
-  #print "calling test_does_not_crash()"
-  #test_does_not_crash()
-  #print "calling test_fwd_pass_compatible_with_OpLSTM()"
-  #test_fwd_pass_compatible_with_OpLSTM()
+  print "calling test_does_not_crash()"
+  test_does_not_crash()
+  print "calling test_fwd_pass_compatible_with_OpLSTM()"
+  test_fwd_pass_compatible_with_OpLSTM()
   print "calling test_bwd_pass_compatible_with_OpLSTM()"
   test_bwd_pass_compatible_with_OpLSTM()

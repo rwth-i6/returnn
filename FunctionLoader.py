@@ -1,5 +1,8 @@
 
 funloader_support_code = """
+#include <sstream>
+#include <vector>
+
 void printPyObj(PyObject * o)
 {
   PyObject* objectsRepresentation = PyObject_Repr(o);
@@ -8,16 +11,15 @@ void printPyObj(PyObject * o)
   Py_DECREF(objectsRepresentation);
 }
 
-#include <sstream>
-
 struct FunLoader
 {
   PyObject * fn;
-  PyObject * res_shared;
+  std::vector<PyObject*> res_shared;
 
-  FunLoader(const char * fn_name)
+  FunLoader(const char * fn_name, int n_outputs)
   {
     std::cout << "Loading function " << fn_name << "..." << std::endl;
+    //TODO: this mod object is never decref'd
     static PyObject * mod = 0;
     if(!mod)
     {
@@ -27,7 +29,13 @@ struct FunLoader
     fn = PyObject_GetAttrString(mod, fn_name);
     std::stringstream ss;
     ss << fn_name << "_res";
-    res_shared = PyObject_GetAttrString(mod, ss.str().c_str());
+    for(int i = 0; i < n_outputs; ++i)
+    {
+      std::stringstream ss2;
+      ss2 << ss.str() << i;
+      std::string res_name = ss2.str();
+      res_shared.push_back(PyObject_GetAttrString(mod, res_name.c_str()));
+    }
 
     std::cout << "loaded function" << std::endl;
   }
@@ -37,7 +45,10 @@ struct FunLoader
   ~FunLoader()
   {
     Py_XDECREF(fn);
-    Py_XDECREF(res_shared);
+    for(int i = 0; i < res_shared.size(); ++i)
+    {
+      Py_XDECREF(res_shared[i]);
+    }
     /*if(mod)
     {
       Py_DECREF(mod);
@@ -45,43 +56,39 @@ struct FunLoader
     }*/
   }
 
-  PyObject * operator()(CudaNdarray* x)
+  std::vector<PyObject*> call_helper(PyObject * args)
+  {
+    PyObject_CallObject(fn, args);
+    Py_DECREF(args);
+    //this should be the C++ equivalent for the following python code
+    //res = res_shared.get_value(borrow=True, return_internal_type=True)
+
+    std::vector<PyObject*> res;
+    for(int i = 0; i < res_shared.size(); ++i)
+    {
+      PyObject * sub_res = PyObject_CallMethod(res_shared[i], "get_value", "(ii)", 1, 1);
+      assert(sub_res);
+      res.push_back(sub_res);
+    }
+    return res;
+  }
+
+  std::vector<PyObject*> operator()(CudaNdarray* x)
   {
     PyObject* args = PyTuple_Pack(1, x);
-    PyObject_CallObject(fn, args);
-    Py_DECREF(args);
-
-    //this should be the C++ equivalent for the following python code
-    //res = res_shared.get_value(borrow=True, return_internal_type=True)
-    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
-    assert(res);
-    return res;
+    return call_helper(args);
   }
 
-  PyObject * operator()(CudaNdarray* x, CudaNdarray* y)
+  std::vector<PyObject*> operator()(CudaNdarray* x, CudaNdarray* y)
   {
     PyObject* args = PyTuple_Pack(2, x, y);
-    PyObject_CallObject(fn, args);
-    Py_DECREF(args);
-
-    //this should be the C++ equivalent for the following python code
-    //res = res_shared.get_value(borrow=True, return_internal_type=True)
-    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
-    assert(res);
-    return res;
+    return call_helper(args);
   }
 
-  PyObject * operator()(CudaNdarray* x, CudaNdarray* y, CudaNdarray* z)
+  std::vector<PyObject*> operator()(CudaNdarray* x, CudaNdarray* y, CudaNdarray* z)
   {
     PyObject* args = PyTuple_Pack(3, x, y, z);
-    PyObject_CallObject(fn, args);
-    Py_DECREF(args);
-
-    //this should be the C++ equivalent for the following python code
-    //res = res_shared.get_value(borrow=True, return_internal_type=True)
-    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
-    assert(res);
-    return res;
+    return call_helper(args);
   }
 
   //TODO add overloads for more arguments if needed
@@ -91,8 +98,8 @@ struct FunLoader
 
 """
 
-def make_funloader_code(fn_name):
+def make_funloader_code(fn_name, n_res):
+  n_res = str(n_res)
   return funloader_support_code + """
-  FunLoader %(fn_name)s("%(fn_name)s");
+  FunLoader %(fn_name)s("%(fn_name)s", %(n_res)s);
   """ % locals()
-

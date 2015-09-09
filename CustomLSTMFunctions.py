@@ -40,7 +40,6 @@ def make_bwd_fun():
   updates = [(out_Dy_p,Dy_p), (out_DW_re,DW_re)]
   return theano.function(inputs=[Y, W_re, idx_f, Dz_re], outputs=[], updates=updates), out_Dy_p, out_DW_re
 
-fwd_fun, fwd_fun_res = make_fwd_fun()
+fwd_fun, fwd_fun_res0 = make_fwd_fun()
 
 bwd_fun, bwd_fun_res0, bwd_fun_res1 = make_bwd_fun()
-bwd_fun_res = (bwd_fun_res0, bwd_fun_res1)

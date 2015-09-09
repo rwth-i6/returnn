@@ -42,7 +42,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
     #TODO!!!
-    funloader = make_funloader_code("bwd_fun")
+    funloader = make_funloader_code("bwd_fun", 2)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
@@ -90,7 +90,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       {
         //affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
         //TODO call function here
-
+        //PyObject * res_obj = bwd_fun(%(Y)s, %(W_re)s, idx_arr);
+        //CudaNdarray * res = (CudaNdarray*) res_obj;
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
@@ -154,7 +155,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def c_support_code(self):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
-    funloader = make_funloader_code("fwd_fun")
+    funloader = make_funloader_code("fwd_fun", 1)
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -199,9 +200,9 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         //call custom function here
         float idx_arr_val[] = {float(x)};
         cudaMemcpy(idx_arr_data, idx_arr_val, sizeof(float), cudaMemcpyHostToDevice);
-        PyObject * res_obj = fwd_fun(%(Y)s, %(W_re)s, idx_arr);
-        //printPyObj(res_obj);
-        CudaNdarray * res = (CudaNdarray*) res_obj;
+        std::vector<PyObject*> res_vec = fwd_fun(%(Y)s, %(W_re)s, idx_arr);
+        assert(res_vec.size() == 1);
+        CudaNdarray * res = (CudaNdarray*) res_vec[0];
 
         //copy to H
         float * H_y_x_data = data_ptr(%(H)s, y, x);
