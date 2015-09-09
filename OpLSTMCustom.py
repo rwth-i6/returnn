@@ -79,24 +79,40 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     const int * H_dim = CudaNdarray_HOST_DIMS(%(H)s);
 
     int y = 0;
+    const int dims_dummy[] = {0};
+    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_dummy); //just pass dummy dims, they won't be used anyway
+    float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
     for(int x = H_dim[0]-1; x >= 0; --x)
     {
       //add recurrent
       bool rightBorder = (x == H_dim[0]-1);
+      bool leftBorder = (x == 0);
 
       //TODO: check if we need to handle boundary case specially
-
       if(!rightBorder)
       {
         //affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
-        //TODO call function here
-        //PyObject * res_obj = bwd_fun(%(Y)s, %(W_re)s, idx_arr);
-        //CudaNdarray * res = (CudaNdarray*) res_obj;
+
+        //call custom function here
+        float idx_arr_val[] = {float(x)};
+        cudaMemcpy(idx_arr_data, idx_arr_val, sizeof(float), cudaMemcpyHostToDevice);
+
+        float * epsilon_y_x_data = data_ptr(%(H)s, y, x);
+        std::vector<PyObject*> res_vec = bwd_fun(%(Y)s, %(W_re)s, idx_arr, epsilon_y_x_data);
+        assert(res_vec.size() == 2);
+        CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+        CudaNdarray * DW_re = (CudaNdarray*) res_vec[1];
+
+        //TODO
+
+        Py_XDECREF(Dy_p);
+        Py_XDECREF(DW_re);
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
 
     }
+    Py_DECREF(idx_arr);
 
     %(DW_re)s = CudaNdarray_uninitialized_like(%(W_re)s);
     //DW_re = Y[0..end-1]^T * delta[1..end]
@@ -187,9 +203,10 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
-    int y = 0;
-    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_Y); //just pass any dims, it won't be used anyway
+    const int dims_dummy[] = {0};
+    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_dummy); //just pass dummy dims, they won't be used anyway
     float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
+    int y = 0;
     for(int x = 0; x < Z_dim[0]; ++x)
     {
       //TODO: later we also need to handle the first state, but atm we can let it be handled outside
