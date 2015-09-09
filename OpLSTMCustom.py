@@ -8,8 +8,6 @@ import theano.gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
 
-#do not remove this import, it is used in the c code!
-import CustomLSTMFunctions
 
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ()
@@ -40,7 +38,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Y, H, c, i, Dd, DY, W_re], [H.type(), c.type(), W_re.type()])
 
   def c_support_code(self):
+    #do not remove this import as it is used in the c code
+    import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
+    #TODO!!!
     funloader = make_funloader_code("bwd_fun")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -82,10 +83,14 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     {
       //add recurrent
       bool rightBorder = (x == H_dim[0]-1);
+
+      //TODO: check if we need to handle boundary case specially
+
       if(!rightBorder)
       {
         //affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
         //TODO call function here
+
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
@@ -147,6 +152,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Z, X, c, i, W_re], [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
+    #do not remove this import as it is used in the c code
+    import CustomLSTMFunctions
     funloader = make_funloader_code("fwd_fun")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:

@@ -17,14 +17,18 @@ struct FunLoader
 
   FunLoader(const char * fn_name)
   {
-    std::cout << "Loading function..." << std::endl;
-    PyObject *mod = PyImport_AddModule("CustomLSTMFunctions");
+    std::cout << "Loading function " << fn_name << "..." << std::endl;
+    static PyObject * mod = 0;
+    if(!mod)
+    {
+      mod = PyImport_AddModule("CustomLSTMFunctions");
+    }
     assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
     std::stringstream ss;
     ss << fn_name << "_res";
     res_shared = PyObject_GetAttrString(mod, ss.str().c_str());
-    Py_DECREF(mod);
+
     std::cout << "loaded function" << std::endl;
   }
 
@@ -34,6 +38,11 @@ struct FunLoader
   {
     Py_XDECREF(fn);
     Py_XDECREF(res_shared);
+    /*if(mod)
+    {
+      Py_DECREF(mod);
+      mod = 0;
+    }*/
   }
 
   PyObject * operator()(CudaNdarray* x)
