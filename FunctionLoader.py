@@ -15,10 +15,12 @@ struct FunLoader
 {
   PyObject * fn;
   std::vector<PyObject*> res_shared;
+  std::string name;
 
   FunLoader(const char * fn_name, int n_outputs)
   {
     std::cout << "Loading function " << fn_name << "..." << std::endl;
+    name = fn_name;
     //TODO: this mod object is never decref'd
     static PyObject * mod = 0;
     if(!mod)
@@ -58,6 +60,7 @@ struct FunLoader
 
   std::vector<PyObject*> call_helper(PyObject * args)
   {
+    std::cout << "calling custom function " << name << "..." << std::endl;
     PyObject_CallObject(fn, args);
     Py_DECREF(args);
     //this should be the C++ equivalent for the following python code
@@ -70,6 +73,7 @@ struct FunLoader
       assert(sub_res);
       res.push_back(sub_res);
     }
+    std::cout << "custom function finished" << std::endl;
     return res;
   }
 
