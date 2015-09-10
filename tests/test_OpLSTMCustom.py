@@ -87,12 +87,14 @@ def test_bwd_pass_compatible_with_OpLSTM():
   cost = Y.sum()
   DZ = T.grad(cost, Z)
   DW_re = T.grad(cost, W_re)
+  Dy0 = T.grad(cost, y0)
   cost2 = Y2.sum()
   DZ2 = T.grad(cost2, Z)
   DW_re2 = T.grad(cost2, W_re)
+  Dy02 = T.grad(cost2, y0)
 
-  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_re], outputs=[DZ, DW_re])
-  g = theano.function(inputs=[Z, W_re, c, y0, i, W_att_re], outputs=[DZ2, DW_re2])
+  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_re], outputs=[DZ, DW_re, Dy0])
+  g = theano.function(inputs=[Z, W_re, c, y0, i, W_att_re], outputs=[DZ2, DW_re2, Dy02])
 
   n_T = 5
   n_batch = 4
@@ -107,11 +109,12 @@ def test_bwd_pass_compatible_with_OpLSTM():
   i_val = numpy.ones((n_T, n_batch), dtype='int8')
 
   vals = f(Z_val, B_val, c_val, y0_val, i_val, W_re_val, W_att_re_val)
-  DZ_val, DW_re_val = (numpy.asarray(vals[0]), numpy.asarray(vals[1]))
+  DZ_val, DW_re_val, Dy0_val = (numpy.asarray(vals[0]), numpy.asarray(vals[1]), numpy.asarray(vals[2]))
   vals2 = g(Z_val, W_re_val, c_val, y0_val, i_val, W_att_re_val)
-  DZ2_val, DW_re2_val = (numpy.asarray(vals2[0]), numpy.asarray(vals2[1]))
+  DZ2_val, DW_re2_val, Dy02_val = (numpy.asarray(vals2[0]), numpy.asarray(vals2[1]), numpy.asarray(vals2[2]))
   assert numpy.allclose(DZ_val, DZ2_val, atol=5e-7, rtol=1e-4), (DZ_val, DZ2_val)
-  assert numpy.allclose(DW_re_val, DW_re2_val), (DW_re_val, DW_re2_val)
+  assert numpy.allclose(DW_re_val, DW_re2_val, atol=5e-7, rtol=1e-4), (DW_re_val, DW_re2_val)
+  assert numpy.allclose(Dy0_val, Dy02_val), (Dy0_val, Dy02_val)
   print "success"
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")

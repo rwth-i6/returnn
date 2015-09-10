@@ -150,6 +150,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       Y_dim[1]*Y_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice));
 
     %(Dy0)s = CudaNdarray_zeros_like(%(y0)s);
+    //calculation like epsilon
     affine_y_x(0, 0, delta, 0, 0, %(W_re)s, 0, 0, %(Dy0)s, false, true);
 
     if(!%(inplace)s)
