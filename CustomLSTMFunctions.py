@@ -2,12 +2,6 @@ import theano
 import theano.tensor as T
 import numpy
 
-#def make_fwd_fun():
-#  x = T.fscalar()
-#  y = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
-#  updates = [(y,x)]
-#  return theano.function(inputs=[x], outputs=[], updates=updates), y
-
 #TODO: pass inputs as shared variables to avoid alot of copying
 def make_fwd_fun():
   #TODO later also use context as input
