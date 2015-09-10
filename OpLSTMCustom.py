@@ -38,31 +38,31 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re], [H.type(), c.type(), W_re.type()])
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re], [H.type(), c.type(), y0.type(), W_re.type()])
 
   def c_support_code(self):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
-    #TODO!!!
     funloader = make_funloader_code("bwd_fun", 2)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
     Y, H, c, y0, i, Dd, DY, W_re = input_names
-    DZ, Dc, DW_re = output_names
+    DZ, Dc, Dy0, DW_re = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
-    std::cout << "LSTMCustomOpGrad called" << std::endl;
-    if(%(DZ)s || %(Dc)s || %(DW_re)s)
+    //std::cout << "LSTMCustomOpGrad called" << std::endl;
+    if(%(DZ)s || %(Dc)s || %(DW_re)s || %(Dy0)s)
     {
       printf("output storage already exists\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(DZ)s);
       Py_XDECREF(%(Dc)s);
       Py_XDECREF(%(DW_re)s);
+      Py_XDECREF(%(Dy0)s);
     }
 
     CudaNdarray * epsilon = 0;
@@ -80,6 +80,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     const int * H_dim = CudaNdarray_HOST_DIMS(%(H)s);
+    const int * Y_dim = CudaNdarray_HOST_DIMS(%(Y)s);
 
     //TODO: use y0
     int y = 0;
@@ -93,33 +94,33 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
-
-        //call custom function here
-        /*CudaNdarray * y_p = 0;
-        //TODO: handle leftBorder
-        if(!leftBorder)
-        {
-          PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
-          assert(y_p_obj);
-          y_p = (CudaNdarray*) y_p_obj;
-          PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", x+1);
-          assert(delta_x_obj);
-          CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
-
-          std::vector<PyObject*> res_vec = bwd_fun(y_p, %(W_re)s, delta_x);
-          assert(res_vec.size() == 2);
-          CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
-          CudaNdarray * DW_re_local = (CudaNdarray*) res_vec[1];
-
-          //TODO
-          //copy to epsilon
-          float * epsilon_x_data = data_ptr(epsilon, y, x);
-          do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
-
-          Py_XDECREF(Dy_p);
-          Py_XDECREF(DW_re_local);
-        }*/
       }
+
+      //call custom function here
+      /*CudaNdarray * y_p = 0;
+      //TODO: handle leftBorder
+      if(!leftBorder)
+      {
+        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+        assert(y_p_obj);
+        y_p = (CudaNdarray*) y_p_obj;
+        PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", x+1);
+        assert(delta_x_obj);
+        CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
+
+        std::vector<PyObject*> res_vec = bwd_fun(y_p, %(W_re)s, delta_x);
+        assert(res_vec.size() == 2);
+        CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+        CudaNdarray * DW_re_local = (CudaNdarray*) res_vec[1];
+
+        //TODO
+        //copy to epsilon
+        float * epsilon_x_data = data_ptr(epsilon, y, x);
+        do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
+
+        Py_XDECREF(Dy_p);
+        Py_XDECREF(DW_re_local);
+      }*/
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
     }
@@ -127,13 +128,17 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     %(DW_re)s = CudaNdarray_uninitialized_like(%(W_re)s);
     //DW_re = Y[0..end-1]^T * delta[1..end]
     affine_global(%(Y)s, delta, %(DW_re)s, true, false, 1, 0.0f);
+    //DW_re += y0^T * delta[0]
+    affine_y_x(0, 0, %(y0)s, 0, 0, delta, 0, 0, %(DW_re)s, true, false);
 
     %(DZ)s = delta;
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
-    const int * Y_dim = CudaNdarray_HOST_DIMS(%(Y)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
-      Y_dim[1]*Y_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
+      Y_dim[1]*Y_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice));
+
+    %(Dy0)s = CudaNdarray_zeros_like(%(y0)s);
+    affine_y_x(0, 0, delta, 0, 0, %(W_re)s, 0, 0, %(Dy0)s, false, true);
 
     if(!%(inplace)s)
     {
@@ -194,7 +199,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     Y, H, d = output_names
     fail = sub['fail']
     return """
-    std::cout << "LSTMCustomOp called" << std::endl;
+    //std::cout << "LSTMCustomOp called" << std::endl;
     if(%(Y)s || %(H)s || %(d)s)
     {
       printf("Y or H or d already exist\\n");
@@ -221,26 +226,32 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     {
       bool leftBorder = (x == 0);
       //TODO: later we also need to handle the first state, but atm we can let it be handled outside
-      if(!leftBorder)
+      if(leftBorder)
+      {
+        affine_y_x(y, x-1, %(y0)s, y, x, %(W_re)s, y, x, %(H)s);
+      }
+      else
       {
         affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
-
-        /*//call custom function here
-        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
-        assert(y_p_obj);
-        CudaNdarray * y_p = (CudaNdarray*) y_p_obj;
-
-        std::vector<PyObject*> res_vec = fwd_fun(y_p, %(W_re)s);
-        assert(res_vec.size() == 1);
-        CudaNdarray * res = (CudaNdarray*) res_vec[0];
-        Py_XDECREF(y_p);
-
-        //copy to H
-        float * H_y_x_data = data_ptr(%(H)s, y, x);
-        do_add(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res));
-
-        Py_XDECREF(res);*/
       }
+
+      /*//call custom function here
+      PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+      assert(y_p_obj);
+      CudaNdarray * y_p = (CudaNdarray*) y_p_obj;
+
+      std::vector<PyObject*> res_vec = fwd_fun(y_p, %(W_re)s);
+      assert(res_vec.size() == 1);
+      CudaNdarray * res = (CudaNdarray*) res_vec[0];
+      Py_XDECREF(y_p);
+
+      //copy to H
+      float * H_y_x_data = data_ptr(%(H)s, y, x);
+      do_add(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res));
+
+      Py_XDECREF(res);*/
+
+
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Y)s, %(c)s, d_ptr, y, x, %(i)s);
     }
@@ -265,11 +276,10 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
     #TODO: later also pass B
-    DZ, Dc, DW_re = LSTMCustomOpGradInstance(Y, H, c, y0, i, Dd, DY, W_re)
+    DZ, Dc, Dy0, DW_re = LSTMCustomOpGradInstance(Y, H, c, y0, i, Dd, DY, W_re)
     Di = theano.gradient.grad_undefined(self, 4, inputs[4], 'cannot diff w.r.t. index')
     #TODO
     DB = theano.gradient.grad_undefined(self, 1, inputs[1], 'cannot diff w.r.t. B yet')
-    Dy0 = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. y0 yet')
 
     return [DZ, DB, Dc, Dy0, Di, DW_re]
 

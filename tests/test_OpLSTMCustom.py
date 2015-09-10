@@ -106,6 +106,35 @@ def test_bwd_pass_compatible_with_OpLSTM():
   assert numpy.allclose(DW_re_val, DW_re2_val), (DW_re_val, DW_re2_val)
   print "success"
 
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
+def test_grads():
+  n_T = 5
+  n_batch = 4
+  n_inp_dim = 3
+  n_cells = 8
+  Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
+  B_val = numpy.random.ranf((n_T,n_batch,n_inp_dim)).astype('float32')
+  W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  i_val = numpy.ones((n_T, n_batch), dtype='int8')
+
+  print "verifying grads..."
+
+  #ignore B atm
+  def LSTMCustomOp_Z(Z, c, y0, W_re):
+    return LSTMCustomOpInstance(Z, B_val, c, y0, i_val, W_re)[0]
+
+  def LSTMCustomOp_d(Z, c, y0, W_re):
+    return LSTMCustomOpInstance(Z, B_val, c, y0, i_val, W_re)[2]
+
+  print "verifying grad of Z"
+  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z, [Z_val, c_val, y0_val, W_re_val])
+  print "verifying grad of d"
+  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val], eps=1e-3)
+
+  print "success"
+
 if __name__ == '__main__':
   print "calling test_does_not_crash()"
   test_does_not_crash()
@@ -113,3 +142,5 @@ if __name__ == '__main__':
   test_fwd_pass_compatible_with_OpLSTM()
   print "calling test_bwd_pass_compatible_with_OpLSTM()"
   test_bwd_pass_compatible_with_OpLSTM()
+  print "calling test_grads()"
+  test_grads()
