@@ -150,7 +150,8 @@ class LSTMC(Unit):
     #TODO: non_sequences
     B = numpy.zeros((1,1,1),dtype=theano.config.floatX)
     #TODO B also backwards?
-    result = LSTMCustomTestOpInstance(z[::-(2 * go_backwards - 1)], B, outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re)
+    #TODO: W_att_re..
+    result = LSTMCustomTestOpInstance(z[::-(2 * go_backwards - 1)], B, outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):

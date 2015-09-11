@@ -18,7 +18,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     self.fun_name = fun_name
 
   #TODO: later also accept B
-  def make_node(self, Y, H, B, c, y0, i, Dd, DY, W_re, W_att_in):
+  def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, B, W_att_in):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
@@ -43,7 +43,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert W_re.ndim == 2
     assert W_att_in.ndim == 2
 
-    return theano.Apply(self, [Y, H, B, c, y0, i, Dd, DY, W_re, W_att_in], [H.type(), c.type(), y0.type(), W_re.type()])
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re, B, W_att_in], [H.type(), c.type(), y0.type(), W_re.type()])
 
   def c_support_code(self):
     #do not remove this import as it is used in the c code
@@ -54,7 +54,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    Y, H, B, c, y0, i, Dd, DY, W_re, W_att_in = input_names
+    Y, H, c, y0, i, Dd, DY, W_re, B, W_att_in = input_names
     DZ, Dc, Dy0, DW_re = output_names
     bwd_fun = self.fun_name + "_bwd"
     fail = sub['fail']
@@ -181,7 +181,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 
   #TODO: make recurrent weights customizable, atm fixed to single matrix (W_re)
   #B is base
-  def make_node(self, Z, B, c, y0, i, W_re, W_att_in):
+  def make_node(self, Z, c, y0, i, W_re, B, W_att_in):
     from Device import have_gpu
     assert have_gpu()
 
@@ -208,7 +208,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     assert W_att_in.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [Z, B, c, y0, i, W_re, W_att_in], [Z.type(), Z.type(), c.type()])
+    return theano.Apply(self, [Z, c, y0, i, W_re, B, W_att_in], [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
     #do not remove this import as it is used in the c code
@@ -219,7 +219,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    Z, B, c, y0, i, W_re, W_att_in = input_names
+    Z, c, y0, i, W_re, B, W_att_in = input_names
     Y, H, d = output_names
     fwd_fun = self.fun_name + "_fwd"
     fail = sub['fail']
@@ -293,7 +293,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    Z, B, c, y0, i, W_re, W_att_in = inputs
+    Z, c, y0, i, W_re, B, W_att_in = inputs
     DY, DH, Dd = output_grads
 
     Z_raw = Z.owner.inputs[0].owner.inputs[0]
@@ -306,19 +306,19 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Y, H, d = self(Z_raw, B_raw, c_raw, y0_raw, i_raw, W_re_raw, W_att_in_raw)
+    Y, H, d = self(Z_raw, c_raw, y0_raw, i_raw, W_re_raw, B_raw, W_att_in_raw)
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
     #TODO: later also pass B
-    DZ, Dc, Dy0, DW_re = LSTMCustomOpGrad(fun_name=self.fun_name)(Y, H, B, c, y0, i, Dd, DY, W_re, W_att_in)
-    Di = theano.gradient.grad_undefined(self, 4, inputs[4], 'cannot diff w.r.t. index')
+    DZ, Dc, Dy0, DW_re = LSTMCustomOpGrad(fun_name=self.fun_name)(Y, H, c, y0, i, Dd, DY, W_re, B, W_att_in)
+    Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
     #TODO
-    DB = theano.gradient.grad_undefined(self, 1, inputs[1], 'cannot diff w.r.t. B yet')
+    DB = theano.gradient.grad_undefined(self, 5, inputs[5], 'cannot diff w.r.t. B yet')
     DW_att_in = theano.gradient.grad_undefined(self, 6, inputs[6], 'cannot diff w.r.t. W_att_in yet')
 
-    return [DZ, DB, Dc, Dy0, Di, DW_re, W_att_in]
+    return [DZ, Dc, Dy0, Di, DW_re, DB, DW_att_in]
 
 LSTMCustomTestOpInstance = LSTMCustomOp(fun_name="test_fun")
 LSTMCustomDotAttentionOpInstance = LSTMCustomOp(fun_name="attention_dot_fun")

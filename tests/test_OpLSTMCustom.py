@@ -15,7 +15,7 @@ def test_does_not_crash():
   c = T.fmatrix('c') #initial state
   y0 = T.fmatrix('y0') #initial activation
   i = T.matrix('i',dtype='int8')
-  Y, H, d = LSTMCustomTestOpInstance(Z, B, c, y0, i, W_re, W_att_in)
+  Y, H, d = LSTMCustomTestOpInstance(Z, c, y0, i, W_re, B, W_att_in)
 
   f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_in], outputs=Y)
 
@@ -46,7 +46,7 @@ def test_fwd_pass_compatible_with_OpLSTM():
   y0 = T.fmatrix('y0') #initial activation
   i = T.matrix('i',dtype='int8')
 
-  Y, H, d = LSTMCustomTestOpInstance(Z, B, c, y0, i, W_re, W_att_in)
+  Y, H, d = LSTMCustomTestOpInstance(Z, c, y0, i, W_re, B, W_att_in)
   W_re_modified = W_re + W_att_in
   Z_modified = T.inc_subtensor(Z[0], T.dot(y0,W_re_modified))
   Y2, H2, d2 = LSTMOpInstance(Z_modified, W_re_modified, c, i)
@@ -81,7 +81,7 @@ def test_bwd_pass_compatible_with_OpLSTM():
   c = T.fmatrix('c') #initial state
   y0 = T.fmatrix('y0') #initial activation
   i = T.matrix('i',dtype='int8')
-  Y, H, d = LSTMCustomTestOpInstance(Z, B, c, y0, i, W_re, W_att_in)
+  Y, H, d = LSTMCustomTestOpInstance(Z, c, y0, i, W_re, B, W_att_in)
   W_re_modified = W_re + W_att_in
   Z_modified = T.inc_subtensor(Z[0], T.dot(y0,W_re_modified))
   Y2, H2, d2 = LSTMOpInstance(Z_modified, W_re_modified, c, i)
@@ -143,13 +143,13 @@ def test_grads():
 
   #ignore B and W_att_in atm
   def LSTMCustomOp_Z_onlyZ(Z):
-      return LSTMCustomTestOpInstance(Z, B_val, c_val, y0_val, i_val, W_re_val, W_att_in_val)[0]
+      return LSTMCustomTestOpInstance(Z, c_val, y0_val, i_val, W_re_val, B_val, W_att_in_val)[0]
 
   def LSTMCustomOp_Z(Z, c, y0, W_re):
-    return LSTMCustomTestOpInstance(Z, B_val, c, y0, i_val, W_re, W_att_in_val)[0]
+    return LSTMCustomTestOpInstance(Z, c, y0, i_val, W_re, B_val, W_att_in_val)[0]
 
   def LSTMCustomOp_d(Z, c, y0, W_re):
-    return LSTMCustomTestOpInstance(Z, B_val, c, y0, i_val, W_re, W_att_in_val)[2]
+    return LSTMCustomTestOpInstance(Z, c, y0, i_val, W_re, B_val, W_att_in_val)[2]
 
   print "verifying grad of Z (only w.r.t. Z)"
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z_onlyZ, [Z_val])
@@ -171,7 +171,7 @@ def test_attention_dot_does_not_crash():
   c = T.fmatrix('c') #initial state
   y0 = T.fmatrix('y0') #initial activation
   i = T.matrix('i',dtype='int8')
-  Y, H, d = LSTMCustomDotAttentionOpInstance(Z, B, c, y0, i, W_re, W_att_in)
+  Y, H, d = LSTMCustomDotAttentionOpInstance(Z, c, y0, i, W_re, B, W_att_in)
 
   f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_in], outputs=Y)
 
