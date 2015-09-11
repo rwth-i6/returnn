@@ -60,7 +60,7 @@ struct FunLoader
 
   std::vector<PyObject*> call_helper(PyObject * args)
   {
-    std::cout << "calling custom function " << name << "..." << std::endl;
+    //std::cout << "calling custom function " << name << "..." << std::endl;
     PyObject_CallObject(fn, args);
     Py_DECREF(args);
     //this should be the C++ equivalent for the following python code
@@ -73,7 +73,7 @@ struct FunLoader
       assert(sub_res);
       res.push_back(sub_res);
     }
-    std::cout << "custom function finished" << std::endl;
+    //std::cout << "custom function finished" << std::endl;
     return res;
   }
 
@@ -92,6 +92,18 @@ struct FunLoader
   std::vector<PyObject*> operator()(CudaNdarray* x, CudaNdarray* y, CudaNdarray* z)
   {
     PyObject* args = PyTuple_Pack(3, x, y, z);
+    return call_helper(args);
+  }
+
+  std::vector<PyObject*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3)
+  {
+    PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
+    return call_helper(args);
+  }
+
+  std::vector<PyObject*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4)
+  {
+    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
     return call_helper(args);
   }
 
