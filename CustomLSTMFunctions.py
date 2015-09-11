@@ -12,7 +12,7 @@ def make_test_fun_fwd():
   z_re = T.dot(y_p, W_att_in) #TODO: use context here
   out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
   updates = [(out, z_re)]
-  return theano.function(inputs=[y_p, B, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out
+  return theano.function(inputs=[y_p, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out
 
 
 def make_test_fun_bwd():
@@ -27,7 +27,7 @@ def make_test_fun_bwd():
 
   out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
   updates = [(out_Dy_p,Dy_p)]
-  return theano.function(inputs=[y_p, B, W_att_in, Dz_re], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
+  return theano.function(inputs=[y_p, Dz_re, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
 
 test_fun_fwd, test_fun_fwd_res0 = make_test_fun_fwd()
 test_fun_bwd, test_fun_bwd_res0 = make_test_fun_bwd()
@@ -77,7 +77,7 @@ def make_attention_dot_fun_bwd():
 
   out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
   updates = [(out_Dy_p,Dy_p)]
-  return theano.function(inputs=[y_p, B, W_att_in, Dz_re], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
+  return theano.function(inputs=[y_p, Dz_re, B, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
 
 attention_dot_fun_fwd, attention_dot_fun_fwd_res0 = make_attention_dot_fun_fwd()
 attention_dot_fun_bwd, attention_dot_fun_bwd_res0 = make_attention_dot_fun_bwd()
