@@ -8,9 +8,12 @@ void printPyObj(PyObject * o)
   Py_DECREF(objectsRepresentation);
 }
 
+#include <sstream>
+
 struct FunLoader
 {
   PyObject * fn;
+  PyObject * res_shared;
 
   FunLoader(const char * fn_name)
   {
@@ -18,6 +21,9 @@ struct FunLoader
     PyObject *mod = PyImport_AddModule("CustomLSTMFunctions");
     assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
+    std::stringstream ss;
+    ss << fn_name << "_res";
+    res_shared = PyObject_GetAttrString(mod, ss.str().c_str());
     Py_DECREF(mod);
     std::cout << "loaded function" << std::endl;
   }
@@ -27,13 +33,20 @@ struct FunLoader
   ~FunLoader()
   {
     Py_XDECREF(fn);
+    Py_XDECREF(res_shared);
   }
 
   PyObject * operator()(CudaNdarray* x)
   {
     PyObject* args = PyTuple_Pack(1, x);
-    PyObject * res = PyObject_CallObject(fn, args);
+    PyObject_CallObject(fn, args);
     Py_DECREF(args);
+
+    //this should be the C++ equivalent for the following python code
+    //res = res_shared.get_value(borrow=True, return_internal_type=True)
+    //TODO
+    PyObject * res = PyObject_CallMethod(res_shared, "get_value", "(ii)", 1, 1);
+    assert(res);
     return res;
   }
 
@@ -61,7 +74,7 @@ struct FunLoader
 """
 
 def make_funloader_code(fn_name):
-  #return funloader_support_code + """
-  #FunLoader %(fn_name)s("%(fn_name)s");
-  #""" % locals()
-  return ""
+  return funloader_support_code + """
+  FunLoader %(fn_name)s("%(fn_name)s");
+  """ % locals()
+

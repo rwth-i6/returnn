@@ -21,7 +21,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   #TODO: later also accept X
   def make_node(self, Y, H, c, i, Dd, DY, W_re):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
-    i = gpu_contiguous(as_cuda_ndarray_variable(i))
+    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     Dd = gpu_contiguous(as_cuda_ndarray_variable(Dd))
     DY = gpu_contiguous(as_cuda_ndarray_variable(DY))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
@@ -122,12 +122,16 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     self.inplace = False
 
   #TODO: make recurrent weights customizable, atm fixed to single matrix (W_re)
+  #X is base
   def make_node(self, Z, X, c, i, W_re):
+    from Device import have_gpu
+    assert have_gpu()
+
     #X: context (on which attention is applied)
     Z = gpu_contiguous(as_cuda_ndarray_variable(Z))
     X = gpu_contiguous(as_cuda_ndarray_variable(X))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
-    i = gpu_contiguous(as_cuda_ndarray_variable(i))
+    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
     assert Z.dtype == "float32"
     assert X.dtype == "float32"
@@ -176,23 +180,36 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
     int y = 0;
-    CudaNdarray * idx_fun = (CudaNdarray*) CudaNdarray_NewDims(0, dims_Y); //just pass any dims, it won't be used anyway
-    //int * idx_fun_data = (int *) PyArray_DATA(idx_fun);
+    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_Y); //just pass any dims, it won't be used anyway
+    float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
     for(int x = 0; x < Z_dim[0]; ++x)
     {
       //TODO: later we also need to handle the first state, but atm we can let it be handled outside
       if(x > 0)
       {
         //affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
-        //TODO: call custom function here
-        //idx_fun_data[0] = x;
-        //CudaNdarray * res = (CudaNdarray*) fwd_fun(..., ..., idx_fun);
+
+        //call custom function here
+        float idx_array[] = {float(x)};
+        cudaMemcpy(idx_arr_data, idx_array, sizeof(float), cudaMemcpyHostToDevice);
+        PyObject * res_obj = fwd_fun(idx_arr);
+        CudaNdarray * res = (CudaNdarray*) res_obj;
+        //printPyObj(res_obj);
+
+        //get test value
+        /*float res2[] = {0.0f};
+        HANDLE_ERROR(cudaMemcpy(res2, CudaNdarray_DEV_DATA(res), sizeof(float), cudaMemcpyDeviceToHost));
+        std::cout << "test " << res2[0] << std::endl;*/
+
         //TODO copy to H
+
+
+        Py_XDECREF(res);
       }
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Y)s, %(c)s, d_ptr, y, x, %(i)s);
     }
-    Py_DECREF(idx_fun);
+    Py_DECREF(idx_arr);
     """ % locals()
 
   def grad(self, inputs, output_grads):

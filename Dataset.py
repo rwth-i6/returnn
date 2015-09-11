@@ -12,6 +12,7 @@ from threading import RLock
 from random import Random, random
 
 import sys
+import os
 import numpy
 import theano
 
@@ -56,7 +57,7 @@ class Dataset(object):
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.timestamps = []
-    self.labels = {}; """ :type: list[str] """
+    self.labels = {}; """ :type: dict[str,list[str]] """
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
     self._num_timesteps = 0
@@ -501,7 +502,7 @@ def get_dataset_class(name):
   from importlib import import_module
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
-  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset"]
+  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset"]
   for mod_name in mod_names:
     mod = import_module(mod_name)
     if name in vars(mod):
@@ -527,3 +528,36 @@ def init_dataset(kwargs):
     obj.add_file(f)
   obj.initialize()
   return obj
+
+
+def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
+  """
+  :param str config_str: hdf-files, or "LmDataset:..." or so
+  :param Config.Config|None config: optional, only for "sprint:..."
+  :param int|None cache_byte_size: optional, only for HDFDataset
+  :rtype: Dataset
+  """
+  from HDFDataset import HDFDataset
+  if config_str.startswith("sprint:"):
+    kwargs["sprintConfigStr"] = config_str[len("sprint:"):]
+    assert config, "need config for dataset in 'sprint:...' format. or use 'ExternSprintDataset:...' instead"
+    sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
+    assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
+    kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
+    from ExternSprintDataset import ExternSprintDataset
+    cls = ExternSprintDataset
+  elif ":" in config_str:
+    kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
+    class_name = config_str[:config_str.find(":")]
+    cls = get_dataset_class(class_name)
+  else:
+    if cache_byte_size is not None:
+      kwargs["cache_byte_size"] = cache_byte_size
+    cls = HDFDataset
+  data = cls.from_config(config, **kwargs)
+  if isinstance(data, HDFDataset):
+    for f in config_str.split(","):
+      assert os.path.exists(f)
+      data.add_file(f)
+  data.initialize()
+  return data
