@@ -102,16 +102,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       if(!rightBorder)
       {
         CudaNdarray * y_p = 0;
-        if(leftBorder)
-        {
-          y_p = %(y0)s;
-        }
-        else
-        {
-          PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
-          assert(y_p_obj);
-          y_p = (CudaNdarray*) y_p_obj;
-        }
+        //x-1?
+        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x);
+        assert(y_p_obj);
+        y_p = (CudaNdarray*) y_p_obj;
 
         PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", x+1);
         assert(delta_x_obj);
@@ -122,16 +116,12 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
 
-        //TODO check
         //copy to epsilon
         float * epsilon_x_data = data_ptr(epsilon, y, x);
         do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
         Py_XDECREF(Dy_p);
-        if(!leftBorder)
-        {
-          Py_XDECREF(y_p);
-        }
+        Py_XDECREF(y_p);
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
@@ -152,6 +142,22 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     %(Dy0)s = CudaNdarray_zeros_like(%(y0)s);
     //calculation like epsilon
     affine_y_x(0, 0, delta, 0, 0, %(W_re)s, 0, 0, %(Dy0)s, false, true);
+    //add custom function
+    //TODO: move to function
+    PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", 0);
+    assert(delta_x_obj);
+    CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
+
+    std::vector<PyObject*> res_vec = bwd_fun(%(y0)s, %(W_att_re)s, delta_x);
+    assert(res_vec.size() == 1);
+    Py_XDECREF(delta_x);
+    CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+
+    //copy to Dy0
+    do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
+
+    Py_XDECREF(Dy_p);
+
 
     if(!%(inplace)s)
     {

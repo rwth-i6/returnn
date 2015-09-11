@@ -87,14 +87,16 @@ def test_bwd_pass_compatible_with_OpLSTM():
   cost = Y.sum()
   DZ = T.grad(cost, Z)
   DW_re = T.grad(cost, W_re)
+  Dc = T.grad(cost, c)
   Dy0 = T.grad(cost, y0)
   cost2 = Y2.sum()
   DZ2 = T.grad(cost2, Z)
   DW_re2 = T.grad(cost2, W_re)
+  Dc2 = T.grad(cost2, c)
   Dy02 = T.grad(cost2, y0)
 
-  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_re], outputs=[DZ, DW_re, Dy0])
-  g = theano.function(inputs=[Z, W_re, c, y0, i, W_att_re], outputs=[DZ2, DW_re2, Dy02])
+  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_re], outputs=[DZ, DW_re, Dc, Dy0])
+  g = theano.function(inputs=[Z, W_re, c, y0, i, W_att_re], outputs=[DZ2, DW_re2, Dc2, Dy02])
 
   n_T = 5
   n_batch = 4
@@ -104,16 +106,18 @@ def test_bwd_pass_compatible_with_OpLSTM():
   B_val = numpy.random.ranf((n_T,n_batch,n_inp_dim)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  #W_att_re_val = numpy.zeros((n_cells, 4 * n_cells)).astype('float32')
   c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
   y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
   i_val = numpy.ones((n_T, n_batch), dtype='int8')
 
   vals = f(Z_val, B_val, c_val, y0_val, i_val, W_re_val, W_att_re_val)
-  DZ_val, DW_re_val, Dy0_val = (numpy.asarray(vals[0]), numpy.asarray(vals[1]), numpy.asarray(vals[2]))
+  DZ_val, DW_re_val, Dc_val, Dy0_val = [numpy.asarray(x) for x in vals]
   vals2 = g(Z_val, W_re_val, c_val, y0_val, i_val, W_att_re_val)
-  DZ2_val, DW_re2_val, Dy02_val = (numpy.asarray(vals2[0]), numpy.asarray(vals2[1]), numpy.asarray(vals2[2]))
+  DZ2_val, DW_re2_val, Dc2_val, Dy02_val = [numpy.asarray(x) for x in vals2]
   assert numpy.allclose(DZ_val, DZ2_val, atol=5e-7, rtol=1e-4), (DZ_val, DZ2_val)
   assert numpy.allclose(DW_re_val, DW_re2_val, atol=5e-7, rtol=1e-4), (DW_re_val, DW_re2_val)
+  assert numpy.allclose(Dc_val, Dc2_val), (Dc_val, Dc2_val)
   assert numpy.allclose(Dy0_val, Dy02_val), (Dy0_val, Dy02_val)
   print "success"
 
@@ -127,11 +131,8 @@ def test_grads():
   B_val = numpy.random.ranf((n_T,n_batch,n_inp_dim)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
-  #TODO: change this back when tests pass again
-  #c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
-  #y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
-  c_val = numpy.zeros((n_batch, n_cells)).astype('float32')
-  y0_val = numpy.zeros((n_batch, n_cells)).astype('float32')
+  c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
   i_val = numpy.ones((n_T, n_batch), dtype='int8')
 
   print "verifying grads..."
