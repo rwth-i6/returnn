@@ -8,8 +8,6 @@ import theano.gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
 
-#do not remove this import, it is used in the c code!
-import CustomLSTMFunctions
 
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ()
@@ -18,47 +16,56 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     super(LSTMCustomOpGrad, self).__init__(self)
     self.inplace = False
 
-  #TODO: later also accept X
-  def make_node(self, Y, H, c, i, Dd, DY, W_re):
+  #TODO: later also accept B
+  def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, W_att_re):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
+    y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     Dd = gpu_contiguous(as_cuda_ndarray_variable(Dd))
     DY = gpu_contiguous(as_cuda_ndarray_variable(DY))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
+    W_att_re = gpu_contiguous(as_cuda_ndarray_variable(W_att_re))
     assert DY.dtype == 'float32'
     assert Y.dtype == 'float32'
     assert H.dtype == 'float32'
     assert c.dtype == 'float32'
+    assert y0.dtype == "float32"
     assert W_re.dtype == "float32"
+    assert W_att_re.dtype == "float32"
     assert DY.ndim == 3
     assert Y.ndim == 3
     assert H.ndim == 3
     assert c.ndim == 2
+    assert y0.ndim == 2
     assert i.ndim == 2
     assert W_re.ndim == 2
+    assert W_att_re.ndim == 2
 
-    return theano.Apply(self, [Y, H, c, i, Dd, DY, W_re], [H.type(), c.type(), W_re.type()])
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re, W_att_re], [H.type(), c.type(), y0.type(), W_re.type()])
 
   def c_support_code(self):
+    #do not remove this import as it is used in the c code
+    import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
-    funloader = make_funloader_code("bwd_fun")
+    funloader = make_funloader_code("bwd_fun", 1)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    Y, H, c, i, Dd, DY, W_re = input_names
-    DZ, Dc, DW_re = output_names
+    Y, H, c, y0, i, Dd, DY, W_re, W_att_re = input_names
+    DZ, Dc, Dy0, DW_re = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
     std::cout << "LSTMCustomOpGrad called" << std::endl;
-    if(%(DZ)s || %(Dc)s || %(DW_re)s)
+    if(%(DZ)s || %(Dc)s || %(DW_re)s || %(Dy0)s)
     {
       printf("output storage already exists\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(DZ)s);
       Py_XDECREF(%(Dc)s);
       Py_XDECREF(%(DW_re)s);
+      Py_XDECREF(%(Dy0)s);
     }
 
     CudaNdarray * epsilon = 0;
@@ -76,32 +83,75 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     const int * H_dim = CudaNdarray_HOST_DIMS(%(H)s);
+    const int * Y_dim = CudaNdarray_HOST_DIMS(%(Y)s);
 
     int y = 0;
     for(int x = H_dim[0]-1; x >= 0; --x)
     {
       //add recurrent
       bool rightBorder = (x == H_dim[0]-1);
+      bool leftBorder = (x == 0);
+
+      //TODO: check if we need to handle boundary case specially
       if(!rightBorder)
       {
-        //affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
-        //TODO call function here
+        affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
+      }
+
+      //call custom function here
+      if(!rightBorder)
+      {
+        CudaNdarray * y_p = 0;
+        if(leftBorder)
+        {
+          y_p = %(y0)s;
+        }
+        else
+        {
+          PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+          assert(y_p_obj);
+          y_p = (CudaNdarray*) y_p_obj;
+        }
+
+        PyObject * delta_x_obj = PyObject_CallMethod((PyObject*) delta, "__getitem__", "(i)", x+1);
+        assert(delta_x_obj);
+        CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
+
+        std::vector<PyObject*> res_vec = bwd_fun(y_p, %(W_att_re)s, delta_x);
+        assert(res_vec.size() == 1);
+        Py_XDECREF(delta_x);
+        CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+
+        //TODO check
+        //copy to epsilon
+        float * epsilon_x_data = data_ptr(epsilon, y, x);
+        do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
+
+        Py_XDECREF(Dy_p);
+        if(!leftBorder)
+        {
+          Py_XDECREF(y_p);
+        }
       }
 
       do_lstm_bwd(delta, epsilon, %(Y)s, %(Dd)s, %(c)s, y, x, rightBorder, %(i)s);
-
     }
 
     %(DW_re)s = CudaNdarray_uninitialized_like(%(W_re)s);
     //DW_re = Y[0..end-1]^T * delta[1..end]
     affine_global(%(Y)s, delta, %(DW_re)s, true, false, 1, 0.0f);
+    //DW_re += y0^T * delta[0]
+    affine_y_x(0, 0, %(y0)s, 0, 0, delta, 0, 0, %(DW_re)s, true, false);
 
     %(DZ)s = delta;
 
     %(Dc)s = CudaNdarray_uninitialized_like(%(c)s);
-    const int * Y_dim = CudaNdarray_HOST_DIMS(%(Y)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
-      Y_dim[1]*Y_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(%(Dc)s), CudaNdarray_DEV_DATA(epsilon),
+      Y_dim[1]*Y_dim[2]*sizeof(float), cudaMemcpyDeviceToDevice));
+
+    %(Dy0)s = CudaNdarray_zeros_like(%(y0)s);
+    //calculation like epsilon
+    affine_y_x(0, 0, delta, 0, 0, %(W_re)s, 0, 0, %(Dy0)s, false, true);
 
     if(!%(inplace)s)
     {
@@ -122,38 +172,46 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     self.inplace = False
 
   #TODO: make recurrent weights customizable, atm fixed to single matrix (W_re)
-  #X is base
-  def make_node(self, Z, X, c, i, W_re):
+  #B is base
+  def make_node(self, Z, B, c, y0, i, W_re, W_att_re):
     from Device import have_gpu
     assert have_gpu()
 
-    #X: context (on which attention is applied)
+    #B: base/context (on which attention is applied)
     Z = gpu_contiguous(as_cuda_ndarray_variable(Z))
-    X = gpu_contiguous(as_cuda_ndarray_variable(X))
+    B = gpu_contiguous(as_cuda_ndarray_variable(B))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
+    y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
+    W_att_re = gpu_contiguous(as_cuda_ndarray_variable(W_att_re))
     assert Z.dtype == "float32"
-    assert X.dtype == "float32"
+    assert B.dtype == "float32"
     assert c.dtype == "float32"
+    assert y0.dtype == "float32"
     assert W_re.dtype == "float32"
+    assert W_att_re.dtype == "float32"
     assert Z.ndim == 3
-    assert X.ndim == 3
+    assert B.ndim == 3
     assert c.ndim == 2
+    assert y0.ndim == 2
     assert i.ndim == 2
     assert W_re.ndim == 2
+    assert W_att_re.ndim == 2
 
     #results: output Y, (gates and cell state) H
-    return theano.Apply(self, [Z, X, c, i, W_re], [Z.type(), Z.type(), c.type()])
+    return theano.Apply(self, [Z, B, c, y0, i, W_re, W_att_re], [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
-    funloader = make_funloader_code("fwd_fun")
+    #do not remove this import as it is used in the c code
+    import CustomLSTMFunctions
+    funloader = make_funloader_code("fwd_fun", 1)
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    Z, X, c, i, W_re = input_names
+    Z, B, c, y0, i, W_re, W_att_re = input_names
     Y, H, d = output_names
     fail = sub['fail']
     return """
@@ -180,61 +238,77 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
 
     int y = 0;
-    CudaNdarray * idx_arr = (CudaNdarray*) CudaNdarray_NewDims(0, dims_Y); //just pass any dims, it won't be used anyway
-    float * idx_arr_data = (float *) CudaNdarray_DEV_DATA(idx_arr);
     for(int x = 0; x < Z_dim[0]; ++x)
     {
-      //TODO: later we also need to handle the first state, but atm we can let it be handled outside
-      if(x > 0)
+      bool leftBorder = (x == 0);
+      if(leftBorder)
       {
-        //affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
-
-        //call custom function here
-        float idx_array[] = {float(x)};
-        cudaMemcpy(idx_arr_data, idx_array, sizeof(float), cudaMemcpyHostToDevice);
-        PyObject * res_obj = fwd_fun(idx_arr);
-        CudaNdarray * res = (CudaNdarray*) res_obj;
-        //printPyObj(res_obj);
-
-        //get test value
-        /*float res2[] = {0.0f};
-        HANDLE_ERROR(cudaMemcpy(res2, CudaNdarray_DEV_DATA(res), sizeof(float), cudaMemcpyDeviceToHost));
-        std::cout << "test " << res2[0] << std::endl;*/
-
-        //TODO copy to H
-
-
-        Py_XDECREF(res);
+        affine_y_x(y, x-1, %(y0)s, y, x, %(W_re)s, y, x, %(H)s);
       }
+      else
+      {
+        affine_y_x(y, x-1, %(Y)s, y, x, %(W_re)s, y, x, %(H)s);
+      }
+
+      //call custom function here
+      CudaNdarray * y_p = 0;
+      if(leftBorder)
+      {
+        y_p = %(y0)s;
+      }
+      else
+      {
+        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+        assert(y_p_obj);
+        y_p = (CudaNdarray*) y_p_obj;
+      }
+
+      std::vector<PyObject*> res_vec = fwd_fun(y_p, %(W_att_re)s);
+      assert(res_vec.size() == 1);
+      CudaNdarray * res = (CudaNdarray*) res_vec[0];
+
+      //add to H
+      float * H_y_x_data = data_ptr(%(H)s, y, x);
+      do_add(H_y_x_data, CudaNdarray_DEV_DATA(res), CudaNdarray_SIZE(res));
+
+      if(!leftBorder)
+      {
+        Py_XDECREF(y_p);
+      }
+      Py_XDECREF(res);
+
+
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d)s) : 0;
       do_lstm(%(H)s, %(Y)s, %(c)s, d_ptr, y, x, %(i)s);
     }
-    Py_DECREF(idx_arr);
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    Z, X, c, i, W_re = inputs
+    Z, B, c, y0, i, W_re, W_att_re = inputs
     DY, DH, Dd = output_grads
 
     Z_raw = Z.owner.inputs[0].owner.inputs[0]
-    X_raw = X.owner.inputs[0].owner.inputs[0]
+    B_raw = B.owner.inputs[0].owner.inputs[0]
     c_raw = c.owner.inputs[0].owner.inputs[0]
+    y0_raw = y0.owner.inputs[0].owner.inputs[0]
     i_raw = i.owner.inputs[0].owner.inputs[0]
     W_re_raw = W_re.owner.inputs[0]
+    W_att_re_raw = W_att_re.owner.inputs[0]
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Y, H, d = LSTMCustomOpInstance(Z_raw, X_raw, c_raw, i_raw, W_re_raw)
+    Y, H, d = LSTMCustomOpInstance(Z_raw, B_raw, c_raw, y0_raw, i_raw, W_re_raw, W_att_re_raw)
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    #TODO: later also pass X
-    DZ, Dc, DW_re = LSTMCustomOpGradInstance(Y, H, c, i, Dd, DY, W_re)
-    Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
+    #TODO: later also pass B
+    DZ, Dc, Dy0, DW_re = LSTMCustomOpGradInstance(Y, H, c, y0, i, Dd, DY, W_re, W_att_re)
+    Di = theano.gradient.grad_undefined(self, 4, inputs[4], 'cannot diff w.r.t. index')
     #TODO
-    DX = theano.gradient.grad_undefined(self, 2, inputs[2], 'cannot diff w.r.t. X yet')
+    DB = theano.gradient.grad_undefined(self, 1, inputs[1], 'cannot diff w.r.t. B yet')
+    DW_att_re = theano.gradient.grad_undefined(self, 6, inputs[6], 'cannot diff w.r.t. W_att_re yet')
 
-    return [DZ, DX, Dc, Di, DW_re]
+    return [DZ, DB, Dc, Dy0, Di, DW_re, W_att_re]
 
 LSTMCustomOpInstance = LSTMCustomOp()

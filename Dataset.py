@@ -494,6 +494,14 @@ class DatasetSeq:
     d.update({k: self.targets[k].shape[0] for k in self.targets.keys()})
     return NumbersDict(d)
 
+  def get_data(self, key):
+    if key == "data":
+      return self.features
+    return self.targets[key]
+
+  def get_data_keys(self):
+    return ["data"] + self.targets.keys()
+
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx
 

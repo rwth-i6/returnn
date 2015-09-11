@@ -2,39 +2,29 @@ import theano
 import theano.tensor as T
 import numpy
 
+#TODO: pass inputs as shared variables to avoid alot of copying
 def make_fwd_fun():
-  x = T.fscalar()
-  y = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
-  updates = [(y,x)]
-  return theano.function(inputs=[x], outputs=[], updates=updates), y
-
-#def make_fwd_fun():
-#  #s: state
-#  #later also use context as input
-#  s = T.ftensor3("s")
-#  W_re = T.fmatrix("W_re")
-#  #TODO check if we need to cast
-#  idx_f = T.fscalar("idx")
-#  idx = T.cast(idx_f, "int32")
-#  z_re = T.dot(s[idx - 1], W_re)
-#  out = theano.shared(value=numpy.zeros((),dtype="float32"), name="fwd_fun_output_shared")
-#  updates = [(out,z_re)]
-#  return theano.function(inputs=[s, W_re, idx], outputs=[], updates=updates), out
+  #TODO later also use context as input
+  y_p = T.fmatrix("y_p")
+  W_att_re = T.fmatrix("W_att_re")
+  z_re = T.dot(y_p, W_att_re) #TODO: use context here
+  out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
+  updates = [(out, z_re)]
+  return theano.function(inputs=[y_p, W_att_re], outputs=[], updates=updates, on_unused_input="warn"), out
 
 def make_bwd_fun():
-  s = T.ftensor3("s")
-  W_re = T.fmatrix("W_re")
-  idx_f = T.fscalar("idx")
-  idx = T.cast(idx_f, "int32")
+  y_p = T.fmatrix("y_p")
+  W_att_re = T.fmatrix("W_att_re")
+  z_re = T.dot(y_p, W_att_re)
   Dz_re = T.fmatrix("Dz_re")
-
-  z_re = T.dot(s[idx - 1], W_re)
   known_grads = {z_re: Dz_re}
-  Ds = T.grad(None, s, known_grads=known_grads)
-  DW_re = T.grad(None, W_re, known_grads=known_grads)
-  #TODO: shared return value
-  return theano.function(inputs=[s, W_re, idx, Dz_re], outputs=[Ds, DW_re])
+  Dy_p = T.grad(None, y_p, known_grads=known_grads)
 
-fwd_fun, fwd_fun_res = make_fwd_fun()
-#TODO
-bwd_fun = make_bwd_fun()
+  #TODO
+  out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
+  updates = [(out_Dy_p,Dy_p)]
+  return theano.function(inputs=[y_p, W_att_re, Dz_re], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
+
+fwd_fun, fwd_fun_res0 = make_fwd_fun()
+
+bwd_fun, bwd_fun_res0 = make_bwd_fun()

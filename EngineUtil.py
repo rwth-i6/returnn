@@ -29,13 +29,14 @@ def assign_dev_data(device, dataset, batches):
         l = seq.frame_length
         #assert o + l[0] <= shape[0]
         #assert q < shape[1]
-        device.input_index[o["data"]:o["data"] + l["data"], q] = numpy.ones((l["data"],), dtype='int8')
-        # input-data will also be set in this loop.
+        # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in device.used_data_keys:
           data = dataset.get_data(seq.seq_idx, k)
+          if l[k] > 0:
+            assert data is not None
+            device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
           if data is not None:
             #print k,o[k],l[k]
-            device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
             device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
             #if exclude:
             #  for i in xrange(l[1]):

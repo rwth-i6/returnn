@@ -147,10 +147,10 @@ class LSTMC(Unit):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     #TODO: non_sequences
-    X = numpy.zeros((1,1,1),dtype=theano.config.floatX)
-    result = LSTMCustomOpInstance(z[::-(2 * go_backwards - 1)], X, outputs_info[1], i[::-(2 * go_backwards - 1)], W_re)
+    B = numpy.zeros((1,1,1),dtype=theano.config.floatX)
+    #TODO B also backwards?
+    result = LSTMCustomOpInstance(z[::-(2 * go_backwards - 1)], B, outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):

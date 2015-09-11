@@ -137,6 +137,16 @@ __global__ void tanh_kernel(float * dst, int len)
 	}
 }
 
+__global__ void add_kernel(float * dst, const float * src, int len)
+{
+	int idx = threadIdx.x + blockDim.x * blockIdx.x;
+	while (idx < len)
+	{
+		dst[idx] += src[idx];
+		idx += gridDim.x * blockDim.x;
+	}
+}
+
 __global__ void lstm_kernel(float * data, const float * old_state, bool old_state_strided,
  float * output, float * state_out, int n_cells, int n_batch, const float * i)
 {
@@ -260,6 +270,11 @@ void do_tanh(CudaNdarray * a, int y, int x)
 	int size = lastTwoDimsStride(a);
 	//TODO tune launch configuration
 	tanh_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_a, size);
+}
+
+void do_add(float * dst, const float * src, int len)
+{
+  add_kernel<<<DIM_GRID, DIM_BLOCK>>>(dst, src, len);
 }
 
 void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x, const CudaNdarray * i)
