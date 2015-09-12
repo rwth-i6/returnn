@@ -309,7 +309,7 @@ class RecurrentUnitLayer(Layer):
       value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
       value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      value[unit.n_units:2*unit.n_units] = 5
+      value[unit.n_units:2*unit.n_units] = 0
     #self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     #self.params["b_%s"%self.name] = self.b
     self.b.set_value(value)

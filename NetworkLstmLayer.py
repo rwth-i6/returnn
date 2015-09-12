@@ -176,7 +176,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       value[:,2 * n_out:3 * n_out] = 1
     else:
       value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
-      value[2 * n_out:3 * n_out] = 1
+      value[2 * n_out:3 * n_out] = 0
     self.b.set_value(value)
     n_re = n_out
     if projection:
