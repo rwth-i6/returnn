@@ -7,7 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
-from OpLSTMCustom import LSTMCustomOpInstance
+from OpLSTMCustom import LSTMCustomTestOpInstance
 from OpLSTMCell import LSTMOpCellInstance
 from FastLSTM import LSTMOp2Instance
 
@@ -147,10 +147,11 @@ class LSTMC(Unit):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     #TODO: non_sequences
-    X = numpy.zeros((1,1,1),dtype=theano.config.floatX)
-    result = LSTMCustomOpInstance(z[::-(2 * go_backwards - 1)], X, outputs_info[1], i[::-(2 * go_backwards - 1)], W_re)
+    B = numpy.zeros((1,1,1),dtype=theano.config.floatX)
+    #TODO B also backwards?
+    #TODO: W_att_re..
+    result = LSTMCustomTestOpInstance(z[::-(2 * go_backwards - 1)], B, outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
@@ -453,7 +454,7 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      def stepr(x_t, z_t, i_t, *args):
+      def step(x_t, z_t, i_t, *args):
         mask,mass = 0,0
         if self.attrs['dropconnect'] > 0.0:
           mask = args[-2]
@@ -522,7 +523,7 @@ class RecurrentUnitLayer(Layer):
           act = unit.step(i_t, x_t, z_t, z_p, *args)
         return [ act[j] * i + args[j] * (1-i) for j in xrange(unit.n_act) ] + result
 
-      def step(x_t, z_t, i_t, *args):
+      def stepo(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)
         #i_x = i_t.dimshuffle(0,'x').repeat(z_p.shape[1],axis=1)
         act = unit.step(i_t, x_t, z_t, z_p, *args)

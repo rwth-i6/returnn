@@ -156,8 +156,8 @@ def test_multi_target_init():
   assert_in("t2", device.targets)
   assert_equal(device.targets["t1"].shape, (1, 1))
   assert_equal(device.targets["t2"].shape, (1, 1))
-  assert_equal(device.input_index.shape, (1, 1))
-  numpy.testing.assert_equal(device.input_index, numpy.array([[1]]))
+  assert_equal(device.output_index["data"].shape, (1, 1))
+  numpy.testing.assert_equal(device.output_index["data"], numpy.array([[1]]))
   assert_equal(device.output_index["t1"].shape, (1, 1))
   numpy.testing.assert_equal(device.output_index["t1"], numpy.array([[1]]))
 

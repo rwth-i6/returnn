@@ -97,9 +97,9 @@ class Updater:
                      for p in network.train_params_vars}
     if self.adagrad:
       self.accu = {}
-      for p in self.net_train_param_deltas[self.net_train_param_deltas.keys()[0]]:
+      for p in self.network.train_params_vars:
         shape = p.get_value(borrow=True, return_internal_type=True).shape
-        scale = numpy.sqrt(12. / numpy.sum(shape))
+        #scale = numpy.sqrt(12. / numpy.sum(shape))
         #values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
         #values = p.get_value()
         values = numpy.zeros(shape, dtype=theano.config.floatX)
