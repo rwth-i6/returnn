@@ -275,7 +275,10 @@ class Device(object):
         if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
           gparam = 0
         else:
-          gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+          try:
+            gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+          except theano.gradient.DisconnectedInputError:
+            gparam = 0
         if gparam == 0:
           exclude.append(param)
           print >> log.v4, "exclude:", self.name, param.name

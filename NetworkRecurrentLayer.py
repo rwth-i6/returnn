@@ -79,7 +79,7 @@ class Unit(Container):
     self.b = b
     self.go_backwards = go_backwards
     self.truncate_gradient = truncate_gradient
-    #z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
+    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[1],W_re))
     try:
       xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
@@ -330,6 +330,7 @@ class RecurrentUnitLayer(Layer):
         z += T.dot(x_t.output, W)
       else:
         z += self.dot(self.mass * m * x_t.output, W)
+    #z = z * T.cast(self.index.dimshuffle(0,1,'x').repeat(unit.n_in,axis=2),'float32')
     if self.depth > 1:
       assert False
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
@@ -521,7 +522,9 @@ class RecurrentUnitLayer(Layer):
             elif attention_step > 0:
               result = [focus+attention_step,beam] + result
           act = unit.step(i_t, x_t, z_t, z_p, *args)
-        return [ act[j] * i + args[j] * (1-i) for j in xrange(unit.n_act) ] + result
+          #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
+          #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result
+          return [ act[0] * i ] + [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(1,unit.n_act) ] + result
 
       def stepo(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)
