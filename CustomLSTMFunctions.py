@@ -1,39 +1,51 @@
 import theano
 import theano.tensor as T
 import numpy
+import theano.sandbox.cuda as cuda
+
+def make_fwd_fun(custom_fun_maker):
+  y_p, z_re, custom_vars = custom_fun_maker()
+
+  z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
+  updates = [(z_re_shared, z_re)]
+  return theano.function(inputs=[y_p] + custom_vars, outputs=[], updates=updates, on_unused_input="warn"), z_re_shared, []
 
 
-#TODO: pass inputs as shared variables to avoid alot of copying
-def make_test_fun_fwd():
-  #B is not used in this test
-  y_p = T.fmatrix("y_p")
-  B = T.ftensor3("B")
-  W_att_in = T.fmatrix("W_att_in")
-  z_re = T.dot(y_p, W_att_in) #TODO: use context here
-  out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
-  updates = [(out, z_re)]
-  return theano.function(inputs=[y_p, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out
+def make_bwd_fun(custom_fun_maker):
+  y_p, z_re, custom_vars = custom_fun_maker()
 
-
-def make_test_fun_bwd():
-  #B is not used in this test
-  y_p = T.fmatrix("y_p")
-  B = T.ftensor3("B")
-  W_att_in = T.fmatrix("W_att_in")
-  z_re = T.dot(y_p, W_att_in)
-  Dz_re = T.fmatrix("Dz_re")
+  Dz_re = cuda.fmatrix("Dz_re")
   known_grads = {z_re: Dz_re}
   Dy_p = T.grad(None, y_p, known_grads=known_grads)
 
   out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
-  updates = [(out_Dy_p,Dy_p)]
-  return theano.function(inputs=[y_p, Dz_re, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
 
-test_fun_fwd, test_fun_fwd_res0 = make_test_fun_fwd()
-test_fun_bwd, test_fun_bwd_res0 = make_test_fun_bwd()
+  custom_grads = [T.grad(None, var, known_grads=known_grads) for var in custom_vars]
+  custom_out = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name=var.name) for var in custom_vars]
+  #custom_updates = [(out, out + grad) for out, grad in zip(custom_out, custom_grads)]
+  #TODO: later add instead of set
+  custom_updates = [(out, grad) for out, grad in zip(custom_out, custom_grads)]
+  #custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(custom_out, custom_vars)]
+  #custom_reset_fn = theano.function(inputs=[], outputs=None, updates=custom_reset_updates)
+
+  updates = [(out_Dy_p, Dy_p)] + custom_updates
+  return theano.function(inputs=[y_p, Dz_re] + custom_vars, outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p, custom_out
 
 
-def attention_dot(y_p, B, W_att_in):
+def test_fun():
+  y_p = cuda.fmatrix("y_p")
+  W_att_in = cuda.fmatrix("W_att_in")
+  z_re = T.dot(y_p, W_att_in)
+  custom_vars = [W_att_in]
+  return y_p, z_re, custom_vars
+
+
+def attention_dot():
+  y_p = cuda.fmatrix("y_p")
+  B = cuda.ftensor3("B")
+  W_att_in = cuda.fmatrix("W_att_in")
+  custom_vars = [B,W_att_in]
+
   #TODO: atm we only use B[0]
   e = T.batched_dot(B[0],y_p)
   linear_combination = e.dimshuffle(0,'x') * B[0]
@@ -49,35 +61,10 @@ def attention_dot(y_p, B, W_att_in):
   #linear_combination = T.dot(B.T, alpha)
   #z_re = T.dot(linear_combination, W_att_in)
 
-  return z_re
+  return y_p, z_re, custom_vars
 
+test_fun_fwd, test_fun_fwd_res0, test_fun_fwd_res1 = make_fwd_fun(test_fun)
+test_fun_bwd, test_fun_bwd_res0, test_fun_bwd_res1 = make_bwd_fun(test_fun)
 
-def make_attention_dot_fun_fwd():
-  #here we assume, that y_p and B have the same last dimension (so we can do a dotproduct without a matrix)
-  y_p = T.fmatrix("y_p")
-  B = T.ftensor3("B")
-  W_att_in = T.fmatrix("W_att_in")
-  z_re = attention_dot(y_p, B, W_att_in)
-
-  out = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_output_shared")
-  updates = [(out, z_re)]
-  return theano.function(inputs=[y_p, B, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out
-
-
-def make_attention_dot_fun_bwd():
-  #here we assume, that y_p and B have the same last dimension (so we can do a dotproduct without a matrix)
-  y_p = T.fmatrix("y_p")
-  B = T.ftensor3("B")
-  W_att_in = T.fmatrix("W_att_in")
-  z_re = attention_dot(y_p, B, W_att_in)
-
-  Dz_re = T.fmatrix("Dz_re")
-  known_grads = {z_re: Dz_re}
-  Dy_p = T.grad(None, y_p, known_grads=known_grads)
-
-  out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
-  updates = [(out_Dy_p,Dy_p)]
-  return theano.function(inputs=[y_p, Dz_re, B, W_att_in], outputs=[], updates=updates, on_unused_input="warn"), out_Dy_p
-
-attention_dot_fun_fwd, attention_dot_fun_fwd_res0 = make_attention_dot_fun_fwd()
-attention_dot_fun_bwd, attention_dot_fun_bwd_res0 = make_attention_dot_fun_bwd()
+attention_dot_fun_fwd, attention_dot_fun_fwd_res0, attention_dot_fun_fwd_res1 = make_fwd_fun(attention_dot)
+attention_dot_fun_bwd, attention_dot_fun_bwd_res0, attention_dot_fun_bwd_res1 = make_bwd_fun(attention_dot)
