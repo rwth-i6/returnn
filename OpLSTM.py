@@ -13,7 +13,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __init__(self, inplace):
     self.inplace = inplace
     if inplace:
-      #all outputs operate inplace on inputs 4 and 6 (which are DZ and H)
+      #all outputs operate inplace on inputs 4 and 6 (which are DY and H)
       #but when the input is marked multiple times, we get an error
       #so we only mark that output 0 destroys inputs 4 and 6
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK

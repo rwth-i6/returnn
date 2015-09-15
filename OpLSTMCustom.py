@@ -5,6 +5,8 @@ import theano.gradient
 import theano.tensor as T
 import theano.printing
 import theano.gof
+from theano.gof.opt import OpSub
+from theano.compile import optdb
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
 
@@ -12,10 +14,16 @@ from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace", "fun_name")
 
-  def __init__(self, fun_name):
+  def __init__(self, fun_name, inplace):
     super(LSTMCustomOpGrad, self).__init__(self)
-    self.inplace = False
+    self.inplace = inplace
     self.fun_name = fun_name
+    if inplace:
+     #all outputs operate inplace on inputs 1 and 6 (which are H and DY)
+     #but when the input is marked multiple times, we get an error
+     #so we only mark that output 0 destroys inputs 1 and 6
+     #anyway theano knows that inputs 1 and 6 will be destroyed, so it should be OK
+     self.destroy_map = {0: [1], 1: [6]}
 
   def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, *custom_inputs):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
@@ -70,6 +78,11 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     inplace = "true" if self.inplace else "false"
     return """
     //std::cout << "LSTMCustomOpGrad called" << std::endl;
+    if(!%(inplace)s)
+    {
+      std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
+    }
+
     if(%(DZ)s || %(Dc)s || %(DW_re)s || %(Dy0)s)
     {
       printf("output storage already exists\\n");
@@ -201,13 +214,17 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace", "fun_name")
 
-  def __init__(self, fun_name):
+  def __init__(self, fun_name, inplace):
     super(LSTMCustomOp, self).__init__(self)
-    self.inplace = False
+    self.inplace = inplace
     self.fun_name = fun_name
+    if inplace:
+      #all outputs operate inplace on input 0 (which is Z)
+      #but when the input is marked multiple times, we get an error
+      #so we only mark that output 0 destroys input 0
+      #anyway theano knows that input 0 will be destroyed, so it should be OK
+      self.destroy_map = {0: [0]}
 
-  #TODO: make recurrent weights customizable, atm fixed to single matrix (W_re)
-  #B is base
   def make_node(self, Z, c, y0, i, W_re, *custom_inputs):
     from Device import have_gpu
     assert have_gpu()
@@ -247,6 +264,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
     Y, H, d = output_names
     fwd_fun = self.fun_name + "_fwd"
+    inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """
     //std::cout << "LSTMCustomOp called" << std::endl;
@@ -267,9 +285,17 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 
     %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Y);
     %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
-    %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H); //CudaNdarray_uninitialized_like(%(Z)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
+    if(%(inplace)s)
+    {
+      %(H)s = %(Z)s;
+      Py_INCREF(%(Z)s);
+    }
+    else
+    {
+      %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+      cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    }
 
     int y = 0;
     for(int x = 0; x < Z_dim[0]; ++x)
@@ -336,13 +362,49 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    #TODO: later also pass B
-    all_grads = LSTMCustomOpGrad(fun_name=self.fun_name)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    all_grads = LSTMCustomOpGrad(fun_name=self.fun_name, inplace=False)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
     DZ, Dc, Dy0, DW_re = all_grads[:4]
     custom_grads = all_grads[4:]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
     return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
-LSTMCustomTestOpInstance = LSTMCustomOp(fun_name="test_fun")
-LSTMCustomDotAttentionOpInstance = LSTMCustomOp(fun_name="attention_dot_fun")
+#register all the functions and optimizations
+LSTMCustomTestOpNoInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=False)
+LSTMCustomDotAttentionOpNoInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=False)
+
+LSTMCustomTestOpInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=True)
+LSTMCustomDotAttentionOpInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=True)
+
+no_inplace_instances = [LSTMCustomTestOpNoInplaceInstance, LSTMCustomDotAttentionOpNoInplaceInstance]
+inplace_instances    = [LSTMCustomTestOpInplaceInstance, LSTMCustomDotAttentionOpInplaceInstance]
+
+opts = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances, inplace_instances)]
+
+#hack to avoid being called twice
+for idx, opt in enumerate(opts):
+  attr = 'LSTMCustomMOpInplaceOpt' + str(idx)
+  if not hasattr(optdb, attr):
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)
+
+#the same for grad
+LSTMCustomTestOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=False)
+LSTMCustomDotAttentionOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=False)
+
+LSTMCustomTestOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=True)
+LSTMCustomDotAttentionOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=True)
+
+no_inplace_instances_grad = [LSTMCustomTestOpGradNoInplaceInstance, LSTMCustomDotAttentionOpGradNoInplaceInstance]
+inplace_instances_grad    = [LSTMCustomTestOpGradInplaceInstance, LSTMCustomDotAttentionOpGradInplaceInstance]
+
+opts_grad = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances_grad, inplace_instances_grad)]
+
+#hack to avoid being called twice
+for idx, opt in enumerate(opts_grad):
+  attr = 'LSTMCustomMOpGradInplaceOpt' + str(idx)
+  if not hasattr(optdb, attr):
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)

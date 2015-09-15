@@ -7,8 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
-from OpLSTMCustom import LSTMCustomTestOpInstance
-from OpLSTMCell import LSTMOpCellInstance
+from OpLSTMCustom import LSTMCustomDotAttentionOpNoInplaceInstance
 from FastLSTM import LSTMOp2Instance
 
 class RecurrentLayer(HiddenLayer):
@@ -147,12 +146,13 @@ class LSTMC(Unit):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    #TODO
+    #TODO: where do we get these values?
     B = numpy.zeros((1,1,1),dtype=theano.config.floatX)
     W_att_in = numpy.zeros((1,1),dtype=theano.config.floatX)
 
     #TODO: also reverse B?
-    result = LSTMCustomTestOpInstance(z[::-(2 * go_backwards - 1)], outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B, W_att_in)
+    result = LSTMCustomDotAttentionOpNoInplaceInstance(z[::-(2 * go_backwards - 1)],
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B, W_att_in)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
