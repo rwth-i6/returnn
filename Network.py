@@ -61,6 +61,15 @@ class LayerNetwork(object):
       assert isinstance(json_content, dict)
       assert json_content
     elif config.network_topology_json:
+      start_var = config.network_topology_json.find('(config:', 0) # e.g. ..., "n_out" : (config:var), ...
+      while start_var > 0:
+        end_var = config.network_topology_json.find(')', start_var)
+        assert end_var > 0, "invalid variable syntax at " + str(start_var)
+        var = config.network_topology_json[start_var+8:end_var]
+        assert config.has(var), "could not find variable " + var
+        config.network_topology_json = config.network_topology_json[:start_var] + config.value(var,"") + config.network_topology_json[end_var+1:]
+        print >> log.v3, "substituting variable %s with %s" % (var,config.value(var,""))
+        start_var = config.network_topology_json.find('(config:', end_var)
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
@@ -178,6 +187,8 @@ class LayerNetwork(object):
         obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
       if 'encoder' in obj:
         index = output_index
+      if 'target' in obj:
+        index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
                  'dropout' : 0.0,
@@ -280,6 +291,8 @@ class LayerNetwork(object):
         centroids = network.hidden[model[layer_name].attrs['centroids']]
       if 'encoder' in model[layer_name].attrs:
         index = output_index
+      if 'target' in model[layer_name].attrs:
+        index = network.j[model[layer_name].attrs['target']]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
