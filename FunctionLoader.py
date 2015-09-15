@@ -14,10 +14,11 @@ void printPyObj(PyObject * o)
 struct FunLoader
 {
   PyObject * fn;
+  PyObject * reset_fn;
   std::vector<PyObject*> res_shared;
   std::string name;
 
-  FunLoader(const char * fn_name)
+  FunLoader(const char * fn_name, const char * reset_fn_name = 0)
   {
     std::cout << "Loading function " << fn_name << "..." << std::endl;
     name = fn_name;
@@ -29,6 +30,14 @@ struct FunLoader
     }
     assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
+    if(reset_fn_name)
+    {
+      reset_fn = PyObject_GetAttrString(mod, reset_fn_name);
+    }
+    else
+    {
+      reset_fn = 0;
+    }
     std::stringstream ss0;
     ss0 << fn_name << "_res0";
     std::stringstream ss1;
@@ -60,6 +69,52 @@ struct FunLoader
       Py_DECREF(mod);
       mod = 0;
     }*/
+  }
+
+  void reset_shared()
+  {
+    assert(reset_fn);
+    PyObject_CallObject(reset_fn, 0);
+  }
+
+  void reset_shared(CudaNdarray * x0)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(1, x0);
+    PyObject_CallObject(reset_fn, args);
+    Py_DECREF(args);
+  }
+
+  void reset_shared(CudaNdarray * x0, CudaNdarray * x1)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(2, x0, x1);
+    PyObject_CallObject(reset_fn, args);
+    Py_DECREF(args);
+  }
+
+  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(3, x0, x1, x2);
+    PyObject_CallObject(reset_fn, args);
+    Py_DECREF(args);
+  }
+
+  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
+    PyObject_CallObject(reset_fn, args);
+    Py_DECREF(args);
+  }
+
+  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3, CudaNdarray * x4)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
+    PyObject_CallObject(reset_fn, args);
+    Py_DECREF(args);
   }
 
   std::vector<CudaNdarray*> call_helper(PyObject * args)
@@ -117,7 +172,12 @@ struct FunLoader
 
 """
 
-def make_funloader_code(fn_name):
-  return funloader_support_code + """
-  FunLoader %(fn_name)s("%(fn_name)s");
-  """ % locals()
+def make_funloader_code(fn_name, reset_fn_name=None):
+  if reset_fn_name is not None:
+    return funloader_support_code + """
+    FunLoader %(fn_name)s("%(fn_name)s", "%(reset_fn_name)s");
+    """ % locals()
+  else:
+    return funloader_support_code + """
+    FunLoader %(fn_name)s("%(fn_name)s", 0);
+    """ % locals()
