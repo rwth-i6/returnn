@@ -570,12 +570,13 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          num_updates = { dev.name : dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.000001 }
+          tot_updates = sum(num_updates.values())
           #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])
           #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          if num_updates:
-            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_updates) / num_updates) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          if tot_updates:
+            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(num_updates[dev.name]) / tot_updates) for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
           else:
             print >> log.v4, "warning: no update available for parameter", basenet[i]
             consnet[i] = basenet[i].get_value()

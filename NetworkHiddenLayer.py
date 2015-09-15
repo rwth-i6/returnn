@@ -156,25 +156,16 @@ class StateToAct(ForwardLayer):
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+
     if dual and len(self.act) > 1:
       self.make_output(self.act[1])
       self.act[0] = T.tanh(self.act[1])
     else:
       self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
-
-
-class StateLayer(DualStateLayer):
-  layer_class = "state"
-
-  def __init__(self, acts = "relu", **kwargs):
-    kwargs['acth'] = 'identity'
-    super(StateToAct, self).__init__(acts, **kwargs)  # TODO wrong super __init__, wrong base class?
-    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
-    self.act[0] = T.tanh(self.act[1])
-    self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
-    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    if 'target' in self.attrs:
+      self.output = self.output.repeat(self.index.shape[0],axis=0)
+    else:
+      self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
 class HDF5DataLayer(Layer):

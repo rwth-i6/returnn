@@ -114,7 +114,7 @@ class Updater:
       #                                 dtype=theano.config.floatX), borrow=True,
       #               name="sqrsum_%s " % p)
       #               for p in self.network.train_params_vars}
-    if self.adadelta or self.varreg:
+    if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                                      dtype=theano.config.floatX))
