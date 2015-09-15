@@ -17,7 +17,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     self.inplace = False
     self.fun_name = fun_name
 
-  #TODO: later also accept B
   def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, *custom_inputs):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
@@ -42,7 +41,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs, [H.type(), c.type(), y0.type(), W_re.type()])
+    custom_grads = [var.type() for var in custom_inputs]
+
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs,
+                        [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
 
   def c_support_code(self):
     #do not remove this import as it is used in the c code
@@ -57,7 +59,12 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     custom_inputs=input_names[8:]
     custom_inputs_str = ",".join(custom_inputs)
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + custom_inputs_str
-    DZ, Dc, Dy0, DW_re = output_names
+    DZ, Dc, Dy0, DW_re = output_names[:4]
+    custom_output_names = output_names[4:]
+    if len(custom_output_names) == 0:
+      custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
+    else:
+      custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
     bwd_fun = self.fun_name + "_bwd"
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -74,6 +81,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     %(bwd_fun)s.reset_shared(%(custom_inputs_str)s);
+    %(custom_outputs_str)s;
 
     CudaNdarray * epsilon = 0;
     CudaNdarray * delta = 0;
@@ -99,7 +107,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       bool rightBorder = (x == H_dim[0]-1);
       bool leftBorder = (x == 0);
 
-      //TODO: check if we need to handle boundary case specially
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
@@ -123,12 +130,12 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         assert(res_vec.size() > 0);
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
-        //TODO: use custom grads
 
         //copy to epsilon
         float * epsilon_x_data = data_ptr(epsilon, y, x);
         do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
+        //TODO check
         for(int i = 0; i < res_vec.size(); ++i)
         {
           Py_XDECREF(res_vec[i]);
@@ -165,11 +172,18 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert(res_vec.size() > 0);
     Py_XDECREF(delta_x);
     CudaNdarray * Dy_p = res_vec[0];
-    //TODO: use custom grads
+
+    //custom grads
+    for(int i = 1; i < res_vec.size(); ++i)
+    {
+      *custom_grads[i-1] = (CudaNdarray*) CudaNdarray_Copy(res_vec[i]);
+      assert(*custom_grads[i-1]);
+    }
 
     //copy to Dy0
     do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
+    //TODO: check
     for(int i = 0; i < res_vec.size(); ++i)
     {
       Py_XDECREF(res_vec[i]);
@@ -323,13 +337,12 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
     #TODO: later also pass B
-    DZ, Dc, Dy0, DW_re = LSTMCustomOpGrad(fun_name=self.fun_name)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    all_grads = LSTMCustomOpGrad(fun_name=self.fun_name)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    DZ, Dc, Dy0, DW_re = all_grads[:4]
+    custom_grads = all_grads[4:]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
-    #TODO
-    Dcustom = [theano.gradient.grad_undefined(self, 5 + idx, inputs[5+idx], 'cannot diff w.r.t. custom yet')
-               for idx in xrange(len(custom_inputs))]
 
-    return [DZ, Dc, Dy0, Di, DW_re] + Dcustom
+    return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
 LSTMCustomTestOpInstance = LSTMCustomOp(fun_name="test_fun")
 LSTMCustomDotAttentionOpInstance = LSTMCustomOp(fun_name="attention_dot_fun")
