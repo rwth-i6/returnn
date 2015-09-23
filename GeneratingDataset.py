@@ -16,6 +16,8 @@ class GeneratingDataset(Dataset):
       output_dim = {"classes": output_dim}
     for v in output_dim.values():
       assert isinstance(v, int)
+    if "data" not in output_dim:
+      output_dim["data"] = output_dim["classes"]
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
