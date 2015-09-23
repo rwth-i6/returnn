@@ -69,6 +69,7 @@ class HDFDataset(CachedDataset):
     if not self.num_outputs:
       if 'targets/size' in  fin:
         self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
+        self.num_outputs["data"] = [self.num_inputs, len(fin['inputs'].shape)]
       else:
         self.num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
         assert self.num_outputs['classes'] == fin.attrs[attr_numLabels], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs['classes']) + " got " + str(fin.attrs[attr_numLabels]) + ")"
