@@ -13,21 +13,20 @@ import time
 class LmDataset(StaticDataset):
 
   def __init__(self, corpus_file, orth_symbols_file, replace_map_file=None, **kwargs):
-    self.orth_symbols = open(orth_symbols_file).read().splitlines()
-    self.labels = {"data": self.orth_symbols}
+    orth_symbols = open(orth_symbols_file).read().splitlines()
     if replace_map_file:
-      self.replace_map = load_json(filename=replace_map_file)
-      assert isinstance(self.replace_map, dict)
-      self.replace_map = {key: parse_orthography_into_symbols(v)
-                          for (key, v) in self.replace_map.items()}
+      replace_map = load_json(filename=replace_map_file)
+      assert isinstance(replace_map, dict)
+      replace_map = {key: parse_orthography_into_symbols(v)
+                     for (key, v) in replace_map.items()}
     else:
-      self.replace_map = {}
-    orth_symbols_map = {sym: i for (i, sym) in enumerate(self.orth_symbols)}
+      replace_map = {}
+    orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
 
-    if len(self.orth_symbols) <= 256:
-      self.dtype = "int8"
+    if len(orth_symbols) <= 256:
+      dtype = "int8"
     else:
-      self.dtype = "int32"
+      dtype = "int32"
 
     if _is_bliss(corpus_file):
       iter_f = _iter_bliss
@@ -36,27 +35,32 @@ class LmDataset(StaticDataset):
     orths = []
     iter_f(corpus_file, orths.append)
 
-    self.total_len = 0
+    total_len = 0
     data = []
     last_log_time = time.time()
     for i, orth in enumerate(orths):
       orth_syms = parse_orthography(orth)
-      orth_syms = sum([self.replace_map.get(s, [s]) for s in orth_syms], [])
+      orth_syms = sum([replace_map.get(s, [s]) for s in orth_syms], [])
       i = 0
       while i < len(orth_syms) - 1:
         if orth_syms[i:i+2] == [" ", " "]:
           orth_syms[i:i+2] = [" "]  # collapse two spaces
         else:
           i += 1
-      targets = numpy.array(map(orth_symbols_map.__getitem__, orth_syms), dtype=self.dtype)
-      self.total_len += len(targets)
+      targets = numpy.array(map(orth_symbols_map.__getitem__, orth_syms), dtype=dtype)
+      total_len += len(targets)
       data.append({"data": targets})
       if time.time() - last_log_time > 2.0:
         last_log_time = time.time()
         print >> log.v5, "Loading %s progress, %i/%i (%.0f%%) seqs loaded, total syms %i ..." % (
-                         self.__class__.__name__, len(data), len(orths), 100.0 * len(data) / len(orths), self.total_len)
+                         self.__class__.__name__, len(data), len(orths), 100.0 * len(data) / len(orths), total_len)
 
-    super(LmDataset, self).__init__(data=data, output_dim={"data": len(self.orth_symbols)}, **kwargs)
+    super(LmDataset, self).__init__(data=data, output_dim={"data": len(orth_symbols)}, **kwargs)
+    self.dtype = dtype
+    self.total_len = total_len
+    self.replace_map = replace_map
+    self.orth_symbols = orth_symbols
+    self.labels["data"] = orth_symbols
 
   def get_data_dtype(self, key):
     return self.dtype
