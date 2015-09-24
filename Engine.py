@@ -283,8 +283,8 @@ class Engine:
     print >> log.v4, "pretrain:", self.pretrain
     if self.network.loss == 'priori':
       prior = self.train_data.calculate_priori()
-      self.network.output.priori.set_value(prior)
-      self.network.output.initialize()
+      self.network.output["output"].priori.set_value(prior)
+      self.network.output["output"].initialize()
 
     if self.network.recurrent:
       assert not self.train_data.shuffle_frames_of_nseqs, "Frames must not be shuffled in recurrent net."
@@ -484,7 +484,7 @@ class Engine:
                                     max_seqs=1)
     merge = {}
     if combine_labels != '':
-      for index, label in enumerate(data.labels):
+      for index, label in enumerate(data.labels["classes"]):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
         if merged == '': merged = label
         if not merged in merge.keys():
@@ -510,7 +510,7 @@ class Engine:
                                     batch_size=data.get_num_timesteps(), max_seqs=1)
     merge = {}
     if combine_labels != '':
-      for index, label in enumerate(data.labels):
+      for index, label in enumerate(data.labels["classes"]):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
         if merged == '': merged = label
         if not merged in merge.keys():
