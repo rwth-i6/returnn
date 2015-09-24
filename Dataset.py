@@ -53,7 +53,7 @@ class Dataset(object):
   def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0):
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
-    self.num_outputs = None; " :type: dict[str,int] "
+    self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.timestamps = []
@@ -312,14 +312,31 @@ class Dataset(object):
     :type key: str
     :return: 1 for hard labels, num_outputs[target] for soft labels
     """
+    if self.is_data_sparse(key):
+      return 1
+    if key in self.num_outputs:
+      return self.num_outputs[key][0]
     if key == "data":
       return self.num_inputs * self.window
     return 1
 
   def get_data_dtype(self, key):
+    if self.is_data_sparse(key):
+      return "int32"
+    return "float32"
+
+  def is_data_sparse(self, key):
     if key == "data":
-      return "float32"
-    return 'int32'
+      return False
+    return True
+
+  def get_data_shape(self, key):
+    """
+    :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+    """
+    if self.is_data_sparse(key):
+      return []
+    return [self.get_data_dim(key)]
 
   def have_seqs(self):
     return self.num_seqs > 0
@@ -346,7 +363,7 @@ class Dataset(object):
     return n < self.num_seqs
 
   def calculate_priori(self, target="classes"):
-    priori = numpy.zeros((self.num_outputs,), dtype=theano.config.floatX)
+    priori = numpy.zeros((self.num_outputs[target][0],), dtype=theano.config.floatX)
     i = 0
     while self.is_less_than_num_seqs(i):
       self.load_seqs(i, i + 1)
@@ -456,8 +473,7 @@ class Dataset(object):
 
     d = {k: [shape[0][k], shape[1]] for k in (set(data_keys) | {"data"})}
     for k in d:
-      if self.get_data_dtype(k) != 'int32':
-        d[k] += [self.get_data_dim(k)]
+      d[k] += self.get_data_shape(k)
     return d
 
 

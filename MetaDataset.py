@@ -18,7 +18,7 @@ class MetaDataset(CachedDataset2):
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-    :param dict[str,int] data_dims: self-data-key -> data-dimension.
+    :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
     :param dict[str,bool] data_1_of_k: self-data-key -> whether it is 1-of-k or not. automatic if not specified
     :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
     """
@@ -36,12 +36,18 @@ class MetaDataset(CachedDataset2):
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - ["data"])
 
+    for k, v in list(data_dims.items()):
+      if isinstance(v, int):
+        v = [v, 1 if k == "classes" else 2]
+        data_dims[k] = v
+      assert isinstance(v, (tuple, list))
+      assert len(v) == 2
+      assert isinstance(v[0], int)
+      assert isinstance(v[1], int)
     self.data_dims = data_dims
-    for v in data_dims.values():
-      assert isinstance(v, int), "all values must be int in %r" % data_dims
     assert "data" in data_dims
-    self.num_inputs = data_dims["data"]
-    self.num_outputs = {data_key: data_dims[data_key] for data_key in self.target_list}
+    self.num_inputs = data_dims["data"][0]
+    self.num_outputs = data_dims
 
     self.data_1_of_k = {data_key: _select_1_of_k(data_key, data_1_of_k, data_dtypes) for data_key in self.data_keys}
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_1_of_k, data_dtypes) for data_key in self.data_keys}

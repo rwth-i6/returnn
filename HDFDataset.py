@@ -21,7 +21,8 @@ class HDFDataset(CachedDataset):
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
-    self.target_type = {}
+    self.data_dtype = {}; ":type: dict[str,str]"
+    self.data_sparse = {}; ":type: dict[str,bool]"
 
   def add_file(self, filename):
     """
@@ -63,16 +64,23 @@ class HDFDataset(CachedDataset):
     self._num_codesteps = sum([s[1] for s in self._seq_lengths])
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
+    if len(fin['inputs'].shape) == 1:  # sparse
+      num_inputs = [fin.attrs[attr_inputPattSize], 1]
+    else:
+      num_inputs = [fin['inputs'].shape[1], len(fin['inputs'].shape)] #fin.attrs[attr_inputPattSize]
     if self.num_inputs == 0:
-      self.num_inputs = fin['inputs'][0].shape[0] #fin.attrs[attr_inputPattSize]
-    assert self.num_inputs == fin['inputs'][0].shape[0], "wrong input dimension in file " + filename + " (expected " + str(self.num_inputs) + " got " + str(fin.attrs[attr_inputPattSize]) + ")"
+      self.num_inputs = num_inputs[0]
+    assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
+                                             filename, self.num_inputs, num_inputs[0])
+    if 'targets/size' in fin:
+      num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
+    else:
+      num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
+    num_outputs["data"] = num_inputs
     if not self.num_outputs:
-      if 'targets/size' in  fin:
-        self.num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
-        self.num_outputs["data"] = [self.num_inputs, len(fin['inputs'].shape)]
-      else:
-        self.num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
-        assert self.num_outputs['classes'] == fin.attrs[attr_numLabels], "wrong number of labels in file " + filename + " (expected " + str(self.num_outputs['classes']) + " got " + str(fin.attrs[attr_numLabels]) + ")"
+      self.num_outputs = num_outputs
+    assert self.num_outputs == num_outputs, "wrong dimensions in file %s (expected %s got %s)" % (
+                                            filename, self.num_outputs, num_outputs)
     if 'ctcIndexTranscription' in fin:
       if self.ctc_targets is None:
         self.ctc_targets = fin['ctcIndexTranscription'][...]
@@ -87,14 +95,15 @@ class HDFDataset(CachedDataset):
     if 'targets' in fin:
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
-        self.target_type[name] = fin['targets/data'][name].dtype
-        if self.target_type[name] == 'int32':
+        self.data_dtype[name] = fin['targets/data'][name].dtype
+        if self.data_dtype[name] == 'int32':
           self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
         else:
           self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
     else:
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
-      self.target_type['classes'] = 'int32'
+      self.data_dtype['classes'] = 'int32'
+    self.data_dtype["data"] = fin['inputs'].dtype
     fin.close()
 
   def _load_seqs(self, start, end):
@@ -138,10 +147,13 @@ class HDFDataset(CachedDataset):
     ids = self._seq_index[sorted_seq_idx]
     return self.tags[ids]
 
+  def is_data_sparse(self, key):
+    if self.get_data_dtype(key).startswith("int"):
+      return True
+    return False
+
   def get_data_dtype(self, key):
-    if key == "data":
-      return "float32"
-    return self.target_type[key]
+    return self.data_dtype[key]
 
   def len_info(self):
     return ", ".join(["HDF dataset",

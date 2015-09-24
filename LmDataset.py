@@ -55,7 +55,7 @@ class LmDataset(StaticDataset):
         print >> log.v5, "Loading %s progress, %i/%i (%.0f%%) seqs loaded, total syms %i ..." % (
                          self.__class__.__name__, len(data), len(orths), 100.0 * len(data) / len(orths), total_len)
 
-    super(LmDataset, self).__init__(data=data, output_dim={"data": len(orth_symbols)}, **kwargs)
+    super(LmDataset, self).__init__(data=data, output_dim={"data": [len(orth_symbols), 1]}, **kwargs)
     self.dtype = dtype
     self.total_len = total_len
     self.replace_map = replace_map

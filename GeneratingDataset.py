@@ -14,10 +14,16 @@ class GeneratingDataset(Dataset):
     self.num_inputs = input_dim
     if isinstance(output_dim, int):
       output_dim = {"classes": output_dim}
-    for v in output_dim.values():
-      assert isinstance(v, int)
+    for k, v in list(output_dim.items()):
+      if isinstance(v, int):
+        v = [v, 1 if k == "classes" else 2]
+        output_dim[k] = v
+      assert isinstance(v, (tuple, list))
+      assert len(v) == 2
+      assert isinstance(v[0], int)
+      assert isinstance(v[1], int)
     if "data" not in output_dim:
-      output_dim["data"] = output_dim["classes"]
+      output_dim["data"] = [input_dim, 2]
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
@@ -217,7 +223,7 @@ class DummyDataset(GeneratingDataset):
     features = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
                             for i in range(i1, i2)]).reshape((seq_len, self.num_inputs))
     i1, i2 = i2, i2 + seq_len
-    targets = numpy.array([i % self.num_outputs["classes"]
+    targets = numpy.array([i % self.num_outputs["classes"][0]
                            for i in range(i1, i2)])
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
