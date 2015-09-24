@@ -33,7 +33,7 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       if tid in global_exclude_thread_ids:
         print "(Auto-ignored traceback.)"
       else:
-        better_exchook.print_traceback(stack)
+        better_exchook.print_tb(stack)
       print ""
   else:
     print "Does not have sys._current_frames, cannot get thread tracebacks."
@@ -61,7 +61,6 @@ def initBetterExchook():
     print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
     if exc_type is KeyboardInterrupt:
       return
-    better_exchook.better_exchook(exc_type, exc_obj, exc_tb, debugshell=False)
 
     if isinstance(threading.currentThread(), threading._MainThread):
       main_thread_id = thread.get_ident()
@@ -71,8 +70,7 @@ def initBetterExchook():
         # Print the stack of all other threads.
         dumpAllThreadTracebacks({main_thread_id})
 
-    if os.environ.get("DEBUG", "") == "1":
-      pdb.post_mortem(exc_tb)
+    better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
 
   sys.excepthook = excepthook
 
