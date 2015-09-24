@@ -199,7 +199,11 @@ class ConcatDataset(CachedDataset2):
         # We are still inside this dataset and have loaded everything.
         # Thus we can stop now.
         break
-      # We have reached the end of the dataset. Continue with the next one.
+      # We have reached the end of the dataset.
+      if dataset_idx + 1 == len(self.datasets):
+        # We are at the last dataset.
+        break
+      # Continue with the next one.
       self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
         self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
       sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
