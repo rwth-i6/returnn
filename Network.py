@@ -327,13 +327,11 @@ class LayerNetwork(object):
                    'name': layer_name,
                    'mask': mask,
                    'train_flag' : train_flag,
-                   'carry' : model[layer_name].attrs['carry'],
-                   'depth' : model[layer_name].attrs['depth'],
                    'network': network,
                    'index' : index }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
+        for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:

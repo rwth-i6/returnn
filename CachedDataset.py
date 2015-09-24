@@ -100,8 +100,8 @@ class CachedDataset(Dataset):
     assert self.num_inputs > 0
     assert self.window > 0
     self.alloc_intervals = \
-      [(0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)),
-       (self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX))]
+      [(0, 0, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))),
+       (self.num_seqs, self.num_seqs, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")))]
     # self.alloc_intervals[i] is (idx start, idx end, data), where
     # idx start/end is the sorted seq idx start/end, end exclusive,
     # and data is a numpy.array.
@@ -272,8 +272,8 @@ class CachedDataset(Dataset):
          numpy.concatenate(
            [xc,
             numpy.zeros(
-              (self._seq_start[ni][0] - self._seq_start[ci][0], self.num_inputs * self.window),
-              dtype=theano.config.floatX),
+              [self._seq_start[ni][0]] + self.get_data_shape("data"),
+              dtype=self.get_data_dtype("data")),
             xn])))
       del self.alloc_intervals[pos + 1]
       del self.alloc_intervals[pos + 1]
@@ -281,21 +281,20 @@ class CachedDataset(Dataset):
     elif value[0] == ci:
       self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
                                         value[1],
-                                        numpy.concatenate([xc, numpy.zeros((self._seq_start[value[1]][0] - self._seq_start[ci][0], self.num_inputs * self.window), dtype=theano.config.floatX)])))
+                                        numpy.concatenate([xc, numpy.zeros([self._seq_start[value[1]][0] - self._seq_start[ci][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))])))
       del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
       self.alloc_intervals.insert(pos + 1, (value[0],
                                             self.alloc_intervals[pos + 1][1],
-                                            numpy.concatenate([numpy.zeros((self._seq_start[ni][0] - self._seq_start[value[0]][0], self.num_inputs * self.window), dtype=theano.config.floatX), xc])))
+                                            numpy.concatenate([numpy.zeros([self._seq_start[ni][0] - self._seq_start[value[0]][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")), xc])))
       del self.alloc_intervals[pos + 2]
       return 0
     else:
       self.alloc_intervals.insert(pos + 1,
         value + (numpy.zeros(
-            (self._seq_start[value[1]][0] - self._seq_start[value[0]][0],
-             self.num_inputs * self.window),
-            dtype=theano.config.floatX),))
+            [self._seq_start[value[1]][0] - self._seq_start[value[0]][0]] + self.get_data_shape("data"),
+            dtype=self.get_data_dtype("data")),))
       return 1
 
   def _remove_alloc_interval(self, pos, value):
@@ -356,9 +355,9 @@ class CachedDataset(Dataset):
         i += modify(i, (start, ni))
       i += 1
     if self.alloc_intervals[0][0] != 0:
-      self.alloc_intervals.insert(0, (0, 0, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
+      self.alloc_intervals.insert(0, (0, 0, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))))
     if self.alloc_intervals[-1][1] != self.num_seqs:
-      self.alloc_intervals.append((self.num_seqs, self.num_seqs, numpy.zeros((1, self.num_inputs * self.window), dtype=theano.config.floatX)))
+      self.alloc_intervals.append((self.num_seqs, self.num_seqs, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))))
     return selection
 
   def insert_alloc_interval(self, start, end=None):

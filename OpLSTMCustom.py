@@ -5,6 +5,8 @@ import theano.gradient
 import theano.tensor as T
 import theano.printing
 import theano.gof
+from theano.gof.opt import OpSub
+from theano.compile import optdb
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
                                            gpu_contiguous)
 
@@ -12,12 +14,17 @@ from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace", "fun_name")
 
-  def __init__(self, fun_name):
+  def __init__(self, fun_name, inplace):
     super(LSTMCustomOpGrad, self).__init__(self)
-    self.inplace = False
+    self.inplace = inplace
     self.fun_name = fun_name
+    if inplace:
+     #all outputs operate inplace on inputs 1 and 6 (which are H and DY)
+     #but when the input is marked multiple times, we get an error
+     #so we only mark that output 0 destroys inputs 1 and 6
+     #anyway theano knows that inputs 1 and 6 will be destroyed, so it should be OK
+     self.destroy_map = {0: [1], 1: [6]}
 
-  #TODO: later also accept B
   def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, *custom_inputs):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
@@ -42,26 +49,40 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs, [H.type(), c.type(), y0.type(), W_re.type()])
+    custom_grads = [var.type() for var in custom_inputs]
+
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs,
+                        [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
 
   def c_support_code(self):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
-    funloader = make_funloader_code(self.fun_name + "_bwd", 1)
+    funloader = make_funloader_code(self.fun_name + "_bwd", self.fun_name + "_reset")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
     Y, H, c, y0, i, Dd, DY, W_re = input_names[:8]
     custom_inputs=input_names[8:]
-    custom_inputs_str = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
-    DZ, Dc, Dy0, DW_re = output_names
+    custom_inputs_str = ",".join(custom_inputs)
+    custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + custom_inputs_str
+    DZ, Dc, Dy0, DW_re = output_names[:4]
+    custom_output_names = output_names[4:]
+    if len(custom_output_names) == 0:
+      custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
+    else:
+      custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
     bwd_fun = self.fun_name + "_bwd"
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
     //std::cout << "LSTMCustomOpGrad called" << std::endl;
+    if(!%(inplace)s)
+    {
+      std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
+    }
+
     if(%(DZ)s || %(Dc)s || %(DW_re)s || %(Dy0)s)
     {
       printf("output storage already exists\\n");
@@ -71,6 +92,9 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(%(DW_re)s);
       Py_XDECREF(%(Dy0)s);
     }
+
+    %(bwd_fun)s.reset_shared(%(custom_inputs_str)s);
+    %(custom_outputs_str)s;
 
     CudaNdarray * epsilon = 0;
     CudaNdarray * delta = 0;
@@ -96,7 +120,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       bool rightBorder = (x == H_dim[0]-1);
       bool leftBorder = (x == 0);
 
-      //TODO: check if we need to handle boundary case specially
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta, y, x, %(W_re)s, y, x, epsilon, false, true);
@@ -116,8 +139,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
         //note: the missing comma is intentionally for the case where there are 0 custom inputs
-        std::vector<PyObject*> res_vec = %(bwd_fun)s(y_p, delta_x %(custom_inputs_str)s);
-        assert(res_vec.size() == 1);
+        std::vector<CudaNdarray*> res_vec = %(bwd_fun)s(y_p, delta_x %(custom_inputs_str_comma)s);
+        assert(res_vec.size() > 0);
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
 
@@ -125,7 +148,11 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         float * epsilon_x_data = data_ptr(epsilon, y, x);
         do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
-        Py_XDECREF(Dy_p);
+        //TODO check
+        for(int i = 0; i < res_vec.size(); ++i)
+        {
+          Py_XDECREF(res_vec[i]);
+        }
         Py_XDECREF(y_p);
       }
 
@@ -154,16 +181,26 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
     //note: the missing comma is intentionally for the case where there are 0 custom inputs
-    std::vector<PyObject*> res_vec = %(bwd_fun)s(%(y0)s, delta_x %(custom_inputs_str)s);
-    assert(res_vec.size() == 1);
+    std::vector<CudaNdarray*> res_vec = %(bwd_fun)s(%(y0)s, delta_x %(custom_inputs_str_comma)s);
+    assert(res_vec.size() > 0);
     Py_XDECREF(delta_x);
-    CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
+    CudaNdarray * Dy_p = res_vec[0];
+
+    //custom grads
+    for(int i = 1; i < res_vec.size(); ++i)
+    {
+      *custom_grads[i-1] = (CudaNdarray*) CudaNdarray_Copy(res_vec[i]);
+      assert(*custom_grads[i-1]);
+    }
 
     //copy to Dy0
     do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
-    Py_XDECREF(Dy_p);
-
+    //TODO: check
+    for(int i = 0; i < res_vec.size(); ++i)
+    {
+      Py_XDECREF(res_vec[i]);
+    }
 
     if(!%(inplace)s)
     {
@@ -177,13 +214,17 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace", "fun_name")
 
-  def __init__(self, fun_name):
+  def __init__(self, fun_name, inplace):
     super(LSTMCustomOp, self).__init__(self)
-    self.inplace = False
+    self.inplace = inplace
     self.fun_name = fun_name
+    if inplace:
+      #all outputs operate inplace on input 0 (which is Z)
+      #but when the input is marked multiple times, we get an error
+      #so we only mark that output 0 destroys input 0
+      #anyway theano knows that input 0 will be destroyed, so it should be OK
+      self.destroy_map = {0: [0]}
 
-  #TODO: make recurrent weights customizable, atm fixed to single matrix (W_re)
-  #B is base
   def make_node(self, Z, c, y0, i, W_re, *custom_inputs):
     from Device import have_gpu
     assert have_gpu()
@@ -212,7 +253,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def c_support_code(self):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
-    funloader = make_funloader_code(self.fun_name + "_fwd", 1)
+    funloader = make_funloader_code(self.fun_name + "_fwd")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -220,9 +261,10 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def c_code(self, node, name, input_names, output_names, sub):
     Z, c, y0, i, W_re = input_names[:5]
     custom_inputs = input_names[5:]
-    custom_inputs_str = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
+    custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
     Y, H, d = output_names
     fwd_fun = self.fun_name + "_fwd"
+    inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """
     //std::cout << "LSTMCustomOp called" << std::endl;
@@ -243,9 +285,17 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 
     %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_Y);
     %(d)s = (CudaNdarray*) CudaNdarray_NewDims(2, dims_d);
-    %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H); //CudaNdarray_uninitialized_like(%(Z)s);
-    cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
+    if(%(inplace)s)
+    {
+      %(H)s = %(Z)s;
+      Py_INCREF(%(Z)s);
+    }
+    else
+    {
+      %(H)s = (CudaNdarray*) CudaNdarray_NewDims(3,dims_H);
+      cudaMemcpy(CudaNdarray_DEV_DATA(%(H)s), CudaNdarray_DEV_DATA(%(Z)s),
       dims_H[0]*dims_H[1]*dims_H[2]*sizeof(float), cudaMemcpyDeviceToDevice);
+    }
 
     int y = 0;
     for(int x = 0; x < Z_dim[0]; ++x)
@@ -273,9 +323,9 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         y_p = (CudaNdarray*) y_p_obj;
       }
 
-      std::vector<PyObject*> res_vec = %(fwd_fun)s(y_p %(custom_inputs_str)s);
+      std::vector<CudaNdarray*> res_vec = %(fwd_fun)s(y_p %(custom_inputs_str_comma)s);
       assert(res_vec.size() == 1);
-      CudaNdarray * res = (CudaNdarray*) res_vec[0];
+      CudaNdarray * res = res_vec[0];
 
       //add to H
       float * H_y_x_data = data_ptr(%(H)s, y, x);
@@ -312,14 +362,49 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    #TODO: later also pass B
-    DZ, Dc, Dy0, DW_re = LSTMCustomOpGrad(fun_name=self.fun_name)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    all_grads = LSTMCustomOpGrad(fun_name=self.fun_name, inplace=False)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    DZ, Dc, Dy0, DW_re = all_grads[:4]
+    custom_grads = all_grads[4:]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
-    #TODO
-    Dcustom = [theano.gradient.grad_undefined(self, 5 + idx, inputs[5+idx], 'cannot diff w.r.t. custom yet')
-               for idx in xrange(len(custom_inputs))]
 
-    return [DZ, Dc, Dy0, Di, DW_re] + Dcustom
+    return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
-LSTMCustomTestOpInstance = LSTMCustomOp(fun_name="test_fun")
-LSTMCustomDotAttentionOpInstance = LSTMCustomOp(fun_name="attention_dot_fun")
+#register all the functions and optimizations
+LSTMCustomTestOpNoInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=False)
+LSTMCustomDotAttentionOpNoInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=False)
+
+LSTMCustomTestOpInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=True)
+LSTMCustomDotAttentionOpInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=True)
+
+no_inplace_instances = [LSTMCustomTestOpNoInplaceInstance, LSTMCustomDotAttentionOpNoInplaceInstance]
+inplace_instances    = [LSTMCustomTestOpInplaceInstance, LSTMCustomDotAttentionOpInplaceInstance]
+
+opts = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances, inplace_instances)]
+
+#hack to avoid being called twice
+for idx, opt in enumerate(opts):
+  attr = 'LSTMCustomMOpInplaceOpt' + str(idx)
+  if not hasattr(optdb, attr):
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)
+
+#the same for grad
+LSTMCustomTestOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=False)
+LSTMCustomDotAttentionOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=False)
+
+LSTMCustomTestOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=True)
+LSTMCustomDotAttentionOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=True)
+
+no_inplace_instances_grad = [LSTMCustomTestOpGradNoInplaceInstance, LSTMCustomDotAttentionOpGradNoInplaceInstance]
+inplace_instances_grad    = [LSTMCustomTestOpGradInplaceInstance, LSTMCustomDotAttentionOpGradInplaceInstance]
+
+opts_grad = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances_grad, inplace_instances_grad)]
+
+#hack to avoid being called twice
+for idx, opt in enumerate(opts_grad):
+  attr = 'LSTMCustomMOpGradInplaceOpt' + str(idx)
+  if not hasattr(optdb, attr):
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)

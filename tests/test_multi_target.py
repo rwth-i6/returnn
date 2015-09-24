@@ -145,6 +145,9 @@ def test_multi_target_init():
     "t2": numpy.array([4])
   }], output_dim=config.typed_value("num_outputs"))
   dataset.init_seq_order()
+  assert_equal(dataset.is_data_sparse("data"), False)
+  assert_equal(dataset.is_data_sparse("t1"), True)
+  assert_equal(dataset.is_data_sparse("t2"), True)
 
   # Copy to device allocation.
   success = assign_dev_data_single_seq(device, dataset, 0)

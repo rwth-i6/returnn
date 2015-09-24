@@ -7,8 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
-from OpLSTMCustom import LSTMCustomTestOpInstance
-from OpLSTMCell import LSTMOpCellInstance
+from OpLSTMCustom import LSTMCustomDotAttentionOpNoInplaceInstance
 from FastLSTM import LSTMOp2Instance
 
 class RecurrentLayer(HiddenLayer):
@@ -147,11 +146,13 @@ class LSTMC(Unit):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    #TODO: non_sequences
-    B = numpy.zeros((1,1,1),dtype=theano.config.floatX)
-    #TODO B also backwards?
-    #TODO: W_att_re..
-    result = LSTMCustomTestOpInstance(z[::-(2 * go_backwards - 1)], B, outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B)
+    B = self.parent.xc
+    W_att_in = self.parent.W_att_in
+    W_att_quadr = self.parent.W_att_re #matrix for qudratic form
+
+    #TODO: is it right to also reverse B?
+    result = LSTMCustomDotAttentionOpNoInplaceInstance(z[::-(2 * go_backwards - 1)],
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B[::-(2 * go_backwards - 1)], W_att_in, W_att_quadr)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
@@ -538,6 +539,7 @@ class RecurrentUnitLayer(Layer):
         #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
 
       index_f = T.cast(index, theano.config.floatX)
+      unit.parent = self
       outputs = unit.scan(step,
                           sources,
                           sequences[s::self.attrs['sampling']],

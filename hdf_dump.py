@@ -70,15 +70,13 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
   for data_key in data_keys:
     assert data_key in total_seq_len.dict
     shape = [total_seq_len[data_key]]
-    data_dim = dataset.get_data_dim(data_key)
-    if data_dim > 1:
-      shape += [data_dim]
+    shape += dataset.get_data_shape(data_key)
     print >> log.v3, "Total len of %r is %s, shape %r, dtype %s" % (
                      data_key, human_size(shape[0]), shape, dataset.get_data_dtype(data_key))
     shapes[data_key] = shape
 
   print >> log.v3, "Set seq tags..."
-  hdf_dataset.create_dataset('seqTags', shape=(num_seqs, max_tag_len + 1), dtype="S10")
+  hdf_dataset.create_dataset('seqTags', shape=(num_seqs,), dtype="S%i" % (max_tag_len + 1))
   for i, tag in enumerate(seq_tags):
     hdf_dataset['seqTags'][i] = tag
     progress_bar_with_time(float(i) / num_seqs)
@@ -106,15 +104,16 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     else:
       hdf_dataset['targets/data'].create_dataset(
         data_key, shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
-    hdf_dataset['targets/size'].attrs[data_key] = dataset.num_outputs[data_key]
+      hdf_dataset['targets/size'].attrs[data_key] = dataset.num_outputs[data_key]
 
     if data_key in dataset.labels:
       labels = dataset.labels[data_key]
-      assert len(labels) == dataset.num_outputs[data_key]
+      assert len(labels) == dataset.num_outputs[data_key][0]
     else:
-      labels = ["class-%i" % i for i in range(dataset.num_outputs[data_key])]
+      labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.num_outputs[data_key][0])]
+    print >> log.v5, "Labels for %s:" % data_key, labels[:3], "..."
     max_label_len = max(map(len, labels))
-    hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels), max_label_len + 1), dtype="S10")
+    hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels),), dtype="S%i" % (max_label_len + 1))
     for i, label in enumerate(labels):
       hdf_dataset['targets/labels'][data_key][i] = label
 
@@ -143,7 +142,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
   # Set some old-format attribs. Not needed for newer CRNN versions.
   hdf_dataset.attrs[HDFDataset.attr_inputPattSize] = dataset.num_inputs
-  hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.num_outputs.get("classes", 0)
+  hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.num_outputs.get("classes", (0, 0))[0]
 
   print >> log.v3, "All done."
 
