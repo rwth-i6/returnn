@@ -154,6 +154,13 @@ class ConcatDataset(CachedDataset2):
     """
     super(ConcatDataset, self).__init__(**kwargs)
     self.datasets = [init_dataset(d_kwargs) for d_kwargs in datasets]
+    assert self.datasets
+    self.num_inputs = self.datasets[0].num_inputs
+    self.num_outputs = self.datasets[0].num_outputs
+    self.labels = self.datasets[0].labels
+    for ds in self.datasets[1:]:
+      assert ds.num_inputs == self.num_inputs
+      assert ds.num_outputs == self.num_outputs
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """

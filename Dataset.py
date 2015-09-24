@@ -541,6 +541,7 @@ def init_dataset(kwargs):
   :type kwargs: dict[str]
   :rtype: Dataset
   """
+  kwargs = kwargs.copy()
   assert "class" in kwargs
   clazz_name = kwargs.pop("class")
   clazz = get_dataset_class(clazz_name)
