@@ -1,5 +1,5 @@
 
-from Dataset import Dataset, DatasetSeq, init_dataset
+from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
 
@@ -18,7 +18,7 @@ class MetaDataset(CachedDataset2):
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-    :param dict[str,int] data_dims: self-data-key -> data-dimension.
+    :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
     :param dict[str,bool] data_1_of_k: self-data-key -> whether it is 1-of-k or not. automatic if not specified
     :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
     """
@@ -36,15 +36,15 @@ class MetaDataset(CachedDataset2):
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - ["data"])
 
+    data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
-    for v in data_dims.values():
-      assert isinstance(v, int), "all values must be int in %r" % data_dims
     assert "data" in data_dims
-    self.num_inputs = data_dims["data"]
-    self.num_outputs = {data_key: data_dims[data_key] for data_key in self.target_list}
+    for key in self.target_list:
+      assert key in data_dims
+    self.num_inputs = data_dims["data"][0]
+    self.num_outputs = data_dims
 
-    self.data_1_of_k = {data_key: _select_1_of_k(data_key, data_1_of_k, data_dtypes) for data_key in self.data_keys}
-    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_1_of_k, data_dtypes) for data_key in self.data_keys}
+    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
@@ -63,7 +63,7 @@ class MetaDataset(CachedDataset2):
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
   def init_seq_order(self, epoch=None, seq_list=None):
-    need_reinit = self.epoch == epoch
+    need_reinit = self.epoch is None or self.epoch != epoch
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not need_reinit:
       return
@@ -128,19 +128,6 @@ class MetaDataset(CachedDataset2):
   def get_target_list(self):
     return self.target_list
 
-  def get_data_dim(self, key):
-    """
-    :type key: str
-    :return: 1 for hard labels, num_outputs[target] for soft labels
-    """
-    if self.data_1_of_k[key]:
-      d = 1
-    else:
-      d = self.data_dims[key]
-    if self.added_data:
-      assert super(MetaDataset, self).get_data_dim(key) == d
-    return d
-
   def get_data_dtype(self, key):
     dtype = self.data_dtypes[key]
     if self.added_data:
@@ -155,13 +142,20 @@ class ConcatDataset(CachedDataset2):
     """
     super(ConcatDataset, self).__init__(**kwargs)
     self.datasets = [init_dataset(d_kwargs) for d_kwargs in datasets]
+    assert self.datasets
+    self.num_inputs = self.datasets[0].num_inputs
+    self.num_outputs = self.datasets[0].num_outputs
+    self.labels = self.datasets[0].labels
+    for ds in self.datasets[1:]:
+      assert ds.num_inputs == self.num_inputs
+      assert ds.num_outputs == self.num_outputs
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
     """
-    need_reinit = self.epoch == epoch
+    need_reinit = self.epoch is None or self.epoch != epoch
     super(ConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self.dataset_seq_idx_offsets = [0]
     if not need_reinit:
@@ -194,6 +188,7 @@ class ConcatDataset(CachedDataset2):
 
   def _load_seqs(self, start, end):
     sub_start = start
+    # We maybe need to call load_seqs on several of our datasets, thus we need this loop.
     while True:
       dataset_idx = self._get_dataset_for_seq_idx(sub_start)
       dataset = self.datasets[dataset_idx]
@@ -201,11 +196,13 @@ class ConcatDataset(CachedDataset2):
       dataset_seq_idx_end = end + self.dataset_seq_idx_offsets[dataset_idx]
       dataset.load_seqs(dataset_seq_idx_start, dataset_seq_idx_end)
       if dataset.is_less_than_num_seqs(dataset_seq_idx_end):
-        self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
-          self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
-        sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
-      else:
+        # We are still inside this dataset and have loaded everything.
+        # Thus we can stop now.
         break
+      # We have reached the end of the dataset. Continue with the next one.
+      self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
+        self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
+      sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
     super(ConcatDataset, self)._load_seqs(start=start, end=end)
 
   def _collect_single_seq(self, seq_idx):
@@ -231,31 +228,15 @@ def _simple_to_bool(v):
   assert isinstance(v, bool)
   return v
 
-def _select_1_of_k(key, data_1_of_k, data_dtypes):
-  if data_1_of_k and key in data_1_of_k:
-    v = data_1_of_k[key]
-    return _simple_to_bool(v)
-  if data_dtypes and key in data_dtypes:
-    v = data_dtypes[key]
-    if v.startswith("int"):
-      return True  # int is likely a 1-of-k
-    return False
-  if key == "data":
-    return False  # the data (input) is likely not 1-of-k
-  return True  # all targets are likely 1-of-k encoded (for classification)
-
-def _select_dtype(key, data_1_of_k, data_dtypes):
+def _select_dtype(key, data_dims, data_dtypes):
   if data_dtypes and key in data_dtypes:
     v = data_dtypes[key]
     assert isinstance(v, str)  # e.g. "int32" or "float32"
     return v
-  if data_1_of_k and key in data_1_of_k:
-    if data_1_of_k[key]:
-      return "int32"  # standard for 1-of-k
-    else:
-      return "float32"  # standard otherwise
-  if key == "data":
-    return "float32"  # standard for input
-  return "int32"  # all targets are likely 1-of-k encoded (for classification)
+  assert key in data_dims
+  if data_dims[key][1] == 1:  # sparse
+    return "int32"  # standard for 1-of-k
+  else:
+    return "float32"  # standard otherwise
 
 
