@@ -63,7 +63,7 @@ class MetaDataset(CachedDataset2):
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
   def init_seq_order(self, epoch=None, seq_list=None):
-    need_reinit = self.epoch == epoch
+    need_reinit = self.epoch is None or self.epoch != epoch
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not need_reinit:
       return
@@ -155,7 +155,7 @@ class ConcatDataset(CachedDataset2):
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
     """
-    need_reinit = self.epoch == epoch
+    need_reinit = self.epoch is None or self.epoch != epoch
     super(ConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self.dataset_seq_idx_offsets = [0]
     if not need_reinit:
