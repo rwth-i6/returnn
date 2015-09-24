@@ -310,15 +310,13 @@ class Dataset(object):
   def get_data_dim(self, key):
     """
     :type key: str
-    :return: 1 for hard labels, num_outputs[target] for soft labels
+    :return: number of classes, no matter if sparse or not
     """
-    if self.is_data_sparse(key):
-      return 1
     if key in self.num_outputs:
       return self.num_outputs[key][0]
     if key == "data":
       return self.num_inputs * self.window
-    return 1
+    return 1  # unknown
 
   def get_data_dtype(self, key):
     if self.is_data_sparse(key):
@@ -326,6 +324,8 @@ class Dataset(object):
     return "float32"
 
   def is_data_sparse(self, key):
+    if key in self.num_outputs:
+      return self.num_outputs[key][1] == 1
     if key == "data":
       return False
     return True
@@ -585,3 +585,26 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
       data.add_file(f)
   data.initialize()
   return data
+
+
+def convert_data_dims(data_dims):
+  """
+  This converts what we called num_outputs originally,
+  from the various formats which were allowed in the past
+  (just an int, or dict[str,int]) into the format which we currently expect.
+  :param int | dict[str,int|(int,int)] data_dims: what we called num_outputs originally
+  :rtype: dict[str,(int,int)]
+  :returns dict from data-key to (data-dimension, len(shape) (1 ==> sparse))
+  """
+  if isinstance(data_dims, int):
+    data_dims = {"classes": data_dims}
+  assert isinstance(data_dims, dict)
+  for k, v in list(data_dims.items()):
+    if isinstance(v, int):
+      v = [v, 2 if k == "data" else 1]
+      data_dims[k] = v
+    assert isinstance(v, (tuple, list))
+    assert len(v) == 2
+    assert isinstance(v[0], int)
+    assert isinstance(v[1], int)
+  return data_dims

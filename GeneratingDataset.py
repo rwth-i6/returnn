@@ -1,5 +1,5 @@
 
-from Dataset import Dataset, DatasetSeq
+from Dataset import Dataset, DatasetSeq, convert_data_dims
 from Util import class_idx_seq_to_features
 import numpy
 
@@ -12,18 +12,9 @@ class GeneratingDataset(Dataset):
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
-    if isinstance(output_dim, int):
-      output_dim = {"classes": output_dim}
-    for k, v in list(output_dim.items()):
-      if isinstance(v, int):
-        v = [v, 1 if k == "classes" else 2]
-        output_dim[k] = v
-      assert isinstance(v, (tuple, list))
-      assert len(v) == 2
-      assert isinstance(v[0], int)
-      assert isinstance(v[1], int)
+    output_dim = convert_data_dims(output_dim)
     if "data" not in output_dim:
-      output_dim["data"] = [input_dim, 2]
+      output_dim["data"] = [input_dim, 2]  # not sparse
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
@@ -249,29 +240,28 @@ class StaticDataset(GeneratingDataset):
         assert target in first_data
     self.target_list = target_list
 
+    if output_dim is None:
+      output_dim = {}
+    output_dim = convert_data_dims(output_dim)
+
     first_data_input = first_data["data"]
     assert len(first_data_input.shape) <= 2  # (time[,dim])
     if input_dim is None:
       if "data" in output_dim:
-        input_dim = output_dim["data"]
+        input_dim = output_dim["data"][0]
       else:
         input_dim = first_data_input.shape[1]
 
-    if isinstance(output_dim, int):
-      assert "classes" in target_list
-      output_dim = {"classes": output_dim}
-    if output_dim is None:
-      output_dim = {}
     for target in target_list:
       first_data_output = first_data[target]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
-      if len(first_data_output.shape) == 1:
-        assert target in output_dim
+      if target in output_dim:
+        assert output_dim[target][1] == len(first_data_output.shape)
+        if len(first_data_output.shape) >= 2:
+          assert output_dim[target][0] == first_data_output.shape[1]
       else:
-        if target in output_dim:
-          assert output_dim[target] == first_data_output.shape[1]
-        else:
-          output_dim[target] = first_data_output.shape[1]
+        assert len(first_data_output.shape) == 2, "We expect not sparse. Or specify it explicitly in output_dim."
+        output_dim[target] = [first_data_output.shape[1], 2]
 
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 

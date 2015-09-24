@@ -1,5 +1,5 @@
 
-from Dataset import Dataset, DatasetSeq, init_dataset
+from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
 
@@ -36,14 +36,7 @@ class MetaDataset(CachedDataset2):
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - ["data"])
 
-    for k, v in list(data_dims.items()):
-      if isinstance(v, int):
-        v = [v, 1 if k == "classes" else 2]
-        data_dims[k] = v
-      assert isinstance(v, (tuple, list))
-      assert len(v) == 2
-      assert isinstance(v[0], int)
-      assert isinstance(v[1], int)
+    data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
     assert "data" in data_dims
     self.num_inputs = data_dims["data"][0]
