@@ -95,7 +95,7 @@ class HDFDataset(CachedDataset):
     if 'targets' in fin:
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
-        self.data_dtype[name] = fin['targets/data'][name].dtype
+        self.data_dtype[name] = str(fin['targets/data'][name].dtype)
         if self.data_dtype[name] == 'int32':
           self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
         else:
@@ -148,6 +148,8 @@ class HDFDataset(CachedDataset):
     return self.tags[ids]
 
   def is_data_sparse(self, key):
+    if key in self.num_outputs:
+      return self.num_outputs[key][1] == 1
     if self.get_data_dtype(key).startswith("int"):
       return True
     return False

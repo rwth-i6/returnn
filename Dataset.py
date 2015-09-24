@@ -312,10 +312,10 @@ class Dataset(object):
     :type key: str
     :return: number of classes, no matter if sparse or not
     """
-    if key in self.num_outputs:
-      return self.num_outputs[key][0]
     if key == "data":
       return self.num_inputs * self.window
+    if key in self.num_outputs:
+      return self.num_outputs[key][0]
     return 1  # unknown
 
   def get_data_dtype(self, key):
