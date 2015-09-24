@@ -143,15 +143,30 @@ class CachedDataset2(Dataset):
     self._load_something()
     return self.added_data[0].targets.keys()
 
+  def is_data_sparse(self, key):
+    """
+    :type key: str
+    :rtype: bool
+    """
+    if key in self.num_outputs:
+      return self.num_outputs[key][1] == 1
+    self._load_something()
+    return len(self.added_data[0].features.shape) == 1
+
   def get_data_dim(self, key):
     """
     :type key: str
     :rtype: int
-    :return: 1 for hard labels, num_outputs[target] for soft labels
+    :return: number of classes, no matter if sparse or not
     """
+    if key in self.num_outputs:
+      d = self.num_outputs[key][0]
+      if self.added_data and not self.is_data_sparse(key):
+        assert self.added_data[0].features.shape[1] == d
+      return d
     self._load_something()
     if len(self.added_data[0].features.shape) == 1:
-      return 1
+      return super(CachedDataset2, self).get_data_dim(key)  # unknown
     assert len(self.added_data[0].features.shape) == 2
     return self.added_data[0].features.shape[1]
 

@@ -39,11 +39,12 @@ class MetaDataset(CachedDataset2):
     data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
     assert "data" in data_dims
+    for key in self.target_list:
+      assert key in data_dims
     self.num_inputs = data_dims["data"][0]
     self.num_outputs = data_dims
 
-    self.data_1_of_k = {data_key: _select_1_of_k(data_key, data_1_of_k, data_dtypes) for data_key in self.data_keys}
-    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_1_of_k, data_dtypes) for data_key in self.data_keys}
+    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
@@ -126,19 +127,6 @@ class MetaDataset(CachedDataset2):
 
   def get_target_list(self):
     return self.target_list
-
-  def get_data_dim(self, key):
-    """
-    :type key: str
-    :return: 1 for hard labels, num_outputs[target] for soft labels
-    """
-    if self.data_1_of_k[key]:
-      d = 1
-    else:
-      d = self.data_dims[key]
-    if self.added_data:
-      assert super(MetaDataset, self).get_data_dim(key) == d
-    return d
 
   def get_data_dtype(self, key):
     dtype = self.data_dtypes[key]
@@ -237,31 +225,15 @@ def _simple_to_bool(v):
   assert isinstance(v, bool)
   return v
 
-def _select_1_of_k(key, data_1_of_k, data_dtypes):
-  if data_1_of_k and key in data_1_of_k:
-    v = data_1_of_k[key]
-    return _simple_to_bool(v)
-  if data_dtypes and key in data_dtypes:
-    v = data_dtypes[key]
-    if v.startswith("int"):
-      return True  # int is likely a 1-of-k
-    return False
-  if key == "data":
-    return False  # the data (input) is likely not 1-of-k
-  return True  # all targets are likely 1-of-k encoded (for classification)
-
-def _select_dtype(key, data_1_of_k, data_dtypes):
+def _select_dtype(key, data_dims, data_dtypes):
   if data_dtypes and key in data_dtypes:
     v = data_dtypes[key]
     assert isinstance(v, str)  # e.g. "int32" or "float32"
     return v
-  if data_1_of_k and key in data_1_of_k:
-    if data_1_of_k[key]:
-      return "int32"  # standard for 1-of-k
-    else:
-      return "float32"  # standard otherwise
-  if key == "data":
-    return "float32"  # standard for input
-  return "int32"  # all targets are likely 1-of-k encoded (for classification)
+  assert key in data_dims
+  if data_dims[key][1] == 1:  # sparse
+    return "int32"  # standard for 1-of-k
+  else:
+    return "float32"  # standard otherwise
 
 
