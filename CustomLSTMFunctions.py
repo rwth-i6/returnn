@@ -44,22 +44,13 @@ def attention_dot():
   y_p = cuda.fmatrix("y_p")
   B = cuda.ftensor3("B")
   W_att_in = cuda.fmatrix("W_att_in")
-  custom_vars = [B,W_att_in]
+  W_att_quadr = cuda.fmatrix("W_att_quadr")
+  custom_vars = [B,W_att_in,W_att_quadr]
 
-  #TODO: atm we only use B[0]
-  e = T.batched_dot(B[0],y_p)
-  linear_combination = e.dimshuffle(0,'x') * B[0]
-  z_re = T.dot(linear_combination, W_att_in)
-
-  #TODO: softmax and stuff
-  #f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0), axis=2, keepdims=True)
-  #f_e = T.exp(f_z)
-  #w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-  #z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in)
-
-  #alpha = T.nnet.softmax(e)
-  #linear_combination = T.dot(B.T, alpha)
-  #z_re = T.dot(linear_combination, W_att_in)
+  f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
+  f_e = T.exp(f_z)
+  w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+  z_re = T.dot(T.sum(B * w_t, axis=0, keepdims=False), W_att_in)
 
   return y_p, z_re, custom_vars
 

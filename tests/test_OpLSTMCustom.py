@@ -163,28 +163,30 @@ def test_attention_dot_does_not_crash():
   Z = T.ftensor3('Z')
   B = T.ftensor3('B') #base
   W_re = T.fmatrix('W_re')
+  W_att_quadr = T.fmatrix("W_att_quadr")
   W_att_in = T.fmatrix('W_att_in')
   c = T.fmatrix('c') #initial state
   y0 = T.fmatrix('y0') #initial activation
   i = T.matrix('i',dtype='int8')
-  Y, H, d = LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i, W_re, B, W_att_in)
+  Y, H, d = LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i, W_re, B, W_att_in, W_att_quadr)
 
-  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_in], outputs=Y)
+  f = theano.function(inputs=[Z, B, c, y0, i, W_re, W_att_in, W_att_quadr], outputs=Y)
 
-  n_B = 2
+  n_B = 8
   n_T = 5
   n_batch = 4
   n_cells = 8
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   B_val = numpy.random.ranf((n_B,n_batch,n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  W_att_quadr_val = numpy.eye(n_B).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
   y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
   #i_val = numpy.ones((n_T, n_batch), dtype='int8')
   i_val = numpy.array([[1,1,1,1,1], [0,0,1,1,1], [0,0,1,1,1], [0,0,1,0,0]], dtype='int8').T
 
-  Y_val = numpy.asarray(f(Z_val, B_val, c_val, y0_val, i_val, W_re_val, W_att_in_val))
+  Y_val = numpy.asarray(f(Z_val, B_val, c_val, y0_val, i_val, W_re_val, W_att_in_val, W_att_quadr_val))
   #print Y_val
   print "success"
 
@@ -194,9 +196,10 @@ def test_attention_dot_grads():
   n_batch = 4
   n_inp_dim = 3
   n_cells = 8
-  n_B = 2
+  n_B = 8
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  W_att_quadr_val = numpy.eye(n_B).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   B_val = numpy.random.ranf((n_B,n_batch,n_cells)).astype('float32')
   c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
@@ -206,16 +209,16 @@ def test_attention_dot_grads():
 
   print "verifying grads..."
 
-  def LSTMCustomOp_Z(Z, c, y0, W_re, B, W_att_in):
-    return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in)[0]
+  def LSTMCustomOp_Z(Z, c, y0, W_re, B, W_att_in, W_att_quadr):
+    return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in, W_att_quadr)[0]
 
-  def LSTMCustomOp_d(Z, c, y0, W_re, B, W_att_in):
-    return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in)[2]
+  def LSTMCustomOp_d(Z, c, y0, W_re, B, W_att_in, W_att_quadr):
+    return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in, W_att_quadr)[2]
 
   print "verifying grad of Z"
-  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val])
+  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val, W_att_quadr_val])
   print "verifying grad of d"
-  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val], eps=1e-3)
+  theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val, W_att_quadr_val], eps=1e-3)
 
   print "success"
 
