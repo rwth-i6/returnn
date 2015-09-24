@@ -188,6 +188,7 @@ class ConcatDataset(CachedDataset2):
 
   def _load_seqs(self, start, end):
     sub_start = start
+    # We maybe need to call load_seqs on several of our datasets, thus we need this loop.
     while True:
       dataset_idx = self._get_dataset_for_seq_idx(sub_start)
       dataset = self.datasets[dataset_idx]
@@ -195,11 +196,13 @@ class ConcatDataset(CachedDataset2):
       dataset_seq_idx_end = end + self.dataset_seq_idx_offsets[dataset_idx]
       dataset.load_seqs(dataset_seq_idx_start, dataset_seq_idx_end)
       if dataset.is_less_than_num_seqs(dataset_seq_idx_end):
-        self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
-          self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
-        sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
-      else:
+        # We are still inside this dataset and have loaded everything.
+        # Thus we can stop now.
         break
+      # We have reached the end of the dataset. Continue with the next one.
+      self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
+        self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
+      sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
     super(ConcatDataset, self)._load_seqs(start=start, end=end)
 
   def _collect_single_seq(self, seq_idx):
