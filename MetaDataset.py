@@ -10,7 +10,7 @@ class MetaDataset(CachedDataset2):
                seq_list_file, seq_lens_file,
                datasets,
                data_map, data_dims,
-               data_1_of_k=None, data_dtypes=None,
+               data_dtypes=None,
                window=1, **kwargs):
     """
     :param str seq_list_file: filename. line-separated
@@ -19,7 +19,6 @@ class MetaDataset(CachedDataset2):
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-    :param dict[str,bool] data_1_of_k: self-data-key -> whether it is 1-of-k or not. automatic if not specified
     :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
     """
     assert window == 1  # not implemented
