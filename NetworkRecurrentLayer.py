@@ -146,9 +146,9 @@ class LSTMC(Unit):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    B = self.xc
-    W_att_in = self.W_att_in
-    W_att_quadr = self.W_att_re #matrix for qudratic form
+    B = self.parent.xc
+    W_att_in = self.parent.W_att_in
+    W_att_quadr = self.parent.W_att_re #matrix for qudratic form
 
     #TODO: is it right to also reverse B?
     result = LSTMCustomDotAttentionOpNoInplaceInstance(z[::-(2 * go_backwards - 1)],
@@ -539,6 +539,7 @@ class RecurrentUnitLayer(Layer):
         #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
 
       index_f = T.cast(index, theano.config.floatX)
+      unit.parent = self
       outputs = unit.scan(step,
                           sources,
                           sequences[s::self.attrs['sampling']],
