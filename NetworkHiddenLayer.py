@@ -156,7 +156,6 @@ class StateToAct(ForwardLayer):
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
-
     if dual and len(self.act) > 1:
       self.make_output(self.act[1])
       self.act[0] = T.tanh(self.act[1])
@@ -286,7 +285,7 @@ class ProtoLayer(ForwardLayer):
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
   layer_class = "base"
 
-  def __init__(self, base=None, method="softmax", **kwargs):
+  def __init__(self, base=None, method="softmax", output_weights = False, **kwargs):
     assert base, "missing base in " + kwargs['name']
     kwargs['n_out'] = 1
     super(BaseInterpolationLayer, self).__init__(**kwargs)
@@ -308,7 +307,10 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
       assert False, "invalid method %s in %s" % (method, self.name)
 
     self.set_attr('n_out', sum([b.attrs['n_out'] for b in base]))
-    self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
+    if output_weights:
+      self.make_output((h_e / T.sum(h_e, axis=0, keepdims=True)).dimshuffle(1,0).reshape((self.base.shape[0],z.shape[1],z.shape[0])).dimshuffle(2,1,0))
+    else:
+      self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
 
 class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
