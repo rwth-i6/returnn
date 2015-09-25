@@ -283,8 +283,8 @@ class Engine:
     print >> log.v4, "pretrain:", self.pretrain
     if self.network.loss == 'priori':
       prior = self.train_data.calculate_priori()
-      self.network.output.priori.set_value(prior)
-      self.network.output.initialize()
+      self.network.output["output"].priori.set_value(prior)
+      self.network.output["output"].initialize()
 
     if self.network.recurrent:
       assert not self.train_data.shuffle_frames_of_nseqs, "Frames must not be shuffled in recurrent net."
@@ -428,7 +428,10 @@ class Engine:
     print >> log.v1, ""
 
   def format_score(self, score):
-    return " ".join([(key.split(':')[-1]+" " if len(score.keys()) > 1 else "") + str(score[key]) for key in score])
+    if len(score) == 1:
+      return str(list(score.values())[0])
+    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
+                     for key in sorted(score.keys())])
 
   def eval_model(self):
     eval_dump_str = []
@@ -437,13 +440,8 @@ class Engine:
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()
-      score_dump = ""
-      error_dump = ""
-      for skey,ekey in zip(tester.score.keys(),tester.error.keys()):
-        score_dump += (skey.split(':')[-1]+" " if len(tester.score.keys()) > 1 else "") + str(tester.score[skey]) + " "
-        error_dump += (skey.split(':')[-1]+" " if len(tester.error.keys()) > 1 else "") + str(tester.error[ekey]) + " "
-
-      eval_dump_str += [" %s: score %s error %s" % (dataset_name,self.format_score(tester.score),self.format_score(tester.error))]
+      eval_dump_str += [" %s: score %s error %s" % (
+                        dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
@@ -484,7 +482,7 @@ class Engine:
                                     max_seqs=1)
     merge = {}
     if combine_labels != '':
-      for index, label in enumerate(data.labels):
+      for index, label in enumerate(data.labels["classes"]):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
         if merged == '': merged = label
         if not merged in merge.keys():
@@ -510,7 +508,7 @@ class Engine:
                                     batch_size=data.get_num_timesteps(), max_seqs=1)
     merge = {}
     if combine_labels != '':
-      for index, label in enumerate(data.labels):
+      for index, label in enumerate(data.labels["classes"]):
         merged = combine_labels.join(label.split(combine_labels)[:-1])
         if merged == '': merged = label
         if not merged in merge.keys():

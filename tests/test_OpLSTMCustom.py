@@ -118,7 +118,7 @@ def test_bwd_pass_compatible_with_OpLSTM():
   assert numpy.allclose(DW_re_val, DW_re2_val, atol=5e-7, rtol=1e-4), (DW_re_val, DW_re2_val)
   assert numpy.allclose(Dc_val, Dc2_val), (Dc_val, Dc2_val)
   assert numpy.allclose(Dy0_val, Dy02_val), (Dy0_val, Dy02_val)
-  assert numpy.allclose(DW_att_in_val, DW_att_in2_val), (DW_att_in_val, DW_att_in2_val)
+  assert numpy.allclose(DW_att_in_val, DW_att_in2_val, atol=5e-7, rtol=1e-4), (DW_att_in_val, DW_att_in2_val)
   print "success"
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")

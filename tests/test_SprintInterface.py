@@ -21,14 +21,14 @@ def install_sigint_handler():
 
   def signal_handler(signal, frame):
     print "\nSIGINT at:"
-    better_exchook.print_tb(frame)
+    better_exchook.print_tb(tb=frame, file=sys.stdout)
     print ""
 
     # It's likely that SIGINT was caused by Util.interrupt_main().
     # We might have a stacktrace from there.
     if hasattr(sys, "exited_frame"):
       print "interrupt_main via:"
-      better_exchook.print_tb(sys.exited_frame)
+      better_exchook.print_tb(tb=sys.exited_frame, file=sys.stdout)
       print ""
     else:
       print "\nno sys.exited_frame\n"

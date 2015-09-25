@@ -55,15 +55,14 @@ struct FunLoader
     std::cout << "loaded function" << std::endl;
   }
 
-  //TODO: this is never executed, as the programs terminates before
-  //This causes a nonzero exit code of the program
+  //TODO
   ~FunLoader()
   {
-    Py_XDECREF(fn);
+    /*Py_XDECREF(fn);
     for(int i = 0; i < res_shared.size(); ++i)
     {
       Py_XDECREF(res_shared[i]);
-    }
+    }*/
     /*if(mod)
     {
       Py_DECREF(mod);
