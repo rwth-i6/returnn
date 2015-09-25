@@ -194,8 +194,8 @@ class Device(object):
       self.device_name = self.output_queue.recv(); """ :type: str """
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
       self.sync_used_targets()
-    except ProcConnectionDied:
-      print >>log.v3, "Device proc died"
+    except ProcConnectionDied as e:
+      print >>log.v3, "Device proc died:", e
       interrupt_main()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
@@ -564,8 +564,8 @@ class Device(object):
       #rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, self.update_specs, asyncTask)
       #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
-    except ProcConnectionDied:
-      print >> log.v2, "Device %s proc, pid %i: Parent seem to have died." % (device, os.getpid())
+    except ProcConnectionDied as e:
+      print >> log.v2, "Device %s proc, pid %i: Parent seem to have died: %s" % (device, os.getpid(), e)
       sys.exit(1)
     except KeyboardInterrupt:
       # Killed by parent.
