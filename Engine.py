@@ -428,9 +428,9 @@ class Engine:
     print >> log.v1, ""
 
   def format_score(self, score):
-    return " ".join(["%s%s%s" % (key.split(':')[-1],
-                                 " " if len(score.keys()) > 1 else "",
-                                 str(score[key]))
+    if len(score) == 1:
+      return str(list(score.values())[0])
+    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
   def eval_model(self):
