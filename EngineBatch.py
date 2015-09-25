@@ -95,7 +95,6 @@ class Batch:
     """
     return self.max_num_frames_per_slice.max_value() * self.num_slices
 
-
   def get_total_num_frames(self):
     return sum([s.frame_length for s in self.seqs])
 
