@@ -58,6 +58,7 @@ def initConfig(configFilename, commandLineOptions):
   #parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
   parser.add_option("-k", "--output_file", dest = "output_file", help = "[STRING] Path to target file for network output.")
   parser.add_option("-l", "--log", dest = "log", help = "[STRING] Log file path.")
+  parser.add_option("-L", "--load", dest = "load", help = "[STRING] lad model file path.")
   parser.add_option("-m", "--momentum", dest = "momentum", help = "[FLOAT] Momentum term in gradient descent optimization.")
   parser.add_option("-n", "--num_epochs", dest = "num_epochs", help = "[INTEGER] Number of epochs that should be trained.")
   parser.add_option("-o", "--order", dest = "order", help = "[default/sorted/random] Ordering of sequences.")
