@@ -265,8 +265,8 @@ def test_compatible_with_other_implementation_and_index_vector():
     vals_fast_grad = [numpy.asarray(A, dtype='float32') for A in vals_fast_grad]
     vals_simple_fwd = [Z2_val, h2_val]
     vals_simple_grad = [DX2_val, DW2_val, DV_h2_val, Db2_val]
-    print vals_fast_fwd
-    print vals_simple_fwd
+    #print vals_fast_fwd
+    #print vals_simple_fwd
     for fa, sl in zip(vals_fast_fwd, vals_simple_fwd):
       assert numpy.allclose(fa, sl)
     for fa, sl in zip(vals_fast_grad, vals_simple_grad):
