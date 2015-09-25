@@ -17,7 +17,7 @@ class Updater:
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
       "adasecant": config.bool('adasecant', False),
-      "varreg" : config.bool('varreg', False),
+      "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
       "momentum": config.float("momentum", 0)}
@@ -32,12 +32,12 @@ class Updater:
     kwargs.setdefault('adagrad', False)
     kwargs.setdefault('adadelta', False)
     kwargs.setdefault('adasecant', False)
-    kwargs.setdefault('varreg', False)
+    kwargs.setdefault('max_norm', 0.0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, varreg, adasecant):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant):
     """
     :type momentum: float
     :type gradient_clip: float
@@ -47,7 +47,7 @@ class Updater:
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.gradient_clip = gradient_clip
-    self.varreg = varreg
+    self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
     self.adasecant = adasecant
@@ -55,7 +55,7 @@ class Updater:
     self.adadelta_offset = adadelta_offset
     self.params = {}
     self.pid = -1
-    assert not (self.adagrad and self.adadelta and self.varreg and self.adasecant)
+    assert not (self.adagrad and self.adadelta and self.adasecant)
     if self.adadelta:
       self.momentum = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
@@ -97,9 +97,9 @@ class Updater:
                      for p in network.train_params_vars}
     if self.adagrad:
       self.accu = {}
-      for p in self.net_train_param_deltas[self.net_train_param_deltas.keys()[0]]:
+      for p in self.network.train_params_vars:
         shape = p.get_value(borrow=True, return_internal_type=True).shape
-        scale = numpy.sqrt(12. / numpy.sum(shape))
+        #scale = numpy.sqrt(12. / numpy.sum(shape))
         #values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
         #values = p.get_value()
         values = numpy.zeros(shape, dtype=theano.config.floatX)
@@ -114,7 +114,7 @@ class Updater:
       #                                 dtype=theano.config.floatX), borrow=True,
       #               name="sqrsum_%s " % p)
       #               for p in self.network.train_params_vars}
-    if self.adadelta or self.varreg:
+    if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                                      dtype=theano.config.floatX))
@@ -135,15 +135,15 @@ class Updater:
     for p in net_param_deltas:
       self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
 
-  def norm_constraint(self, tensor_var, max_norm, norm_axes=None, epsilon=1e-7):
+  def norm_constraint(self, tensor_var, max_norm, norm_axes=None, epsilon=1e-12):
     ndim = tensor_var.ndim
 
     if norm_axes is not None:
         sum_over = tuple(norm_axes)
     elif ndim == 2:  # DenseLayer
         sum_over = (0,)
-    elif ndim in [3, 4, 5]:  # Conv{1,2,3}DLayer
-        sum_over = tuple(range(1, ndim))
+    elif ndim == 3:  # Depth
+        sum_over = (0,2)
     else:
         sum_over = (0,)
 
@@ -183,6 +183,8 @@ class Updater:
       grads = self.net_train_param_deltas
     for param in grads.keys():
       deltas = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
+      if self.max_norm > 0:
+        deltas = self.norm_constraint(deltas, self.max_norm)
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
@@ -460,27 +462,6 @@ class Updater:
         upd[param] += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
         #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
-      elif self.varreg:
-        offset = 6.0 / param.layer.get_branching()
-        decay = 1.0 - 1.0 / sqrt(param.layer.get_branching())
-        g = deltas
-        g2 = g ** 2
-        #z_eg2 = T.sum(self.eg2[param])
-        #z_g2 = T.sum(g2)
-        #z = z_eg2 + z_g2
-        #eg2_new = self.eg2[param] * z_eg2 / z + g2 * z_g2 / z
-        eg2_new = decay * self.eg2[param] + (1 - decay) * g2
-        dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
-        edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
-        #r_edx2 = T.sum(self.edx2[param], axis = 0)
-        #r_dx_new = T.sum(dx_new**2, axis = 0)
-        #r = r_edx2 + r_dx_new
-        #edx2_new = self.edx2[param] * z_eg2 / z + (dx_new**2) * z_g2 / z
-        #edx2_new = self.edx2[param] * r_edx2 / r + (dx_new**2) * r_dx_new / r
-        updates.append((self.eg2[param], eg2_new))
-        updates.append((self.edx2[param], edx2_new))
-        updates.append((self.dx[param], dx_new))
-        upd[param] += self.learning_rate_var * dx_new
       elif self.adadelta:
         # http://arxiv.org/pdf/1212.5701v1.pdf
         decay = self.adadelta_decay

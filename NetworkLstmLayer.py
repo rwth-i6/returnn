@@ -176,7 +176,7 @@ class OptimizedLstmLayer(RecurrentLayer):
       value[:,2 * n_out:3 * n_out] = 1
     else:
       value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
-      value[2 * n_out:3 * n_out] = 1
+      value[2 * n_out:3 * n_out] = 0
     self.b.set_value(value)
     n_re = n_out
     if projection:
@@ -306,8 +306,8 @@ class OptimizedLstmLayer(RecurrentLayer):
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out),
                            T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], self.depth, n_out) ]
         else:
-          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out),
-                           T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out) ]
+          outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[1], n_out),
+                           T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[1], n_out) ]
 
       [state, act], _ = theano.scan(step,
                                     #strict = True,

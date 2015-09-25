@@ -18,9 +18,9 @@ class LayerNetwork(object):
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     self.x = T.tensor3('x'); """ :type: theano.Variable """
-    self.y = {} #T.ivector('y'); """ :type: theano.Variable """
+    self.y = {"data": self.x} #T.ivector('y'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    self.j = {} #T.bmatrix('j'); """ :type: theano.Variable """
+    self.j = {"data": self.i} #T.bmatrix('j'); """ :type: theano.Variable """
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -61,6 +61,15 @@ class LayerNetwork(object):
       assert isinstance(json_content, dict)
       assert json_content
     elif config.network_topology_json:
+      start_var = config.network_topology_json.find('(config:', 0) # e.g. ..., "n_out" : (config:var), ...
+      while start_var > 0:
+        end_var = config.network_topology_json.find(')', start_var)
+        assert end_var > 0, "invalid variable syntax at " + str(start_var)
+        var = config.network_topology_json[start_var+8:end_var]
+        assert config.has(var), "could not find variable " + var
+        config.network_topology_json = config.network_topology_json[:start_var] + config.value(var,"") + config.network_topology_json[end_var+1:]
+        print >> log.v3, "substituting variable %s with %s" % (var,config.value(var,""))
+        start_var = config.network_topology_json.find('(config:', end_var)
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
@@ -149,6 +158,8 @@ class LayerNetwork(object):
           elif prev != "null":
             if not network.hidden.has_key(prev) and not network.output.has_key(prev):
               index = traverse(content, prev, index)
+            else:
+              index = network.hidden[prev].index if prev in network.hidden else network.output[prev].index
             source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
       if 'encoder' in obj:
         encoder = []
@@ -174,7 +185,10 @@ class LayerNetwork(object):
       if 'centroids' in obj:
         index = traverse(content, obj['centroids'], index)
         obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
-
+      if 'encoder' in obj:
+        index = output_index
+      if 'target' in obj:
+        index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
                  'dropout' : 0.0,
@@ -183,7 +197,7 @@ class LayerNetwork(object):
                  'network': network }
       params.update(obj)
       params["mask"] = mask # overwrite
-      params['index'] = index if not 'encoder' in obj else output_index
+      params['index'] = index
       params['y_in'] = network.y
       if cl == 'softmax':
         if not 'target' in params:
@@ -201,7 +215,8 @@ class LayerNetwork(object):
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
+        if not trg in network.j:
+          network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
         traverse(json_content, layer_name, network.j[trg])
     return network
 
@@ -235,6 +250,8 @@ class LayerNetwork(object):
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
               index = traverse(model, s, index)
+            else:
+              index = network.hidden[s].index
             x_in.append(network.hidden[s])
           elif s == "":
             assert not s
@@ -246,6 +263,8 @@ class LayerNetwork(object):
             else:
               if not network.hidden.has_key(s):
                 index = traverse(model, s, index)
+              else:
+                index = network.hidden[s].index
               # Add just like in NetworkDescription, so that param names are correct.
               x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
       else:
@@ -270,6 +289,10 @@ class LayerNetwork(object):
       if 'centroids' in model[layer_name].attrs:
         index = traverse(model, model[layer_name].attrs['centroids'], index)
         centroids = network.hidden[model[layer_name].attrs['centroids']]
+      if 'encoder' in model[layer_name].attrs:
+        index = output_index
+      if 'target' in model[layer_name].attrs:
+        index = network.j[model[layer_name].attrs['target']]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "lstm_softmax":
         params = { 'dropout' : 0.0,
@@ -304,13 +327,11 @@ class LayerNetwork(object):
                    'name': layer_name,
                    'mask': mask,
                    'train_flag' : train_flag,
-                   'carry' : model[layer_name].attrs['carry'],
-                   'depth' : model[layer_name].attrs['depth'],
                    'network': network,
-                   'index' : index if not 'encoder' in model[layer_name].attrs else output_index }
+                   'index' : index }
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
+        for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:

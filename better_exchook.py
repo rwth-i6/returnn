@@ -154,26 +154,45 @@ def simple_debug_shell(globals, locals):
 					print("Error printing return value of %r" % s)
 					better_exchook(*sys.exc_info(), autodebugshell=False)
 
-def debug_shell(user_ns, user_global_ns, execWrapper=None):
+def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
 	ipshell = None
-	try:
-		import IPython
-		import IPython.terminal.embed
-		class DummyMod(object): pass
-		module = DummyMod()
-		module.__dict__ = user_global_ns
-		module.__name__ = "DummyMod"
-		ipshell = IPython.terminal.embed.InteractiveShellEmbed(
-			user_ns=user_ns, user_module=module)
-	except Exception: pass
-	else:
-		if execWrapper:
-			old = ipshell.run_code
-			ipshell.run_code = lambda code: execWrapper(lambda: old(code))
+	if traceback:
+		try:
+			from IPython.core.debugger import Pdb
+			from IPython.terminal.ipapp import TerminalIPythonApp
+			ipapp = TerminalIPythonApp.instance()
+			ipapp.interact = False  # Avoid output (banner, prints)
+			ipapp.initialize()
+			def_colors = ipapp.shell.colors
+			pdb_obj = Pdb(def_colors)
+			pdb_obj.botframe = None  # not sure. exception otherwise at quit
+			ipshell = lambda: pdb_obj.interaction(None, traceback=traceback)
+		except Exception:
+			pass
+	if not ipshell:
+		try:
+			import IPython
+			import IPython.terminal.embed
+			class DummyMod(object): pass
+			module = DummyMod()
+			module.__dict__ = user_global_ns
+			module.__name__ = "DummyMod"
+			ipshell = IPython.terminal.embed.InteractiveShellEmbed(
+				user_ns=user_ns, user_module=module)
+		except Exception:
+			pass
+		else:
+			if execWrapper:
+				old = ipshell.run_code
+				ipshell.run_code = lambda code: execWrapper(lambda: old(code))
 	if ipshell:
 		ipshell()
 	else:
-		simple_debug_shell(user_global_ns, user_ns)
+		if traceback:
+			import pdb
+			pdb.post_mortem(traceback)
+		else:
+			simple_debug_shell(user_global_ns, user_ns)
 
 def output_limit():
 	return 300
@@ -338,7 +357,7 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
 		except Exception: pass
 	if debugshell:
 		output("---------- DEBUG SHELL -----------")
-		debug_shell(user_ns=allLocals, user_global_ns=allGlobals)
+		debug_shell(user_ns=allLocals, user_global_ns=allGlobals, traceback=tb)
 	file.flush()
 
 def install():

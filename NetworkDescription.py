@@ -140,6 +140,7 @@ class LayerNetworkDescription:
       num_outputs = config.typed_value('num_outputs')
       if not isinstance(num_outputs, dict):
         num_outputs = {target: num_outputs}
+      num_outputs = num_outputs.copy()
       for target, value in num_outputs.items():
         if not isinstance(value, (tuple,list)):
           value = [value, 1]

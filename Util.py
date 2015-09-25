@@ -8,7 +8,7 @@ import sys
 import shlex
 import numpy as np
 import re
-from collections import defaultdict
+import time
 
 
 def cmd(s):
@@ -107,6 +107,15 @@ def hms(s):
   h, m = divmod(m, 60)
   return "%d:%02d:%02d" % (h, m, s)
 
+def human_size(n, factor=1000, frac=0.8, prec=1):
+  postfixs = ["", "K", "M", "G", "T"]
+  i = 0
+  while i < len(postfixs) - 1 and n > (factor ** (i + 1)) * frac:
+    i += 1
+  if i == 0:
+    return str(n)
+  return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
+
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys
@@ -127,6 +136,30 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bar = bars + spaces
   sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
   sys.stdout.flush()
+
+
+class _progress_bar_with_time_stats:
+  start_time = None
+  last_complete = None
+
+def progress_bar_with_time(complete=1.0, prefix="", **kwargs):
+  stats = _progress_bar_with_time_stats
+  if stats.start_time is None:
+    stats.start_time = time.time()
+    stats.last_complete = complete
+  if stats.last_complete > complete:
+    stats.start_time = time.time()
+  stats.last_complete = complete
+
+  start_elapsed = time.time() - stats.start_time
+  if complete > 0:
+    total_time_estimated = start_elapsed / complete
+    remaining_estimated = total_time_estimated - start_elapsed
+    if prefix:
+      prefix += ", " + hms(remaining_estimated)
+    else:
+      prefix = hms(remaining_estimated)
+  progress_bar(complete, prefix=prefix, **kwargs)
 
 
 def betterRepr(o):
@@ -171,7 +204,7 @@ class ObjAsDict:
   def __getitem__(self, item):
     try:
       return getattr(self.__obj, item)
-    except AttributeError, e:
+    except AttributeError as e:
       raise KeyError(e)
 
 
@@ -349,10 +382,10 @@ def uniq(seq):
   return seq[idx]
 
 
-def parse_orthography_into_symbols(orthography):
+def parse_orthography_into_symbols(orthography, upper_case_special=True):
   """
   For Speech.
-  Parses "hello [HESITATION] there " -> list("hello ") + ["HESITATION"] + list(" there ").
+  Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there ").
   No pre/post-processing such as:
   Spaces are kept as-is. No stripping at begin/end. (E.g. trailing spaces are not removed.)
   No tolower/toupper.
@@ -362,31 +395,44 @@ def parse_orthography_into_symbols(orthography):
   :rtype: list[str]
   """
   ret = []
-  in_special = False
+  in_special = 0
   for c in orthography:
     if in_special:
-      if c == "]":
-        in_special = False
+      if c == "[":  # special-special
+        in_special += 1
+        ret[-1] += "["
+      elif c == "]":
+        in_special -= 1
+        ret[-1] += "]"
+      elif upper_case_special:
+        ret[-1] += c.upper()
       else:
         ret[-1] += c
     else:  # not in_special
       if c == "[":
-        in_special = True
-        ret += [""]
+        in_special = 1
+        ret += ["["]
       else:
         ret += c
   return ret
 
 
-def parse_orthography(orthography, end_symbol="END"):
+def parse_orthography(orthography, prefix=(), postfix=("[END]",),
+                      remove_chars="(){}", collapse_spaces=True, final_strip=True,
+                      **kwargs):
   """
   For Speech. Full processing.
-  Parses "hello [HESITATION] there " -> list("hello ") + ["HESITATION"] + list(" there") + ["END"].
+  Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"].
   :param str orthography: e.g. "hello [HESITATION] there "
   :rtype: list[str]
   """
-  orthography = orthography.strip()
-  return parse_orthography_into_symbols(orthography) + [end_symbol]
+  for c in remove_chars:
+    orthography = orthography.replace(c, "")
+  if collapse_spaces:
+    orthography = " ".join(orthography.split())
+  if final_strip:
+    orthography = orthography.strip()
+  return list(prefix) + parse_orthography_into_symbols(orthography, **kwargs) + list(postfix)
 
 
 def json_remove_comments(string, strip_space=True):

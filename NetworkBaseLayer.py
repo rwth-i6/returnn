@@ -142,12 +142,13 @@ class Container(object):
   def set_attr(self, name, value):
     self.attrs[name] = value
 
-  def create_bias(self, n, prefix='b'):
+  def create_bias(self, n, prefix='b', name=""):
     """
     :param int n: output dimension
     :rtype: theano.shared
     """
-    name = "%s_%s" % (prefix, self.name)
+    if not name:
+      name = "%s_%s" % (prefix, self.name)
     if self.depth > 1:
       size = (self.depth, n)
     else:
@@ -264,7 +265,7 @@ class SourceLayer(Container):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, target=None, sparse = False, carry = False, cost_scale=1.0, **kwargs):
+  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, target=None, sparse = False, carry = False, cost_scale=1.0, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -286,6 +287,7 @@ class Layer(Container):
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
     self.set_attr('varreg', varreg)
+    self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
       self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
     else:
@@ -406,6 +408,8 @@ class Layer(Container):
       x = T.concatenate([s.output for s in self.sources], axis = -1)
       Tr = T.nnet.sigmoid(self.dot(x, W) + b)
       self.output = Tr * self.output + (1 - Tr) * x
+    if self.attrs['batch_norm']:
+      self.output = (self.output - T.mean(self.output,axis=1,keepdims=True)) / T.std(self.output,axis=1,keepdims=True)
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
 

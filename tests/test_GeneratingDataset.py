@@ -9,7 +9,7 @@ import numpy as np
 def test_init():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=4)
   assert_equal(dataset.num_inputs, 2)
-  assert_equal(dataset.num_outputs, {"classes": 3})
+  assert_equal(dataset.num_outputs, {"classes": [3, 1], "data": [2, 2]})
   assert_equal(dataset.num_seqs, 4)
 
 

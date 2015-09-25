@@ -156,25 +156,16 @@ class StateToAct(ForwardLayer):
     #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
     self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+
     if dual and len(self.act) > 1:
       self.make_output(self.act[1])
       self.act[0] = T.tanh(self.act[1])
     else:
       self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
-
-
-class StateLayer(DualStateLayer):
-  layer_class = "state"
-
-  def __init__(self, acts = "relu", **kwargs):
-    kwargs['acth'] = 'identity'
-    super(StateToAct, self).__init__(acts, **kwargs)  # TODO wrong super __init__, wrong base class?
-    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
-    self.act[0] = T.tanh(self.act[1])
-    self.make_output(self.act[0])
-    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
-    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    if 'target' in self.attrs:
+      self.output = self.output.repeat(self.index.shape[0],axis=0)
+    else:
+      self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
 class HDF5DataLayer(Layer):
@@ -328,7 +319,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) * chunk_size
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
-    z = T.concatenate([s.output for s in self.sources], axis=2) # BTD
+    z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
     calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), z.shape[1], z.shape[2])
     container = T.set_subtensor(
       calloc[:self.index.shape[0]],
@@ -340,6 +331,22 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
     #self.index = self.index.repeat(self.index.shape[0] % chunk_size, axis = 0)
     self.make_output(container.reshape((container.shape[0], container.shape[1]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
+
+
+class CorruptionLayer(ForwardLayer): # x = x + noise
+  layer_class = "corruption"
+  rng = T.shared_randomstreams.RandomStreams(hash(layer_class) % 4294967295)
+
+  def __init__(self, noise='gaussian', p=0.0, **kwargs):
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
+    super(CorruptionLayer, self).__init__(**kwargs)
+    self.set_attr('noise', noise)
+    self.set_attr('p', p)
+
+    z = T.concatenate([s.output for s in self.sources], axis=2)
+    if noise == 'gaussian':
+      z = self.rng.normal(size=z.shape,avg=0,std=p,dtype='float32') + (z - T.mean(z, axis=(0,1), keepdims=True)) / T.std(z, axis=(0,1), keepdims=True)
+    self.make_output(z)
 
 
 import theano

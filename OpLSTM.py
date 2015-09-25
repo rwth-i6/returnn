@@ -13,7 +13,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __init__(self, inplace):
     self.inplace = inplace
     if inplace:
-      #all outputs operate inplace on inputs 4 and 6 (which are DZ and H)
+      #all outputs operate inplace on inputs 4 and 6 (which are DY and H)
       #but when the input is marked multiple times, we get an error
       #so we only mark that output 0 destroys inputs 4 and 6
       #anyway theano knows that inputs 4 and 6 will be destroyed, so it should be OK
@@ -36,7 +36,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     DY = gpu_contiguous(as_cuda_ndarray_variable(DY))
-    idx = gpu_contiguous(as_cuda_ndarray_variable(idx))
+    idx = gpu_contiguous(as_cuda_ndarray_variable(T.cast(idx,'float32')))
     Dd = gpu_contiguous(as_cuda_ndarray_variable(Dd))
     assert V_h.dtype == "float32"
     assert DY.dtype == 'float32'
@@ -176,7 +176,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     Z = gpu_contiguous(as_cuda_ndarray_variable(Z))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
-    i = gpu_contiguous(as_cuda_ndarray_variable(i))
+    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     assert Z.dtype == "float32"
     assert V_h.dtype == "float32"
     assert c.dtype == 'float32'

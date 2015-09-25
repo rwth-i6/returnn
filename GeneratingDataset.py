@@ -1,19 +1,20 @@
 
-from Dataset import Dataset, DatasetSeq
+from Dataset import Dataset, DatasetSeq, convert_data_dims
 from Util import class_idx_seq_to_features
 import numpy
 
 
 class GeneratingDataset(Dataset):
 
-  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), *args, **kwargs):
+  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), **kwargs):
     assert window == 1
-    super(GeneratingDataset, self).__init__(window, *args, **kwargs)
+    super(GeneratingDataset, self).__init__(window, **kwargs)
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
-    if isinstance(output_dim, int):
-      output_dim = {"classes": output_dim}
+    output_dim = convert_data_dims(output_dim)
+    if "data" not in output_dim:
+      output_dim["data"] = [input_dim, 2]  # not sparse
     self.num_outputs = output_dim
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
@@ -196,26 +197,31 @@ class Task12AXDataset(GeneratingDataset):
 
 class DummyDataset(GeneratingDataset):
 
-  def __init__(self, input_dim, output_dim, num_seqs, seq_len=2):
-    assert input_dim > 0
-    assert output_dim > 0
-    assert num_seqs > 0
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
+               input_max_value=10.0, input_shift=None, input_scale=None):
     super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
     self.seq_len = seq_len
+    self.input_max_value = input_max_value
+    if input_shift is None: input_shift = -input_max_value / 2.0
+    self.input_shift = input_shift
+    if input_scale is None: input_scale = 1.0 / self.input_max_value
+    self.input_scale = input_scale
 
   def generate_seq(self, seq_idx):
     seq_len = self.seq_len
     i1 = seq_idx
     i2 = i1 + seq_len * self.num_inputs
-    features = numpy.array(range(i1, i2)).reshape((seq_len, self.num_inputs))
+    features = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
+                            for i in range(i1, i2)]).reshape((seq_len, self.num_inputs))
     i1, i2 = i2, i2 + seq_len
-    targets = numpy.array(range(i1, i2))
+    targets = numpy.array([i % self.num_outputs["classes"][0]
+                           for i in range(i1, i2)])
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
 class StaticDataset(GeneratingDataset):
 
-  def __init__(self, data, target_list=None, output_dim=None):
+  def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
     :type data: list[dict[str,numpy.ndarray]]
     """
@@ -234,27 +240,30 @@ class StaticDataset(GeneratingDataset):
         assert target in first_data
     self.target_list = target_list
 
-    first_data_input = first_data["data"]
-    assert len(first_data_input.shape) == 2  # (time,dim)
-    input_dim = first_data_input.shape[1]
-
-    if isinstance(output_dim, int):
-      assert "classes" in target_list
-      output_dim = {"classes": output_dim}
     if output_dim is None:
       output_dim = {}
+    output_dim = convert_data_dims(output_dim)
+
+    first_data_input = first_data["data"]
+    assert len(first_data_input.shape) <= 2  # (time[,dim])
+    if input_dim is None:
+      if "data" in output_dim:
+        input_dim = output_dim["data"][0]
+      else:
+        input_dim = first_data_input.shape[1]
+
     for target in target_list:
       first_data_output = first_data[target]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
-      if len(first_data_output.shape) == 1:
-        assert target in output_dim
+      if target in output_dim:
+        assert output_dim[target][1] == len(first_data_output.shape)
+        if len(first_data_output.shape) >= 2:
+          assert output_dim[target][0] == first_data_output.shape[1]
       else:
-        if target in output_dim:
-          assert output_dim[target] == first_data_output.shape[1]
-        else:
-          output_dim[target] = first_data_output.shape[1]
+        assert len(first_data_output.shape) == 2, "We expect not sparse. Or specify it explicitly in output_dim."
+        output_dim[target] = [first_data_output.shape[1], 2]
 
-    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
+    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 
   def generate_seq(self, seq_idx):
     data = self.data[seq_idx]

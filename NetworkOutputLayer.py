@@ -30,6 +30,7 @@ class OutputLayer(Layer):
     :param str loss: e.g. 'ce'
     """
     super(OutputLayer, self).__init__(**kwargs)
+    self.y = y
     self.y_data_flat = time_batch_make_flat(y)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
@@ -74,8 +75,9 @@ class OutputLayer(Layer):
     #self.make_output(self.z, collapse = False)
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
 
-  def create_bias(self, n, prefix='b'):
-    name = "%s_%s" % (prefix, self.name)
+  def create_bias(self, n, prefix='b', name=""):
+    if not name:
+      name = "%s_%s" % (prefix, self.name)
     assert n > 0
     bias = numpy.log(1.0 / n)  # More numerical stable.
     value = numpy.zeros((n,), dtype=theano.config.floatX) + bias
@@ -138,8 +140,14 @@ class FramewiseOutputLayer(OutputLayer):
       if self.y_data_flat.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
+        #idx = self.index.flatten().dimshuffle(0,'x').repeat(self.y_m.shape[1],axis=1) # faster than line below
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m * idx, y_idx=self.y_data_flat * self.index.flatten())
         nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
-        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y)
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
+        #nll = -T.log(T.nnet.softmax(self.y_m)[self.i,self.y_data_flat[self.i]])
+        #z_c = T.exp(self.z[:,self.y])
+        #nll = -T.log(z_c / T.sum(z_c,axis=2,keepdims=True))
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
         #nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)

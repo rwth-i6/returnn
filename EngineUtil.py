@@ -16,10 +16,7 @@ def assign_dev_data(device, dataset, batches):
   shapes = dataset.shapes_for_batches(batches, data_keys=device.used_data_keys)
   if shapes is None:
     return False, len(batches)
-  import time
-  ts = time.time()
   device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())
-  ts = time.time()
   offset_slice = 0
 
   for batch in batches:
@@ -32,14 +29,15 @@ def assign_dev_data(device, dataset, batches):
         l = seq.frame_length
         #assert o + l[0] <= shape[0]
         #assert q < shape[1]
-        device.input_index[o["data"]:o["data"] + l["data"], q] = numpy.ones((l["data"],), dtype='int8')
-        data = dataset.get_data(seq.seq_idx, "data")
-        device.data[o["data"]:o["data"] + l["data"], q] = data[seq.seq_start_frame["data"]:seq.seq_end_frame["data"]]
+        # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in device.used_data_keys:
-          targets = dataset.get_data(seq.seq_idx, k)
-          if targets is not None:
+          data = dataset.get_data(seq.seq_idx, k)
+          if l[k] > 0:
+            assert data is not None
             device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
-            device.targets[k][o[k]:o[k] + l[k], q] = targets[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+          if data is not None:
+            #print k,o[k],l[k]
+            device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
             #if exclude:
             #  for i in xrange(l[1]):
             #    if device.targets[target][o + i, q] in exclude:

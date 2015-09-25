@@ -39,8 +39,8 @@ class TaskThread(threading.Thread):
       self.daemon = True
       self.elapsed = 0
       self.finalized = False
-      self.score = None
-      self.error = None
+      self.score = {}
+      self.error = {}
       self.results = {}
       self.num_frames = NumbersDict(0)
       self.batch_idx = None; " :type: int | None "
@@ -64,7 +64,6 @@ class TaskThread(threading.Thread):
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
       This sets:
-        device.data
         device.targets
         device.ctc_targets
         device.tags
@@ -159,8 +158,8 @@ class TaskThread(threading.Thread):
       for key, value in self.results.items():
         self.results[key] *= self.epoch_norm_factor_for_result(key)
       # Total score/error.
-      self.score = sum([value for (key, value) in self.results.items() if key.startswith("cost:")])
-      self.error = sum([value for (key, value) in self.results.items() if key.startswith("error:")])
+      self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
+      self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
 
     class DeviceBatchRun(threading.Thread):
@@ -270,10 +269,10 @@ class TaskThread(threading.Thread):
         assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
-            print >> log.v5, "running", device.data.shape[1], \
-                             "sequence slices (%i nts)" % (device.data.shape[0] * device.data.shape[1]),
+            print >> log.v5, "running", device.targets["data"].shape[1], \
+                             "sequence slices (%i nts)" % (device.targets["data"].shape[0] * device.targets["data"].shape[1]),
           else:
-            print >> log.v5, "running", device.data.shape[0] * device.data.shape[1], "frames",
+            print >> log.v5, "running", device.targets["data"].shape[0] * device.targets["data"].shape[1], "frames",
           if device.num_batches == 1:
             print >> log.v5, "of batch %i" % batch_idx,
           else:
@@ -571,12 +570,13 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         for i in xrange(nparams):
-          num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.0001 ])
+          num_updates = { dev.name : dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > 0.000001 }
+          tot_updates = sum(num_updates.values())
           #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])
           #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
           #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          if num_updates:
-            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_updates) / num_updates) for net,dev in zip(hypnets,self.devices) ], axis = 0)
+          if tot_updates:
+            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(num_updates[dev.name]) / tot_updates) for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
           else:
             print >> log.v4, "warning: no update available for parameter", basenet[i]
             consnet[i] = basenet[i].get_value()

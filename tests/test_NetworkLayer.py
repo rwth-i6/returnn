@@ -1,7 +1,7 @@
 
 from nose.tools import assert_equal, assert_is, assert_in, assert_not_in, assert_true, assert_false
 from NetworkLayer import LayerClasses
-from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer, DualStateLayer, StateLayer
+from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer, DualStateLayer
 from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
 from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, SimpleLstmLayer, GRULayer, SRULayer, SRALayer
 
@@ -20,7 +20,6 @@ def test_LayerClasses_list():
   assert_in('sra', LayerClasses)
   assert_in('chunking', LayerClasses)
   assert_in('dual', LayerClasses)
-  assert_in('state', LayerClasses)
   assert_in("state_to_act", LayerClasses)
   assert_in("base", LayerClasses)
   assert_in('rec', LayerClasses)

@@ -413,7 +413,7 @@ class Engine:
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch, self.epoch - 1)
       sys.exit(1)
 
-    assert not (numpy.isinf(trainer.score) or numpy.isnan(trainer.score)), \
+    assert not any(numpy.isinf(trainer.score.values())) or any(numpy.isnan(trainer.score.values())), \
       "Model is broken, got inf or nan final score: %s" % trainer.score
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
@@ -423,9 +423,12 @@ class Engine:
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
-    print >> log.v1, self.get_epoch_str(), "score:", trainer.score, "elapsed:", hms(trainer.elapsed),
+    print >> log.v1, self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed),
     self.eval_model()
     print >> log.v1, ""
+
+  def format_score(self, score):
+    return " ".join([(key.split(':')[-1]+" " if len(score.keys()) > 1 else "") + str(score[key]) for key in score])
 
   def eval_model(self):
     eval_dump_str = []
@@ -434,7 +437,13 @@ class Engine:
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()
-      eval_dump_str += ["  %s: score %s error %s" % (dataset_name, tester.score, tester.error)]
+      score_dump = ""
+      error_dump = ""
+      for skey,ekey in zip(tester.score.keys(),tester.error.keys()):
+        score_dump += (skey.split(':')[-1]+" " if len(tester.score.keys()) > 1 else "") + str(tester.score[skey]) + " "
+        error_dump += (skey.split(':')[-1]+" " if len(tester.error.keys()) > 1 else "") + str(tester.error[ekey]) + " "
+
+      eval_dump_str += [" %s: score %s error %s" % (dataset_name,self.format_score(tester.score),self.format_score(tester.error))]
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()

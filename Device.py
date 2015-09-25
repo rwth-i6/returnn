@@ -125,7 +125,6 @@ class Device(object):
     update_specs.setdefault('layers', [])
     update_specs.setdefault('block_size', 0)
     self.update_specs = update_specs
-    self.data = None
     self.main_pid = os.getpid()
 
     if blocking:
@@ -251,14 +250,13 @@ class Device(object):
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
-    self.x = theano.shared(numpy.zeros((1, 1, 1), dtype = theano.config.floatX), borrow=True, name='x')
-    self.y = {}
     self.used_data_keys = set(self.trainnet.y.keys())
-    for k in self.trainnet.y:
-      self.y[k] = theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
-                                borrow=True, name='y_%s' % k)
-    self.i = theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='i')
-    self.j = {k: theano.shared(numpy.zeros((1, 1), dtype = 'int8'), borrow=True, name='j_%s' % k) for k in self.trainnet.y.keys()}
+    assert "data" in self.used_data_keys
+    self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
+                               borrow=True, name='y_%s' % k)
+              for k in self.used_data_keys}
+    self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
+              for k in self.used_data_keys}
     if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
@@ -277,7 +275,10 @@ class Device(object):
         if update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
           gparam = 0
         else:
-          gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+          try:
+            gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+          except theano.gradient.DisconnectedInputError:
+            gparam = 0
         if gparam == 0:
           exclude.append(param)
           print >> log.v4, "exclude:", self.name, param.name
@@ -429,7 +430,7 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    batch_dim = self.x.get_value().shape[1]
+    batch_dim = self.y["data"].get_value().shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if task == "train" or task == "theano_graph" or task == "eval":
       func = self.tester if task == "eval" else self.trainer
@@ -506,9 +507,9 @@ class Device(object):
       return
     collected_info = {"info_str": str(info)}
     try:
-      collected_info["dev_data"] = numpy.asarray(self.x.get_value())
-      collected_info["dev_targets"] = numpy.asarray(self.y.get_value())
-      collected_info["dev_index"] = numpy.asarray(self.i.get_value())
+      collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
+      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value())
+      collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
     except Exception, e:
       print >> log.v3, "Exception when getting device data. %s" % e
     try:
@@ -634,12 +635,10 @@ class Device(object):
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
-        x = input_queue.recv()
         t = {}
         target_keys = input_queue.recv()
         for k in target_keys:
           t[k] = input_queue.recv()
-        i = input_queue.recv()
         j = {}
         for k in target_keys:
           j[k] = input_queue.recv()
@@ -650,11 +649,10 @@ class Device(object):
           self.cp.set_value(c)
         if SprintCommunicator.instance is not None:
           SprintCommunicator.instance.segments = self.tags
-        self.x.set_value(x.astype('float32'), borrow = True)
+        # self.x == self.y["data"], will be set also here.
         for k in target_keys:
           self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
-        self.i.set_value(i.astype('int8'), borrow = True)
         for k in target_keys:
           self.j[k].set_value(j[k].astype('int8'), borrow = True)
         self.update_total_time += time.time() - update_start_time
@@ -809,22 +807,17 @@ class Device(object):
     assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
-    self.data = numpy.zeros(shapes["data"], dtype=theano.config.floatX)
     self.targets = {k: numpy.zeros(shapes[k], dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
-    self.input_index = numpy.zeros(shapes["data"][0:2], dtype='int8')
-    self.output_index = {k: numpy.zeros(shapes["data"][0:2], dtype='int8') for k in self.used_data_keys}
+    self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # TODO
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
     if self.blocking:
       update_start_time = time.time()
-      self.x.set_value(self.data, borrow = True)
-      #self.t.set_value(self.targets, borrow = True)
       for target in self.used_data_keys:
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
-      self.i.set_value(self.input_index, borrow = True)
       for k in self.used_data_keys:
         self.j[k].set_value(self.output_index[k], borrow = True)
       if SprintCommunicator.instance is not None:
@@ -835,12 +828,10 @@ class Device(object):
     else:
       assert self.main_pid == os.getpid()
       self.input_queue.send("update-data")
-      self.input_queue.send(self.data)
       target_keys = list(sorted(self.used_data_keys))
       self.input_queue.send(target_keys)
       for target in target_keys:
         self.input_queue.send(self.targets[target])
-      self.input_queue.send(self.input_index)
       for k in target_keys:
         self.input_queue.send(self.output_index[k])
       self.input_queue.send(self.tags)
@@ -1059,28 +1050,21 @@ class Device(object):
     """
     :type network: LayerNetwork
     """
+    # self.i == self.j["data"], self.x == self.y["data"]
     if True or self.block_size:
       i = self.block_start
       j = self.block_end
-      return [(network.x, self.x[:,i:j]),
-              (network.i, self.i[:,i:j])] + \
-             [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
+      return [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
              [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
     else:
-      return [(network.x, self.x),
-              (network.i, self.i)] + \
-             [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
+      return [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
              [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_input_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    # self.i == self.j["data"]
+    return [(network.y["data"], self.y["data"])] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_sprint_givens(self, network):
-    return [(network.x, self.x), (network.i, self.i)] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_input_givens(network)
   def make_ctc_givens(self, network):
-    return [(network.x, self.x), (network.c, self.c), (network.i, self.i)] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_input_givens(network) + [(network.c, self.c)]
   def make_ce_ctc_givens(self, network):
-    return [(network.x, self.x),
-            (network.y, self.y),
-            (network.c, self.c),
-            (network.i, self.i)] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return self.make_givens(network) + [(network.c, self.c)]
