@@ -80,15 +80,15 @@ class Unit(Container):
     self.truncate_gradient = truncate_gradient
     z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[1],W_re))
     try:
-      xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
+      self.xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
-      xc = z if not x else T.concatenate(x, axis = -1)
+      self.xc = z if not x else T.concatenate(x, axis = -1)
 
     outputs, _ = theano.scan(step,
                              #strict = True,
                              truncate_gradient = truncate_gradient,
                              go_backwards = go_backwards,
-                             sequences = [xc,z,i],
+                             sequences = [self.xc,z,i],
                              non_sequences = non_sequences,
                              outputs_info = outputs_info)
     return outputs
@@ -326,7 +326,7 @@ class RecurrentUnitLayer(Layer):
     z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
-        z += W[T.cast(x_t.output[:,:,0], 'int32')]
+        z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],s.output.shape[2] * W.shape[1])) #W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         z += T.dot(x_t.output, W)
       else:
@@ -455,6 +455,9 @@ class RecurrentUnitLayer(Layer):
         else:
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
+
+      if sequences == 0:
+        sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
 
       def step(x_t, z_t, i_t, *args):
         mask,mass = 0,0

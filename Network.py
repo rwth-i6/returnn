@@ -175,9 +175,12 @@ class LayerNetwork(object):
         if not isinstance(obj['base'], list):
           obj['base'] = [obj['base']]
         for prev in obj['base']:
-          if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, index)
-          base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+          if prev == 'data':
+            base.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+          else:
+            if not network.hidden.has_key(prev) and not network.output.has_key(prev):
+              traverse(content, prev, index)
+            base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
         obj['base'] = base
       if 'copy_input' in obj:
         index = traverse(content, obj['copy_input'], index)
@@ -195,6 +198,7 @@ class LayerNetwork(object):
                  'name' : layer_name,
                  "train_flag": train_flag,
                  'network': network }
+      print layer_name, index
       params.update(obj)
       params["mask"] = mask # overwrite
       params['index'] = index

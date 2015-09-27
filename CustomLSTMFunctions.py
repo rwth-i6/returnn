@@ -51,8 +51,9 @@ def attention_dot():
   f_e = T.exp(f_z)
   w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
   
-  import theano.printing
-  w_t = theano.printing.Print("w_t")(w_t)
+  #import theano.printing
+  #w_t = theano.printing.Print("w_t")(T.sum(T.log(w_t)*w_t))
+  #theano.printing.Print("w_t")(T.argmax(w_t,axis=0))
 
   z_re = T.dot(T.sum(B * w_t, axis=0, keepdims=False), W_att_in)
 
