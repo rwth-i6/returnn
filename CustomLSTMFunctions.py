@@ -1,7 +1,14 @@
 import theano
 import theano.tensor as T
 import numpy
-import theano.sandbox.cuda as cuda
+from Device import have_gpu
+
+if have_gpu():
+  import theano.sandbox.cuda as theano_cuda
+  tt = theano_cuda
+else:
+  tt = T
+
 
 def make_fwd_fun(custom_fun_maker):
   y_p, z_re, custom_vars = custom_fun_maker()
@@ -15,7 +22,7 @@ def make_fwd_fun(custom_fun_maker):
 def make_bwd_fun(custom_fun_maker):
   y_p, z_re, custom_vars = custom_fun_maker()
 
-  Dz_re = cuda.fmatrix("Dz_re")
+  Dz_re = tt.fmatrix("Dz_re")
   known_grads = {z_re: Dz_re}
   Dy_p = T.grad(None, y_p, known_grads=known_grads)
 
@@ -32,9 +39,9 @@ def make_bwd_fun(custom_fun_maker):
   return bwd_fun, custom_reset_fn, out_Dy_p, custom_out
 
 
-def test_fun():
-  y_p = cuda.fmatrix("y_p")
-  W_att_in = cuda.fmatrix("W_att_in")
+def test():
+  y_p = tt.fmatrix("y_p")
+  W_att_in = tt.fmatrix("W_att_in")
   z_re = T.dot(y_p, W_att_in)
   custom_vars = [W_att_in]
   return y_p, z_re, custom_vars
@@ -43,10 +50,10 @@ def print_wt(op,x):
   print x.argmax(axis=0)
 
 def attention_dot():
-  y_p = cuda.fmatrix("y_p")
-  B = cuda.ftensor3("B")
-  W_att_in = cuda.fmatrix("W_att_in")
-  W_att_quadr = cuda.fmatrix("W_att_quadr")
+  y_p = tt.fmatrix("y_p")
+  B = tt.ftensor3("B")
+  W_att_in = tt.fmatrix("W_att_in")
+  W_att_quadr = tt.fmatrix("W_att_quadr")
   custom_vars = [B,W_att_in,W_att_quadr]
 
   #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
@@ -63,11 +70,11 @@ def attention_dot():
 
 
 def attention_time_gauss():
-  y_p = cuda.fmatrix("y_p")  # s_t-1
-  B = cuda.ftensor3("B")  # h
+  y_p = tt.fmatrix("y_p")  # s_t-1
+  B = tt.ftensor3("B")  # h
 
-  W_att_in = cuda.fmatrix("W_att_in")
-  W_att_quadr = cuda.fmatrix("W_att_quadr")
+  W_att_in = tt.fmatrix("W_att_in")
+  W_att_quadr = tt.fmatrix("W_att_quadr")
   custom_vars = [B,W_att_in,W_att_quadr]
 
   # TODO...
@@ -82,21 +89,23 @@ def attention_time_gauss():
 
 
 
-test_fun_fwd, test_fun_fwd_res0, test_fun_fwd_res1 = make_fwd_fun(test_fun)
-test_fun_bwd, test_fun_reset, test_fun_bwd_res0, test_fun_bwd_res1 = make_bwd_fun(test_fun)
-
-
-
-def setup_functions():
+def _setup_func(fn):
+  f = globals()[fn]
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
-  for fn, f in list(globals().items()):
-    if not fn.startswith("attention_"): continue
-    vs_fwd = make_fwd_fun(f)
-    vs_bwd = make_bwd_fun(f)
-    assert len(vs_fwd) == len(fwd_names)
-    assert len(vs_bwd) == len(bwd_names)
-    for v, postfix in zip(vs_fwd + vs_bwd, fwd_names + bwd_names):
-      globals()[fn + postfix] = v
+  vs_fwd = make_fwd_fun(f)
+  vs_bwd = make_bwd_fun(f)
+  assert len(vs_fwd) == len(fwd_names)
+  assert len(vs_bwd) == len(bwd_names)
+  for v, postfix in zip(vs_fwd + vs_bwd, fwd_names + bwd_names):
+    globals()[fn + postfix] = v
 
-setup_functions()
+def _setup_functions():
+  _setup_func("test")
+  import inspect
+  for fn in list(globals().keys()):
+    if not fn.startswith("attention_"): continue
+    if not inspect.isfunction(globals()[fn]): continue
+    _setup_func(fn)
+
+_setup_functions()
