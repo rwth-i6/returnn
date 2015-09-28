@@ -58,7 +58,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
-    funloader = make_funloader_code(self.fun_name + "_bwd", self.fun_name + "_reset")
+    funloader = make_funloader_code(self.fun_name + "_fun_bwd", self.fun_name + "_fun_reset")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
@@ -73,7 +73,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
     else:
       custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
-    bwd_fun = self.fun_name + "_bwd"
+    bwd_fun = self.fun_name + "_fun_bwd"
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
@@ -253,7 +253,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def c_support_code(self):
     #do not remove this import as it is used in the c code
     import CustomLSTMFunctions
-    funloader = make_funloader_code(self.fun_name + "_fwd")
+    funloader = make_funloader_code(self.fun_name + "_fun_fwd")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -263,7 +263,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     custom_inputs = input_names[5:]
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
     Y, H, d = output_names
-    fwd_fun = self.fun_name + "_fwd"
+    fwd_fun = self.fun_name + "_fun_fwd"
     inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """
@@ -361,49 +361,45 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    all_grads = LSTMCustomOpGrad(fun_name=self.fun_name, inplace=False)(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
+    grad_op = grad_ops[self.fun_name]
+    all_grads = grad_op(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
     DZ, Dc, Dy0, DW_re = all_grads[:4]
     custom_grads = all_grads[4:]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
     return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
-#register all the functions and optimizations
-LSTMCustomTestOpNoInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=False)
-LSTMCustomDotAttentionOpNoInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=False)
 
-LSTMCustomTestOpInplaceInstance = LSTMCustomOp(fun_name="test_fun", inplace=True)
-LSTMCustomDotAttentionOpInplaceInstance = LSTMCustomOp(fun_name="attention_dot_fun", inplace=True)
+function_ops = {}; ":type: dict[str,LSTMCustomOp]"
+grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
 
-no_inplace_instances = [LSTMCustomTestOpNoInplaceInstance, LSTMCustomDotAttentionOpNoInplaceInstance]
-inplace_instances    = [LSTMCustomTestOpInplaceInstance, LSTMCustomDotAttentionOpInplaceInstance]
+def _register_all_funcs():
+  import CustomLSTMFunctions
+  for fn in CustomLSTMFunctions.functions.keys():
+    # register op
+    no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
+    inpl = LSTMCustomOp(fun_name=fn, inplace=True)
+    function_ops[fn] = no_inpl
 
-opts = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances, inplace_instances)]
+    # hack to avoid being called twice
+    attr = 'LSTMCustomMOpInplaceOpt_%s' % fn
+    if not hasattr(optdb, attr):
+      opt = OpSub(no_inpl, inpl)
+      optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                     50.0, 'fast_run', 'inplace', 'gpuarray')
+      setattr(optdb, attr, True)
 
-#hack to avoid being called twice
-for idx, opt in enumerate(opts):
-  attr = 'LSTMCustomMOpInplaceOpt' + str(idx)
-  if not hasattr(optdb, attr):
-    optdb.register(attr, theano.gof.TopoOptimizer(opt),
-                   50.0, 'fast_run', 'inplace', 'gpuarray')
-    setattr(optdb, attr, True)
+    # the same for grad
+    no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False)
+    inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True)
+    grad_ops[fn] = no_inpl
 
-#the same for grad
-LSTMCustomTestOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=False)
-LSTMCustomDotAttentionOpGradNoInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=False)
+    # hack to avoid being called twice
+    attr = 'LSTMCustomMOpGradInplaceOpt_%s' % fn
+    if not hasattr(optdb, attr):
+      opt = OpSub(no_inpl, inpl)
+      optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                     50.0, 'fast_run', 'inplace', 'gpuarray')
+      setattr(optdb, attr, True)
 
-LSTMCustomTestOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="test_fun", inplace=True)
-LSTMCustomDotAttentionOpGradInplaceInstance = LSTMCustomOpGrad(fun_name="attention_dot_fun", inplace=True)
-
-no_inplace_instances_grad = [LSTMCustomTestOpGradNoInplaceInstance, LSTMCustomDotAttentionOpGradNoInplaceInstance]
-inplace_instances_grad    = [LSTMCustomTestOpGradInplaceInstance, LSTMCustomDotAttentionOpGradInplaceInstance]
-
-opts_grad = [OpSub(no_inpl, inpl) for no_inpl, inpl in zip(no_inplace_instances_grad, inplace_instances_grad)]
-
-#hack to avoid being called twice
-for idx, opt in enumerate(opts_grad):
-  attr = 'LSTMCustomMOpGradInplaceOpt' + str(idx)
-  if not hasattr(optdb, attr):
-    optdb.register(attr, theano.gof.TopoOptimizer(opt),
-                   50.0, 'fast_run', 'inplace', 'gpuarray')
-    setattr(optdb, attr, True)
+_register_all_funcs()

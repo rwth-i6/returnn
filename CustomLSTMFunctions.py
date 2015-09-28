@@ -89,8 +89,11 @@ def attention_time_gauss():
 
 
 
+functions = {}
+
 def _setup_func(fn):
   f = globals()[fn]
+  functions[fn] = f
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
   vs_fwd = make_fwd_fun(f)
