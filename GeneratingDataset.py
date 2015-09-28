@@ -1,6 +1,6 @@
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
-from Util import class_idx_seq_to_features
+from Util import class_idx_seq_to_1_of_k
 import numpy
 
 
@@ -190,7 +190,7 @@ class Task12AXDataset(GeneratingDataset):
     seq_len = self.get_random_seq_len()
     input_seq = self.generate_input_seq(seq_len)
     output_seq = self.make_output_seq(input_seq)
-    features = class_idx_seq_to_features(input_seq, num_classes=len(self._input_classes))
+    features = class_idx_seq_to_1_of_k(input_seq, num_classes=len(self._input_classes))
     targets = numpy.array(output_seq)
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
@@ -273,3 +273,31 @@ class StaticDataset(GeneratingDataset):
 
   def get_target_list(self):
     return self.target_list
+
+
+class CopyTaskDataset(GeneratingDataset):
+
+  def __init__(self, nsymbols, minlen, maxlen, **kwargs):
+    # Sparse data.
+    super(CopyTaskDataset, self).__init__(input_dim=nsymbols,
+                                          output_dim={"data": [nsymbols, 1],
+                                                      "classes": [nsymbols, 1]},
+                                          **kwargs)
+
+    assert nsymbols <= 256
+    self.nsymbols = nsymbols
+    self.minlen = minlen
+    self.maxlen = maxlen
+
+  def get_random_seq_len(self):
+    return self.random.randint(self.minlen, self.maxlen + 1)
+
+  def generate_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq
+    """
+    seq_len = self.get_random_seq_len()
+    seq = [self.random.randint(0, self.nsymbols) for i in range(seq_len)]
+    seq_np = numpy.array(seq, dtype="int8")
+    return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})

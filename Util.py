@@ -363,7 +363,7 @@ def try_run(func, args=(), catch_exc=Exception, default=None):
     return default
 
 
-def class_idx_seq_to_features(seq, num_classes):
+def class_idx_seq_to_1_of_k(seq, num_classes):
   num_frames = len(seq)
   m = np.zeros((num_frames, num_classes))
   m[np.arange(num_frames), seq] = 1
