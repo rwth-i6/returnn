@@ -50,7 +50,7 @@ def attention_dot():
   f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
   f_e = T.exp(f_z)
   w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-  
+
   #import theano.printing
   #w_t = theano.printing.Print("w_t")(T.sum(T.log(w_t)*w_t))
   #theano.printing.Print("w_t")(T.argmax(w_t,axis=0))
@@ -59,8 +59,42 @@ def attention_dot():
 
   return y_p, z_re, custom_vars
 
+
+def attention_time_gauss():
+  y_p = cuda.fmatrix("y_p")  # s_t-1
+  B = cuda.ftensor3("B")  # h
+
+  W_att_in = cuda.fmatrix("W_att_in")
+  W_att_quadr = cuda.fmatrix("W_att_quadr")
+  custom_vars = [B,W_att_in,W_att_quadr]
+
+  # TODO...
+  f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
+  f_e = T.exp(f_z)
+  w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+
+  z_re = T.dot(T.sum(B * w_t, axis=0, keepdims=False), W_att_in)
+
+
+  return y_p, z_re, custom_vars
+
+
+
 test_fun_fwd, test_fun_fwd_res0, test_fun_fwd_res1 = make_fwd_fun(test_fun)
 test_fun_bwd, test_fun_reset, test_fun_bwd_res0, test_fun_bwd_res1 = make_bwd_fun(test_fun)
 
-attention_dot_fun_fwd, attention_dot_fun_fwd_res0, attention_dot_fun_fwd_res1 = make_fwd_fun(attention_dot)
-attention_dot_fun_bwd, attention_dot_fun_reset, attention_dot_fun_bwd_res0, attention_dot_fun_bwd_res1 = make_bwd_fun(attention_dot)
+
+
+def setup_functions():
+  fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
+  bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
+  for fn, f in list(globals().items()):
+    if not fn.startswith("attention_"): continue
+    vs_fwd = make_fwd_fun(f)
+    vs_bwd = make_bwd_fun(f)
+    assert len(vs_fwd) == len(fwd_names)
+    assert len(vs_bwd) == len(bwd_names)
+    for v, postfix in zip(vs_fwd + vs_bwd, fwd_names + bwd_names):
+      globals()[fn + postfix] = v
+
+setup_functions()
