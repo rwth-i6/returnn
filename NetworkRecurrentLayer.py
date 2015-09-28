@@ -70,6 +70,12 @@ class Unit(Container):
     self.slice = T.constant(self.n_units, dtype='int32')
     self.params = {}
 
+  def set_parent(self, parent):
+    """
+    :type parent: RecurrentUnitLayer
+    """
+    self.parent = parent
+
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards=False, truncate_gradient=-1):
     self.outputs_info = outputs_info
     self.non_sequences = non_sequences
@@ -544,7 +550,7 @@ class RecurrentUnitLayer(Layer):
         #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
 
       index_f = T.cast(index, theano.config.floatX)
-      unit.parent = self
+      unit.set_parent(self)
       outputs = unit.scan(step,
                           sources,
                           sequences[s::self.attrs['sampling']],
