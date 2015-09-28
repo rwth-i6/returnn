@@ -35,6 +35,19 @@ def test_num_inputs_outputs_old():
   assert_equal(num_outputs["classes"], [n_out, 1])
 
 
+def test_num_inputs_outputs_special_dataset():
+  config = Config()
+  config.update({
+    "train": {"class": "CopyTaskDataset", "num_seqs": 1000, "nsymbols": 80, "minlen": 100, "maxlen": 100},
+    "num_outputs": {"data": [80, 1], "classes": [80, 1]}})
+  num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+  assert_equal(num_inputs, 80)
+  assert_in("data", num_outputs)
+  assert_in("classes", num_outputs)
+  assert_equal(num_outputs["classes"], [80, 1])
+  assert_equal(num_outputs["data"], [80, 1])
+
+
 config1_dict = {
   "num_inputs": 5,
   "num_outputs": 10,
@@ -149,3 +162,4 @@ def test_config2_bidirect_lstm():
   assert_in("hidden_2_bw", net_json)
   assert_equal(net_json["output"]["from"], ["hidden_2_fw", "hidden_2_bw"])
   assert_equal(len(net_json), 7)
+
