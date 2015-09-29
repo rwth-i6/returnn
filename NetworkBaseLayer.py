@@ -251,8 +251,15 @@ class Container(object):
 class SourceLayer(Container):
   layer_class = "source"
 
-  def __init__(self, n_out, x_out, delay = 0, sparse = False, name=""):
+  def __init__(self, n_out, x_out=None, delay=0, sparse=False, name="", network=None,
+               # These will be given if we initialize via JSON.
+               sources=None, dropout=0, train_flag=None, mask=None, index=None, y_in=None):
     super(SourceLayer, self).__init__(layer_class=self.layer_class, name=name)
+    if x_out is None:
+      assert network is not None
+      x_out = network.x
+    assert not sources, 'specify `"from": "null"` in json'  # or just ignore?
+    assert dropout == 0
     if not delay:
       self.output = x_out
     else:
