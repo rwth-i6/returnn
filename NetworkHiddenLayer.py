@@ -93,6 +93,25 @@ class CopyLayer(_NoOpLayer):
     self.make_output(act_f(self.z))
 
 
+class ConstantLayer(_NoOpLayer):
+  layer_class = "constant"
+
+  def __init__(self, value, dtype="float32", **kwargs):
+    super(ConstantLayer, self).__init__(**kwargs)
+    assert not self.sources
+    self.set_attr("value", value)
+    self.set_attr("dtype", dtype)
+    value = T.constant(numpy.array(value), dtype=dtype)
+    if value.ndim == 0:
+      value = value.dimshuffle('x', 'x', 'x')
+    elif value.ndim == 1:
+      value = value.dimshuffle('x', 'x', 0)
+    else:
+      raise Exception("ndim %i not supported" % value.ndim)
+    assert value.ndim == 3
+    self.make_output(value)
+
+
 class BinOpLayer(_NoOpLayer):
   layer_class = "bin_op"
 
