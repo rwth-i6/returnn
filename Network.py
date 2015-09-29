@@ -198,7 +198,6 @@ class LayerNetwork(object):
                  'name' : layer_name,
                  "train_flag": train_flag,
                  'network': network }
-      print layer_name, index
       params.update(obj)
       params["mask"] = mask # overwrite
       params['index'] = index

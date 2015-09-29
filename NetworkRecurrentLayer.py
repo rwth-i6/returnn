@@ -347,15 +347,15 @@ class RecurrentUnitLayer(Layer):
       if self.attrs['attention'] == 'default': # attention over dot product of base outputs and time dependent activation
         n_in = sum([e.attrs['n_out'] for e in base])
         src = [e.output for e in base]
-        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
+        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in + unit.n_re)
         self.xb = self.add_param(self.create_bias(n_in, name='b_att'))
         self.xc = T.concatenate(src, axis=2) + self.xb
-        if n_in != unit.n_out:
-          values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
-          self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
-          self.add_param(self.W_att_proj)
-          self.xc = T.dot(self.xc, self.W_att_proj)
-          n_in = unit.n_units
+        #if n_in != unit.n_out:
+        #  values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
+        #  self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
+        #  self.add_param(self.W_att_proj)
+        #  self.xc = T.dot(self.xc, self.W_att_proj)
+        #  n_in = unit.n_units
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
         self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
         self.add_param(self.W_att_re)
@@ -421,8 +421,8 @@ class RecurrentUnitLayer(Layer):
       index = self.index[s::self.attrs['sampling']]
       sequences = z
       sources = self.sources
+      n_dec = self.out_dec
       if encoder:
-        n_dec = self.out_dec
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder[0].index.shape[1])

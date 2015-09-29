@@ -322,7 +322,6 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         assert(y_p_obj);
         y_p = (CudaNdarray*) y_p_obj;
       }
-
       std::vector<CudaNdarray*> res_vec = %(fwd_fun)s(y_p %(custom_inputs_str_comma)s);
       assert(res_vec.size() == 1);
       CudaNdarray * res = res_vec[0];
