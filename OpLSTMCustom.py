@@ -55,8 +55,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
                         [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
 
   def c_support_code(self):
-    #do not remove this import as it is used in the c code
-    import CustomLSTMFunctions
     crnn_path = os.path.dirname(__file__)
     funloader = make_funloader_code(self.fun_name + "_fun_bwd", self.fun_name + "_fun_reset")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
@@ -251,8 +249,6 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
-    #do not remove this import as it is used in the c code
-    import CustomLSTMFunctions
     funloader = make_funloader_code(self.fun_name + "_fun_fwd")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
