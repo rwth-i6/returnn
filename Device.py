@@ -801,7 +801,6 @@ class Device(object):
     :type max_ctc_length: int
     """
     assert self.main_pid == os.getpid()
-    assert len(shapes["data"]) == 3
     assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
