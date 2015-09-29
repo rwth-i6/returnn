@@ -26,7 +26,7 @@ class ForwardLayer(HiddenLayer):
     super(ForwardLayer, self).__init__(**kwargs)
     self.set_attr('sparse_window', sparse_window) # TODO this is ugly
     self.attrs['n_out'] = sparse_window * kwargs['n_out']
-    self.z = 0
+    self.z = self.b
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(self.sources, self.masks, self.W_in):
       if s.attrs['sparse']:
@@ -35,8 +35,15 @@ class ForwardLayer(HiddenLayer):
         self.z += self.dot(s.output, W_in)
       else:
         self.z += self.dot(self.mass * m * s.output, W_in)
-    if not any(s.attrs['sparse'] for s in self.sources):
-      self.z += self.b
+    self.make_output(self.z if self.activation is None else self.activation(self.z))
+
+
+class EmbeddingLayer(ForwardLayer):
+  layer_class = "embedding"
+
+  def __init__(self, **kwargs):
+    super(EmbeddingLayer, self).__init__(**kwargs)
+    self.z -= self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
 
