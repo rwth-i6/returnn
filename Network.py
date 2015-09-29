@@ -18,7 +18,10 @@ class LayerNetwork(object):
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     if "data" in n_out:
+      #assert 1 <= n_out["data"][1] <= 2
+      #assert n_out["data"][1] == 2  # old
       data_dim = n_out["data"][1] + 1
+      data_dim = 3  # hack for now
     else:
       data_dim = 3
     self.x = T.TensorType('float32', ((False,) * data_dim))('x')
@@ -28,8 +31,9 @@ class LayerNetwork(object):
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
-    self.n_out = n_out
-    self.n_out["data"] = (n_in, n_in)  # small hack: support input-data as target
+    self.n_out = n_out.copy()
+    if "data" not in self.n_out:
+      self.n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
