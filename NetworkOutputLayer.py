@@ -44,7 +44,12 @@ class OutputLayer(Layer):
       assert len(self.sources) > 0
       for source, m, W in zip(self.sources, self.masks, self.W_in):
         if source.attrs['sparse']:
-          self.z += W[T.cast(source.output[:,:,0], 'int32')]
+          if source.output.ndim == 3:
+            input = source.output[:,:,0]  # old sparse format
+          else:
+            assert source.output.ndim == 2
+            input = source.output
+          self.z += W[T.cast(input, 'int32')]
         elif m is None:
           self.z += self.dot(source.output, W)
         else:

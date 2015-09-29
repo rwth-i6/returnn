@@ -17,7 +17,11 @@ class LayerNetwork(object):
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
-    self.x = T.tensor3('x'); """ :type: theano.Variable """
+    if "data" in n_out:
+      data_dim = n_out["data"][1] + 1
+    else:
+      data_dim = 3
+    self.x = T.TensorType('float32', ((False,) * data_dim))('x')
     self.y = {"data": self.x} #T.ivector('y'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
     self.j = {"data": self.i} #T.bmatrix('j'); """ :type: theano.Variable """
