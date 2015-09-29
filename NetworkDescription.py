@@ -141,17 +141,15 @@ class LayerNetworkDescription:
       if not isinstance(num_outputs, dict):
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
-      for target, value in num_outputs.items():
-        if not isinstance(value, (tuple,list)):
-          value = [value, 1]
-        for v in value:
-          assert isinstance(v, int)
-        num_outputs[target] = value
+      from Dataset import convert_data_dims
+      num_outputs = convert_data_dims(num_outputs)
+      if "data" in num_outputs:
+        num_inputs = num_outputs["data"][0]
     elif config.has('num_outputs'):
       num_outputs = {target: [config.int('num_outputs', 0), 1]}
     else:
       num_outputs = None
-    if config.list('train') and ":" not in config.value('train', ''):
+    if not config.is_typed('num_outputs') and config.list('train') and ":" not in config.value('train', ''):
       try:
         _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
       except Exception:

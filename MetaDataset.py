@@ -5,6 +5,11 @@ from Util import NumbersDict, load_json
 
 
 class MetaDataset(CachedDataset2):
+  """
+  This wraps around one or multiple datasets and might provide extra information.
+  Every dataset is expected to provide the the same sequences, where the sequence list
+  is given by a file.
+  """
 
   def __init__(self,
                seq_list_file, seq_lens_file,
@@ -135,6 +140,11 @@ class MetaDataset(CachedDataset2):
 
 
 class ConcatDataset(CachedDataset2):
+  """
+  This concatenates multiple datasets. They are expected to provide the same data-keys and data-dimensions.
+  It will go through the datasets always in order.
+  """
+
   def __init__(self, datasets, **kwargs):
     """
     :param list[dict[str]] datasets: list of kwargs for init_dataset
@@ -169,9 +179,9 @@ class ConcatDataset(CachedDataset2):
       assert len(seq_list) == 0  # we have consumed all
     else:
       seq_lists = [None] * len(self.datasets)
-      if self.seq_ordering == "sorted":
-        # Not sure about this case. Maybe a separate implementation makes more sense.
-        raise NotImplementedError
+      if self.seq_ordering != "default":
+        # Not sure about these cases (random / sorted). Maybe a separate implementation makes more sense.
+        raise NotImplementedError("seq_ordering %s" % self.seq_ordering)
 
     assert len(seq_lists) == len(self.datasets)
     for dataset, sub_list in zip(self.datasets, seq_lists):
@@ -223,6 +233,159 @@ class ConcatDataset(CachedDataset2):
 
   def get_target_list(self):
     return self.datasets[0].get_target_list()
+
+
+class CombinedDataset(CachedDataset2):
+  """
+  This combines multiple different datasets, which provide different data-sources.
+  E.g. one can provide am-dataset with data:acoustic-features -> classes:characters (acoustic model train data),
+  and lm-dataset provides just data:characters (language model train data).
+  You provide a mapping as in MetaDataset, e.g.
+  am-data -> am-dataset:data, am-classes -> am-dataset:classes, lm-data -> lm-dataset:data.
+  For each sequence idx, it will select one of the given datasets, fill in the data-keys of this dataset
+  and will return empty sequences for the remaining datasets.
+  The selection of the dataset will be random and equally distributed, over the sum of num-seqs.
+  """
+
+  def __init__(self,
+               datasets,
+               data_map, data_dims,
+               data_dtypes=None,
+               window=1, **kwargs):
+    """
+    :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
+    :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
+      Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+    :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
+    :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
+    """
+    assert window == 1  # not implemented
+    super(CombinedDataset, self).__init__(**kwargs)
+    assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
+
+    self.data_map = data_map
+    self.dataset_keys = set([m[0] for m in self.data_map.values()]); ":type: set[str]"
+    self.dataset_idxs = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
+    self.data_keys = set(self.data_map.keys()); ":type: set[str]"
+    assert "data" in self.data_keys
+    self.target_list = sorted(self.data_keys - ["data"])
+
+    data_dims = convert_data_dims(data_dims)
+    self.data_dims = data_dims
+    assert "data" in data_dims
+    for key in self.target_list:
+      assert key in data_dims
+    self.num_inputs = data_dims["data"][0]
+    self.num_outputs = data_dims
+
+    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
+
+    # Will only init the needed datasets.
+    self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
+
+    self._num_seqs = sum([ds.num_seqs for ds in self.datasets.values()])
+
+  def _canonical_seqs_dataset_idxs(self):
+    """
+    :returns: list of dataset-idx, via self.dataset_idxs, so that we cover the sum of num-seqs
+    :rtype: list[int]
+    """
+    l = []
+    for i in range(len(self.datasets)):
+      dataset = self.datasets[self.dataset_idxs[i]]
+      l += [i] * dataset.num_seqs
+    return l
+
+  def _dataset_seq_idxs(self, seqs_dataset_idx):
+    """
+    :returns: list of (dataset-idx, dataset-seq-idx)
+    :rtype: list[(int,int)]
+    """
+    l = []
+    seq_idx_counter = [0] * len(self.datasets)  # dataset-idx -> dataset-seq-idx
+    for dataset_idx in seqs_dataset_idx:
+      seq_idx = seq_idx_counter[dataset_idx]
+      seq_idx_counter[dataset_idx] += 1
+      l += [(dataset_idx, seq_idx)]
+    return l
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    assert seq_list is None, "seq_list not supported for %s" % self.__class__
+    need_reinit = self.epoch is None or self.epoch != epoch
+    super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not need_reinit:
+      return
+
+    # We just select for which seq-idx we will use which dataset.
+    # The ordering of the seqs in the datasets will not be set here
+    # (do that in the config for the specific dataset).
+
+    seqs_dataset_idx = self._canonical_seqs_dataset_idxs()
+    if self.seq_ordering in ("default", "random"):  # default is random. this is different from base class!
+      from random import Random
+      rnd = Random(self.epoch)
+      rnd.shuffle(seqs_dataset_idx)
+    elif self.seq_ordering == "in-order":
+      pass  # keep as-is
+    elif self.seq_ordering == "reversed":
+      seqs_dataset_idx = reversed(seqs_dataset_idx)
+    else:
+      raise Exception("seq_ordering %s not supported" % self.seq_ordering)
+
+    self.dataset_seq_idxs = self._dataset_seq_idxs(seqs_dataset_idx)
+    assert self.num_seqs == len(self.dataset_seq_idxs)
+
+    for dataset in self.datasets.values():
+      dataset.init_seq_order(epoch=epoch)
+
+  def _load_seqs(self, start, end):
+    for dataset in self.datasets.values():
+      dataset.load_seqs(start, end)
+      for seq_idx in range(start, end):
+        self._check_dataset_seq(dataset, seq_idx)
+    super(CombinedDataset, self)._load_seqs(start=start, end=end)
+
+  def _check_dataset_seq(self, dataset, seq_idx):
+    """
+    :type dataset: Dataset
+    :type seq_idx: int
+    """
+    dataset_seq_tag = dataset.get_tag(seq_idx)
+    self_seq_tag = self.get_tag(seq_idx)
+    assert dataset_seq_tag == self_seq_tag
+
+  def _get_data(self, dataset_seq_idx, data_key):
+    """
+    :type dataset_seq_idx: int
+    :type data_key: str
+    :rtype: numpy.ndarray
+    """
+    dataset_key, dataset_data_key = self.data_map[data_key]
+    dataset = self.datasets[dataset_key]; ":type: Dataset"
+    return dataset.get_data(dataset_seq_idx, dataset_data_key)
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq
+    """
+    dataset_idx, dataset_seq_idx = self.dataset_seq_idxs[seq_idx]
+    dataset_key = self.dataset_idxs[dataset_idx]
+    dataset = self.datasets[dataset_key]
+
+    seq_tag = dataset_key + "-" + dataset.get_tag(dataset_seq_idx)
+    features = self._get_data(dataset_seq_idx, "data")
+    targets = {target: self._get_data(dataset_seq_idx, target) for target in self.target_list}
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+
+  def get_target_list(self):
+    return self.target_list
+
+  def get_data_dtype(self, key):
+    dtype = self.data_dtypes[key]
+    if self.added_data:
+      assert super(CombinedDataset, self).get_data_dtype(key) == dtype
+    return dtype
 
 
 def _simple_to_bool(v):
