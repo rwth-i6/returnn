@@ -26,18 +26,22 @@ def install_sigint_handler():
 
     # It's likely that SIGINT was caused by Util.interrupt_main().
     # We might have a stacktrace from there.
-    if hasattr(sys, "exited_frame"):
+    if getattr(sys, "exited_frame", None) is not None:
       print "interrupt_main via:"
       better_exchook.print_tb(tb=sys.exited_frame, file=sys.stdout)
       print ""
+      sys.exited_frame = None
+      # Normal exception instead so that Nose will catch it.
+      raise Exception("Got SIGINT!")
     else:
       print "\nno sys.exited_frame\n"
+      # Normal SIGINT. Normal Nose exit.
+      if old_action:
+        old_action()
+      else:
+        raise KeyboardInterrupt
 
-    # Normal exception instead so that Nose will catch it.
-    # Nose doesn't catch KeyboardInterrupt for some reason.
-    raise Exception("Got SIGINT!")
-
-  signal.signal(signal.SIGINT, signal_handler)
+  old_action = signal.signal(signal.SIGINT, signal_handler)
 
 install_sigint_handler()
 
