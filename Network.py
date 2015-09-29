@@ -18,10 +18,8 @@ class LayerNetwork(object):
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     if "data" in n_out:
-      #assert 1 <= n_out["data"][1] <= 2
-      #assert n_out["data"][1] == 2  # old
+      assert 1 <= n_out["data"][1] <= 2
       data_dim = n_out["data"][1] + 1
-      data_dim = 3  # hack for now
     else:
       data_dim = 3
     self.x = T.TensorType('float32', ((False,) * data_dim))('x')
@@ -243,7 +241,7 @@ class LayerNetwork(object):
     try:
       for k in model['n_out'].attrs:
         dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
-        n_out_model[k] = [model['n_out'].attrs[k], 1]
+        n_out_model[k] = [model['n_out'].attrs[k], dim]
     except Exception:
       n_out_model = {'classes':[model.attrs['n_out'],1]}
     n_in_model = model.attrs['n_in']
