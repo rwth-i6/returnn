@@ -513,7 +513,7 @@ class RecurrentUnitLayer(Layer):
               #att_z = zc[focus_start:focus_end]
               att_x = xc[focus_start:focus_end]
             #f_e = T.exp(att_z * T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
-            f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0), axis=2, keepdims=True)
+            f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0) / T.cast(att_x.shape[0],'float32'), axis=2, keepdims=True)
             f_e = T.exp(f_z)
             w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
             z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)

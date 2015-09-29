@@ -39,6 +39,11 @@ class ForwardLayer(HiddenLayer):
       self.z += self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+class EmbeddingLayer(ForwardLayer):
+  layer_class = "embedding"
+  def __init__(self, **kwargs):
+    super(EmbeddingLayer, self).__init__(**kwargs)
+    self.make_output(self.z - self.b)
 
 class _NoOpLayer(Layer):
   """
