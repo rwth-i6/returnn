@@ -17,15 +17,21 @@ class LayerNetwork(object):
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
-    self.x = T.tensor3('x'); """ :type: theano.Variable """
+    if "data" in n_out:
+      assert 1 <= n_out["data"][1] <= 2
+      data_dim = n_out["data"][1] + 1
+    else:
+      data_dim = 3
+    self.x = T.TensorType('float32', ((False,) * data_dim))('x')
     self.y = {"data": self.x} #T.ivector('y'); """ :type: theano.Variable """
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
     self.j = {"data": self.i} #T.bmatrix('j'); """ :type: theano.Variable """
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
-    self.n_out = n_out
-    self.n_out["data"] = (n_in, n_in)  # small hack: support input-data as target
+    self.n_out = n_out.copy()
+    if "data" not in self.n_out:
+      self.n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
@@ -102,7 +108,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def json_init_args_from_config(cls, config):
+  def init_args_from_config(cls, config):
     """
     :rtype: dict[str]
     :returns the kwarg for cls.from_json()
@@ -123,7 +129,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     return cls.from_json(json_content, mask=mask, train_flag=train_flag,
-                         **cls.json_init_args_from_config(config))
+                         **cls.init_args_from_config(config))
 
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
@@ -142,7 +148,6 @@ class LayerNetwork(object):
     def traverse(content, layer_name, output_index):
       source = []
       obj = content[layer_name].copy()
-      act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
       index = output_index
       if not 'from' in obj:
@@ -209,7 +214,7 @@ class LayerNetwork(object):
         return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': act, 'name': layer_name})
+        params.update({'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
         return network.add_layer(layer_class(**params))
@@ -224,21 +229,26 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, input_mask=None, sparse_input = False, target = 'classes', train_flag = False):
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, input_mask=None, sparse_input=False, target='classes', train_flag=False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
     grp = model['training']
-    n_out = {}
+    n_out_model = {}
     try:
       for k in model['n_out'].attrs:
         dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
-        n_out[k] = [model['n_out'].attrs[k], 1]
+        n_out_model[k] = [model['n_out'].attrs[k], dim]
     except Exception:
-      n_out = {'classes':[model.attrs['n_out'],1]}
-    network = cls(model.attrs['n_in'], n_out)
+      n_out_model = {'classes':[model.attrs['n_out'],1]}
+    n_in_model = model.attrs['n_in']
+    if n_in and n_in != n_in_model:
+      print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
+    if n_out and n_out != n_out_model:
+      print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
+    network = cls(n_in_model, n_out_model)
     network.recurrent = False
     def traverse(model, layer_name, output_index):
       index = output_index
@@ -319,19 +329,19 @@ class LayerNetwork(object):
         params.pop('class', None)
         network.make_classifier(**params)
       else:
-        try:
-          act = model[layer_name].attrs['activation']
-        except Exception:
-          act = 'logistic'
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],
-                   'activation': act,
                    'dropout': model[layer_name].attrs['dropout'] if train_flag else 0.0,
                    'name': layer_name,
                    'mask': mask,
                    'train_flag' : train_flag,
                    'network': network,
                    'index' : index }
+        try:
+          act = model[layer_name].attrs['activation']
+          params["activation"] = act
+        except Exception:
+          pass
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
         for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much

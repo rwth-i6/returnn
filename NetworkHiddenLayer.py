@@ -5,7 +5,7 @@ from ActivationFunctions import strtoact, strtoact_single_joined
 
 
 class HiddenLayer(Layer):
-  def __init__(self, activation="tanh", **kwargs):
+  def __init__(self, activation="sigmoid", **kwargs):
     """
     :type activation: str | list[str]
     """
@@ -26,17 +26,27 @@ class ForwardLayer(HiddenLayer):
     super(ForwardLayer, self).__init__(**kwargs)
     self.set_attr('sparse_window', sparse_window) # TODO this is ugly
     self.attrs['n_out'] = sparse_window * kwargs['n_out']
-    self.z = 0
+    self.z = self.b
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(self.sources, self.masks, self.W_in):
       if s.attrs['sparse']:
-        self.z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],s.output.shape[2] * W_in.shape[1]))
+        if s.output.ndim == 3: out_dim = s.output.shape[2]
+        elif s.output.ndim == 2: out_dim = 1
+        else: assert False, s.output.ndim
+        self.z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W_in.shape[1]))
       elif m is None:
         self.z += self.dot(s.output, W_in)
       else:
         self.z += self.dot(self.mass * m * s.output, W_in)
-    if not any(s.attrs['sparse'] for s in self.sources):
-      self.z += self.b
+    self.make_output(self.z if self.activation is None else self.activation(self.z))
+
+
+class EmbeddingLayer(ForwardLayer):
+  layer_class = "embedding"
+
+  def __init__(self, **kwargs):
+    super(EmbeddingLayer, self).__init__(**kwargs)
+    self.z -= self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
 class EmbeddingLayer(ForwardLayer):
@@ -86,6 +96,25 @@ class CopyLayer(_NoOpLayer):
     else:
       raise Exception("CopyLayer needs at least one source")
     self.make_output(act_f(self.z))
+
+
+class ConstantLayer(_NoOpLayer):
+  layer_class = "constant"
+
+  def __init__(self, value, dtype="float32", **kwargs):
+    super(ConstantLayer, self).__init__(**kwargs)
+    assert not self.sources
+    self.set_attr("value", value)
+    self.set_attr("dtype", dtype)
+    value = T.constant(numpy.array(value), dtype=dtype)
+    if value.ndim == 0:
+      value = value.dimshuffle('x', 'x', 'x')
+    elif value.ndim == 1:
+      value = value.dimshuffle('x', 'x', 0)
+    else:
+      raise Exception("ndim %i not supported" % value.ndim)
+    assert value.ndim == 3
+    self.make_output(value)
 
 
 class BinOpLayer(_NoOpLayer):
@@ -178,7 +207,6 @@ class HDF5DataLayer(Layer):
 
   def __init__(self, filename, dset, **kwargs):
     kwargs['n_out'] = 1
-    kwargs.pop('activation')
     super(HDF5DataLayer, self).__init__(**kwargs)
     self.set_attr('filename', filename)
     self.set_attr('dset', dset)

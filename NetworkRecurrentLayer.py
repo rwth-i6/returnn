@@ -263,7 +263,6 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(unit, Unit)
     kwargs.setdefault("n_out", unit.n_out)
     kwargs.setdefault("depth", depth)
-    kwargs.pop("activation", None)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)
@@ -326,7 +325,10 @@ class RecurrentUnitLayer(Layer):
     z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
-        z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],s.output.shape[2] * W.shape[1])) #W[T.cast(x_t.output[:,:,0], 'int32')]
+        if s.output.ndim == 3: out_dim = s.output.shape[2]
+        elif s.output.ndim == 2: out_dim = 1
+        else: assert False, s.output.ndim
+        z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W.shape[1])) #W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         z += T.dot(x_t.output, W)
       else:

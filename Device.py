@@ -238,11 +238,9 @@ class Device(object):
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
-                                                           sparse_input=config.bool("sparse_input", False),
-                                                           target=target)
+                                                           **LayerNetwork.init_args_from_config(config))
       self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False,
-                                                          sparse_input=config.bool("sparse_input", False),
-                                                          target=target)
+                                                          **LayerNetwork.init_args_from_config(config))
       model.close()
     else:
       self.trainnet = LayerNetwork.from_config_topology(config, train_flag=True)
@@ -803,7 +801,6 @@ class Device(object):
     :type max_ctc_length: int
     """
     assert self.main_pid == os.getpid()
-    assert len(shapes["data"]) == 3
     assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano

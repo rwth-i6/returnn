@@ -7,6 +7,8 @@ from Network import LayerNetwork
 from NetworkHiddenLayer import ForwardLayer
 from Util import dict_diff_str
 from pprint import pprint
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 def test_init():
@@ -33,7 +35,6 @@ def test_num_inputs_outputs_old():
   assert_equal(len(num_outputs), 1)
   assert_in("classes", num_outputs)
   assert_equal(num_outputs["classes"], [n_out, 1])
-
 
 def test_num_inputs_outputs_special_dataset():
   config = Config()
