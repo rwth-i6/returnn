@@ -102,7 +102,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def json_init_args_from_config(cls, config):
+  def init_args_from_config(cls, config):
     """
     :rtype: dict[str]
     :returns the kwarg for cls.from_json()
@@ -123,7 +123,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     return cls.from_json(json_content, mask=mask, train_flag=train_flag,
-                         **cls.json_init_args_from_config(config))
+                         **cls.init_args_from_config(config))
 
   @classmethod
   def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
@@ -224,21 +224,26 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, input_mask=None, sparse_input = False, target = 'classes', train_flag = False):
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, input_mask=None, sparse_input=False, target='classes', train_flag=False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
     grp = model['training']
-    n_out = {}
+    n_out_model = {}
     try:
       for k in model['n_out'].attrs:
         dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
-        n_out[k] = [model['n_out'].attrs[k], 1]
+        n_out_model[k] = [model['n_out'].attrs[k], 1]
     except Exception:
-      n_out = {'classes':[model.attrs['n_out'],1]}
-    network = cls(model.attrs['n_in'], n_out)
+      n_out_model = {'classes':[model.attrs['n_out'],1]}
+    n_in_model = model.attrs['n_in']
+    if n_in and n_in != n_in_model:
+      print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
+    if n_out and n_out != n_out_model:
+      print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
+    network = cls(n_in_model, n_out_model)
     network.recurrent = False
     def traverse(model, layer_name, output_index):
       index = output_index

@@ -238,11 +238,9 @@ class Device(object):
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
-                                                           sparse_input=config.bool("sparse_input", False),
-                                                           target=target)
+                                                           **LayerNetwork.init_args_from_config(config))
       self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False,
-                                                          sparse_input=config.bool("sparse_input", False),
-                                                          target=target)
+                                                          **LayerNetwork.init_args_from_config(config))
       model.close()
     else:
       self.trainnet = LayerNetwork.from_config_topology(config, train_flag=True)

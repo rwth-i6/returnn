@@ -132,7 +132,7 @@ def pretrainFromConfig(config):
   """
   pretrainType = config.value("pretrain", "")
   if pretrainType == "default":
-    network_init_args = LayerNetwork.json_init_args_from_config(config)
+    network_init_args = LayerNetwork.init_args_from_config(config)
     original_network_json = LayerNetwork.json_from_config(config)
     copy_output_layer = config.bool("pretrain_copy_output_layer", None)
     greedy = config.bool("pretrain_greedy", None)
