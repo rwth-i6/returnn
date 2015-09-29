@@ -263,7 +263,6 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(unit, Unit)
     kwargs.setdefault("n_out", unit.n_out)
     kwargs.setdefault("depth", depth)
-    kwargs.pop("activation", None)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)

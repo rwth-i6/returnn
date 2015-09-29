@@ -5,7 +5,7 @@ from ActivationFunctions import strtoact, strtoact_single_joined
 
 
 class HiddenLayer(Layer):
-  def __init__(self, activation="tanh", **kwargs):
+  def __init__(self, activation="sigmoid", **kwargs):
     """
     :type activation: str | list[str]
     """
@@ -183,7 +183,6 @@ class HDF5DataLayer(Layer):
 
   def __init__(self, filename, dset, **kwargs):
     kwargs['n_out'] = 1
-    kwargs.pop('activation')
     super(HDF5DataLayer, self).__init__(**kwargs)
     self.set_attr('filename', filename)
     self.set_attr('dset', dset)

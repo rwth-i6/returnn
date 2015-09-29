@@ -148,7 +148,6 @@ class LayerNetwork(object):
     def traverse(content, layer_name, output_index):
       source = []
       obj = content[layer_name].copy()
-      act = obj.pop('activation', 'logistic')
       cl = obj.pop('class', None)
       index = output_index
       if not 'from' in obj:
@@ -215,7 +214,7 @@ class LayerNetwork(object):
         return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
-        params.update({'activation': act, 'name': layer_name})
+        params.update({'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
         return network.add_layer(layer_class(**params))
@@ -330,19 +329,19 @@ class LayerNetwork(object):
         params.pop('class', None)
         network.make_classifier(**params)
       else:
-        try:
-          act = model[layer_name].attrs['activation']
-        except Exception:
-          act = 'logistic'
         params = { 'sources': x_in,
                    'n_out': model[layer_name].attrs['n_out'],
-                   'activation': act,
                    'dropout': model[layer_name].attrs['dropout'] if train_flag else 0.0,
                    'name': layer_name,
                    'mask': mask,
                    'train_flag' : train_flag,
                    'network': network,
                    'index' : index }
+        try:
+          act = model[layer_name].attrs['activation']
+          params["activation"] = act
+        except Exception:
+          pass
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
         for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect"]: # uugh i hate this so much
