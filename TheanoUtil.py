@@ -16,3 +16,10 @@ def time_batch_make_flat(val):
                    newshape,
                    ndim=val.ndim - 1,
                    name="flat_%s" % val.name)
+
+
+def class_idx_seq_to_1_of_k(seq, num_classes, dtype="float32"):
+  shape = [seq.shape[i] for i in range(seq.ndim)] + [num_classes]
+  eye = T.eye(num_classes, dtype=dtype)
+  m = eye[T.cast(seq, 'int32')].reshape(shape)
+  return m

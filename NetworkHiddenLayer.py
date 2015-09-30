@@ -2,6 +2,7 @@
 from theano import tensor as T
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined
+from TheanoUtil import class_idx_seq_to_1_of_k
 
 
 class HiddenLayer(Layer):
@@ -78,7 +79,13 @@ class CopyLayer(_NoOpLayer):
     assert len(self.sources) == len(self.masks)
     zs = []
     for s, m in zip(self.sources, self.masks):
-      if m is None:
+      if s.attrs['sparse']:
+        if s.output.ndim == 3: out = s.output.reshape((s.output.shape[0], s.output.shape[1]))
+        elif s.output.ndim == 2: out = s.output
+        else: assert False, s.output.ndim
+        out_1_of_k = class_idx_seq_to_1_of_k(out, num_classes=s.attrs['n_out'])
+        zs += [out_1_of_k]
+      elif m is None:
         zs += [s.output]
       else:
         zs += [self.mass * m * s.output]
