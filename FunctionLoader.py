@@ -15,6 +15,7 @@ struct FunLoader
 {
   PyObject * fn;
   PyObject * reset_fn;
+  PyObject * mod;
   std::vector<PyObject*> res_shared;
   std::string name;
 
@@ -22,12 +23,7 @@ struct FunLoader
   {
     std::cout << "Loading function " << fn_name << "..." << std::endl;
     name = fn_name;
-    //TODO: this mod object is never decref'd
-    static PyObject * mod = 0;
-    if(!mod)
-    {
-      mod = PyImport_AddModule("CustomLSTMFunctions");
-    }
+    mod = PyImport_ImportModule("CustomLSTMFunctions");
     assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
     if(reset_fn_name)
@@ -55,19 +51,15 @@ struct FunLoader
     std::cout << "loaded function" << std::endl;
   }
 
-  //TODO
   ~FunLoader()
   {
-    /*Py_XDECREF(fn);
+    Py_XDECREF(fn);
+    Py_XDECREF(reset_fn);
     for(int i = 0; i < res_shared.size(); ++i)
     {
       Py_XDECREF(res_shared[i]);
-    }*/
-    /*if(mod)
-    {
-      Py_DECREF(mod);
-      mod = 0;
-    }*/
+    }
+    Py_DECREF(mod);
   }
 
   void reset_shared()
