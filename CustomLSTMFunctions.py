@@ -39,61 +39,13 @@ def make_bwd_fun(custom_fun_maker):
   return bwd_fun, custom_reset_fn, out_Dy_p, custom_out
 
 
-def test():
-  y_p = tt.fmatrix("y_p")
-  W_att_in = tt.fmatrix("W_att_in")
-  z_re = T.dot(y_p, W_att_in)
-  custom_vars = [W_att_in]
-  return y_p, z_re, custom_vars
-
 def print_wt(op,x):
   print x.argmax(axis=0)
 
-def attention_dot():
-  y_p = tt.fmatrix("y_p")
-  B = tt.ftensor3("B")
-  W_att_in = tt.fmatrix("W_att_in")
-  W_att_quadr = tt.fmatrix("W_att_quadr")
-  custom_vars = [B,W_att_in,W_att_quadr]
 
-  #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
-  f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0) / T.cast(B.shape[0],'float32'), axis=2, keepdims=True)
-  f_e = T.exp(f_z)
-  w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-
-  import theano.printing
-  #w_t = theano.printing.Print("w_t", attrs=['argmax(axis=0)'])(w_t)
-  #w_t = theano.printing.Print("w_t",global_fn=print_wt)(w_t)
-  z_re = T.dot(T.sum(B * w_t, axis=0, keepdims=False), W_att_in)
-
-  return y_p, z_re, custom_vars
-
-
-def attention_time_gauss():
-  y_p = tt.fmatrix("y_p")  # s_t-1
-  B = tt.ftensor3("B")  # h
-
-  W_att_in = tt.fmatrix("W_att_in")
-  W_att_quadr = tt.fmatrix("W_att_quadr")
-  custom_vars = [B,W_att_in,W_att_quadr]
-
-  # TODO...
-  f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
-  f_e = T.exp(f_z)
-  w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-
-  z_re = T.dot(T.sum(B * w_t, axis=0, keepdims=False), W_att_in)
-
-
-  return y_p, z_re, custom_vars
-
-
-
-functions = {}
 
 def _setup_func(fn):
   f = globals()[fn]
-  functions[fn] = f
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
   vs_fwd = make_fwd_fun(f)
@@ -104,8 +56,12 @@ def _setup_func(fn):
     globals()[fn + postfix] = v
 
 def _setup_functions():
-  from OpLSTMCustom import function_list
-  for fn in function_list:
+  import Attentions
+  for att_clazz in Attentions.attentions.values():
+    att = att_clazz(force_gpu=True)
+    assert isinstance(att, Attentions.AttentionBase)
+    fn = att.name
+    globals()[fn] = att.function_for_custom_op
     _setup_func(fn)
 
 _setup_functions()

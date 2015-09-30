@@ -224,6 +224,14 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       self.destroy_map = {0: [0]}
 
   def make_node(self, Z, c, y0, i, W_re, *custom_inputs):
+    """
+    :param Z:
+    :param c: initial cell state. 2d (batch,dim)
+    :param y0: output of t = -1 (for recursion at t = 0). 2d (batch,dim)
+    :param i: index. 2d (time,batch) -> 0 or 1
+    :param W_re: recurrent matrix. 2d (dim,dim*4)
+    :param custom_inputs: other inputs for the custom function
+    """
     from Device import have_gpu
     assert have_gpu()
 
@@ -259,6 +267,9 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     custom_inputs = input_names[5:]
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
     Y, H, d = output_names
+    # Y: all the outputs. 3d (time,batch,dim)
+    # Z/H: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
+    # d: last state (= Y[T-1]). 2d (batch,dim)
     fwd_fun = self.fun_name + "_fun_fwd"
     inplace = "true" if self.inplace else "false"
     fail = sub['fail']
@@ -366,12 +377,12 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
 
-function_list = ["test", "attention_dot"]
 function_ops = {}; ":type: dict[str,LSTMCustomOp]"
 grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
 
 def _register_all_funcs():
-  for fn in function_list:
+  import Attentions
+  for fn in Attentions.attentions.keys():
     # register op
     no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
     inpl = LSTMCustomOp(fun_name=fn, inplace=True)

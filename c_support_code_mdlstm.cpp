@@ -35,9 +35,9 @@ static const char *_cudaGetErrorEnum(cublasStatus_t error)
 	return "<unknown>";
 }
 
-static void HandleError(cudaError_t err, const char *file, int line) 
+static void HandleError(cudaError_t err, const char *file, int line)
 {
-	if (err != cudaSuccess) 
+	if (err != cudaSuccess)
 	{
 		printf("%s in %s at line %d\n", cudaGetErrorString(err),
 			file, line);
@@ -78,7 +78,7 @@ CudaNdarray * CudaNdarray_zeros_like(CudaNdarray* a)
 {
 	const int * dim = CudaNdarray_HOST_DIMS(a);
 	CudaNdarray * res = (CudaNdarray*) CudaNdarray_NewDims(a->nd, dim);
-	int n = CudaNdarray_SIZE(a);	
+	int n = CudaNdarray_SIZE(a);
 	HANDLE_ERROR(cudaMemset(CudaNdarray_DEV_DATA(res), 0, sizeof(float) * n));
 	return res;
 }
@@ -98,7 +98,7 @@ const float * data_ptr(const CudaNdarray * a, int y, int x)
 	if (a->nd == 2)
 	{
 		return CudaNdarray_DEV_DATA(a);
-	} 
+	}
 	else
 	{
 		const int * dims = CudaNdarray_HOST_DIMS(a);
@@ -117,7 +117,7 @@ void lastTwoDims(const CudaNdarray * a, int out[2])
 	const int * dims = CudaNdarray_HOST_DIMS(a);
 	assert(a->nd >= 2);
 	out[0] = dims[a->nd - 2];
-	out[1] = dims[a->nd - 1];	
+	out[1] = dims[a->nd - 1];
 }
 
 int lastTwoDimsStride(const CudaNdarray * a)
@@ -150,7 +150,7 @@ __global__ void add_kernel(float * dst, const float * src, int len)
 __global__ void lstm_kernel(float * data, const float * old_state, bool old_state_strided,
  float * output, float * state_out, int n_cells, int n_batch, const float * i)
 {
-	//layout: 
+	//layout:
 	//data[0*n_cells..1*n_cells-1] : input gate
 	//data[1*n_cells..2*n_cells-1] : forget gate
 	//data[2*n_cells..3*n_cells-1] : output gate
@@ -194,7 +194,7 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * old_state,
   bool old_state_strided, const float * Y, int n_cells, int n_batch, const float * i)
 {
-	//layout: 
+	//layout:
 	//delta[0*n_cells..1*n_cells-1] : input gate
 	//delta[1*n_cells..2*n_cells-1] : forget gate
 	//delta[2*n_cells..3*n_cells-1] : output gate
@@ -220,7 +220,7 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		float eps = epsilon[idx];
 
 		//avoid division by 0 (TODO: check if this is needed)
-		float gc = 0.f; //g(c(t))		
+		float gc = 0.f; //g(c(t))
 		float gzc = 0.f; //g(z_c(t))
 		if (outGate != 0)
 		{
@@ -230,10 +230,10 @@ __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * ne
 		{
 			gzc = (state - fgtGate * oldState) / inpGate;
 		}
-		
+
 		//delta_output
 		delta[start + 2 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
-		
+
 		//epsilon_c
 		float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
 		epsilon_c += next_epsilon[idx];
@@ -278,14 +278,14 @@ void do_add(float * dst, const float * src, int len)
 }
 
 void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x, const CudaNdarray * i)
-{		
+{
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
-	lastTwoDims(H, dims);	
+	lastTwoDims(H, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
 	int n_cells = dims[1] / 4;
 	int n_batch = dims[0];
-	
+
 	float * data_H = data_ptr(H, y, x);
 	const float * data_prev = CudaNdarray_DEV_DATA(prev);
 	const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
@@ -302,12 +302,12 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 {
 	assert(y == 0 && "2d LSTM not supported yet");
 	int dims[2];
-	lastTwoDims(delta, dims);	
+	lastTwoDims(delta, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
 	int n_cells = dims[1] / 4;
 	int n_batch = dims[0];
 
-	float * data_delta = data_ptr(delta, y, x);	
+	float * data_delta = data_ptr(delta, y, x);
 	float * data_epsilon = data_ptr(epsilon, y, x);
 	const float * data_next_epsilon = rightBorder ? CudaNdarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
 	const float * data_old_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : CudaNdarray_DEV_DATA(c);
@@ -339,9 +339,9 @@ __global__ void repvec(const float * v, int vlen, int nCopies, float * dest)
 
 void fillmat(const CudaNdarray * b, CudaNdarray * dst)
 {
-	const float * data_b = CudaNdarray_DEV_DATA(b);	
+	const float * data_b = CudaNdarray_DEV_DATA(b);
 	float * data_dst = CudaNdarray_DEV_DATA(dst);
-	const int * dims_b = CudaNdarray_HOST_DIMS(b);	
+	const int * dims_b = CudaNdarray_HOST_DIMS(b);
 	int dims_dst[2];
 	lastTwoDims(dst, dims_dst);
 	assert(dims_b[0] == dims_dst[1]);
@@ -354,13 +354,13 @@ void fillmat(const CudaNdarray * b, CudaNdarray * dst)
 void affine_y_x(int y_A, int x_A, const CudaNdarray * A, int y_B, int x_B, const CudaNdarray * B,
 	int y_C, int x_C, CudaNdarray * C, bool transpose_A=false, bool transpose_B=false)
 {
-	const float * data_A = data_ptr(A, y_A, x_A);	
+	const float * data_A = data_ptr(A, y_A, x_A);
 	const float * data_B = data_ptr(B, y_B, x_B);
 	float * data_C = data_ptr(C, y_C, x_C);
 	int A_dim[2], B_dim[2];
 	lastTwoDims(A, A_dim);
-	lastTwoDims(B, B_dim);	
-	
+	lastTwoDims(B, B_dim);
+
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
 	cublasOperation_t transA = transpose_A ? CUBLAS_OP_T : CUBLAS_OP_N;
@@ -380,11 +380,11 @@ void affine_y_x(int y_A, int x_A, const CudaNdarray * A, int y_B, int x_B, const
 		data_A, ldA, &beta, data_C, B_dim[1]));
 }
 
-//offset is used for x time-shift between A and B 
+//offset is used for x time-shift between A and B
 //if offset == 1, then we will calculate A[0..end-1] * B[1..end]
-void affine_global(const CudaNdarray * A, const CudaNdarray * B, CudaNdarray * C, 
+void affine_global(const CudaNdarray * A, const CudaNdarray * B, CudaNdarray * C,
 	bool transpose_A=false, bool transpose_B=false, int offset = 0, float beta = 1.0)
-{	
+{
 	float * data_C = CudaNdarray_DEV_DATA(C);
 	int A_dim[2], B_dim[2];
 	lastTwoDims(A, A_dim);
