@@ -173,3 +173,18 @@ def initIPythonKernel():
   thread = threading.Thread(target=ipython_thread, name="IPython kernel")
   thread.daemon = True
   thread.start()
+
+
+def initCudaNotInMainProcCheck():
+  import TaskSystem
+  import theano.sandbox.cuda as cuda
+  if cuda.use.device_number is not None:
+    print "CUDA already initialized in proc", os.getpid()
+    return
+  use_original = cuda.use
+  def use_wrapped(device, **kwargs):
+    print "CUDA.use", device, "in proc", os.getpid()
+    assert not TaskSystem.isMainProcess
+    use_original(device=device, **kwargs)
+  cuda.use = use_wrapped
+  cuda.use.device_number = None
