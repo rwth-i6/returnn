@@ -104,11 +104,8 @@ def _setup_func(fn):
     globals()[fn + postfix] = v
 
 def _setup_functions():
-  _setup_func("test")
-  import inspect
-  for fn in list(globals().keys()):
-    if not fn.startswith("attention_"): continue
-    if not inspect.isfunction(globals()[fn]): continue
+  from OpLSTMCustom import function_list
+  for fn in function_list:
     _setup_func(fn)
 
 _setup_functions()

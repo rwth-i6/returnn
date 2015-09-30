@@ -366,12 +366,12 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
 
+function_list = ["test", "attention_dot"]
 function_ops = {}; ":type: dict[str,LSTMCustomOp]"
 grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
 
 def _register_all_funcs():
-  import CustomLSTMFunctions
-  for fn in CustomLSTMFunctions.functions.keys():
+  for fn in function_list:
     # register op
     no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
     inpl = LSTMCustomOp(fun_name=fn, inplace=True)
