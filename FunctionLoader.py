@@ -45,7 +45,9 @@ struct FunLoader
     int len = PyList_Size(res1);
     for(int i = 0; i < len; ++i)
     {
-      res_shared.push_back(PyList_GetItem(res1, i));
+      PyObject* obj = PyList_GetItem(res1, i);
+      Py_XINCREF(obj);
+      res_shared.push_back(obj);
     }
 
     std::cout << "loaded function" << std::endl;
