@@ -68,14 +68,18 @@ struct FunLoader
   void reset_shared()
   {
     assert(reset_fn);
-    PyObject_CallObject(reset_fn, 0);
+    PyObject* r = PyObject_CallObject(reset_fn, 0);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
   }
 
   void reset_shared(CudaNdarray * x0)
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(1, x0);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -83,7 +87,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(2, x0, x1);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -91,7 +97,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(3, x0, x1, x2);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -99,7 +107,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -107,14 +117,18 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
   std::vector<CudaNdarray*> call_helper(PyObject * args)
   {
     //std::cout << "calling custom function " << name << "..." << std::endl;
-    PyObject_CallObject(fn, args);
+    PyObject* r = PyObject_CallObject(fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
 
     std::vector<CudaNdarray*> res;
@@ -122,6 +136,7 @@ struct FunLoader
     {
       //res_shared.get_value(borrow=True, return_internal_type=True)
       PyObject * sub_res = PyObject_CallMethod(res_shared[i], "get_value", "(ii)", 1, 1);
+      if(!sub_res) PyErr_Print();
       assert(sub_res);
       res.push_back((CudaNdarray*) sub_res);
     }
