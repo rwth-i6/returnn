@@ -56,10 +56,10 @@ def _setup_func(fn):
     globals()[fn + postfix] = v
 
 def _setup_functions():
-  import Attentions
-  for att_clazz in Attentions.attentions.values():
+  import RecurrentTransform
+  for att_clazz in RecurrentTransform.transforms.values():
     att = att_clazz(force_gpu=True)
-    assert isinstance(att, Attentions.AttentionBase)
+    assert isinstance(att, RecurrentTransform.RecurrentTransformBase)
     fn = att.name
     globals()[fn] = att.function_for_custom_op
     _setup_func(fn)

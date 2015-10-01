@@ -8,6 +8,8 @@ from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
 from FastLSTM import LSTMOp2Instance
+import RecurrentTransform
+
 
 class RecurrentLayer(HiddenLayer):
   recurrent = True
@@ -362,7 +364,9 @@ class RecurrentUnitLayer(Layer):
     if attention != "none":
       assert recurrent_transform == "none"
       recurrent_transform = attention
-    self.recurrent_transform = Attentions.attentions[recurrent_transform](layer=self)
+    self.recurrent_transform = None
+    if recurrent_transform != "none":
+      self.recurrent_transform = RecurrentTransform.transforms[recurrent_transform](layer=self)
     non_sequences = []
     if recurrent_transform != "none":
       self.recurrent_transform.create_vars()
@@ -472,7 +476,7 @@ class RecurrentUnitLayer(Layer):
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.recurrent_transform:
-            z_t += self.recurrent_transform.attention(h_p)
+            z_t += self.recurrent_transform.transform(h_p)
           act = unit.step(i_t, x_t, z_t, z_p, *args)
           #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
           #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result

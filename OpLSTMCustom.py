@@ -381,8 +381,8 @@ function_ops = {}; ":type: dict[str,LSTMCustomOp]"
 grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
 
 def _register_all_funcs():
-  import Attentions
-  for fn in Attentions.attentions.keys():
+  import RecurrentTransform
+  for fn in RecurrentTransform.transforms.keys():
     # register op
     no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
     inpl = LSTMCustomOp(fun_name=fn, inplace=True)

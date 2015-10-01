@@ -6,7 +6,7 @@ import theano.sandbox.cuda as cuda
 import numpy
 
 
-class AttentionBase:
+class RecurrentTransformBase:
   name = None
 
   def __init__(self, force_gpu=False, layer=None):
@@ -54,10 +54,10 @@ class AttentionBase:
     assert not self.layer
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
-    z_re = self.attention(y_p)
+    z_re = self.transform(y_p)
     return y_p, z_re, self.get_sorted_custom_vars()
 
-  def attention(self, y_p):
+  def transform(self, y_p):
     """
     :param y_p: output of last time-frame. 2d (batch,dim)
     :return: z_re
@@ -66,18 +66,18 @@ class AttentionBase:
     raise NotImplementedError
 
 
-class AttentionTest(AttentionBase):
+class AttentionTest(RecurrentTransformBase):
   name = "test"
 
   def init_vars(self):
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
 
-  def attention(self, y_p):
+  def transform(self, y_p):
     z_re = T.dot(y_p, self.W_att_in)
     return z_re
 
 
-class AttentionInput(AttentionBase):
+class AttentionInput(RecurrentTransformBase):
   """
   attention is just a sequence dependent bias (lstmp compatible)
   """
@@ -109,7 +109,7 @@ class AttentionInput(AttentionBase):
     self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
 
 
-class AttentionDot(AttentionBase):
+class AttentionDot(RecurrentTransformBase):
   """
   attention over dot product of base outputs and time dependent activation
   """
@@ -158,7 +158,7 @@ class AttentionDot(AttentionBase):
     values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
 
-  def attention(self, y_p):
+  def transform(self, y_p):
 
     # #att_z = zc
     # att_x = xc  # == self.B
@@ -191,12 +191,14 @@ class AttentionDot(AttentionBase):
     return z_re
 
 
-attentions = {}
+transforms = {}
 
 def _setup():
+  import inspect
   for clazz in globals().values():
-    if not issubclass(clazz, AttentionBase): continue
+    if not inspect.isclass(clazz): continue
+    if not issubclass(clazz, RecurrentTransformBase): continue
     if clazz.name is None: continue
-    attentions[clazz.name] = clazz
+    transforms[clazz.name] = clazz
 
 _setup()
