@@ -49,8 +49,12 @@ def attention_dot():
   W_att_quadr = cuda.fmatrix("W_att_quadr")
   custom_vars = [B,W_att_in,W_att_quadr]
 
+  sigma = T.constant(4.0,'float32')
+
   #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
-  f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0) / T.cast(B.shape[0],'float32'), axis=2, keepdims=True)
+  #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0) / T.cast(B.shape[0],'float32'), axis=2, keepdims=True)
+  #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
+  f_z = -T.sqrt(T.sum(T.sqr(B - T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0)), axis=2, keepdims=True)) / (2.0 * sigma)
   f_e = T.exp(f_z)
   w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
 

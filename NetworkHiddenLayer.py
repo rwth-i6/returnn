@@ -49,12 +49,6 @@ class EmbeddingLayer(ForwardLayer):
     self.z -= self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
-class EmbeddingLayer(ForwardLayer):
-  layer_class = "embedding"
-  def __init__(self, **kwargs):
-    super(EmbeddingLayer, self).__init__(**kwargs)
-    self.make_output(self.z - self.b)
-
 class _NoOpLayer(Layer):
   """
   Use this as a base class if you want to remove all params by the Layer base class.
