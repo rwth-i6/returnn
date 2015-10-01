@@ -15,20 +15,26 @@ struct FunLoader
 {
   PyObject * fn;
   PyObject * reset_fn;
+  PyObject * mod;
+  PyObject * setup_fn;
   std::vector<PyObject*> res_shared;
   std::string name;
 
   FunLoader(const char * fn_name, const char * reset_fn_name = 0)
   {
-    std::cout << "Loading function " << fn_name << "..." << std::endl;
+    //std::cout << "Loading function " << fn_name << "..." << std::endl;
     name = fn_name;
-    //TODO: this mod object is never decref'd
-    static PyObject * mod = 0;
-    if(!mod)
-    {
-      mod = PyImport_AddModule("CustomLSTMFunctions");
-    }
+    mod = PyImport_ImportModule("CustomLSTMFunctions");
+    if(!mod) PyErr_Print();
     assert(mod);
+    std::stringstream sss("setup_parent_functions");
+    setup_fn = PyObject_GetAttrString(mod, sss.str().c_str());
+    PyObject* args = PyTuple_New(1);
+    PyTuple_SetItem(args,0,PyString_FromString(fn_name));
+    PyObject* r = PyObject_CallObject(setup_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
+    Py_XDECREF(args);
     fn = PyObject_GetAttrString(mod, fn_name);
     if(reset_fn_name)
     {
@@ -49,38 +55,40 @@ struct FunLoader
     int len = PyList_Size(res1);
     for(int i = 0; i < len; ++i)
     {
-      res_shared.push_back(PyList_GetItem(res1, i));
+      PyObject* obj = PyList_GetItem(res1, i);
+      Py_XINCREF(obj);
+      res_shared.push_back(obj);
     }
 
-    std::cout << "loaded function" << std::endl;
+    //std::cout << "loaded function" << std::endl;
   }
 
-  //TODO
   ~FunLoader()
   {
-    /*Py_XDECREF(fn);
+    Py_XDECREF(fn);
+    Py_XDECREF(reset_fn);
     for(int i = 0; i < res_shared.size(); ++i)
     {
       Py_XDECREF(res_shared[i]);
-    }*/
-    /*if(mod)
-    {
-      Py_DECREF(mod);
-      mod = 0;
-    }*/
+    }
+    Py_DECREF(mod);
   }
 
   void reset_shared()
   {
     assert(reset_fn);
-    PyObject_CallObject(reset_fn, 0);
+    PyObject* r = PyObject_CallObject(reset_fn, 0);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
   }
 
   void reset_shared(CudaNdarray * x0)
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(1, x0);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -88,7 +96,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(2, x0, x1);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -96,7 +106,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(3, x0, x1, x2);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -104,7 +116,9 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
@@ -112,14 +126,28 @@ struct FunLoader
   {
     assert(reset_fn);
     PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
-    PyObject_CallObject(reset_fn, args);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
+    Py_DECREF(args);
+  }
+
+  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3, CudaNdarray * x4, CudaNdarray * x5)
+  {
+    assert(reset_fn);
+    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4, x5);
+    PyObject* r = PyObject_CallObject(reset_fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
   }
 
   std::vector<CudaNdarray*> call_helper(PyObject * args)
   {
     //std::cout << "calling custom function " << name << "..." << std::endl;
-    PyObject_CallObject(fn, args);
+    PyObject* r = PyObject_CallObject(fn, args);
+    if(!r) PyErr_Print();
+    Py_XDECREF(r);
     Py_DECREF(args);
 
     std::vector<CudaNdarray*> res;
@@ -127,6 +155,7 @@ struct FunLoader
     {
       //res_shared.get_value(borrow=True, return_internal_type=True)
       PyObject * sub_res = PyObject_CallMethod(res_shared[i], "get_value", "(ii)", 1, 1);
+      if(!sub_res) PyErr_Print();
       assert(sub_res);
       res.push_back((CudaNdarray*) sub_res);
     }
@@ -161,6 +190,12 @@ struct FunLoader
   std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4)
   {
     PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
+    return call_helper(args);
+  }
+
+  std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4, CudaNdarray* x5)
+  {
+    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4, x5);
     return call_helper(args);
   }
 

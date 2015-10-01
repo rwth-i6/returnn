@@ -444,9 +444,9 @@ class TaskThread(threading.Thread):
 
       for run in deviceRuns:
         run.stop()
+      if crashed: return
       for device in self.devices:
         device.finish_epoch_stats()
-      if crashed: return
       self.finalize()
       if self.interactive: progress_bar()
       self.elapsed = (time.time() - self.start_time)

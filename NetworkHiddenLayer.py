@@ -2,6 +2,7 @@
 from theano import tensor as T
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined
+from TheanoUtil import class_idx_seq_to_1_of_k
 
 
 class HiddenLayer(Layer):
@@ -77,7 +78,13 @@ class CopyLayer(_NoOpLayer):
     assert len(self.sources) == len(self.masks)
     zs = []
     for s, m in zip(self.sources, self.masks):
-      if m is None:
+      if s.attrs['sparse']:
+        if s.output.ndim == 3: out = s.output.reshape((s.output.shape[0], s.output.shape[1]))
+        elif s.output.ndim == 2: out = s.output
+        else: assert False, s.output.ndim
+        out_1_of_k = class_idx_seq_to_1_of_k(out, num_classes=s.attrs['n_out'])
+        zs += [out_1_of_k]
+      elif m is None:
         zs += [s.output]
       else:
         zs += [self.mass * m * s.output]
@@ -95,11 +102,11 @@ class CopyLayer(_NoOpLayer):
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 
-  def __init__(self, value, dtype="float32", **kwargs):
+  def __init__(self, value, n_out, dtype="float32", **kwargs):
     super(ConstantLayer, self).__init__(**kwargs)
-    assert not self.sources
     self.set_attr("value", value)
     self.set_attr("dtype", dtype)
+    self.set_attr("n_out", n_out)
     value = T.constant(numpy.array(value), dtype=dtype)
     if value.ndim == 0:
       value = value.dimshuffle('x', 'x', 'x')
@@ -108,13 +115,16 @@ class ConstantLayer(_NoOpLayer):
     else:
       raise Exception("ndim %i not supported" % value.ndim)
     assert value.ndim == 3
+    source = self.sources[0]
+    shape = [source.output.shape[0], source.output.shape[1], n_out]
+    value += T.zeros(shape, dtype=dtype)  # so we have the same shape as the source output
     self.make_output(value)
 
 
 class BinOpLayer(_NoOpLayer):
   layer_class = "bin_op"
 
-  def __init__(self, op=None, **kwargs):
+  def __init__(self, op=None, n_out=None, **kwargs):
     """
     :type op: str
     """
@@ -122,8 +132,11 @@ class BinOpLayer(_NoOpLayer):
     assert len(self.sources) == 2
     s1, s2 = self.sources
     assert s1.attrs["n_out"] == s2.attrs["n_out"]
+    if n_out is not None:
+      assert n_out == s1.attrs["n_out"]
     assert op
     self.set_attr('op', op.encode("utf8"))
+    self.set_attr('n_out', s1.attrs["n_out"])
     if ":" in op:
       op, act = op.split(":", 1)
     else:

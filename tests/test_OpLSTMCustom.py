@@ -3,7 +3,9 @@ import theano
 import theano.tensor as T
 import numpy
 from Device import have_gpu
-from OpLSTMCustom import LSTMCustomTestOpNoInplaceInstance, LSTMCustomDotAttentionOpNoInplaceInstance
+import OpLSTMCustom
+LSTMCustomTestOpNoInplaceInstance = OpLSTMCustom.function_ops["test"]
+LSTMCustomDotAttentionOpNoInplaceInstance = OpLSTMCustom.function_ops["attention_dot"]
 from OpLSTM import LSTMOpInstance
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
