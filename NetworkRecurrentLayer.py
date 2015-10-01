@@ -100,7 +100,7 @@ class Unit(Container):
 
 
 class VANILLA(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(VANILLA, self).__init__(n_units, depth, n_units, n_units, n_units, 1)
 
   def step(self, i_t, x_t, z_t, z_p, h_p):
@@ -108,7 +108,7 @@ class VANILLA(Unit):
 
 
 class LSTME(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(LSTME, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
@@ -125,7 +125,7 @@ class LSTME(Unit):
 
 
 class LSTM(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
@@ -138,7 +138,7 @@ class LSTM(Unit):
 
 
 class LSTMP(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
@@ -147,10 +147,10 @@ class LSTMP(Unit):
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMC(Unit):
-  def __init__(self, n_units, depth, attention="attention_dot"):
+  def __init__(self, n_units, depth, recurrent_transform="attention_dot", **kwargs):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
     import OpLSTMCustom
-    self.op = OpLSTMCustom.function_ops[attention]
+    self.op = OpLSTMCustom.function_ops[recurrent_transform]
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     B = self.parent.xc
@@ -163,7 +163,7 @@ class LSTMC(Unit):
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(LSTMQ, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
@@ -179,7 +179,7 @@ class LSTMQ(Unit):
 
 
 class GRU(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
     l = sqrt(6.) / sqrt(n_units * 3)
     rng = numpy.random.RandomState(1234)
@@ -197,7 +197,7 @@ class GRU(Unit):
 
 
 class SRU(Unit):
-  def __init__(self, n_units, depth):
+  def __init__(self, n_units, depth, **kwargs):
     super(SRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 3, 1)
 
   def step(self, i_t, x_t, z_t, z_p, h_p):
@@ -252,7 +252,8 @@ class RecurrentUnitLayer(Layer):
                pdepth = 1, # depth of projection
                unit = 'lstm', # cell type
                n_dec = 0, # number of time steps to decode
-               attention = "none", # soft attention (none, input, time)
+               attention = "none", # soft attention (none, input, time) # deprecated
+               recurrent_transform = "none",
                attention_step = 0, # soft attention step (-1 for weighted index)
                attention_beam = 0, # soft attention context window
                base = None,
@@ -261,15 +262,17 @@ class RecurrentUnitLayer(Layer):
                dropconnect = 0.0, # recurrency dropout
                depth = 1,
                **kwargs):
-    # if on cpu, we need to fall back to the theano version of the LSTM Op
     unit_given = unit
-    if (str(theano.config.device).startswith('cpu') or attention == 'default') and (unit == 'lstm' or unit == 'lstmp'):
-      #print "%s: falling back to theano cell implementation" % kwargs['name']
-      unit = "lstme"
-    unit = eval(unit.upper())(n_out, depth)
-    assert isinstance(unit, Unit)
-    kwargs.setdefault("n_out", unit.n_out)
+    if unit == 'lstm':
+      if str(theano.config.device).startswith('cpu'):
+        unit = 'lstme'
+      elif recurrent_transform != 'none':
+        unit = 'lstmc'
+      else:
+        unit = 'lstmp'
+        
     kwargs.setdefault("depth", depth)
+    kwargs.setdefault("n_out", n_out)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)
@@ -286,12 +289,17 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention', attention.encode("utf8"))
     self.set_attr('attention_step', attention_step)
     self.set_attr('attention_beam', attention_beam)
+    self.set_attr('recurrent_transform', recurrent_transform)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
       self.set_attr('base', ",".join([b.name for b in base]))
     else:
       base = encoder
+    self.set_attr('n_units', n_out)
+    unit = eval(unit.upper())(**self.attrs)
+    assert isinstance(unit, Unit)
+    kwargs.setdefault("n_out", unit.n_out)
     pact = strtoact(pact)
     if n_dec:
       self.set_attr('n_dec', n_dec)
@@ -350,10 +358,10 @@ class RecurrentUnitLayer(Layer):
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
 
     non_sequences = []
-    if self.attrs['attention'] != "none":
+    if recurrent_transform != "none":
       assert base, "attention networks are only defined for decoder networks"
       n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
-      if self.attrs['attention'] == 'default': # attention over dot product of base outputs and time dependent activation
+      if recurrent_transform == 'attention_dot': # attention over dot product of base outputs and time dependent activation
         n_in = sum([e.attrs['n_out'] for e in base])
         src = [e.output for e in base]
         l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in + unit.n_re)
