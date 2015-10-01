@@ -24,11 +24,11 @@ def make_bwd_fun(custom_fun_maker):
 
   Dz_re = tt.fmatrix("Dz_re")
   known_grads = {z_re: Dz_re}
-  Dy_p = T.grad(None, y_p, known_grads=known_grads)
+  Dy_p = T.grad(None, y_p, known_grads=known_grads, disconnected_inputs="ignore")
 
   out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
 
-  custom_grads = [T.grad(None, var, known_grads=known_grads) for var in custom_vars]
+  custom_grads = [T.grad(None, var, known_grads=known_grads, disconnected_inputs="ignore") for var in custom_vars]
   custom_out = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name=var.name) for var in custom_vars]
   custom_updates = [(out, out + grad) for out, grad in zip(custom_out, custom_grads)]
   custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(custom_out, custom_vars)]

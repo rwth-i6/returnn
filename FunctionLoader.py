@@ -24,6 +24,7 @@ struct FunLoader
     std::cout << "Loading function " << fn_name << "..." << std::endl;
     name = fn_name;
     mod = PyImport_ImportModule("CustomLSTMFunctions");
+    if(!mod) PyErr_Print();
     assert(mod);
     fn = PyObject_GetAttrString(mod, fn_name);
     if(reset_fn_name)

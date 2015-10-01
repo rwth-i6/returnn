@@ -37,7 +37,7 @@ class RecurrentTransformBase:
     return v
 
   def add_var(self, v):
-    self.custom_vars[v.name] = [v]
+    self.custom_vars[v.name] = v
     return v
 
   def get_sorted_non_sequence_inputs(self):
@@ -54,6 +54,7 @@ class RecurrentTransformBase:
     assert not self.layer
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
+    self.init_vars()
     z_re = self.transform(y_p)
     return y_p, z_re, self.get_sorted_custom_vars()
 
@@ -107,6 +108,10 @@ class AttentionInput(RecurrentTransformBase):
     self.add_param(self.W_att_in)
     zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
     self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
+
+  def transform(self, y_p):
+    # TODO
+    return T.unbroadcast(T.constant(numpy.array([[0]]), dtype="float32"), 0, 1)
 
 
 class AttentionDot(RecurrentTransformBase):
