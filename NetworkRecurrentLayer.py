@@ -147,19 +147,17 @@ class LSTMP(Unit):
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMC(Unit):
-  def __init__(self, n_units, depth, recurrent_transform="attention_dot", **kwargs):
+  def __init__(self, n_units, depth, **kwargs):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
-    import OpLSTMCustom
-    self.op = OpLSTMCustom.function_ops[recurrent_transform]
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    B = self.parent.xc
-    W_att_in = self.parent.W_att_in
-    W_att_quadr = self.parent.W_att_re #matrix for qudratic form
+    assert self.parent.recurrent_transform
+    import OpLSTMCustom
+    op = OpLSTMCustom.function_ops[self.parent.recurrent_transform.name]
+    custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
 
-    #TODO: is it right to also reverse B?
-    result = self.op(z[::-(2 * go_backwards - 1)],
-                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, B[::-(2 * go_backwards - 1)], W_att_in, W_att_quadr)
+    result = op(z[::-(2 * go_backwards - 1)],
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *custom_vars)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
@@ -270,7 +268,7 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmc'
       else:
         unit = 'lstmp'
-        
+
     kwargs.setdefault("depth", depth)
     kwargs.setdefault("n_out", n_out)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
@@ -296,9 +294,11 @@ class RecurrentUnitLayer(Layer):
       self.set_attr('base', ",".join([b.name for b in base]))
     else:
       base = encoder
+    self.base = base
     self.set_attr('n_units', n_out)
     unit = eval(unit.upper())(**self.attrs)
     assert isinstance(unit, Unit)
+    self.unit = unit
     kwargs.setdefault("n_out", unit.n_out)
     pact = strtoact(pact)
     if n_dec:
@@ -357,56 +357,16 @@ class RecurrentUnitLayer(Layer):
       assert False # this is broken
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
 
+    if attention == "default":
+      attention = "attention_dot"
+    if attention != "none":
+      assert recurrent_transform == "none"
+      recurrent_transform = attention
+    self.recurrent_transform = Attentions.attentions[recurrent_transform](layer=self)
     non_sequences = []
     if recurrent_transform != "none":
-      assert base, "attention networks are only defined for decoder networks"
-      n_in = 0 #numpy.sum([s.attrs['n_out'] for s in self.sources])
-      if recurrent_transform == 'attention_dot': # attention over dot product of base outputs and time dependent activation
-        n_in = sum([e.attrs['n_out'] for e in base])
-        src = [e.output for e in base]
-        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in + unit.n_re)
-        self.xb = self.add_param(self.create_bias(n_in, name='b_att'))
-        self.xc = T.concatenate(src, axis=2) + self.xb
-        #if n_in != unit.n_out:
-        #  values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
-        #  self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
-        #  self.add_param(self.W_att_proj)
-        #  self.xc = T.dot(self.xc, self.W_att_proj)
-        #  n_in = unit.n_units
-        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.attrs['n_out'], n_in)), dtype=theano.config.floatX)
-        self.W_att_re = theano.shared(value=values, borrow=True, name = "W_att_re")
-        self.add_param(self.W_att_re)
-        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-        self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-        self.add_param(self.W_att_in)
-        non_sequences += [self.xc]
-      elif self.attrs['attention'] == 'input': # attention is just a sequence dependent bias (lstmp compatible)
-        src = []
-        src_names = []
-        for e in base:
-          src_base = [ s for s in e.sources if s.name not in src_names ]
-          src_names += [ s.name for s in e.sources ]
-          src += [s.output for s in src_base]
-          n_in += sum([s.attrs['n_out'] for s in src_base])
-        self.xc = T.concatenate(src, axis=2)
-        l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
-        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-        self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-        self.add_param(self.W_att_xc)
-        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-        self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-        self.add_param(self.W_att_in)
-        zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
-        self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
-
-      if attention_step > 0:
-        if attention_beam == 0:
-          attention_beam = attention_step
-      elif attention_step == -1:
-        assert attention_beam > 0
-        self.index_range = T.arange(self.index.shape[0], dtype='float32').dimshuffle(0,'x','x').repeat(self.index.shape[1],axis=1)
-      else:
-        assert attention_beam == 0
+      self.recurrent_transform.create_vars()
+      non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
 
     if self.attrs['lm']:
       if not 'target' in self.attrs:
@@ -453,9 +413,6 @@ class RecurrentUnitLayer(Layer):
         #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
         if len(self.W_in) == 0:
           if self.depth == 1:
-            if self.attrs['attention'] != 'none' and attention_step != 0:
-              outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # focus (B)
-              outputs_info.append(T.cast(T.alloc(numpy.cast['int32'](0), index.shape[1]) + attention_beam,'int32')) # beam (B)
             if self.attrs['lm']:
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
@@ -482,14 +439,9 @@ class RecurrentUnitLayer(Layer):
           mask = args[-2]
           mass = args[-1]
           args = args[:-2]
-        if self.attrs['attention'] != 'none':
-          if self.attrs['attention'] == 'default':
-            xc = args[-1]
-            args = args[:-1]
-          if attention_step != 0:
-            focus = args[-2]
-            beam = args[-1]
-            args = args[:-2]
+        if self.recurrent_transform:
+          attention_non_seq_inputs = args[len(args) - len(self.recurrent_transform.input_vars):]
+          args = args[:len(args) - len(self.recurrent_transform.input_vars)]
         if self.attrs['lm']:
           c_p = args[-1]
           args = args[:-1]
@@ -519,29 +471,8 @@ class RecurrentUnitLayer(Layer):
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
-          if self.attrs['attention'] == 'default':
-            #att_z = zc
-            att_x = xc
-            if attention_step != 0:
-              focus_i = T.switch(T.ge(focus + beam,xc.shape[0]), xc.shape[0], focus + beam)
-              focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
-              focus_end = T.max(focus_i)
-              focus_start = T.min(focus_j)
-              #att_z = zc[focus_start:focus_end]
-              att_x = xc[focus_start:focus_end]
-            #f_e = T.exp(att_z * T.dot(h_p, self.W_att_re)) #.dimshuffle('x',0,1).repeat(att_z.shape[0],axis=0)) # (time,batch,1)
-            f_z = T.sum(att_x * T.tanh(T.dot(h_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0), axis=2, keepdims=True)
-            f_e = T.exp(f_z)
-            w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-            z_t += T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
-            #z_t += T.dot(T.dot(att_x.dimshuffle(2,1,0), w_t), self.W_att_in) #T.tensordot(xc.dimshuffe(2,1,0), w_t, [[2], [2]]) # (batch, dim)
-            if attention_step == -1:
-              #focus = focus_start + T.cast(T.mean(w_t,axis=0).flatten() * (focus_end - focus_start), 'int32')
-              focus = T.cast(T.sum(w_t*self.index_range[focus_start:focus_end],axis=0).flatten() + 1,'int32') #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
-              beam = T.cast(T.max([0.5 * T.exp(-T.sum(T.log(w_t)*w_t,axis=0)).flatten(),T.ones_like(beam)],axis=0),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
-              result = [focus,beam] + result
-            elif attention_step > 0:
-              result = [focus+attention_step,beam] + result
+          if self.recurrent_transform:
+            z_t += self.recurrent_transform.attention(h_p)
           act = unit.step(i_t, x_t, z_t, z_p, *args)
           #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
           #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result

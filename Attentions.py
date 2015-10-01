@@ -43,6 +43,9 @@ class AttentionBase:
   def get_sorted_non_sequence_inputs(self):
     return [v for (k, v) in sorted(self.input_vars.items())]
 
+  def get_sorted_custom_vars(self):
+    return [v for (k, v) in sorted(self.custom_vars.items())]
+
   def function_for_custom_op(self):
     """
     :return: (y_p, z_re, custom_vars)
@@ -52,7 +55,7 @@ class AttentionBase:
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
     z_re = self.attention(y_p)
-    return y_p, z_re, sorted(self.custom_vars.keys())
+    return y_p, z_re, self.get_sorted_custom_vars()
 
   def attention(self, y_p):
     """
@@ -131,6 +134,10 @@ class AttentionDot(AttentionBase):
     #   self.index_range = T.arange(self.index.shape[0], dtype='float32').dimshuffle(0,'x','x').repeat(self.index.shape[1],axis=1)
     # else:
     #   assert attention_beam == 0
+
+    # if self.attrs['attention'] != 'none' and attention_step != 0:
+    #   outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # focus (B)
+    #   outputs_info.append(T.cast(T.alloc(numpy.cast['int32'](0), index.shape[1]) + attention_beam,'int32')) # beam (B)
 
     n_in = sum([e.attrs['n_out'] for e in base])
     src = [e.output for e in base]
