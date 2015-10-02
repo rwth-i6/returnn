@@ -44,7 +44,7 @@ class RecurrentTransformBase(object):
   def add_state_var(self, v):
     assert v.name
     self.state_vars[v.name] = v
-    self.add_var(v)
+    #self.add_var(v)
     return v
 
   def add_var(self, v):
@@ -239,6 +239,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
+    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")
     self.t_max = self.add_var(self.tt.fscalar("t_max"))
 
   def create_vars(self):
@@ -258,25 +259,29 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
-    self.t = self.add_state_var(theano.shared(numpy.cast['float32'](0), name="t"))
+    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
 
   def step(self, y_p):
 
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re))  # (batch,2)
-    dt = T.nnet.sigmoid(a[:, 0]) * self.t_max
-    std = T.nnet.sigmoid(a[:, 1]) * 5
+    dt = T.nnet.sigmoid(a[:, 0]) * self.t_max  # (batch,)
+    std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
+    std_t_bc = std.dimshuffle('x', 0)
 
-    t_old = self.t
+    t_old = self.t  # (batch,)
     t = t_old + dt
+    t_bc = t.dimshuffle('x', 0)  # (time,batch)
 
     # gauss window
-    idxs = T.arange(self.B.shape[0]).dimshuffle(0, 'x')
-    f_e = T.exp(((t - idxs) ** 2) / (2 * std ** 2))
-    norm = T.constant(1.0, dtype="float32") / (std * T.constant(sqrt(2 * pi), dtype="float32"))
+    idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
+    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time.batch)
+    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time.batch)
     w_t = f_e * norm
 
     z_re = T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in)
+    z_re = theano.tensor.opt.assert_op
+
     return z_re, {self.t: t}
 
 
