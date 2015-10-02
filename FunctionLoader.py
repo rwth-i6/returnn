@@ -195,7 +195,7 @@ struct FunLoader
 
   std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4, CudaNdarray* x5)
   {
-    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4, x5);
+    PyObject* args = PyTuple_Pack(6, x0, x1, x2, x3, x4, x5);
     return call_helper(args);
   }
 
