@@ -391,9 +391,11 @@ class RecurrentUnitLayer(Layer):
       recurrent_transform = attention
     self.recurrent_transform = None
     if recurrent_transform != "none":
-      self.recurrent_transform = RecurrentTransform.transforms[recurrent_transform](layer=self)
+      recurrent_transform_inst = RecurrentTransform.transforms[recurrent_transform](layer=self)
+      assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
+      self.recurrent_transform = recurrent_transform_inst
     non_sequences = []
-    if recurrent_transform != "none":
+    if self.recurrent_transform:
       self.recurrent_transform.create_vars()
       non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
 
@@ -495,17 +497,20 @@ class RecurrentUnitLayer(Layer):
           z_p = T.dot(h_p * mass * mask, W_re)
         else:
           z_p = T.dot(h_p, W_re)
+        updates = {}
         if self.depth > 1:
           assert False # this is broken
           sargs = [arg.dimshuffle(0,1,2) for arg in args]
           act = [ act.dimshuffle(0,2,1) for act in unit.step(x_t.dimshuffle(1,0), z_t.dimshuffle(0,2,1), z_p.dimshuffle(0,2,1), *sargs) ]
         else:
           if self.recurrent_transform:
-            z_t += self.recurrent_transform.transform(h_p)
-          act = unit.step(i_t, x_t, z_t, z_p, *args)
-          #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
-          #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result
-          return [ act[0] * i ] + [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(1,unit.n_act) ] + result
+            z_r, r_updates = self.recurrent_transform.step(h_p)
+            z_t += z_r
+            updates.update(r_updates)
+        act = unit.step(i_t, x_t, z_t, z_p, *args)
+        #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
+        #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result
+        return [ act[0] * i ] + [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(1,unit.n_act) ] + result, updates
 
       def stepo(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)

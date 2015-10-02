@@ -12,16 +12,18 @@ else:
 
 
 def make_fwd_fun(custom_fun_maker):
-  y_p, z_re, custom_vars = custom_fun_maker()
+  y_p, z_re, custom_vars, state_updates = custom_fun_maker()
 
   z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
   updates = [(z_re_shared, z_re)]
+  for k, v in sorted(state_updates.items()):
+    updates += [(k, v)]
   fwd_fun = theano.function(inputs=[y_p] + custom_vars, outputs=[], updates=updates, on_unused_input="warn")
   return fwd_fun, z_re_shared, []
 
 
 def make_bwd_fun(custom_fun_maker):
-  y_p, z_re, custom_vars = custom_fun_maker()
+  y_p, z_re, custom_vars, state_updates = custom_fun_maker()
 
   Dz_re = tt.fmatrix("Dz_re")
   known_grads = {z_re: Dz_re}
