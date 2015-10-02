@@ -218,58 +218,14 @@ class AttentionRBF(AttentionDot):
   name = "attention_rbf"
 
   def init_vars(self):
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
+    super(AttentionRBF, self).init_vars()
     self.sigma = self.add_var(self.tt.fscalar('sigma'))
 
   def create_vars(self):
-    layer = self.layer
-    base = layer.base
-    assert base, "attention networks are only defined for decoder networks"
-    unit = layer.unit
-
-    # if attention_step > 0:
-    #   if attention_beam == 0:
-    #     attention_beam = attention_step
-    # elif attention_step == -1:
-    #   assert attention_beam > 0
-    #   self.index_range = T.arange(self.index.shape[0], dtype='float32').dimshuffle(0,'x','x').repeat(self.index.shape[1],axis=1)
-    # else:
-    #   assert attention_beam == 0
-
-    # if self.attrs['attention'] != 'none' and attention_step != 0:
-    #   outputs_info.append(T.alloc(numpy.cast['int32'](0), index.shape[1])) # focus (B)
-    #   outputs_info.append(T.cast(T.alloc(numpy.cast['int32'](0), index.shape[1]) + attention_beam,'int32')) # beam (B)
-
-    n_in = sum([e.attrs['n_out'] for e in base])
-    src = [e.output for e in base]
-    l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
-
-    self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = T.concatenate(src, axis=2) + self.xb  # == B
-    self.B.name = "B"
-    self.add_input(self.B)
-
-    #self.sigma = T.constant(4.0,dtype='float32',name='sigma')
-    #self.add_input(self.sigma)
-
-    #if n_in != unit.n_out:
-    #  values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, unit.n_units)), dtype=theano.config.floatX)
-    #  self.W_att_proj = theano.shared(value=values, borrow=True, name = "W_att_proj")
-    #  self.add_param(self.W_att_proj)
-    #  self.xc = T.dot(self.xc, self.W_att_proj)
-    #  n_in = unit.n_units
-    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
-    self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
-    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-    self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
-
-    self.sigma = self.add_var(theano.shared(numpy.cast['float32'](layer.attrs['attention_sigma']), name="sigma"))
+    super(AttentionRBF, self).create_vars()
+    self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
 
   def step(self, y_p):
-    #self.sigma = T.constant(2.0 * (4.0 if not 'attention_sigma' in self.layer.attrs else self.layer.attrs['attention_sigma']), 'float32')
-    #self.sigma=2.0
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
