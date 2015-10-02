@@ -74,69 +74,15 @@ struct FunLoader
     Py_DECREF(mod);
   }
 
-  void reset_shared()
+  void reset_shared(CudaNdarray** args, size_t num_args)
   {
     assert(reset_fn);
-    PyObject* r = PyObject_CallObject(reset_fn, 0);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-  }
-
-  void reset_shared(CudaNdarray * x0)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(1, x0);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-    Py_DECREF(args);
-  }
-
-  void reset_shared(CudaNdarray * x0, CudaNdarray * x1)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(2, x0, x1);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-    Py_DECREF(args);
-  }
-
-  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(3, x0, x1, x2);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-    Py_DECREF(args);
-  }
-
-  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-    Py_DECREF(args);
-  }
-
-  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3, CudaNdarray * x4)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
-    if(!r) PyErr_Print();
-    Py_XDECREF(r);
-    Py_DECREF(args);
-  }
-
-  void reset_shared(CudaNdarray * x0, CudaNdarray * x1, CudaNdarray * x2, CudaNdarray * x3, CudaNdarray * x4, CudaNdarray * x5)
-  {
-    assert(reset_fn);
-    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4, x5);
-    PyObject* r = PyObject_CallObject(reset_fn, args);
+    PyObject* py_args = PyTuple_New(num_args);
+    for(size_t i = 0; i < num_args; ++i) {
+      Py_INCREF(args[i]);
+      PyTuple_SET_ITEM(py_args, i, (PyObject*) args[i]);
+    }
+    PyObject* r = PyObject_CallObject(reset_fn, py_args);
     if(!r) PyErr_Print();
     Py_XDECREF(r);
     Py_DECREF(args);
@@ -163,44 +109,15 @@ struct FunLoader
     return res;
   }
 
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x)
+  std::vector<CudaNdarray*> call(CudaNdarray** args, size_t num_args)
   {
-    PyObject* args = PyTuple_Pack(1, x);
-    return call_helper(args);
+    PyObject* py_args = PyTuple_New(num_args);
+    for(size_t i = 0; i < num_args; ++i) {
+      Py_INCREF(args[i]);
+      PyTuple_SET_ITEM(py_args, i, (PyObject*) args[i]);
+    }
+    return call_helper(py_args);
   }
-
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x, CudaNdarray* y)
-  {
-    PyObject* args = PyTuple_Pack(2, x, y);
-    return call_helper(args);
-  }
-
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x, CudaNdarray* y, CudaNdarray* z)
-  {
-    PyObject* args = PyTuple_Pack(3, x, y, z);
-    return call_helper(args);
-  }
-
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3)
-  {
-    PyObject* args = PyTuple_Pack(4, x0, x1, x2, x3);
-    return call_helper(args);
-  }
-
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4)
-  {
-    PyObject* args = PyTuple_Pack(5, x0, x1, x2, x3, x4);
-    return call_helper(args);
-  }
-
-  std::vector<CudaNdarray*> operator()(CudaNdarray* x0, CudaNdarray* x1, CudaNdarray* x2, CudaNdarray* x3, CudaNdarray* x4, CudaNdarray* x5)
-  {
-    PyObject* args = PyTuple_Pack(6, x0, x1, x2, x3, x4, x5);
-    return call_helper(args);
-  }
-
-  //TODO add overloads for more arguments if needed
-  //(variadic template would be better but not widely supported by compilers)
 
 };
 
