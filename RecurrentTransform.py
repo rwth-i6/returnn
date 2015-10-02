@@ -278,9 +278,14 @@ class AttentionTimeGauss(RecurrentTransformBase):
     f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time.batch)
     norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time.batch)
     w_t = f_e * norm
+    w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,dim)
 
-    z_re = T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in)
-    z_re = theano.tensor.opt.assert_op
+    # self.B is (time,batch,dim)
+    z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
+    assert z_re.ndim == 2
+    assert self.B.ndim == 3
+    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[0] == self.B.shape[1])
+    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[1] == self.B.shape[2])
 
     return z_re, {self.t: t}
 
