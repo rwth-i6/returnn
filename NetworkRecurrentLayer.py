@@ -155,6 +155,7 @@ class LSTMC(Unit):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
     import OpLSTMCustom
+    OpLSTMCustom.register_func(self.parent.recurrent_transform.name)
     op = OpLSTMCustom.function_ops[self.parent.recurrent_transform.name]
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     #for att in ['attention_sigma']:
@@ -366,7 +367,26 @@ class RecurrentUnitLayer(Layer):
 
     if attention == "default":
       attention = "attention_dot"
-    if attention != "none":
+    if attention == 'input': # attention is just a sequence dependent bias (lstmp compatible)
+      src = []
+      src_names = []
+      n_in = 0
+      for e in base:
+        src_base = [ s for s in e.sources if s.name not in src_names ]
+        src_names += [ s.name for s in e.sources ]
+        src += [s.output for s in src_base]
+        n_in += sum([s.attrs['n_out'] for s in src_base])
+      self.xc = T.concatenate(src, axis=2)
+      l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
+      self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
+      self.add_param(self.W_att_xc)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+      self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
+      self.add_param(self.W_att_in)
+      zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
+      self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
+    elif attention != "none":
       assert recurrent_transform == "none"
       recurrent_transform = attention
     self.recurrent_transform = None
@@ -429,9 +449,9 @@ class RecurrentUnitLayer(Layer):
               sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * lmmask
               outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
-              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
+              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
           else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
+            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
       else:
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]

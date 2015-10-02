@@ -380,33 +380,36 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 function_ops = {}; ":type: dict[str,LSTMCustomOp]"
 grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
 
+def register_func(fn):
+  # register op
+  no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
+  inpl = LSTMCustomOp(fun_name=fn, inplace=True)
+  function_ops[fn] = no_inpl
+
+  # hack to avoid being called twice
+  attr = 'LSTMCustomMOpInplaceOpt_%s' % fn
+  if not hasattr(optdb, attr):
+    opt = OpSub(no_inpl, inpl)
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)
+
+  # the same for grad
+  no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False)
+  inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True)
+  grad_ops[fn] = no_inpl
+
+  # hack to avoid being called twice
+  attr = 'LSTMCustomMOpGradInplaceOpt_%s' % fn
+  if not hasattr(optdb, attr):
+    opt = OpSub(no_inpl, inpl)
+    optdb.register(attr, theano.gof.TopoOptimizer(opt),
+                   50.0, 'fast_run', 'inplace', 'gpuarray')
+    setattr(optdb, attr, True)
+
 def _register_all_funcs():
   import RecurrentTransform
   for fn in RecurrentTransform.transforms.keys():
-    # register op
-    no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
-    inpl = LSTMCustomOp(fun_name=fn, inplace=True)
-    function_ops[fn] = no_inpl
+    register_func(fn)
 
-    # hack to avoid being called twice
-    attr = 'LSTMCustomMOpInplaceOpt_%s' % fn
-    if not hasattr(optdb, attr):
-      opt = OpSub(no_inpl, inpl)
-      optdb.register(attr, theano.gof.TopoOptimizer(opt),
-                     50.0, 'fast_run', 'inplace', 'gpuarray')
-      setattr(optdb, attr, True)
-
-    # the same for grad
-    no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False)
-    inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True)
-    grad_ops[fn] = no_inpl
-
-    # hack to avoid being called twice
-    attr = 'LSTMCustomMOpGradInplaceOpt_%s' % fn
-    if not hasattr(optdb, attr):
-      opt = OpSub(no_inpl, inpl)
-      optdb.register(attr, theano.gof.TopoOptimizer(opt),
-                     50.0, 'fast_run', 'inplace', 'gpuarray')
-      setattr(optdb, attr, True)
-
-_register_all_funcs()
+#_register_all_funcs()
