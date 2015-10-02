@@ -85,7 +85,7 @@ struct FunLoader
     PyObject* r = PyObject_CallObject(reset_fn, py_args);
     if(!r) PyErr_Print();
     Py_XDECREF(r);
-    Py_DECREF(args);
+    Py_DECREF(py_args);
   }
 
   std::vector<CudaNdarray*> call_helper(PyObject * args)
