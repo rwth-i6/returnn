@@ -217,15 +217,11 @@ class AttentionRBF(AttentionDot):
   """
   name = "attention_rbf"
 
-  def __init__(self,force_gpu=False,layer=None):
-    super(AttentionRBF, self).__init__(force_gpu,layer)
-    #self.sigma = self.add_var(theano.shared(value=numpy.asarray([4.0],dtype='float32'),name='sigma'))
-
   def init_vars(self):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
-    #self.sigma = self.add_input(self.tt.fscalar('sigma'))
+    self.sigma = self.add_var(self.tt.fscalar('sigma'))
 
   def create_vars(self):
     layer = self.layer
@@ -268,15 +264,12 @@ class AttentionRBF(AttentionDot):
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
     values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
-    values = numpy.asarray(4.0, dtype=theano.config.floatX)
-    #self.sigma = self.add_param(theano.shared(value=values, borrow=True, name = "sigma"))
-    #self.sigma = self.add_param(theano.shared(value=numpy.asarray(4.0,dtype='float32'),name='sigma'))
-    #self.sigma = self.add_var(T.constant(4.0,'float32')) #theano.shared(value=numpy.asarray(4.0,dtype='float32'),name='sigma'))
 
+    self.sigma = self.add_var(theano.shared(numpy.cast['float32'](layer.attrs['attention_sigma']), name="sigma"))
 
   def step(self, y_p):
     #self.sigma = T.constant(2.0 * (4.0 if not 'attention_sigma' in self.layer.attrs else self.layer.attrs['attention_sigma']), 'float32')
-    self.sigma=2.0
+    #self.sigma=2.0
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)

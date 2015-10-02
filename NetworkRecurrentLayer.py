@@ -158,9 +158,6 @@ class LSTMC(Unit):
     OpLSTMCustom.register_func(self.parent.recurrent_transform.name)
     op = OpLSTMCustom.function_ops[self.parent.recurrent_transform.name]
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
-    #for att in ['attention_sigma']:
-    #  if att in self.parent.attrs and att in custom_vars:
-    #    custom_vars[att].set_value(numpy.asarray(self.parent.attrs[att]))
 
     result = op(z[::-(2 * go_backwards - 1)],
                 outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *custom_vars)
