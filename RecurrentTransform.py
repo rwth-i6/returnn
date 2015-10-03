@@ -227,7 +227,7 @@ class AttentionBeam(AttentionBase):
     import theano.printing
     focus = T.cast(self.focus, 'int32')
     beam = T.cast(self.beam, 'int32')
-    focus = theano.printing.Print("focus")(focus)
+    #focus = theano.printing.Print("focus")(focus)
     focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam)
     focus_j = T.switch(T.lt(focus - 1,0), 0, focus - 1)
     focus_end = T.max(focus_i) #theano.printing.Print("focus_end", T.max(focus_i))
@@ -240,7 +240,7 @@ class AttentionBeam(AttentionBase):
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
 
-    focus = T.cast(T.argmax(w_t,axis=0).dimshuffle(0) + focus_start, 'float32') #T.sum(w_t[:,:,0]*self.index_range[focus_start:focus_end],axis=0) #
+    focus = T.cast(T.argmax(w_t,axis=0).dimshuffle(0), 'float32') #T.sum(w_t[:,:,0]*self.index_range[focus_start:focus_end],axis=0) #
     #focus = T.sum(w_t.dimshuffle(0,1)*T.arange(w_t.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1),axis=0) + T.cast(focus_start,'float32') # #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
     #focus = self.focus + 1
     #self.focus += 1
