@@ -255,7 +255,7 @@ class RecurrentUnitLayer(Layer):
                n_dec = 0, # number of time steps to decode
                attention = "none", # soft attention (none, input, time) # deprecated
                recurrent_transform = "none",
-               attention_sigma = 4.0,
+               attention_sigma = 1.0,
                attention_step = 0, # soft attention step (-1 for weighted index)
                attention_beam = 0, # soft attention context window
                base = None,

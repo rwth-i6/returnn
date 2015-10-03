@@ -47,7 +47,9 @@ class RecurrentTransformBase(object):
     #self.add_var(v)
     return v
 
-  def add_var(self, v):
+  def add_var(self, v, name=None):
+    if name:
+      v.name = name
     assert v.name
     self.custom_vars[v.name] = v
     return v
@@ -93,48 +95,10 @@ class AttentionTest(RecurrentTransformBase):
     return z_re, {}
 
 
-class AttentionInput(RecurrentTransformBase): # TODO: this isn't a recurrent transform
+class AttentionBase(RecurrentTransformBase):
   """
-  attention is just a sequence dependent bias (lstmp compatible)
+  Attention base class"
   """
-
-  name = "input"
-
-  def create_vars(self):
-    layer = self.layer
-    base = layer.base
-    assert base, "attention networks are only defined for decoder networks"
-    # TODO ...
-    src = []
-    src_names = []
-    n_in = 0
-    for e in base:
-      src_base = [ s for s in e.sources if s.name not in src_names ]
-      src_names += [ s.name for s in e.sources ]
-      src += [s.output for s in src_base]
-      n_in += sum([s.attrs['n_out'] for s in src_base])
-    self.xc = T.concatenate(src, axis=2)
-    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_in)
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-    self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-    self.add_param(self.W_att_xc)
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-    self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-    self.add_param(self.W_att_in)
-    zz = T.exp(T.dot(self.xc, self.W_att_xc)) # TB1
-    self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
-
-  def step(self, y_p):
-    # TODO
-    return T.unbroadcast(T.constant(numpy.array([[0]]), dtype="float32"), 0, 1), {}
-
-
-class AttentionDot(RecurrentTransformBase):
-  """
-  attention over dot product of base outputs and time dependent activation
-  """
-  name = "attention_dot"
-
   def init_vars(self):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
@@ -178,6 +142,13 @@ class AttentionDot(RecurrentTransformBase):
     values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
 
+
+class AttentionDot(AttentionBase):
+  """
+  attention over dot product of base outputs and time dependent activation
+  """
+  name = "attention_dot"
+
   def step(self, y_p):
 
     # #att_z = zc
@@ -211,7 +182,7 @@ class AttentionDot(RecurrentTransformBase):
     return z_re, {}
 
 
-class AttentionRBF(AttentionDot):
+class AttentionRBF(AttentionBase):
   """
   attention over rbf kernel of base outputs and time dependent activation
   """
@@ -230,6 +201,45 @@ class AttentionRBF(AttentionDot):
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
+
+
+class AttentionBeam(AttentionBase):
+  """
+  beam attention over rbf kernel of base outputs and time dependent activation
+  """
+  name = "attention_beam"
+
+  def init_vars(self):
+    super(AttentionBeam, self).init_vars()
+    self.beam = self.add_var(self.tt.fscalar('beam'))
+    self.focus = self.add_var(self.tt.fvector('focus'))
+    self.index_range = self.add_var(self.tt.ftensor3('index_range'))
+
+  def create_vars(self):
+    super(AttentionBeam, self).create_vars()
+    self.layer.attrs['attention_beam'] = 10.0
+    self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
+    self.focus = self.add_var(T.alloc(numpy.cast['float32'](0), self.layer.index.shape[1]), "focus")
+    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
+    self.index_range = self.add_var(T.arange(self.layer.index.shape[0], dtype='float32').dimshuffle(0,'x','x').repeat(self.layer.index.shape[1],axis=1), "index_range")
+
+  def step(self, y_p):
+    focus = T.cast(self.focus, 'int32')
+    beam = T.cast(self.beam, 'int32')
+    focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam)
+    focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
+    focus_end = T.max(focus_i)
+    focus_start = T.min(focus_j)
+    att_x = self.B[focus_start:focus_end]
+
+    f_z = -T.sqrt(T.sum(T.sqr(att_x - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0)), axis=2, keepdims=True)) #/ self.sigma
+    f_e = T.exp(f_z)
+    w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+
+    self.focus = T.sum(w_t*self.index_range[focus_start:focus_end],axis=0).flatten() #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
+    #self.beam = T.cast(T.max([0.5 * T.exp(-T.sum(T.log(w_t)*w_t,axis=0)).flatten(),T.ones_like(beam)],axis=0),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
+
+    return T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in), {}
 
 
 class AttentionTimeGauss(RecurrentTransformBase):

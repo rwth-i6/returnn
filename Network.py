@@ -75,12 +75,12 @@ class LayerNetwork(object):
         assert config.has(var), "could not find variable " + var
         config.network_topology_json = config.network_topology_json[:start_var] + config.value(var,"") + config.network_topology_json[end_var+1:]
         print >> log.v4, "substituting variable %s with %s" % (var,config.value(var,""))
-        start_var = config.network_topology_json.find('(config:', end_var)
+        start_var = config.network_topology_json.find('(config:', start_var+1)
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
         print >> log.v4, "----- BEGIN JSON CONTENT -----"
-        print >> log.v4, config.network_topology_json
+        print >> log.v3, config.network_topology_json
         print >> log.v4, "------ END JSON CONTENT ------"
         assert False, "invalid json content, %r" % e
       assert isinstance(json_content, dict)
