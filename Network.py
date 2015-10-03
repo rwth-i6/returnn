@@ -79,9 +79,9 @@ class LayerNetwork(object):
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
-        print >> log.v4, "----- BEGIN JSON CONTENT -----"
+        print >> log.v3, "----- BEGIN JSON CONTENT -----"
         print >> log.v3, config.network_topology_json
-        print >> log.v4, "------ END JSON CONTENT ------"
+        print >> log.v3, "------ END JSON CONTENT ------"
         assert False, "invalid json content, %r" % e
       assert isinstance(json_content, dict)
       if 'network' in json_content:

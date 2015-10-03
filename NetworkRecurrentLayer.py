@@ -256,8 +256,7 @@ class RecurrentUnitLayer(Layer):
                attention = "none", # soft attention (none, input, time) # deprecated
                recurrent_transform = "none",
                attention_sigma = 1.0,
-               attention_step = 0, # soft attention step (-1 for weighted index)
-               attention_beam = 0, # soft attention context window
+               attention_beam = 3, # soft attention context window
                base = None,
                lm = False, # language model
                droplm = 0.0, # language model drop during training
@@ -289,7 +288,6 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
     self.set_attr('attention', attention.encode("utf8"))
-    self.set_attr('attention_step', attention_step)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform)
     self.set_attr('attention_sigma', attention_sigma)
@@ -551,10 +549,6 @@ class RecurrentUnitLayer(Layer):
         #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j,self.y_in[self.attrs['target']][j]], y_idx=)
         #self.constraints += T.sum(nll)
         outputs = outputs[:-1]
-      if self.attrs['attention'] != "none" and attention_step != 0:
-        self.focus = outputs[-2]
-        self.beam = outputs[-1]
-        outputs = outputs[:-2]
       if self.attrs['sampling'] > 1:
         if s == 0:
           #self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]
