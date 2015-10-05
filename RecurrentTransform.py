@@ -13,6 +13,7 @@ class RecurrentTransformBase(object):
     """
     :type layer: NetworkRecurrentLayer.RecurrentUnitLayer
     """
+    self.force_gpu = force_gpu
     if force_gpu:
       self.tt = cuda
     else:
@@ -25,11 +26,31 @@ class RecurrentTransformBase(object):
     if not for_custom:
       transforms_by_id[id(self)] = self
 
+  def _create_var_for_custom(self, base_var):
+    if self.force_gpu:
+      base_type_class = cuda.CudaNdarrayType
+    else:
+      base_type_class = T.TensorType
+    dtype = base_var.dtype
+    ndim = base_var.ndim
+    type_inst = base_type_class(dtype=dtype, broadcastable=(False,) * ndim)
+    name = base_var.name
+    var = type_inst(name)
+    setattr(self, name, var)
+    return var
+
   def create_vars_for_custom(self):
     """
     Called via CustomLSTMFunctions.
     """
-    pass
+    assert self.for_custom
+    layer_transform_instance = self.layer.recurrent_transform   # this is a different instance
+    assert isinstance(layer_transform_instance, RecurrentTransformBase)
+    assert layer_transform_instance.layer is self.layer
+    for k, v in layer_transform_instance.custom_vars.items():
+      assert getattr(layer_transform_instance, k) is v
+      assert v.name == k
+      self.add_var(self._create_var_for_custom(v))
 
   def create_vars(self):
     """
@@ -107,10 +128,6 @@ class AttentionBase(RecurrentTransformBase):
   """
   Attention base class"
   """
-  def create_vars_for_custom(self):
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
 
   def create_vars(self):
     layer = self.layer
