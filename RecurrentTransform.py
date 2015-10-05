@@ -22,10 +22,16 @@ class RecurrentTransformBase(object):
     self.state_vars = {}  # updated in each step()
     self.custom_vars = {}
 
-  def init_vars(self):
+  def create_vars_for_custom(self):
+    """
+    Called via CustomLSTMFunctions.
+    """
     pass
 
   def create_vars(self):
+    """
+    Called for regular theano.scan().
+    """
     pass
 
   def add_param(self, v):
@@ -71,7 +77,7 @@ class RecurrentTransformBase(object):
     assert not self.layer
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
-    self.init_vars()
+    self.create_vars_for_custom()
     z_re, updates = self.step(y_p)
     return y_p, z_re, self.get_sorted_custom_vars(), updates
 
@@ -87,7 +93,7 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def init_vars(self):
+  def create_vars_for_custom(self):
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
 
   def step(self, y_p):
@@ -99,7 +105,7 @@ class AttentionBase(RecurrentTransformBase):
   """
   Attention base class"
   """
-  def init_vars(self):
+  def create_vars_for_custom(self):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
@@ -188,8 +194,8 @@ class AttentionRBF(AttentionBase):
   """
   name = "attention_rbf"
 
-  def init_vars(self):
-    super(AttentionRBF, self).init_vars()
+  def create_vars_for_custom(self):
+    super(AttentionRBF, self).create_vars_for_custom()
     self.sigma = self.add_var(self.tt.fscalar('sigma'))
 
   def create_vars(self):
@@ -209,8 +215,8 @@ class AttentionBeam(AttentionBase):
   """
   name = "attention_beam"
 
-  def init_vars(self):
-    super(AttentionBeam, self).init_vars()
+  def create_vars_for_custom(self):
+    super(AttentionBeam, self).create_vars_for_custom()
     self.beam = self.add_var(self.tt.fscalar('beam'))
     self.focus = self.add_state_var(theano.shared(value=numpy.zeros((50,), dtype="float32"), name="focus"))
     #self.focus = self.add_state_var(self.tt.fvector('focus'))
@@ -255,7 +261,7 @@ class AttentionBeam(AttentionBase):
 class AttentionTimeGauss(RecurrentTransformBase):
   name = "attention_time_gauss"
 
-  def init_vars(self):
+  def create_vars_for_custom(self):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
