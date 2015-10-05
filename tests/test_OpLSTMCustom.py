@@ -3,9 +3,10 @@ import theano
 import theano.tensor as T
 import numpy
 from Device import have_gpu
+import RecurrentTransform
 import OpLSTMCustom
-LSTMCustomTestOpNoInplaceInstance = OpLSTMCustom.function_ops["test"]
-LSTMCustomDotAttentionOpNoInplaceInstance = OpLSTMCustom.function_ops["attention_dot"]
+LSTMCustomTestOpNoInplaceInstance = OpLSTMCustom.register_func(RecurrentTransform.AttentionTest())
+LSTMCustomDotAttentionOpNoInplaceInstance = OpLSTMCustom.register_func(RecurrentTransform.AttentionDot())
 from OpLSTM import LSTMOpInstance
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
