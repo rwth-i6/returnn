@@ -265,6 +265,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
+    self.i = theano.shared(value=0, name="i")
     self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")
     self.t_max = self.add_var(self.tt.fscalar("t_max"))
 
@@ -285,35 +286,31 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
+    self.i = theano.shared(value=0, name="i")
     self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
 
   def step(self, y_p):
-
+    # self.B is (time,batch,dim)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re))  # (batch,2)
     dt = T.nnet.sigmoid(a[:, 0]) * self.t_max  # (batch,)
     std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
 
-    t_old = self.t  # (batch,)
+    t_old = T.switch(T.gt(self.i, 0), self.t, T.zeros((self.B.shape[1],), dtype="float32"))  # (batch,)
     t = t_old + dt
     t_bc = t.dimshuffle('x', 0)  # (time,batch)
 
     # gauss window
     idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
-    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time.batch)
-    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time.batch)
+    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
+    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time,batch)
     w_t = f_e * norm
     w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,dim)
 
-    # self.B is (time,batch,dim)
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
-    assert z_re.ndim == 2
-    assert self.B.ndim == 3
-    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[0] == self.B.shape[1])
-    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[1] == self.B.shape[2])
 
-    return z_re, {self.t: t}
+    return z_re, {self.t: t, self.i: self.i + 1}
 
 
 
