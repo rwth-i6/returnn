@@ -84,6 +84,7 @@ struct FunLoader
     }
     PyObject* r = PyObject_CallObject(reset_fn, py_args);
     if(!r) PyErr_Print();
+    assert(r);
     Py_XDECREF(r);
     Py_DECREF(py_args);
   }
@@ -93,6 +94,7 @@ struct FunLoader
     //std::cout << "calling custom function " << name << "..." << std::endl;
     PyObject* r = PyObject_CallObject(fn, args);
     if(!r) PyErr_Print();
+    assert(r);
     Py_XDECREF(r);
     Py_DECREF(args);
 
