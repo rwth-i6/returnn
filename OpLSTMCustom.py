@@ -57,7 +57,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
-    funloader = make_funloader_code(self.fun_name + "_fun_bwd", self.fun_name + "_fun_reset")
+    fun_prefix = "%s_%i" % (self.fun_name, id(self.recurrent_transform))
+    funloader = make_funloader_code(self.recurrent_transform, fun_prefix + "_fun_bwd", fun_prefix + "_fun_reset")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
@@ -73,7 +74,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
     else:
       custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
-    bwd_fun = self.fun_name + "_fun_bwd"
+    bwd_fun = "%s_%i_fun_bwd" % (self.fun_name, id(self.recurrent_transform))
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
@@ -263,7 +264,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
-    funloader = make_funloader_code(self.fun_name + "_fun_fwd")
+    fun_prefix = "%s_%i" % (self.fun_name, id(self.recurrent_transform))
+    funloader = make_funloader_code(self.recurrent_transform, fun_prefix + "_fun_fwd")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -277,7 +279,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     # Y: all the outputs. 3d (time,batch,dim)
     # Z/H: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
     # d: last state (= Y[T-1]). 2d (batch,dim)
-    fwd_fun = self.fun_name + "_fun_fwd"
+    fwd_fun = "%s_%i_fun_fwd" % (self.fun_name, id(self.recurrent_transform))
     inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """

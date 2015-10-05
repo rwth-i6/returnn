@@ -9,7 +9,7 @@ import numpy
 class RecurrentTransformBase(object):
   name = None
 
-  def __init__(self, force_gpu=False, layer=None):
+  def __init__(self, force_gpu=False, layer=None, for_custom=False):
     """
     :type layer: NetworkRecurrentLayer.RecurrentUnitLayer
     """
@@ -21,6 +21,9 @@ class RecurrentTransformBase(object):
     self.input_vars = {}  # used as non_sequences for theano.scan(), i.e. as input for the step() function
     self.state_vars = {}  # updated in each step()
     self.custom_vars = {}
+    self.for_custom = for_custom
+    if not for_custom:
+      transforms_by_id[id(self)] = self
 
   def create_vars_for_custom(self):
     """
@@ -36,7 +39,7 @@ class RecurrentTransformBase(object):
 
   def add_param(self, v):
     assert v.name
-    if self.layer:
+    if not self.for_custom:
       self.layer.add_param(v, v.name + "_" + self.name)
     self.add_var(v)
     return v
@@ -74,7 +77,6 @@ class RecurrentTransformBase(object):
     :return: (y_p, z_re, custom_vars)
     :rtype: (theano.Variable,theano.Variable,list[theano.Variable],theano.Variable,list[theano.Variable])
     """
-    assert not self.layer
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
     self.create_vars_for_custom()
@@ -314,7 +316,8 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
 
 
-transforms = {}
+transform_classes = {}
+transforms_by_id = {}; ":type: dict[int,RecurrentTransformBase]"
 
 def _setup():
   import inspect
@@ -322,6 +325,6 @@ def _setup():
     if not inspect.isclass(clazz): continue
     if not issubclass(clazz, RecurrentTransformBase): continue
     if clazz.name is None: continue
-    transforms[clazz.name] = clazz
+    transform_classes[clazz.name] = clazz
 
 _setup()

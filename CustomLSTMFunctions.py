@@ -1,3 +1,5 @@
+
+import os
 import theano
 import theano.tensor as T
 import numpy
@@ -11,7 +13,8 @@ else:
   tt = T
 
 
-def make_fwd_fun(custom_fun_maker):
+def make_fwd_fun(recurrent_transform):
+  custom_fun_maker = recurrent_transform.function_for_custom_op
   y_p, z_re, custom_vars, state_updates = custom_fun_maker()
 
   z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
@@ -23,7 +26,8 @@ def make_fwd_fun(custom_fun_maker):
   return fwd_fun, z_re_shared, custom_out
 
 
-def make_bwd_fun(custom_fun_maker):
+def make_bwd_fun(recurrent_transform):
+  custom_fun_maker = recurrent_transform.function_for_custom_op
   y_p, z_re, custom_vars, state_updates = custom_fun_maker()
 
   Dz_re = tt.fmatrix("Dz_re")
@@ -46,38 +50,26 @@ def make_bwd_fun(custom_fun_maker):
 def print_wt(op,x):
   print x.argmax(axis=0)
 
-def setup_parent_functions(fn):
-  if fn in globals(): return
+functions = {}
+
+def setup_parent_functions(fn, recurrent_transform_id):
   import RecurrentTransform
   fn = "_".join(fn.split('_')[:-2])
-  print >> log.v4, "loading function",fn
-  for att_clazz in RecurrentTransform.transforms.values():
-    if att_clazz.name == fn:
-      att = att_clazz(force_gpu=True)
-      assert isinstance(att, RecurrentTransform.RecurrentTransformBase)
-      fn = att.name
-      globals()[fn] = att.function_for_custom_op
-      _setup_func(fn)
-      break
+  if fn in functions: return
+  print >> log.v4, "loading function", fn, "(pid %i)" % os.getpid()
+  transform = RecurrentTransform.transforms_by_id[recurrent_transform_id]
+  # New instance for the custom op.
+  transform = transform.__class__(force_gpu=True, for_custom=True, layer=transform.layer)
+  assert isinstance(transform, RecurrentTransform.RecurrentTransformBase)
+  _setup_func(fn, transform)
+  functions[fn] = transform
 
-def _setup_func(fn):
-  f = globals()[fn]
+def _setup_func(fn, recurrent_transform):
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
-  vs_fwd = make_fwd_fun(f)
-  vs_bwd = make_bwd_fun(f)
+  vs_fwd = make_fwd_fun(recurrent_transform)
+  vs_bwd = make_bwd_fun(recurrent_transform)
   assert len(vs_fwd) == len(fwd_names)
   assert len(vs_bwd) == len(bwd_names)
   for v, postfix in zip(vs_fwd + vs_bwd, fwd_names + bwd_names):
     globals()[fn + postfix] = v
-
-def _setup_functions():
-  import RecurrentTransform
-  for att_clazz in RecurrentTransform.transforms.values():
-    att = att_clazz(force_gpu=True)
-    assert isinstance(att, RecurrentTransform.RecurrentTransformBase)
-    fn = att.name
-    globals()[fn] = att.function_for_custom_op
-    _setup_func(fn)
-
-#_setup_functions()

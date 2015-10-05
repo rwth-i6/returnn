@@ -385,7 +385,7 @@ class RecurrentUnitLayer(Layer):
       recurrent_transform = attention
     self.recurrent_transform = None
     if recurrent_transform != "none":
-      recurrent_transform_inst = RecurrentTransform.transforms[recurrent_transform](layer=self)
+      recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
       assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
       self.recurrent_transform = recurrent_transform_inst
     non_sequences = []

@@ -20,7 +20,7 @@ struct FunLoader
   std::vector<PyObject*> res_shared;
   std::string name;
 
-  FunLoader(const char * fn_name, const char * reset_fn_name = 0)
+  FunLoader(long recurrent_transform_id, const char * fn_name, const char * reset_fn_name = 0)
   {
     //std::cout << "Loading function " << fn_name << "..." << std::endl;
     name = fn_name;
@@ -29,13 +29,17 @@ struct FunLoader
     assert(mod);
     std::stringstream sss("setup_parent_functions");
     setup_fn = PyObject_GetAttrString(mod, sss.str().c_str());
-    PyObject* args = PyTuple_New(1);
+    assert(setup_fn);
+    PyObject* args = PyTuple_New(2);
     PyTuple_SetItem(args,0,PyString_FromString(fn_name));
+    PyTuple_SetItem(args,1,PyLong_FromLong(recurrent_transform_id));
     PyObject* r = PyObject_CallObject(setup_fn, args);
     if(!r) PyErr_Print();
     Py_XDECREF(r);
     Py_XDECREF(args);
     fn = PyObject_GetAttrString(mod, fn_name);
+    if(!fn) PyErr_Print();
+    assert(fn);
     if(reset_fn_name)
     {
       reset_fn = PyObject_GetAttrString(mod, reset_fn_name);
@@ -50,6 +54,7 @@ struct FunLoader
     ss1 << fn_name << "_res1";
     PyObject * res0 = PyObject_GetAttrString(mod, ss0.str().c_str());
     PyObject * res1 = PyObject_GetAttrString(mod, ss1.str().c_str());
+    assert(res0);
     res_shared.push_back(res0);
     assert(PyList_Check(res1));
     int len = PyList_Size(res1);
@@ -125,12 +130,9 @@ struct FunLoader
 
 """
 
-def make_funloader_code(fn_name, reset_fn_name=None):
-  if reset_fn_name is not None:
-    return funloader_support_code + """
-    FunLoader %(fn_name)s("%(fn_name)s", "%(reset_fn_name)s");
-    """ % locals()
-  else:
-    return funloader_support_code + """
-    FunLoader %(fn_name)s("%(fn_name)s", 0);
-    """ % locals()
+def make_funloader_code(recurrent_transform, fn_name, reset_fn_name=None):
+  reset_fn_name_str = ('"%s"' % reset_fn_name) if reset_fn_name is not None else "0"
+  recurrent_transform_id = id(recurrent_transform)
+  return funloader_support_code + """
+  FunLoader %(fn_name)s(%(recurrent_transform_id)i, "%(fn_name)s", %(reset_fn_name_str)s);
+  """ % locals()
