@@ -155,8 +155,7 @@ class LSTMC(Unit):
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
     import OpLSTMCustom
-    OpLSTMCustom.register_func(self.parent.recurrent_transform.name)
-    op = OpLSTMCustom.function_ops[self.parent.recurrent_transform.name]
+    op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
 
     result = op(z[::-(2 * go_backwards - 1)],
@@ -386,7 +385,7 @@ class RecurrentUnitLayer(Layer):
       recurrent_transform = attention
     self.recurrent_transform = None
     if recurrent_transform != "none":
-      recurrent_transform_inst = RecurrentTransform.transforms[recurrent_transform](layer=self)
+      recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
       assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
       self.recurrent_transform = recurrent_transform_inst
     non_sequences = []

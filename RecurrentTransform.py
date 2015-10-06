@@ -9,10 +9,11 @@ import numpy
 class RecurrentTransformBase(object):
   name = None
 
-  def __init__(self, force_gpu=False, layer=None):
+  def __init__(self, force_gpu=False, layer=None, for_custom=False):
     """
     :type layer: NetworkRecurrentLayer.RecurrentUnitLayer
     """
+    self.force_gpu = force_gpu
     if force_gpu:
       self.tt = cuda
     else:
@@ -21,19 +22,48 @@ class RecurrentTransformBase(object):
     self.input_vars = {}  # used as non_sequences for theano.scan(), i.e. as input for the step() function
     self.state_vars = {}  # updated in each step()
     self.custom_vars = {}
+    self.for_custom = for_custom
+    if not for_custom:
+      transforms_by_id[id(self)] = self
 
-  def init_vars(self):
-    pass
+  def _create_var_for_custom(self, base_var):
+    if self.force_gpu:
+      base_type_class = cuda.CudaNdarrayType
+    else:
+      base_type_class = T.TensorType
+    dtype = base_var.dtype
+    ndim = base_var.ndim
+    type_inst = base_type_class(dtype=dtype, broadcastable=(False,) * ndim)
+    name = base_var.name
+    var = type_inst(name)
+    setattr(self, name, var)
+    return var
+
+  def create_vars_for_custom(self):
+    """
+    Called via CustomLSTMFunctions.
+    """
+    assert self.for_custom
+    layer_transform_instance = self.layer.recurrent_transform   # this is a different instance
+    assert isinstance(layer_transform_instance, RecurrentTransformBase)
+    assert layer_transform_instance.layer is self.layer
+    for k, v in layer_transform_instance.custom_vars.items():
+      assert getattr(layer_transform_instance, k) is v
+      assert v.name == k
+      self.add_var(self._create_var_for_custom(v))
 
   def init_vars(self):
     pass
 
   def create_vars(self):
+    """
+    Called for regular theano.scan().
+    """
     pass
 
   def add_param(self, v):
     assert v.name
-    if self.layer:
+    if not self.for_custom:
       self.layer.add_param(v, v.name + "_" + self.name)
     self.add_var(v)
     return v
@@ -71,10 +101,9 @@ class RecurrentTransformBase(object):
     :return: (y_p, z_re, custom_vars)
     :rtype: (theano.Variable,theano.Variable,list[theano.Variable],theano.Variable,list[theano.Variable])
     """
-    assert not self.layer
     assert self.tt is cuda
     y_p = self.tt.fmatrix("y_p")
-    self.init_vars()
+    self.create_vars_for_custom()
     z_re, updates = self.step(y_p)
     return y_p, z_re, self.get_sorted_custom_vars(), updates
 
@@ -90,7 +119,7 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def init_vars(self):
+  def create_vars_for_custom(self):
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
 
   def step(self, y_p):
@@ -102,10 +131,6 @@ class AttentionBase(RecurrentTransformBase):
   """
   Attention base class
   """
-  def init_vars(self):
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
 
   def create_vars(self):
     layer = self.layer
@@ -195,8 +220,8 @@ class AttentionRBF(AttentionBase):
   """
   name = "attention_rbf"
 
-  def init_vars(self):
-    super(AttentionRBF, self).init_vars()
+  def create_vars_for_custom(self):
+    super(AttentionRBF, self).create_vars_for_custom()
     self.sigma = self.add_var(self.tt.fscalar('sigma'))
 
   def create_vars(self):
@@ -216,8 +241,8 @@ class AttentionBeam(AttentionBase):
   """
   name = "attention_beam"
 
-  def init_vars(self):
-    super(AttentionBeam, self).init_vars()
+  def create_vars_for_custom(self):
+    super(AttentionBeam, self).create_vars_for_custom()
     self.beam = self.add_var(self.tt.fscalar('beam'))
     self.focus = self.add_state_var(theano.shared(value=numpy.zeros((50,), dtype="float32"), name="focus"))
     #self.focus = self.add_state_var(self.tt.fvector('focus'))
@@ -294,10 +319,11 @@ class AttentionQuantile(AttentionBase):
 class AttentionTimeGauss(RecurrentTransformBase):
   name = "attention_time_gauss"
 
-  def init_vars(self):
+  def create_vars_for_custom(self):
     self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
     self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
     self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
+    self.i = theano.shared(value=0, name="i")
     self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")
     self.t_max = self.add_var(self.tt.fscalar("t_max"))
 
@@ -318,39 +344,36 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
+    self.i = theano.shared(value=0, name="i")
     self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
 
   def step(self, y_p):
-
+    # self.B is (time,batch,dim)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re))  # (batch,2)
     dt = T.nnet.sigmoid(a[:, 0]) * self.t_max  # (batch,)
     std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
 
-    t_old = self.t  # (batch,)
+    t_old = T.switch(T.gt(self.i, 0), self.t, T.zeros((self.B.shape[1],), dtype="float32"))  # (batch,)
     t = t_old + dt
     t_bc = t.dimshuffle('x', 0)  # (time,batch)
 
     # gauss window
     idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
-    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time.batch)
-    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time.batch)
+    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
+    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time,batch)
     w_t = f_e * norm
     w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,dim)
 
-    # self.B is (time,batch,dim)
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
-    assert z_re.ndim == 2
-    assert self.B.ndim == 3
-    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[0] == self.B.shape[1])
-    z_re = theano.tensor.opt.assert_op(z_re, z_re.shape[1] == self.B.shape[2])
 
-    return z_re, {self.t: t}
+    return z_re, {self.t: t, self.i: self.i + 1}
 
 
 
-transforms = {}
+transform_classes = {}
+transforms_by_id = {}; ":type: dict[int,RecurrentTransformBase]"
 
 def _setup():
   import inspect
@@ -358,6 +381,6 @@ def _setup():
     if not inspect.isclass(clazz): continue
     if not issubclass(clazz, RecurrentTransformBase): continue
     if clazz.name is None: continue
-    transforms[clazz.name] = clazz
+    transform_classes[clazz.name] = clazz
 
 _setup()

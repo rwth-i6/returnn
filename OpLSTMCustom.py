@@ -12,12 +12,13 @@ from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable,
 
 
 class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
-  __props__ = ("inplace", "fun_name")
+  __props__ = ("inplace", "fun_name", "recurrent_transform")
 
-  def __init__(self, fun_name, inplace):
+  def __init__(self, fun_name, inplace, recurrent_transform):
     super(LSTMCustomOpGrad, self).__init__(self)
     self.inplace = inplace
     self.fun_name = fun_name
+    self.recurrent_transform = recurrent_transform
     if inplace:
      #all outputs operate inplace on inputs 1 and 6 (which are H and DY)
      #but when the input is marked multiple times, we get an error
@@ -56,7 +57,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
-    funloader = make_funloader_code(self.fun_name + "_fun_bwd", self.fun_name + "_fun_reset")
+    fun_prefix = "%s_%i" % (self.fun_name, id(self.recurrent_transform))
+    funloader = make_funloader_code(self.recurrent_transform, fun_prefix + "_fun_bwd", fun_prefix + "_fun_reset")
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
 
@@ -72,7 +74,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
     else:
       custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
-    bwd_fun = self.fun_name + "_fun_bwd"
+    bwd_fun = "%s_%i_fun_bwd" % (self.fun_name, id(self.recurrent_transform))
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
     return """
@@ -214,12 +216,13 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 #------------------------
 
 class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
-  __props__ = ("inplace", "fun_name")
+  __props__ = ("inplace", "fun_name", "recurrent_transform")
 
-  def __init__(self, fun_name, inplace):
+  def __init__(self, fun_name, inplace, recurrent_transform):
     super(LSTMCustomOp, self).__init__(self)
     self.inplace = inplace
     self.fun_name = fun_name
+    self.recurrent_transform = recurrent_transform
     if inplace:
       #all outputs operate inplace on input 0 (which is Z)
       #but when the input is marked multiple times, we get an error
@@ -261,7 +264,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
-    funloader = make_funloader_code(self.fun_name + "_fun_fwd")
+    fun_prefix = "%s_%i" % (self.fun_name, id(self.recurrent_transform))
+    funloader = make_funloader_code(self.recurrent_transform, fun_prefix + "_fun_fwd")
     crnn_path = os.path.dirname(__file__)
     with open(crnn_path + "/c_support_code_mdlstm.cpp") as f:
       return funloader + f.read()
@@ -275,7 +279,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     # Y: all the outputs. 3d (time,batch,dim)
     # Z/H: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
     # d: last state (= Y[T-1]). 2d (batch,dim)
-    fwd_fun = self.fun_name + "_fun_fwd"
+    fwd_fun = "%s_%i_fun_fwd" % (self.fun_name, id(self.recurrent_transform))
     inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """
@@ -375,7 +379,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
-    grad_op = grad_ops[self.fun_name]
+    grad_op = grad_ops[(self.fun_name, id(self.recurrent_transform))]
     all_grads = grad_op(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
     DZ, Dc, Dy0, DW_re = all_grads[:4]
     custom_grads = all_grads[4:]
@@ -384,17 +388,21 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
 
 
-function_ops = {}; ":type: dict[str,LSTMCustomOp]"
-grad_ops = {}; ":type: dict[str,LSTMCustomOpGrad]"
+function_ops = {}; ":type: dict[(str,int),LSTMCustomOp]"
+grad_ops = {}; ":type: dict[(str,int),LSTMCustomOpGrad]"
 
-def register_func(fn):
+def register_func(recurrent_transform):
+  """
+  :type recurrent_transform: RecurrentTransform.RecurrentTransformBase
+  """
+  fn = recurrent_transform.name
   # register op
-  no_inpl = LSTMCustomOp(fun_name=fn, inplace=False)
-  inpl = LSTMCustomOp(fun_name=fn, inplace=True)
-  function_ops[fn] = no_inpl
+  no_inpl = LSTMCustomOp(fun_name=fn, inplace=False, recurrent_transform=recurrent_transform)
+  inpl = LSTMCustomOp(fun_name=fn, inplace=True, recurrent_transform=recurrent_transform)
+  function_ops[(fn, id(recurrent_transform))] = no_inpl
 
   # hack to avoid being called twice
-  attr = 'LSTMCustomMOpInplaceOpt_%s' % fn
+  attr = 'LSTMCustomMOpInplaceOpt_%s_%i' % (fn, id(recurrent_transform))
   if not hasattr(optdb, attr):
     opt = OpSub(no_inpl, inpl)
     optdb.register(attr, theano.gof.TopoOptimizer(opt),
@@ -402,21 +410,17 @@ def register_func(fn):
     setattr(optdb, attr, True)
 
   # the same for grad
-  no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False)
-  inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True)
-  grad_ops[fn] = no_inpl
+  no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False, recurrent_transform=recurrent_transform)
+  inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True, recurrent_transform=recurrent_transform)
+  grad_ops[(fn, id(recurrent_transform))] = no_inpl
 
   # hack to avoid being called twice
-  attr = 'LSTMCustomMOpGradInplaceOpt_%s' % fn
+  attr = 'LSTMCustomMOpGradInplaceOpt_%s_%i' % (fn, id(recurrent_transform))
   if not hasattr(optdb, attr):
     opt = OpSub(no_inpl, inpl)
     optdb.register(attr, theano.gof.TopoOptimizer(opt),
                    50.0, 'fast_run', 'inplace', 'gpuarray')
     setattr(optdb, attr, True)
 
-def _register_all_funcs():
-  import RecurrentTransform
-  for fn in RecurrentTransform.transforms.keys():
-    register_func(fn)
+  return function_ops[(fn, id(recurrent_transform))]
 
-#_register_all_funcs()
