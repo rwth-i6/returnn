@@ -372,7 +372,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
       self.index)[::chunk_size] # BT'D
 
     #self.index = self.index.repeat(self.index.shape[0] % chunk_size, axis = 0)
-    self.make_output(container.reshape((container.shape[0], container.shape[1]/chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
+    self.make_output(container.reshape((container.shape[0], container.shape[1] / chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
 
 
 class CorruptionLayer(ForwardLayer): # x = x + noise

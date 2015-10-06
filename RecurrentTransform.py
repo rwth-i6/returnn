@@ -132,6 +132,11 @@ class AttentionBase(RecurrentTransformBase):
   Attention base class
   """
 
+  def create_vars_for_custom(self):
+    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
+    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
+    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
+
   def create_vars(self):
     layer = self.layer
     base = layer.base
@@ -290,30 +295,6 @@ class AttentionBeam(AttentionBase):
     #self.beam = T.cast(T.max([0.5 * T.exp(-T.sum(T.log(w_t)*w_t,axis=0)).flatten(),T.ones_like(beam)],axis=0),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
 
     return T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in), {} # self.focus : focus }
-
-
-class AttentionQuantile(AttentionBase):
-  name = "attention_quantile"
-
-  def init_vars(self):
-    super(AttentionQuantile, self).init_vars()
-    self.t = self.add_state_var(theano.shared(value=1.0, name="t"))
-
-  def create_vars(self):
-    super(AttentionQuantile, self).create_vars()
-    self.t = theano.shared(value=1.0, name="t")
-
-  def step(self, y_p):
-    import theano.printing
-    t = self.t + 1
-    t = theano.printing.Print("t")(t)
-    att_x = self.B[T.cast(t,'int32'):]
-
-    f_z = -T.sqrt(T.sum(T.sqr(att_x - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(att_x.shape[0],axis=0)), axis=2, keepdims=True)) #/ self.sigma
-    f_e = T.exp(f_z)
-    w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-
-    return T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in), { self.t : t }
 
 
 class AttentionTimeGauss(RecurrentTransformBase):
