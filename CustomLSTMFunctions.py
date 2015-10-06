@@ -52,6 +52,7 @@ def make_bwd_fun(recurrent_transform):
 def print_wt(op,x):
   print x.argmax(axis=0)
 
+
 functions = {}
 
 def setup_parent_functions(fn, recurrent_transform_id):

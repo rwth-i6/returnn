@@ -1,13 +1,23 @@
+
 import unittest
 import theano
 import theano.tensor as T
 import numpy
 from Device import have_gpu
 import RecurrentTransform
-import OpLSTMCustom
-LSTMCustomTestOpNoInplaceInstance = OpLSTMCustom.register_func(RecurrentTransform.AttentionTest())
-LSTMCustomDotAttentionOpNoInplaceInstance = OpLSTMCustom.register_func(RecurrentTransform.AttentionDot())
+
+def get_attention(att_class):
+  import OpLSTMCustom
+  from NetworkRecurrentLayer import RecurrentUnitLayer
+  layer = RecurrentUnitLayer(n_out=5, attention=att_class.name)
+  assert isinstance(layer.recurrent_transform, att_class)
+  f = OpLSTMCustom.register_func(layer.recurrent_transform)
+  return f
+
+LSTMCustomTestOpNoInplaceInstance = get_attention(RecurrentTransform.AttentionTest)
+LSTMCustomDotAttentionOpNoInplaceInstance = get_attention(RecurrentTransform.AttentionDot)
 from OpLSTM import LSTMOpInstance
+
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_does_not_crash():

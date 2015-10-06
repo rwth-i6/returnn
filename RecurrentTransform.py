@@ -25,6 +25,7 @@ class RecurrentTransformBase(object):
     self.for_custom = for_custom
     if not for_custom:
       transforms_by_id[id(self)] = self
+      self.create_vars()
 
   def _create_var_for_custom(self, base_var):
     if self.force_gpu:
@@ -54,7 +55,6 @@ class RecurrentTransformBase(object):
       assert getattr(layer_transform_instance, k) is v
       assert v.name == k
       self.add_var(self._create_var_for_custom(v))
-
 
   def create_vars(self):
     """
@@ -273,14 +273,6 @@ class AttentionBeam(AttentionBase):
 class AttentionTimeGauss(RecurrentTransformBase):
   name = "attention_time_gauss"
 
-  def create_vars_for_custom(self):
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
-    self.i = theano.shared(value=0, name="i")
-    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")
-    self.t_max = self.add_var(self.tt.fscalar("t_max"))
-
   def create_vars(self):
     layer = self.layer
     base = layer.base
@@ -291,7 +283,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     src = [e.output for e in base]
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = T.concatenate(src, axis=2) + self.xb  # == B
+    self.B = T.concatenate(src, axis=2) + self.xb  # base (output of encoder). (time,batch,encoder-dim)
     self.B.name = "B"
     self.add_input(self.B)
 

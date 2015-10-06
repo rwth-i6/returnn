@@ -390,7 +390,6 @@ class RecurrentUnitLayer(Layer):
       self.recurrent_transform = recurrent_transform_inst
     non_sequences = []
     if self.recurrent_transform:
-      self.recurrent_transform.create_vars()
       non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
 
     if self.attrs['lm']:
