@@ -259,7 +259,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    # results: (output) Y, (gates and cell state) H, (last state) d
+    # results: (output) Y, (gates and cell state) H, (last state) d, state vars
+    state_var_types = []
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
