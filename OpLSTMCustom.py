@@ -232,7 +232,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 
   def make_node(self, Z, c, y0, i, W_re, *custom_inputs):
     """
-    :param Z:
+    :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
     :param c: initial cell state. 2d (batch,dim)
     :param y0: output of t = -1 (for recursion at t = 0). 2d (batch,dim)
     :param i: index. 2d (time,batch) -> 0 or 1
@@ -260,7 +260,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    #results: output Y, (gates and cell state) H
+    # results: (output) Y, (gates and cell state) H, (last state) d
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
