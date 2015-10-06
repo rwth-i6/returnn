@@ -17,11 +17,18 @@ def make_fwd_fun(recurrent_transform):
   y_p = recurrent_transform.y_p
   z_re, state_updates = recurrent_transform.step(y_p)
   custom_vars = recurrent_transform.get_sorted_custom_vars()
+  state_vars = recurrent_transform.get_sorted_state_vars()
 
   z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
   updates = [(z_re_shared, z_re)]
   custom_out = []
-  fwd_fun = theano.function(inputs=[y_p] + custom_vars, outputs=[], updates=updates, on_unused_input="warn")
+  state_shared_vars = {v: theano.shared(value=numpy.zeros((1,) * v.ndim, dtype="float32"), name=v.name) for v in state_vars}
+  for v in state_vars:
+    v_upd = state_updates[v]
+    updates += [(state_shared_vars[v], v_upd)]
+    custom_out += [state_shared_vars[v]]
+  fwd_fun = theano.function(inputs=[y_p] + custom_vars + state_vars, outputs=[],
+                            updates=updates, on_unused_input="warn")
   return fwd_fun, z_re_shared, custom_out
 
 

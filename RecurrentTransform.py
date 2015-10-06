@@ -21,6 +21,7 @@ class RecurrentTransformBase(object):
     self.layer = layer
     self.input_vars = {}  # used as non_sequences for theano.scan(), i.e. as input for the step() function
     self.state_vars = {}  # updated in each step()
+    self.state_vars_initial = {}
     self.custom_vars = {}
     self.for_custom = for_custom
     if not for_custom:
@@ -28,6 +29,11 @@ class RecurrentTransformBase(object):
       self.create_vars()
 
   def _create_var_for_custom(self, base_var):
+    var = self._create_symbolic_var(base_var)
+    setattr(self, var.name, var)
+    return var
+
+  def _create_symbolic_var(self, base_var):
     if self.force_gpu:
       base_type_class = cuda.CudaNdarrayType
     else:
@@ -37,7 +43,6 @@ class RecurrentTransformBase(object):
     type_inst = base_type_class(dtype=dtype, broadcastable=(False,) * ndim)
     name = base_var.name
     var = type_inst(name)
-    setattr(self, name, var)
     return var
 
   def create_vars_for_custom(self):
@@ -75,12 +80,13 @@ class RecurrentTransformBase(object):
     self.add_var(v)
     return v
 
-  def add_state_var(self, v, name=None):
-    if name: v.name = name
-    assert v.name
-    self.state_vars[v.name] = v
-    #self.add_var(v)
-    return v
+  def add_state_var(self, initial_value, name=None):
+    if name: initial_value.name = name
+    assert initial_value.name
+    sym_var = self._create_symbolic_var(initial_value)
+    self.state_vars_initial[initial_value.name] = initial_value
+    self.state_vars[initial_value.name] = sym_var
+    return sym_var
 
   def add_var(self, v, name=None):
     if name: v.name = name
