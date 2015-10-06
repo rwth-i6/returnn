@@ -131,12 +131,6 @@ class AttentionBase(RecurrentTransformBase):
   Attention base class
   """
 
-  def create_vars_for_custom(self):
-    super(AttentionBase).create_vars_for_custom()
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
-
   def create_vars(self):
     layer = self.layer
     base = layer.base
