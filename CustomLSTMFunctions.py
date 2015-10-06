@@ -14,8 +14,9 @@ else:
 
 
 def make_fwd_fun(recurrent_transform):
-  custom_fun_maker = recurrent_transform.function_for_custom_op
-  y_p, z_re, custom_vars, state_updates = custom_fun_maker()
+  y_p = recurrent_transform.y_p
+  z_re, state_updates = recurrent_transform.step(y_p)
+  custom_vars = recurrent_transform.get_sorted_custom_vars()
 
   z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
   updates = [(z_re_shared, z_re)]
@@ -27,8 +28,9 @@ def make_fwd_fun(recurrent_transform):
 
 
 def make_bwd_fun(recurrent_transform):
-  custom_fun_maker = recurrent_transform.function_for_custom_op
-  y_p, z_re, custom_vars, state_updates = custom_fun_maker()
+  y_p = recurrent_transform.y_p
+  z_re, state_updates = recurrent_transform.step(y_p)
+  custom_vars = recurrent_transform.get_sorted_custom_vars()
 
   Dz_re = tt.fmatrix("Dz_re")
   known_grads = {z_re: Dz_re}
@@ -43,7 +45,7 @@ def make_bwd_fun(recurrent_transform):
   custom_reset_fn = theano.function(inputs=custom_vars, outputs=None, updates=custom_reset_updates)
 
   updates = [(out_Dy_p, Dy_p)] + custom_updates
-  bwd_fun = theano.function(inputs=[y_p, Dz_re] + custom_vars, outputs=[], updates=updates, on_unused_input="warn")
+  bwd_fun = theano.function(inputs=[y_p] + custom_vars + [Dz_re], outputs=[], updates=updates, on_unused_input="warn")
   return bwd_fun, custom_reset_fn, out_Dy_p, custom_out
 
 
@@ -67,6 +69,7 @@ def setup_parent_functions(fn, recurrent_transform_id):
 def _setup_func(fn, recurrent_transform):
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
+  recurrent_transform.create_vars_for_custom()
   vs_fwd = make_fwd_fun(recurrent_transform)
   vs_bwd = make_bwd_fun(recurrent_transform)
   assert len(vs_fwd) == len(fwd_names)

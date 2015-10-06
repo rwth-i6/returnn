@@ -44,6 +44,9 @@ class RecurrentTransformBase(object):
     Called via CustomLSTMFunctions.
     """
     assert self.for_custom
+    assert self.tt is cuda
+    self.y_p = self.tt.fmatrix("y_p")
+
     layer_transform_instance = self.layer.recurrent_transform   # this is a different instance
     assert isinstance(layer_transform_instance, RecurrentTransformBase)
     assert layer_transform_instance.layer is self.layer
@@ -51,6 +54,7 @@ class RecurrentTransformBase(object):
       assert getattr(layer_transform_instance, k) is v
       assert v.name == k
       self.add_var(self._create_var_for_custom(v))
+
 
   def create_vars(self):
     """
@@ -92,17 +96,6 @@ class RecurrentTransformBase(object):
 
   def get_sorted_state_vars(self):
     return [v for (k, v) in sorted(self.state_vars.items())]
-
-  def function_for_custom_op(self):
-    """
-    :return: (y_p, z_re, custom_vars)
-    :rtype: (theano.Variable,theano.Variable,list[theano.Variable],theano.Variable,list[theano.Variable])
-    """
-    assert self.tt is cuda
-    y_p = self.tt.fmatrix("y_p")
-    self.create_vars_for_custom()
-    z_re, updates = self.step(y_p)
-    return y_p, z_re, self.get_sorted_custom_vars(), updates
 
   def step(self, y_p):
     """
