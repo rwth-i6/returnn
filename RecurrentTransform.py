@@ -179,6 +179,8 @@ class AttentionDot(AttentionBase):
   def create_vars(self):
     super(AttentionDot, self).create_vars()
     self.B = (self.B - T.mean(self.B, axis=0, keepdims=True)) / T.std(self.B,axis=0,keepdims=True)
+    self.B.name = 'B'
+    self.add_input(self.B)
 
   def step(self, y_p):
 
