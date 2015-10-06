@@ -290,8 +290,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
-    self.i = theano.shared(value=0, name="i")
-    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
+    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
 
   def step(self, y_p):
@@ -314,7 +313,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
 
-    return z_re, {self.t: t, self.i: self.i + 1}
+    return z_re, {self.t: t}
 
 
 

@@ -21,8 +21,6 @@ def make_fwd_fun(recurrent_transform):
   z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
   updates = [(z_re_shared, z_re)]
   custom_out = []
-  for k, v in state_updates.items():
-    updates += [(k, v)]
   fwd_fun = theano.function(inputs=[y_p] + custom_vars, outputs=[], updates=updates, on_unused_input="warn")
   return fwd_fun, z_re_shared, custom_out
 
