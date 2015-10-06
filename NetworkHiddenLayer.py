@@ -390,6 +390,16 @@ class CorruptionLayer(ForwardLayer): # x = x + noise
       z = self.rng.normal(size=z.shape,avg=0,std=p,dtype='float32') + (z - T.mean(z, axis=(0,1), keepdims=True)) / T.std(z, axis=(0,1), keepdims=True)
     self.make_output(z)
 
+class InputBase(Layer):
+  layer_class = "input_base"
+
+  def __init__(self, **kwargs):
+    kwargs['n_out'] = 1
+    super(InputBase, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+    self.make_output(self.sources[0].W_in[0].dimshuffle(0,'x',1).repeat(self.index.shape[1],axis=1))
+    self.set_attr('n_out', self.sources[0].W_in[0].get_value().shape[1])
 
 import theano
 from theano.tensor.nnet import conv

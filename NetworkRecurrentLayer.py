@@ -505,7 +505,7 @@ class RecurrentUnitLayer(Layer):
         act = unit.step(i_t, x_t, z_t, z_p, *args)
         #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
         #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result
-        return [ act[0] * i ] + [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(1,unit.n_act) ] + result, updates
+        return [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(unit.n_act) ] + result, updates
 
       def stepo(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)
