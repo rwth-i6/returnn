@@ -65,7 +65,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   def c_code(self, node, name, input_names, output_names, sub):
     Y, H, c, y0, i, Dd, DY, W_re = input_names[:8]
     custom_inputs = input_names[8:]
-    custom_inputs_num = len(custom_inputs)
     custom_inputs_str = ",".join(custom_inputs)
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + custom_inputs_str
     DZ, Dc, Dy0, DW_re = output_names[:4]
@@ -95,7 +94,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     CudaNdarray* custom_inputs[] = {%(custom_inputs_str)s};
-    %(bwd_fun)s.reset_shared(custom_inputs, %(custom_inputs_num)i);
+    %(bwd_fun)s.reset_shared(custom_inputs, sizeof(custom_inputs) / sizeof(custom_inputs[0]));
     %(custom_outputs_str)s;
 
     CudaNdarray * epsilon = 0;
@@ -141,8 +140,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
         //note: the missing comma is intentionally for the case where there are 0 custom inputs
-        CudaNdarray* bwd_fun_inputs[] = {y_p, delta_x %(custom_inputs_str_comma)s};
-        std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, %(custom_inputs_num)i + 2);
+        CudaNdarray* bwd_fun_inputs[] = {y_p %(custom_inputs_str_comma)s, delta_x};
+        std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, sizeof(bwd_fun_inputs) / sizeof(bwd_fun_inputs[0]));
         assert(res_vec.size() > 0);
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
@@ -184,8 +183,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
     //note: the missing comma is intentionally for the case where there are 0 custom inputs
-    CudaNdarray* bwd_fun_inputs[] = {%(y0)s, delta_x %(custom_inputs_str_comma)s};
-    std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, %(custom_inputs_num)i + 2);
+    CudaNdarray* bwd_fun_inputs[] = {%(y0)s %(custom_inputs_str_comma)s, delta_x};
+    std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, sizeof(bwd_fun_inputs) / sizeof(bwd_fun_inputs[0]));
     assert(res_vec.size() > 0);
     Py_XDECREF(delta_x);
     CudaNdarray * Dy_p = res_vec[0];
@@ -232,7 +231,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
 
   def make_node(self, Z, c, y0, i, W_re, *custom_inputs):
     """
-    :param Z:
+    :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
     :param c: initial cell state. 2d (batch,dim)
     :param y0: output of t = -1 (for recursion at t = 0). 2d (batch,dim)
     :param i: index. 2d (time,batch) -> 0 or 1
@@ -260,7 +259,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    #results: output Y, (gates and cell state) H
+    # results: (output) Y, (gates and cell state) H, (last state) d
     return theano.Apply(self, [Z, c, y0, i, W_re] + custom_inputs, [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):
@@ -273,7 +272,6 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def c_code(self, node, name, input_names, output_names, sub):
     Z, c, y0, i, W_re = input_names[:5]
     custom_inputs = input_names[5:]
-    custom_inputs_num = len(custom_inputs)
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + ",".join(custom_inputs)
     Y, H, d = output_names
     # Y: all the outputs. 3d (time,batch,dim)
@@ -340,7 +338,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       }
       //std::cerr << "t=" << x << std::endl;
       CudaNdarray* fun_args[] = {y_p %(custom_inputs_str_comma)s};
-      std::vector<CudaNdarray*> res_vec = %(fwd_fun)s.call(fun_args, %(custom_inputs_num)i + 1);
+      std::vector<CudaNdarray*> res_vec = %(fwd_fun)s.call(fun_args, sizeof(fun_args) / sizeof(fun_args[0]));
       assert(res_vec.size() == 1);
       CudaNdarray * res = res_vec[0];
 

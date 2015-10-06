@@ -21,12 +21,19 @@ class RecurrentTransformBase(object):
     self.layer = layer
     self.input_vars = {}  # used as non_sequences for theano.scan(), i.e. as input for the step() function
     self.state_vars = {}  # updated in each step()
+    self.state_vars_initial = {}
     self.custom_vars = {}
     self.for_custom = for_custom
     if not for_custom:
       transforms_by_id[id(self)] = self
+      self.create_vars()
 
   def _create_var_for_custom(self, base_var):
+    var = self._create_symbolic_var(base_var)
+    setattr(self, var.name, var)
+    return var
+
+  def _create_symbolic_var(self, base_var):
     if self.force_gpu:
       base_type_class = cuda.CudaNdarrayType
     else:
@@ -36,7 +43,6 @@ class RecurrentTransformBase(object):
     type_inst = base_type_class(dtype=dtype, broadcastable=(False,) * ndim)
     name = base_var.name
     var = type_inst(name)
-    setattr(self, name, var)
     return var
 
   def create_vars_for_custom(self):
@@ -44,6 +50,9 @@ class RecurrentTransformBase(object):
     Called via CustomLSTMFunctions.
     """
     assert self.for_custom
+    assert self.tt is cuda
+    self.y_p = self.tt.fmatrix("y_p")
+
     layer_transform_instance = self.layer.recurrent_transform   # this is a different instance
     assert isinstance(layer_transform_instance, RecurrentTransformBase)
     assert layer_transform_instance.layer is self.layer
@@ -74,12 +83,13 @@ class RecurrentTransformBase(object):
     self.add_var(v)
     return v
 
-  def add_state_var(self, v, name=None):
-    if name: v.name = name
-    assert v.name
-    self.state_vars[v.name] = v
-    #self.add_var(v)
-    return v
+  def add_state_var(self, initial_value, name=None):
+    if name: initial_value.name = name
+    assert initial_value.name
+    sym_var = self._create_symbolic_var(initial_value)
+    self.state_vars_initial[initial_value.name] = initial_value
+    self.state_vars[initial_value.name] = sym_var
+    return sym_var
 
   def add_var(self, v, name=None):
     if name: v.name = name
@@ -95,17 +105,6 @@ class RecurrentTransformBase(object):
 
   def get_sorted_state_vars(self):
     return [v for (k, v) in sorted(self.state_vars.items())]
-
-  def function_for_custom_op(self):
-    """
-    :return: (y_p, z_re, custom_vars)
-    :rtype: (theano.Variable,theano.Variable,list[theano.Variable],theano.Variable,list[theano.Variable])
-    """
-    assert self.tt is cuda
-    y_p = self.tt.fmatrix("y_p")
-    self.create_vars_for_custom()
-    z_re, updates = self.step(y_p)
-    return y_p, z_re, self.get_sorted_custom_vars(), updates
 
   def step(self, y_p):
     """
@@ -300,14 +299,6 @@ class AttentionBeam(AttentionBase):
 class AttentionTimeGauss(RecurrentTransformBase):
   name = "attention_time_gauss"
 
-  def create_vars_for_custom(self):
-    self.B = self.add_input(self.tt.ftensor3("B"))  # base (output of encoder). (time,batch,encoder-dim)
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
-    self.W_att_re = self.add_param(self.tt.fmatrix("W_att_re"))
-    self.i = theano.shared(value=0, name="i")
-    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")
-    self.t_max = self.add_var(self.tt.fscalar("t_max"))
-
   def create_vars(self):
     layer = self.layer
     base = layer.base
@@ -318,15 +309,14 @@ class AttentionTimeGauss(RecurrentTransformBase):
     src = [e.output for e in base]
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = T.concatenate(src, axis=2) + self.xb  # == B
+    self.B = T.concatenate(src, axis=2) + self.xb  # base (output of encoder). (time,batch,encoder-dim)
     self.B.name = "B"
     self.add_input(self.B)
 
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
-    self.i = theano.shared(value=0, name="i")
-    self.t = theano.shared(value=numpy.zeros((1,), dtype="float32"), name="t")  # (batch,)
+    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
 
   def step(self, y_p):
@@ -349,7 +339,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
 
-    return z_re, {self.t: t, self.i: self.i + 1}
+    return z_re, {self.t: t}
 
 
 
