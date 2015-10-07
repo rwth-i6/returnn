@@ -85,7 +85,7 @@ class Unit(Container):
     self.b = b
     self.go_backwards = go_backwards
     self.truncate_gradient = truncate_gradient
-    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[1],W_re))
+    #z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     try:
       self.xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
@@ -144,9 +144,9 @@ class LSTMP(Unit):
     super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
     return [ result[0], result[2].dimshuffle('x',0,1) ]
+
 
 class LSTMC(Unit):
   def __init__(self, n_units, depth, **kwargs):
@@ -162,6 +162,7 @@ class LSTMC(Unit):
                 outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *custom_vars)
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
+
 class LSTMQ(Unit):
   def __init__(self, n_units, depth, **kwargs):
     super(LSTMQ, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
@@ -175,7 +176,6 @@ class LSTMQ(Unit):
 
     res = LSTMOpInstance((z_t+z_p).dimshuffle('x',0,1), self.W_re, s_p, i_t.dimshuffle('x',0))
     return [res[0][-1],res[2]]
-
 
 
 class GRU(Unit):
@@ -266,11 +266,8 @@ class RecurrentUnitLayer(Layer):
     if unit == 'lstm':
       if str(theano.config.device).startswith('cpu'):
         unit = 'lstme'
-      elif recurrent_transform != 'none':
-        unit = 'lstmc'
       else:
-        unit = 'lstmp'
-
+        unit = 'lstmc'
     kwargs.setdefault("depth", depth)
     kwargs.setdefault("n_out", n_out)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
@@ -383,11 +380,9 @@ class RecurrentUnitLayer(Layer):
     elif attention != "none":
       assert recurrent_transform == "none"
       recurrent_transform = attention
-    self.recurrent_transform = None
-    if recurrent_transform != "none":
-      recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
-      assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
-      self.recurrent_transform = recurrent_transform_inst
+    recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
+    assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
+    self.recurrent_transform = recurrent_transform_inst
     non_sequences = []
     if self.recurrent_transform:
       non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
@@ -426,7 +421,7 @@ class RecurrentUnitLayer(Layer):
       if encoder:
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, encoder[0].index.shape[1])
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
         #outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for i in xrange(unit.n_act) ]
         #offset = 0
         #for i in xrange(len(encoder)):
@@ -457,7 +452,7 @@ class RecurrentUnitLayer(Layer):
       if sequences == 0:
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
 
-      def step(x_t, z_t, i_t, *args):
+      def stepr(x_t, z_t, i_t, *args):
         mask,mass = 0,0
         if self.attrs['dropconnect'] > 0.0:
           mask = args[-2]
@@ -503,21 +498,47 @@ class RecurrentUnitLayer(Layer):
         act = unit.step(i_t, x_t, z_t, z_p, *args)
         #return [ act[0] * i ] + [ act[j] * i + theano.gradient.grad_clip(args[j] * (T.ones_like(i)-i),-0.00000001,0.00000001) for j in xrange(1,unit.n_act) ] + result
         #return [ act[0] * i ] + [ T.switch(T.gt(i,T.zeros_like(i)),act[j], args[j]) for j in xrange(1,unit.n_act) ] + result
-        return [ act[j] * i + args[j] * (T.ones_like(i)-i) for j in xrange(unit.n_act) ] + result, updates
+        return [act[0]*i] + [ act[j] * i + args[j] * (1-i) for j in xrange(1,unit.n_act) ] + result, updates
 
-      def stepo(x_t, z_t, i_t, *args):
+      o_h = T.as_tensor(numpy.ones((unit.n_units,), dtype='float32'))
+      def stepk(x_t, z_t, i_t, *args):
         z_p = T.dot(args[0], W_re)
         #i_x = i_t.dimshuffle(0,'x').repeat(z_p.shape[1],axis=1)
         act = unit.step(i_t, x_t, z_t, z_p, *args)
-        #i = i_t.dimshuffle(0,'x').repeat(unit.n_units,axis=1)
-        i_a = T.outer(i_t, T.alloc(numpy.cast['float32'](1), unit.n_units))
+        i_a = i_t.dimshuffle(0,'x').repeat(unit.n_units,axis=1)
+        #i_a = T.outer(i_t, o_h) # T.alloc(numpy.cast['float32'](1), unit.n_units))
         #return [ act[0] * i ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
         return [ act[0] * i_a ] + [  act[j] * i_a for j in xrange(1,unit.n_act) ]
         #return [ theano.gradient.grad_clip(act[0] * i,T.sum(i*500),T.sum(i*500)) ] + [  act[j] * i + theano.gradient.grad_clip(args[j] * (i-1),0,0) for j in xrange(1,unit.n_act) ]
         #return [ T.switch(T.lt(i,T.ones_like(i)), theano.gradient.grad_clip(args[a], 0, 0), act[a]) for a in xrange(unit.n_act) ]
 
+      o_output = T.as_tensor(numpy.ones((unit.n_units,), dtype='float32'))
+      o_h = T.as_tensor(numpy.ones((unit.n_units,), dtype='float32'))
+      def step(x_t, z_t, i_t, *args):
+        if self.recurrent_transform:
+          attention_non_seq_inputs = args[len(args) - len(self.recurrent_transform.input_vars):]
+          args = args[:len(args) - len(self.recurrent_transform.input_vars)]
+        updates = {}
+        if self.recurrent_transform:
+          z_r, r_updates = self.recurrent_transform.step(args[0])
+          z_t += z_r
+          updates.update(r_updates)
+        z_t += T.dot(args[0], W_re)
+        partition = z_t.shape[1] / 4
+        ingate = T.nnet.sigmoid(z_t[:,:partition])
+        forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+        outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+        input = T.tanh(z_t[:,3*partition:4*partition])
+        c_t = forgetgate * args[1] + ingate * input
+        y_t = outgate * T.tanh(c_t)
+        i_output = T.outer(i_t, o_output)
+        i_h = T.outer(i_t, o_h)
+        return y_t * i_output, c_t * i_h + args[1] * (1 - i_h) #, updates
+
       index_f = T.cast(index, theano.config.floatX)
       unit.set_parent(self)
+      #sequences = T.inc_subtensor(sequences[-1 if direction == -1 else 0], T.dot(outputs_info[0],W_re))
+      #outputs_info[0] = T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)
       outputs = unit.scan(step,
                           sources,
                           sequences[s::self.attrs['sampling']],

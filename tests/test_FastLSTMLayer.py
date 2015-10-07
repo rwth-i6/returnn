@@ -2,6 +2,7 @@ import numpy
 import theano
 import theano.tensor as T
 from FastLSTM import LSTMOp2Instance
+from OpLSTM import LSTMOpInstance
 import unittest
 from Device import have_gpu
 
@@ -145,7 +146,8 @@ def test_compatible_with_other_implementation():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i',dtype='int8')
-  Y, _, _ = LSTMOp2Instance(V_h, c, b, i, X, W)
+  #Y, _, _ = LSTMOp2Instance(V_h, c, b, i, X, W)
+  Y, _, _ = LSTMOpInstance(T.dot(X,W) + b, V_h, c, i)
   DX = T.grad(Y.sum(), X)
   DW = T.grad(Y.sum(), W)
   DV_h = T.grad(Y.sum(), V_h)
@@ -202,7 +204,8 @@ def test_compatible_with_other_implementation_and_index_vector():
   b = T.fvector('b')
   c = T.fmatrix('c') #initial state
   i = T.matrix('i', dtype='int8')
-  Z, _, h = LSTMOp2Instance(V_h, c, b, i, X, W)
+  #Z, _, h = LSTMOp2Instance(V_h, c, b, i, X, W)
+  Z, _, h = LSTMOpInstance(T.dot(X,W) + b, V_h, c, i)
   obj = Z.sum() + h.sum()
   DX = T.grad(obj, X)
   DW = T.grad(obj, W)
@@ -233,7 +236,8 @@ def test_compatible_with_other_implementation_and_index_vector():
   o_output = T.as_tensor(numpy.ones((3,), dtype='float32'))
   o_h = T.as_tensor(numpy.ones((3,), dtype='float32'))
   def _step(x_t, i_t, c_tm1, y_tm1):
-    z_t = T.dot(x_t, W) + T.dot(y_tm1, V_h) + b
+    #z_t = T.dot(x_t, W) + T.dot(y_tm1, V_h) + b
+    z_t = x_t + T.dot(y_tm1, V_h)
     partition = z_t.shape[1] / 4
     ingate = T.nnet.sigmoid(z_t[:,:partition])
     forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
@@ -245,7 +249,9 @@ def test_compatible_with_other_implementation_and_index_vector():
     i_h = T.outer(i_t, o_h)
     return c_t * i_h + c_tm1 * (1 - i_h), y_t * i_output
 
-  [state, Z2], _ = theano.scan(_step, sequences=[X, i],
+  #[state, Z2], _ = theano.scan(_step, sequences=[X, i],
+  #                        outputs_info=[c, c])
+  [state, Z2], _ = theano.scan(_step, sequences=[T.dot(X,W)+b, i],
                           outputs_info=[c, c])
 
   h2 = state[-1]

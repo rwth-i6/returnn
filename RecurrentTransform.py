@@ -126,6 +126,12 @@ class AttentionTest(RecurrentTransformBase):
     return z_re, {}
 
 
+class DummyTransform(RecurrentTransformBase):
+  name = "none"                                  
+  def step(self, y_p):
+    return T.zeros((y_p.shape[0],y_p.shape[1]*4),dtype='float32'), {}
+
+
 class AttentionBase(RecurrentTransformBase):
   """
   Attention base class
@@ -155,7 +161,7 @@ class AttentionBase(RecurrentTransformBase):
     l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = T.concatenate(src, axis=2) + self.xb  # == B
+    self.B = (T.concatenate(src, axis=2) + self.xb) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)  # == B
     self.B.name = "B"
     self.add_input(self.B)
     #if n_in != unit.n_out:
