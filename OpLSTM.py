@@ -173,6 +173,12 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     return hash(type(self)) ^ hash(self.inplace)
 
   def make_node(self, Z, V_h, c, i):
+    """
+    :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
+    :param V_h: recurrent matrix. 2d (dim,dim*4)
+    :param c: initial cell state. 2d (batch,dim)
+    :param i: index. 2d (time,batch) -> 0 or 1
+    """
     Z = gpu_contiguous(as_cuda_ndarray_variable(Z))
     V_h = gpu_contiguous(as_cuda_ndarray_variable(V_h))
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
@@ -185,7 +191,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert V_h.ndim == 2
 
-    #results: output Y, (gates and cell state) H
+    # results: output Y, (gates and cell state) H, (final cell state) d
     return theano.Apply(self, [Z, V_h, c, i], [Z.type(), Z.type(), c.type()])
 
   def c_support_code(self):

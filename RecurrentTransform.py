@@ -106,6 +106,9 @@ class RecurrentTransformBase(object):
   def get_sorted_state_vars(self):
     return [v for (k, v) in sorted(self.state_vars.items())]
 
+  def get_sorted_state_vars_initial(self):
+    return [v for (k, v) in sorted(self.state_vars_initial.items())]
+
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
