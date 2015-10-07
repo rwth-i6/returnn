@@ -157,9 +157,10 @@ class LSTMC(Unit):
     import OpLSTMCustom
     op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
+    initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
 
     result = op(z[::-(2 * go_backwards - 1)],
-                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *custom_vars)
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMQ(Unit):
