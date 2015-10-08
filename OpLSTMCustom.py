@@ -23,10 +23,17 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     self.fun_name = fun_name
     self.recurrent_transform = recurrent_transform
     if inplace:
-     #all outputs operate inplace on inputs 1 and 6 (which are H and DY)
-     #but when the input is marked multiple times, we get an error
-     #so we only mark that output 0 destroys inputs 1 and 6
-     #anyway theano knows that inputs 1 and 6 will be destroyed, so it should be OK
+     # http://deeplearning.net/software/theano/extending/inplace.html
+     # It's strange that we must mark which output operates on which input -
+     # I would expect that it must only know which inputs are destroyed.
+     # Anyway:
+     # All outputs operate inplace on inputs 1 and 6 (which are H and DY)
+     # but when the input is marked multiple times, we get an error.
+     # This is also strange, and probably a bug in Theano.
+     # So we could mark that output 0 destroys inputs 1 and 6.
+     # That also doesn't work, it will not apply the inplace-optimization anymore.
+     # So, we do it in some other way.
+     # Anyway Theano knows what inputs will be destroyed, so it should be OK.
      self.destroy_map = {0: [1], 1: [6]}
 
   def _get_num_custom_vars(self):
@@ -65,6 +72,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     initial_state_var_grads = [var[0].type() for var in args[self._get_num_custom_vars():]]
     custom_grads = custom_input_grads + initial_state_var_grads
     return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + args,
+                        # DZ, Dc, Dy0, DW_re and custom grads
                         [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
 
   def c_support_code(self):
@@ -456,8 +464,8 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     #so that theano can merge the nodes
     all_out = self(*([Z_raw, c_raw, y0_raw, i_raw, W_re_raw] + custom_inputs))
     (Y, H, d), seq_state_vars = all_out[:3], all_out[3:]
-    
-    # DH not expected to be disconnected.
+
+    assert isinstance(DH.type, theano.gradient.DisconnectedType)  # DH is ignored.
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
