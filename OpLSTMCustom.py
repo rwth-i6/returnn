@@ -24,6 +24,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     self.recurrent_transform = recurrent_transform
     if inplace:
      # http://deeplearning.net/software/theano/extending/inplace.html
+     # https://github.com/Theano/Theano/issues/3506
      # It's strange that we must mark which output operates on which input -
      # I would expect that it must only know which inputs are destroyed.
      # Anyway:
@@ -32,9 +33,11 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
      # This is also strange, and probably a bug in Theano.
      # So we could mark that output 0 destroys inputs 1 and 6.
      # That also doesn't work, it will not apply the inplace-optimization anymore.
-     # So, we do it in some other way.
+     # So, we do it in some other way. From how I understand the Theano code,
+     # the output index is ignored, so we can use any.
      # Anyway Theano knows what inputs will be destroyed, so it should be OK.
-     self.destroy_map = {0: [1], 1: [6]}
+     destroy_input_list = [1, 6]
+     self.destroy_map = {i: [i] for i in destroy_input_list}  # hack, see above
 
   def _get_num_custom_vars(self):
     return len(self.recurrent_transform.custom_vars)
@@ -499,7 +502,7 @@ def register_func(recurrent_transform):
   key = (fn, id(recurrent_transform))
   if key in function_ops:
     return function_ops[key]
-  
+
   # register op
   no_inpl = LSTMCustomOp(fun_name=fn, inplace=False, recurrent_transform=recurrent_transform)
   inpl = LSTMCustomOp(fun_name=fn, inplace=True, recurrent_transform=recurrent_transform)
