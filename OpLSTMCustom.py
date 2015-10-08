@@ -92,10 +92,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     custom_inputs_str_comma = ("," if len(custom_inputs) > 0 else "") + custom_inputs_str
     DZ, Dc, Dy0, DW_re = output_names[:4]
     custom_output_names = output_names[4:]
-    if len(custom_output_names) == 0:
-      custom_outputs_str = "CudaNdarray *** custom_grads = 0;"
-    else:
-      custom_outputs_str = "CudaNdarray ** custom_grads[] = {" + ",".join(["&" + grad for grad in custom_output_names]) + "}"
+    custom_outputs_str = "CudaNdarray ** custom_grads[] = {%s};" % ",".join(["&" + grad for grad in custom_output_names])
     bwd_fun = "%s_%i_fun_bwd" % (self.fun_name, id(self.recurrent_transform))
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -116,8 +113,9 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(%(Dy0)s);
     }
 
+    #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
     CudaNdarray* custom_inputs[] = {%(custom_inputs_str)s};
-    %(bwd_fun)s.reset_shared(custom_inputs, sizeof(custom_inputs) / sizeof(custom_inputs[0]));
+    %(bwd_fun)s.reset_shared(custom_inputs, ARRAY_LEN(custom_inputs));
     %(custom_outputs_str)s;
 
     CudaNdarray * epsilon = 0;
@@ -164,7 +162,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
         //note: the missing comma is intentionally for the case where there are 0 custom inputs
         CudaNdarray* bwd_fun_inputs[] = {y_p %(custom_inputs_str_comma)s, delta_x};
-        std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, sizeof(bwd_fun_inputs) / sizeof(bwd_fun_inputs[0]));
+        std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, ARRAY_LEN(bwd_fun_inputs));
         assert(res_vec.size() > 0);
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
@@ -207,7 +205,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
     //note: the missing comma is intentionally for the case where there are 0 custom inputs
     CudaNdarray* bwd_fun_inputs[] = {%(y0)s %(custom_inputs_str_comma)s, delta_x};
-    std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, sizeof(bwd_fun_inputs) / sizeof(bwd_fun_inputs[0]));
+    std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, ARRAY_LEN(bwd_fun_inputs));
     assert(res_vec.size() > 0);
     Py_XDECREF(delta_x);
     CudaNdarray * Dy_p = res_vec[0];
@@ -233,6 +231,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       Py_XDECREF(epsilon);
     }
 
+    #undef ARRAY_LEN
     """ % locals()
 
 #------------------------
