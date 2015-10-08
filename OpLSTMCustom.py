@@ -15,6 +15,9 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace", "fun_name", "recurrent_transform")
 
   def __init__(self, fun_name, inplace, recurrent_transform):
+    """
+    :type recurrent_transform: RecurrentTransform.RecurrentTransformBase
+    """
     super(LSTMCustomOpGrad, self).__init__(self)
     self.inplace = inplace
     self.fun_name = fun_name
@@ -26,21 +29,29 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
      #anyway theano knows that inputs 1 and 6 will be destroyed, so it should be OK
      self.destroy_map = {0: [1], 1: [6]}
 
-  def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, *custom_inputs):
+  def _get_num_custom_vars(self):
+    return len(self.recurrent_transform.custom_vars)
+
+  def _get_num_state_vars(self):
+    return len(self.recurrent_transform.state_vars)
+
+  def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, *args):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     Dd = gpu_contiguous(as_cuda_ndarray_variable(Dd))
     DY = gpu_contiguous(as_cuda_ndarray_variable(DY))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
-    custom_inputs = [gpu_contiguous(as_cuda_ndarray_variable(x)) for x in custom_inputs]
+    args = [gpu_contiguous(as_cuda_ndarray_variable(x)) for x in args]
+    # args = custom_inputs + state_vars_seqs
+    assert len(args) == self._get_num_custom_vars() + self._get_num_state_vars()
     assert DY.dtype == 'float32'
     assert Y.dtype == 'float32'
     assert H.dtype == 'float32'
     assert c.dtype == 'float32'
     assert y0.dtype == "float32"
     assert W_re.dtype == "float32"
-    for x in custom_inputs:
+    for x in args:
       assert x.dtype == "float32"
     assert DY.ndim == 3
     assert Y.ndim == 3
@@ -50,9 +61,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    custom_grads = [var.type() for var in custom_inputs]
-
-    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs,
+    custom_input_grads = [var.type() for var in args[:self._get_num_custom_vars()]]
+    initial_state_var_grads = [var[0].type() for var in args[self._get_num_custom_vars():]]
+    custom_grads = custom_input_grads + initial_state_var_grads
+    return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + args,
                         [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
 
   def c_support_code(self):
@@ -238,6 +250,12 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
   def _get_num_state_vars(self):
     return len(self.recurrent_transform.state_vars)
 
+  def _seq_var_for_initial_state_var(self, v):
+    type_class = v.type.__class__
+    # One ndim more for time.
+    seq_var_type = type_class(dtype="float32", broadcastable=(False,) * (v.ndim + 1))
+    return seq_var_type()
+
   def make_node(self, Z, c, y0, i, W_re, *args):
     """
     :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
@@ -275,13 +293,11 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     assert i.ndim == 2
     assert W_re.ndim == 2
 
-    type_class = Z.__class__
-    # One ndim more for time.
-    state_var_types = [type_class(dtype="float32", broadcastable=(False,) * (x.ndim + 1)) for x in initial_state_vars]
+    seq_state_vars = [self._seq_var_for_initial_state_var(x) for x in initial_state_vars]
     return theano.Apply(self,
                         [Z, c, y0, i, W_re] + custom_inputs + initial_state_vars,
                         # results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
-                        [Z.type(), Z.type(), c.type()] + state_var_types)
+                        [Z.type(), Z.type(), c.type()] + seq_state_vars)
 
   def c_support_code(self):
     fun_prefix = "%s_%i" % (self.fun_name, id(self.recurrent_transform))
@@ -356,6 +372,11 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       for(int d = 0; d < initial_ndim; ++d)
         dims[d + 1] = initial_dims[d];
       *state_vars_seqs_ptr[i] = (CudaNdarray*) CudaNdarray_NewDims(ndim, dims);
+      // copy initial over
+      cudaMemcpy(
+        CudaNdarray_DEV_DATA(*state_vars_seqs_ptr[i]),
+        CudaNdarray_DEV_DATA(initial_state_vars[i]),
+        CudaNdarray_SIZE(initial_state_vars[i]) * sizeof(float), cudaMemcpyDeviceToDevice);
     }
 
     int y = 0;
@@ -417,9 +438,12 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    Z, c, y0, i, W_re = inputs[:5]
-    custom_inputs = inputs[5:]
-    DY, DH, Dd = output_grads
+    (Z, c, y0, i, W_re), input_rest = inputs[:5], inputs[5:]
+    assert len(input_rest) == self._get_num_custom_vars() + self._get_num_state_vars()
+    custom_inputs = input_rest[:self._get_num_custom_vars()]
+    initial_state_vars = input_rest[self._get_num_custom_vars():]
+    (DY, DH, Dd), seq_state_var_grads = output_grads[:3], output_grads[3:]
+    assert len(seq_state_var_grads) == self._get_num_state_vars()
 
     Z_raw = Z.owner.inputs[0].owner.inputs[0]
     c_raw = c.owner.inputs[0].owner.inputs[0]
@@ -430,18 +454,30 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Y, H, d = self(*([Z_raw, c_raw, y0_raw, i_raw, W_re_raw] + custom_inputs))
+    all_out = self(*([Z_raw, c_raw, y0_raw, i_raw, W_re_raw] + custom_inputs))
+    (Y, H, d), seq_state_vars = all_out[:3], all_out[3:]
+    
+    # DH not expected to be disconnected.
     if isinstance(DY.type, theano.gradient.DisconnectedType):
       DY = T.zeros_like(Z)
     if isinstance(Dd.type, theano.gradient.DisconnectedType):
       Dd = T.zeros_like(c)
+    for i in range(len(seq_state_var_grads)):
+      if isinstance(seq_state_var_grads[i].type, theano.gradient.DisconnectedType):
+        # First dim for time. One more for -1 element.
+        shape = [Z.shape[0] + 1] + [initial_state_vars[i].shape[d] for d in range(initial_state_vars[i].ndim)]
+        seq_state_var_grads[i] = T.zeros(shape, dtype="float32")
+
     grad_op = grad_ops[(self.fun_name, id(self.recurrent_transform))]
-    all_grads = grad_op(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs))
-    DZ, Dc, Dy0, DW_re = all_grads[:4]
-    custom_grads = all_grads[4:]
+    all_grads = grad_op(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs + seq_state_var_grads))
+    (DZ, Dc, Dy0, DW_re), remaining_grads = all_grads[:4], all_grads[4:]
+    # remaining grads = custom_inputs grads + initial state var grads
+    assert len(remaining_grads) == self._get_num_custom_vars() + self._get_num_state_vars()
+    custom_input_grads = remaining_grads[:self._get_num_custom_vars()]
+    initial_state_var_grads = remaining_grads[self._get_num_custom_vars():]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
 
-    return [DZ, Dc, Dy0, Di, DW_re] + custom_grads
+    return [DZ, Dc, Dy0, Di, DW_re] + custom_input_grads + initial_state_var_grads
 
 
 function_ops = {}; ":type: dict[(str,int),LSTMCustomOp]"
