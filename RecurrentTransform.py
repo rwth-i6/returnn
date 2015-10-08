@@ -77,7 +77,8 @@ class RecurrentTransformBase(object):
     self.add_var(v)
     return v
 
-  def add_input(self, v):
+  def add_input(self, v, name=None):
+    if name: v.name = name
     assert v.name
     self.input_vars[v.name] = v
     self.add_var(v)
@@ -188,8 +189,8 @@ class AttentionDot(AttentionBase):
   def create_vars(self):
     super(AttentionDot, self).create_vars()
     self.B = (self.B - T.mean(self.B, axis=0, keepdims=True)) / T.std(self.B,axis=0,keepdims=True)
-    self.B.name = 'B'
-    self.add_input(self.B)
+    self.add_input(self.B, 'B')
+    self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), "index")
 
   def step(self, y_p):
 
@@ -206,7 +207,7 @@ class AttentionDot(AttentionBase):
     #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
     f_z = T.sum(self.B * T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) / T.cast(self.B.shape[0],'float32'), axis=2, keepdims=True)
     f_e = T.exp(f_z)
-    w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+    w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) - T.sum(T.ones_like(self.index)-self.index,axis=0,keepdims=True).dimshuffle(0,1,'x').repeat(f_e.shape[2],axis=2))
 
     import theano.printing
     #w_t = theano.printing.Print("w_t", attrs=['argmax(axis=0)'])(w_t)
