@@ -496,10 +496,14 @@ def register_func(recurrent_transform):
   :type recurrent_transform: RecurrentTransform.RecurrentTransformBase
   """
   fn = recurrent_transform.name
+  key = (fn, id(recurrent_transform))
+  if key in function_ops:
+    return function_ops[key]
+  
   # register op
   no_inpl = LSTMCustomOp(fun_name=fn, inplace=False, recurrent_transform=recurrent_transform)
   inpl = LSTMCustomOp(fun_name=fn, inplace=True, recurrent_transform=recurrent_transform)
-  function_ops[(fn, id(recurrent_transform))] = no_inpl
+  function_ops[key] = no_inpl
 
   # hack to avoid being called twice
   attr = 'LSTMCustomMOpInplaceOpt_%s_%i' % (fn, id(recurrent_transform))
@@ -512,7 +516,7 @@ def register_func(recurrent_transform):
   # the same for grad
   no_inpl = LSTMCustomOpGrad(fun_name=fn, inplace=False, recurrent_transform=recurrent_transform)
   inpl = LSTMCustomOpGrad(fun_name=fn, inplace=True, recurrent_transform=recurrent_transform)
-  grad_ops[(fn, id(recurrent_transform))] = no_inpl
+  grad_ops[key] = no_inpl
 
   # hack to avoid being called twice
   attr = 'LSTMCustomMOpGradInplaceOpt_%s_%i' % (fn, id(recurrent_transform))
@@ -522,5 +526,5 @@ def register_func(recurrent_transform):
                    50.0, 'fast_run', 'inplace', 'gpuarray')
     setattr(optdb, attr, True)
 
-  return function_ops[(fn, id(recurrent_transform))]
+  return function_ops[key]
 
