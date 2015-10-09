@@ -51,16 +51,18 @@ def make_bwd_fun(recurrent_transform):
   out_custom_grads = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in custom_vars]
   out_state_var_prev_grads = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in state_vars_prev]
 
-  custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(out_custom_grads, custom_vars)]
-  custom_reset_fn = theano.function(inputs=custom_vars + state_vars_prev, outputs=None, updates=custom_reset_updates)
-
   updates = [(out_Dy_p, Dy_p)]
-  updates += [(out, out + grad) for out, grad in zip(out_custom_grads, custom_grads)]
+  updates += [(out, out + grad) for out, grad in zip(out_custom_grads, custom_grads)]  # we accumulate the custom input grads
   updates += [(out, grad) for out, grad in zip(out_state_var_prev_grads, state_var_prev_grads)]
   bwd_fun = theano.function(inputs=[y_p] + custom_vars + [Dz_re] + state_vars_prev,
                             outputs=[],
                             updates=updates,
                             on_unused_input="warn")
+
+  # Before we can accumulate the custom input grads, we need to initialize them with 0.
+  custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(out_custom_grads, custom_vars)]
+  custom_reset_fn = theano.function(inputs=custom_vars, outputs=None, updates=custom_reset_updates)
+
   return bwd_fun, custom_reset_fn, out_Dy_p, out_custom_grads + out_state_var_prev_grads
 
 

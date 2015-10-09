@@ -120,12 +120,11 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     }
 
     #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
-    CudaNdarray* custom_inputs[] = {%(custom_inputs_str)s};
-    %(bwd_fun)s.reset_shared(custom_inputs, ARRAY_LEN(custom_inputs));
-    CudaNdarray** custom_grads[] = {%(custom_outputs_str)s};
+    CudaNdarray* custom_inputs[] = {%(custom_inputs_str)s}; // input
+    %(bwd_fun)s.reset_shared(custom_inputs, ARRAY_LEN(custom_inputs)); // init the custom grads with zero
 
-    CudaNdarray* seq_state_vars[] = {%(seq_state_var_names_str)s};
-    CudaNdarray** state_var_grads[] = {%(initial_state_var_grad_names_str)s};
+    CudaNdarray* seq_state_vars[] = {%(seq_state_var_names_str)s}; // input
+    CudaNdarray** state_var_grads[] = {%(initial_state_var_grad_names_str)s}; // output
 
     CudaNdarray * epsilon = 0;
     CudaNdarray * delta = 0;
@@ -220,6 +219,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     CudaNdarray * Dy_p = res_vec[0];
 
     //custom grads
+    CudaNdarray** custom_grads[] = {%(custom_outputs_str)s}; // output
+    assert(res_vec.size() == 1 + ARRAY_LEN(custom_grads));
     for(int i = 1; i < res_vec.size(); ++i)
     {
       *custom_grads[i-1] = (CudaNdarray*) CudaNdarray_Copy(res_vec[i]);
