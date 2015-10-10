@@ -60,6 +60,10 @@ class RecurrentTransformBase(object):
       assert getattr(layer_transform_instance, k) is v
       assert v.name == k
       self.add_var(self._create_var_for_custom(v))
+    for k, v in layer_transform_instance.state_vars.items():
+      assert getattr(layer_transform_instance, k) is v
+      assert v.name == k
+      self.add_state_var(self._create_var_for_custom(v))
 
   def init_vars(self):
     pass
@@ -131,7 +135,7 @@ class AttentionTest(RecurrentTransformBase):
 
 
 class DummyTransform(RecurrentTransformBase):
-  name = "none"                                  
+  name = "none"
   def step(self, y_p):
     return T.zeros((y_p.shape[0],y_p.shape[1]*4),dtype='float32'), {}
 
