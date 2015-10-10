@@ -207,7 +207,7 @@ class AttentionDot(AttentionBase):
     #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
     f_z = T.sum(self.B * T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) / T.cast(self.B.shape[0],'float32'), axis=2, keepdims=True)
     f_e = T.exp(f_z)
-    w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) - T.sum(T.ones_like(self.index)-self.index,axis=0,keepdims=True).dimshuffle(0,1,'x').repeat(f_e.shape[2],axis=2))
+    w_t = f_e / T.sum(f_e, axis=0, keepdims=True) #- T.sum(T.ones_like(self.index)-self.index,axis=0,keepdims=True).dimshuffle(0,1,'x').repeat(f_e.shape[2],axis=2))
 
     import theano.printing
     #w_t = theano.printing.Print("w_t", attrs=['argmax(axis=0)'])(w_t)
@@ -230,13 +230,10 @@ class AttentionRBF(AttentionBase):
   attention over rbf kernel of base outputs and time dependent activation
   """
   name = "attention_rbf"
-
-  def create_vars_for_custom(self):
-    super(AttentionRBF, self).create_vars_for_custom()
-    self.sigma = self.add_var(self.tt.fscalar('sigma'))
-
   def create_vars(self):
     super(AttentionRBF, self).create_vars()
+    self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
+    self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
 
   def step(self, y_p):
@@ -244,6 +241,24 @@ class AttentionRBF(AttentionBase):
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
+
+
+class AttentionRBFLM(AttentionRBF):
+  """
+  attention over rbf kernel of base outputs and time dependent activation
+  """
+  name = "attention_rbf_lm"
+  def create_vars(self):
+    super(AttentionRBFLM, self).create_vars()
+    self.W_re = self.add_input()
+    self.y = self.add_input()
+    self.add_input(self.B, 'B')
+    self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
+
+  def step(self, y_p):
+    z_re, updates = super(AttentionRBFLM, self).step(y_p)
+
+    return z_re, updates
 
 
 class AttentionBeam(AttentionBase):
