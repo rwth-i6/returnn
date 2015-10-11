@@ -258,6 +258,7 @@ class AttentionRBFLM(AttentionRBF):
     self.W_lm_in = self.add_param(self.layer.W_lm_in)
     self.W_lm_out = self.add_param(self.layer.W_lm_out)
     #self.test_flag = self.add_var(theano.shared(value=numpy.asarray(1.0 if self.layer.train_flag else 0.0,dtype='float32'),name='test_flag')) #T.constant(0.0 if self.layer.train_flag else 1.0, 'float32'), 'train_flag')
+    self.loop_weight = self.add_var(theano.shared(value=numpy.asarray(self.layer.attrs['droplm'] if self.layer.train_flag else 1.0,dtype='float32'),name='loop_weight'))
     #l = sqrt(6.) / sqrt(self.layer.unit.n_out + self.y_in[self.layer.attrs['target']].n_out)
     #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.unit.n_out, self.layer.y_in[self.layer.attrs['target']].n_out)), dtype=theano.config.floatX)
     #self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in"))
@@ -267,7 +268,7 @@ class AttentionRBFLM(AttentionRBF):
 
   def step(self, y_p):
     z_re, updates = super(AttentionRBFLM, self).step(y_p)
-    z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] #* self.test_flag
+    z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
     return z_re, updates
 
 

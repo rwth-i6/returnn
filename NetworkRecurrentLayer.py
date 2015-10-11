@@ -442,7 +442,9 @@ class RecurrentUnitLayer(Layer):
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
               y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
-              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) + self.b #* lmmask * float(int(self.train_flag)) + self.b
+              real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
+              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
+              #sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
               #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
               sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
@@ -569,10 +571,20 @@ class RecurrentUnitLayer(Layer):
         #y_t = T.dot(T.extra_ops.to_one_hot(y,n_cls), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # TBD
         #self.constraints += T.mean(T.sqr(self.y_m[j] - y_f[j]))
 
-        h_y = (self.y_in[self.attrs['target']].reshape(index.shape)).flatten()
-        h_e = T.dot(outputs[0][::direction or 1], self.W_lm_in)
-        h_f = T.exp(h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2])))[j]
-        self.constraints += T.sum(-T.log((h_f / T.sum(h_f,axis=1,keepdims=True))[:,h_y[j]]))
+        y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
+        y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
+        h_e = T.exp(T.dot(outputs[0][::direction or 1], self.W_lm_in))
+        h_t = T.dot(h_e / T.sum(h_e,axis=2,keepdims=True), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))
+        #h_t = self.W_lm_out[T.argmax(T.dot(outputs[0][::direction or 1], self.W_lm_in), axis=2)].reshape((index.shape[0],index.shape[1],unit.n_in))
+        self.constraints += T.sum(T.sqrt(T.sum(T.sqr(y_t - h_t),axis=2)))
+
+        #h_y = (self.y_in[self.attrs['target']].reshape(index.shape)).flatten()
+        #h_e = T.dot(outputs[0][::direction or 1], self.W_lm_in)
+        #h_f = T.exp(h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2])))[j]
+        #self.constraints += T.sum(-T.log((h_f / T.sum(h_f,axis=1,keepdims=True))[:,h_y[j]]))
+
+
+
         #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j,self.y_in[self.attrs['target']][j]], y_idx=)
         #self.constraints += T.sum(nll)
         #outputs = outputs[:-1]
