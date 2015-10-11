@@ -272,6 +272,8 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmp'
       else:
         unit = 'lstmc'
+    if lm and recurrent_transform != 'none': # TODO hack
+      recurrent_transform += "_lm"
     kwargs.setdefault("depth", depth)
     kwargs.setdefault("n_out", n_out)
     super(RecurrentUnitLayer, self).__init__(**kwargs)
@@ -360,6 +362,31 @@ class RecurrentUnitLayer(Layer):
       assert False # this is broken
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
 
+    non_sequences = []
+    if self.attrs['lm']:
+      if not 'target' in self.attrs:
+        self.attrs['target'] = 'classes'
+      l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
+      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
+      self.add_param(self.W_lm_in)
+      l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
+      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
+      self.add_param(self.W_lm_out)
+      if self.attrs['droplm'] > 0.0 and self.train_flag:
+        srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+        lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
+      else:
+        lmmask = 1
+      #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
+
+    if self.attrs['dropconnect'] > 0.0:
+      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(unit.n_out,)), theano.config.floatX)
+      connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
+      non_sequences += [connectmask, connectmass]
+
     if attention == "default":
       attention = "attention_dot"
     if attention == 'input': # attention is just a sequence dependent bias (lstmp compatible)
@@ -387,33 +414,8 @@ class RecurrentUnitLayer(Layer):
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     self.recurrent_transform = recurrent_transform_inst
-    non_sequences = []
     if self.recurrent_transform:
       non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
-
-    if self.attrs['lm']:
-      if not 'target' in self.attrs:
-        self.attrs['target'] = 'classes'
-      l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
-      self.add_param(self.W_lm_in)
-      l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
-      self.add_param(self.W_lm_out)
-      if self.attrs['droplm'] > 0.0 and self.train_flag:
-        srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-        lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
-      else:
-        lmmask = 1
-      #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
-
-    if self.attrs['dropconnect'] > 0.0:
-      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(unit.n_out,)), theano.config.floatX)
-      connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
-      non_sequences += [connectmask, connectmass]
 
     self.out_dec = self.index.shape[0]
     # scan over sequence
@@ -440,8 +442,8 @@ class RecurrentUnitLayer(Layer):
               y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
               n_cls = self.y_in[self.attrs['target']].n_out
               y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
-              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * lmmask
-              outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
+              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) + self.b #* lmmask * float(int(self.train_flag)) + self.b
+              #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
             else:
               sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
           else:
@@ -570,10 +572,10 @@ class RecurrentUnitLayer(Layer):
         h_y = (self.y_in[self.attrs['target']].reshape(index.shape)).flatten()
         h_e = T.dot(outputs[0][::direction or 1], self.W_lm_in)
         h_f = T.exp(h_e.reshape((h_e.shape[0]*h_e.shape[1],h_e.shape[2])))[j]
-        self.constraints += self.index.shape[0] * T.sum(-T.log((h_f / T.sum(h_f,axis=1,keepdims=True))[:,h_y[j]]))
+        self.constraints += T.sum(-T.log((h_f / T.sum(h_f,axis=1,keepdims=True))[:,h_y[j]]))
         #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=h_f[j,self.y_in[self.attrs['target']][j]], y_idx=)
         #self.constraints += T.sum(nll)
-        outputs = outputs[:-1]
+        #outputs = outputs[:-1]
       if self.attrs['sampling'] > 1:
         if s == 0:
           #self.act = [ T.repeat(act, self.attrs['sampling'], axis = 0)[:self.sources[0].output.shape[0]] for act in outputs ]

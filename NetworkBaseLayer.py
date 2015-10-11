@@ -301,6 +301,8 @@ class Layer(Container):
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
       self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
+      for k in y_in:
+        self.y_in[k].n_out = y_in[k].n_out
     else:
       self.y_in = None
     self.constraints = T.constant(0)

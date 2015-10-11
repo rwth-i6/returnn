@@ -143,6 +143,7 @@ class LayerNetwork(object):
     network = cls(n_in, n_out)
     assert isinstance(json_content, dict)
     network.recurrent = False
+    network.y['data'].n_out = network.n_out['data'][0]
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     def traverse(content, layer_name, output_index):
@@ -150,6 +151,16 @@ class LayerNetwork(object):
       obj = content[layer_name].copy()
       cl = obj.pop('class', None)
       index = output_index
+      target = 'classes' if not 'target' in obj else obj['target']
+      dtype = 'int32' if not 'dtype' in obj else obj['dtype']
+      if target != "null" and target not in network.y:
+        assert target in network.n_out
+        if network.n_out[target][1] == 1:
+          ndim = 2
+        else:
+          ndim = 3
+        network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+        network.y[target].n_out = network.n_out[target][0]
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
         index = network.i
