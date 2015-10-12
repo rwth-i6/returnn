@@ -269,6 +269,7 @@ class AttentionRBFLM(AttentionRBF):
   def step(self, y_p):
     z_re, updates = super(AttentionRBFLM, self).step(y_p)
     z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
+
     return z_re, updates
 
 

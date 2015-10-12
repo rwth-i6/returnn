@@ -22,7 +22,7 @@ class CachedDataset(Dataset):
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
-    self._seq_start = [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
+    self._seq_start = [] # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
     self.tags = []; """ :type: list[str] """  # uses real seq idx
@@ -109,7 +109,7 @@ class CachedDataset(Dataset):
     # and data is a numpy.array.
 
   def _init_seq_starts(self):
-    self._seq_start = [numpy.array([0,0])]  # idx like in seq_index, *not* real idx
+    self._seq_start = [self._seq_start[0] * 0]  # idx like in seq_index, *not* real idx
     for i in xrange(self.num_seqs):
       ids = self._seq_index[i]
       self._seq_start.append(self._seq_start[-1] + self._seq_lengths[ids])

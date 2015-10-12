@@ -47,6 +47,8 @@ class HDFDataset(CachedDataset):
       self.timestamps.extend(fin[attr_times][...].tolist())
     seq_lengths = fin[attr_seqLengths][...]
     seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
+    if not self._seq_start:
+      self._seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(seq_lengths.tolist(), seq_lengths.tolist()))
     for l in seq_lengths:
@@ -140,7 +142,8 @@ class HDFDataset(CachedDataset):
         l = self._seq_lengths[ids]
         if 'targets' in fin:
           for k in fin['targets/data']:
-            self.targets[k][self.get_seq_start(idc)[1]:self.get_seq_start(idc)[1] + l[1]] = fin['targets/data/' + k][p[1] : p[1] + l[1]][...]
+            ldx = self.target_keys.index(k) + 1
+            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = fin['targets/data/' + k][p[ldx] : p[ldx] + l[ldx]][...]
         self._set_alloc_intervals_data(idc, data=fin['inputs'][p[0] : p[0] + l[0]][...])
       fin.close()
     gc.collect()
