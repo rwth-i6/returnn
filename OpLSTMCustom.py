@@ -73,10 +73,9 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
     custom_input_grads = [var.type() for var in args[:self._get_num_custom_vars()]]
     initial_state_var_grads = [var[0].type() for var in args[self._get_num_custom_vars():]]
-    custom_grads = custom_input_grads + initial_state_var_grads
     return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + args,
-                        # DZ, Dc, Dy0, DW_re and custom grads
-                        [H.type(), c.type(), y0.type(), W_re.type()] + custom_grads)
+                        # DZ, Dc, Dy0, DW_re, custom input grads, initial state var grads
+                        [H.type(), c.type(), y0.type(), W_re.type()] + custom_input_grads + initial_state_var_grads)
 
   def c_support_code(self):
     crnn_path = os.path.dirname(__file__)
@@ -276,17 +275,30 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     // result shared vars: Dy_p, custom input grads, state var grads
     assert(res_vec.size() == 1 + ARRAY_LEN(custom_inputs) + ARRAY_LEN(seq_state_vars));
     Py_XDECREF(delta_x);
-    CudaNdarray * Dy_p = res_vec[0];
-    //copy to Dy0
-    do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
-
-    //custom grads
-    CudaNdarray** custom_grads[] = {%(custom_outputs_str)s}; // output
-    assert(res_vec.size() == 1 + ARRAY_LEN(custom_grads));
-    for(int i = 1; i < res_vec.size(); ++i)
     {
-      *custom_grads[i-1] = (CudaNdarray*) CudaNdarray_Copy(res_vec[i]);
-      assert(*custom_grads[i-1]);
+      int idx = 0;
+      CudaNdarray * Dy_p = res_vec[idx++];
+      //copy to Dy0
+      do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
+
+
+      //custom grads
+      CudaNdarray** custom_grads[] = {%(custom_outputs_str)s}; // output
+      for(int i = 0; i < ARRAY_LEN(custom_grads); ++i) {
+        *custom_grads[i] = (CudaNdarray*) CudaNdarray_Copy(res_vec[idx++]);
+        assert(*custom_grads[i]);
+      }
+
+      // copy state var grads
+      for(int i = 0; i < ARRAY_LEN(seq_state_vars); ++i) {
+        CudaNdarray* dst = *state_var_grads[i];
+        CudaNdarray* src = res_vec[idx++];
+        assert(CudaNdarray_SIZE(dst) == CudaNdarray_SIZE(src));
+        cudaMemcpy(
+          CudaNdarray_DEV_DATA(dst), CudaNdarray_DEV_DATA(src),
+          CudaNdarray_SIZE(src) * sizeof(real), cudaMemcpyDeviceToDevice);
+      }
+      assert(res_vec.size() == idx);
     }
 
     for(int i = 0; i < res_vec.size(); ++i)
