@@ -80,7 +80,7 @@ def setup_parent_functions(fn, recurrent_transform_id):
   print >> log.v4, "loading function", fn, "(pid %i)" % os.getpid()
   transform = RecurrentTransform.transforms_by_id[recurrent_transform_id]
   # New instance for the custom op.
-  transform = transform.__class__(force_gpu=True, for_custom=True, layer=transform.layer)
+  transform = transform.copy_for_custom()
   assert isinstance(transform, RecurrentTransform.RecurrentTransformBase)
   _setup_func(fn, transform)
   functions[fn] = transform

@@ -8,10 +8,9 @@ import RecurrentTransform
 
 def get_attention(att_class):
   import OpLSTMCustom
-  from NetworkRecurrentLayer import RecurrentUnitLayer
-  layer = RecurrentUnitLayer(n_out=5, attention=att_class.name)
-  assert isinstance(layer.recurrent_transform, att_class)
-  f = OpLSTMCustom.register_func(layer.recurrent_transform)
+  recurrent_transform = RecurrentTransform.get_dummy_recurrent_transform(att_class.name)
+  assert isinstance(recurrent_transform, att_class)
+  f = OpLSTMCustom.register_func(recurrent_transform)
   return f
 
 LSTMCustomTestOpNoInplaceInstance = get_attention(RecurrentTransform.AttentionTest)

@@ -34,6 +34,12 @@ class RecurrentTransformBase(object):
       transforms_by_id[id(self)] = self
       self.create_vars()
 
+  def copy_for_custom(self, force_gpu=True):
+    """
+    :returns a new instance of this class for LSTMCustomOp
+    """
+    return self.__class__(force_gpu=force_gpu, for_custom=True, layer=self.layer)
+
   def _create_var_for_custom(self, base_var):
     var = self._create_symbolic_var(base_var)
     setattr(self, var.name, var)
@@ -387,7 +393,25 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
 
 
-transform_classes = {}
+def get_dummy_recurrent_transform(recurrent_transform_name):
+  """
+  :type recurrent_transform_name: str
+  :rtype: RecurrentTransformBase
+  This function is a useful helper for testing/debugging.
+  """
+  cls = transform_classes[recurrent_transform_name]
+  from NetworkRecurrentLayer import RecurrentUnitLayer
+  from NetworkBaseLayer import SourceLayer
+  if getattr(RecurrentUnitLayer, "rng", None) is None:
+    RecurrentUnitLayer.initialize_rng()
+  layer = RecurrentUnitLayer(n_out=5, index=numpy.array([[]]), sources=[],
+                             base=[SourceLayer(n_out=1, x_out=numpy.array([[[1.0]]]))],
+                             attention=recurrent_transform_name)
+  assert isinstance(layer.recurrent_transform, cls)
+  return layer.recurrent_transform
+
+
+transform_classes = {}; ":type: dict[str,]"
 transforms_by_id = {}; ":type: dict[int,RecurrentTransformBase]"
 
 def _setup():
