@@ -359,7 +359,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
 
-    t_old = T.switch(T.gt(self.i, 0), self.t, T.zeros((self.B.shape[1],), dtype="float32"))  # (batch,)
+    t_old = self.t  # (batch,)
     t = t_old + dt
     t_bc = t.dimshuffle('x', 0)  # (time,batch)
 
