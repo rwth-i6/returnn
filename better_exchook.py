@@ -162,7 +162,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
 			from IPython.terminal.ipapp import TerminalIPythonApp
 			ipapp = TerminalIPythonApp.instance()
 			ipapp.interact = False  # Avoid output (banner, prints)
-			ipapp.initialize()
+			ipapp.initialize(argv=[])
 			def_colors = ipapp.shell.colors
 			pdb_obj = Pdb(def_colors)
 			pdb_obj.botframe = None  # not sure. exception otherwise at quit
