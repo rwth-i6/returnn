@@ -549,7 +549,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    (Z, c, y0, i, W_re), input_rest = inputs[:5], inputs[5:]
+    (Z, c, y0, index, W_re), input_rest = inputs[:5], inputs[5:]
     assert len(input_rest) == self._get_num_custom_vars() + self._get_num_state_vars()
     custom_inputs = input_rest[:self._get_num_custom_vars()]
     initial_state_vars = input_rest[self._get_num_custom_vars():]
@@ -559,13 +559,13 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     Z_raw = Z.owner.inputs[0].owner.inputs[0]
     c_raw = c.owner.inputs[0].owner.inputs[0]
     y0_raw = y0.owner.inputs[0].owner.inputs[0]
-    i_raw = i.owner.inputs[0].owner.inputs[0]
+    i_raw = index.owner.inputs[0].owner.inputs[0]
     W_re_raw = W_re.owner.inputs[0]
     custom_inputs_raw = [x.owner.inputs[0] for x in custom_inputs]
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    all_out = self(*([Z_raw, c_raw, y0_raw, i_raw, W_re_raw] + custom_inputs))
+    all_out = self(*([Z_raw, c_raw, y0_raw, i_raw, W_re_raw] + custom_inputs + initial_state_vars))
     (Y, H, d), seq_state_vars = all_out[:3], all_out[3:]
 
     assert isinstance(DH.type, theano.gradient.DisconnectedType)  # DH is ignored.
@@ -580,7 +580,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         seq_state_var_grads[i] = T.zeros(shape, dtype="float32")
 
     grad_op = grad_ops[(self.fun_name, id(self.recurrent_transform))]
-    all_grads = grad_op(*([Y, H, c, y0, i, Dd, DY, W_re] + custom_inputs + seq_state_var_grads))
+    all_grads = grad_op(*([Y, H, c, y0, index, Dd, DY, W_re] + custom_inputs + seq_state_var_grads))
     (DZ, Dc, Dy0, DW_re), remaining_grads = all_grads[:4], all_grads[4:]
     # remaining grads = custom_inputs grads + initial state var grads
     assert len(remaining_grads) == self._get_num_custom_vars() + self._get_num_state_vars()
