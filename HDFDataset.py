@@ -93,6 +93,7 @@ class HDFDataset(CachedDataset):
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
+      self.target_keys = fin['targets/labels'].keys()
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
         self.data_dtype[name] = str(fin['targets/data'][name].dtype)
@@ -101,9 +102,11 @@ class HDFDataset(CachedDataset):
         else:
           self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
     else:
+      self.target_keys = ['classes']
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
       self.data_dtype['classes'] = 'int32'
     self.data_dtype["data"] = fin['inputs'].dtype
+    assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
     fin.close()
 
   def _load_seqs(self, start, end):

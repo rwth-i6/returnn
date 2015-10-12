@@ -4,6 +4,7 @@ import numpy
 import theano
 from Dataset import Dataset
 from Log import log
+from Util import NumbersDict
 
 
 class CachedDataset(Dataset):
@@ -27,6 +28,7 @@ class CachedDataset(Dataset):
     self.tags = []; """ :type: list[str] """  # uses real seq idx
     self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
     self.targets = {}
+    self.target_keys = []
 
   def initialize(self):
     super(CachedDataset, self).initialize()
@@ -427,6 +429,18 @@ class CachedDataset(Dataset):
     """
     real_seq_idx = self._seq_index[sorted_seq_idx]
     return self._seq_lengths[real_seq_idx]
+
+  def get_seq_length(self, seq_idx):
+    """
+    :rtype: NumbersDict
+    """
+    lengths = self.get_seq_length_2d(seq_idx)
+    d = {"data": lengths[0]}
+    for k, l in zip(self.target_keys, lengths[1:]):
+      d[k] = l
+    #d.update(self.get_output_lengths)
+    #d.update({k: output_len for k in self.get_target_list()})
+    return NumbersDict(d)
 
   def get_seq_start(self, sorted_seq_idx):
     """

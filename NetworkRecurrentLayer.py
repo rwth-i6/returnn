@@ -260,7 +260,7 @@ class RecurrentUnitLayer(Layer):
                attention_beam = 3, # soft attention context window
                base = None,
                lm = False, # language model
-               droplm = 0.0, # language model drop during training
+               droplm = 1.0, # language model drop during training
                dropconnect = 0.0, # recurrency dropout
                depth = 1,
                **kwargs):
@@ -291,7 +291,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('dropconnect', dropconnect)
     self.set_attr('attention', attention.encode("utf8"))
     self.set_attr('attention_beam', attention_beam)
-    self.set_attr('recurrent_transform', recurrent_transform)
+    self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     self.set_attr('attention_sigma', attention_sigma)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
@@ -348,7 +348,8 @@ class RecurrentUnitLayer(Layer):
         if s.output.ndim == 3: out_dim = s.output.shape[2]
         elif s.output.ndim == 2: out_dim = 1
         else: assert False, s.output.ndim
-        z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W.shape[1])) #W[T.cast(x_t.output[:,:,0], 'int32')]
+        #z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W.shape[1]))
+        z += W[T.cast(x_t.output[:,:,0], 'int32')]
       elif m is None:
         z += T.dot(x_t.output, W)
       else:
