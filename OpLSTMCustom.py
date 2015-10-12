@@ -197,13 +197,29 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
           assert(idx == ARRAY_LEN(bwd_fun_inputs));
         }
         std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, ARRAY_LEN(bwd_fun_inputs));
-        assert(res_vec.size() > 0);
+        // result shared vars: Dy_p, custom input grads, state var grads
+        assert(res_vec.size() == 1 + ARRAY_LEN(custom_inputs) + ARRAY_LEN(seq_state_vars));
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
 
         //copy to epsilon
         float * epsilon_x_data = data_ptr(epsilon, y, x);
         do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
+
+        // custom input grads will automatically be accumulated. see CustomLSTMFunctions.
+        // copy state var grads
+        {
+          int idx = 1 + ARRAY_LEN(custom_inputs);
+          for(int i = 0; i < ARRAY_LEN(seq_state_vars); ++i) {
+            CudaNdarray* dst = *state_var_grads[i];
+            CudaNdarray* src = res_vec[idx++];
+            assert(CudaNdarray_SIZE(dst) == CudaNdarray_SIZE(src));
+            cudaMemcpy(
+              CudaNdarray_DEV_DATA(dst), CudaNdarray_DEV_DATA(src),
+              CudaNdarray_SIZE(src) * sizeof(real), cudaMemcpyDeviceToDevice);
+          }
+          assert(res_vec.size() == idx);
+        }
 
         for(int i = 0; i < res_vec.size(); ++i)
         {
@@ -419,7 +435,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       cudaMemcpy(
         CudaNdarray_DEV_DATA(*state_vars_seqs_ptr[i]),
         CudaNdarray_DEV_DATA(initial_state_vars[i]),
-        CudaNdarray_SIZE(initial_state_vars[i]) * sizeof(float), cudaMemcpyDeviceToDevice);
+        CudaNdarray_SIZE(initial_state_vars[i]) * sizeof(real), cudaMemcpyDeviceToDevice);
     }
 
     int y = 0;
@@ -464,7 +480,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         CudaNdarray* dst = *state_vars_seqs_ptr[i];
         float* dst_ptr = CudaNdarray_DEV_DATA(dst) + CudaNdarray_HOST_STRIDES(dst)[0] * (x + 1);
         assert(CudaNdarray_HOST_STRIDES(dst)[0] == CudaNdarray_SIZE(src));
-        cudaMemcpy(dst_ptr, src_ptr, CudaNdarray_SIZE(src) * sizeof(float), cudaMemcpyDeviceToDevice);
+        cudaMemcpy(dst_ptr, src_ptr, CudaNdarray_SIZE(src) * sizeof(real), cudaMemcpyDeviceToDevice);
       }
 
       if(!leftBorder)
