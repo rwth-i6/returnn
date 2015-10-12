@@ -125,6 +125,14 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
     CudaNdarray* seq_state_vars[] = {%(seq_state_var_names_str)s}; // input
     CudaNdarray** state_var_grads[] = {%(initial_state_var_grad_names_str)s}; // output
+    for(int i = 0; i < ARRAY_LEN(state_var_grads); ++i) {
+      Py_XDECREF(*state_var_grads[i]); // in case of earlier output storage
+      // dims like seq_state_vars[i] without time, which is the first dim
+      int ndim = CudaNdarray_NDIM(seq_state_vars[i]) - 1;
+      const int* dims = CudaNdarray_HOST_DIMS(seq_state_vars[i]) + 1;
+      *state_var_grads[i] = (CudaNdarray*) CudaNdarray_ZEROS(ndim, (int*) dims);
+      assert(*state_var_grads[i]);
+    }
 
     CudaNdarray * epsilon = 0;
     CudaNdarray * delta = 0;
@@ -168,10 +176,29 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         assert(delta_x_obj);
         CudaNdarray * delta_x = (CudaNdarray*) delta_x_obj;
 
-        //note: the missing comma is intentionally for the case where there are 0 custom inputs
-        CudaNdarray* bwd_fun_inputs[] = {y_p %(custom_inputs_str_comma)s, delta_x};
+        CudaNdarray* state_vars_prev[ARRAY_LEN(seq_state_vars)];
+        for(int i = 0; i < ARRAY_LEN(seq_state_vars); ++i) {
+          state_vars_prev[i] = (CudaNdarray*) PyObject_CallMethod((PyObject*) seq_state_vars[i], "__getitem__", "(i)", x);
+          assert(state_vars_prev[i]);
+        }
+
+        // bwd_fun args: y_p, custom inputs, state vars prev, Dz_re, state var new grads
+        CudaNdarray* bwd_fun_inputs[2 + ARRAY_LEN(custom_inputs) + 2 * ARRAY_LEN(seq_state_vars)];
+        {
+          int idx = 0;
+          bwd_fun_inputs[idx++] = y_p;
+          for(int i = 0; i < ARRAY_LEN(custom_inputs); ++i)
+            bwd_fun_inputs[idx++] = custom_inputs[i];
+          for(int i = 0; i < ARRAY_LEN(state_vars_prev); ++i)
+            bwd_fun_inputs[idx++] = state_vars_prev[i];
+          bwd_fun_inputs[idx++] = delta_x;
+          for(int i = 0; i < ARRAY_LEN(state_var_grads); ++i)
+            bwd_fun_inputs[idx++] = *state_var_grads[i];
+          assert(idx == ARRAY_LEN(bwd_fun_inputs));
+        }
         std::vector<CudaNdarray*> res_vec = %(bwd_fun)s.call(bwd_fun_inputs, ARRAY_LEN(bwd_fun_inputs));
-        assert(res_vec.size() > 0);
+        // result shared vars: Dy_p, custom input grads, state var grads
+        assert(res_vec.size() == 1 + ARRAY_LEN(custom_inputs) + ARRAY_LEN(seq_state_vars));
         Py_XDECREF(delta_x);
         CudaNdarray * Dy_p = (CudaNdarray*) res_vec[0];
 
@@ -179,7 +206,21 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
         float * epsilon_x_data = data_ptr(epsilon, y, x);
         do_add(epsilon_x_data, CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
-        //TODO check
+        // custom input grads will automatically be accumulated. see CustomLSTMFunctions.
+        // copy state var grads
+        {
+          int idx = 1 + ARRAY_LEN(custom_inputs);
+          for(int i = 0; i < ARRAY_LEN(seq_state_vars); ++i) {
+            CudaNdarray* dst = *state_var_grads[i];
+            CudaNdarray* src = res_vec[idx++];
+            assert(CudaNdarray_SIZE(dst) == CudaNdarray_SIZE(src));
+            cudaMemcpy(
+              CudaNdarray_DEV_DATA(dst), CudaNdarray_DEV_DATA(src),
+              CudaNdarray_SIZE(src) * sizeof(real), cudaMemcpyDeviceToDevice);
+          }
+          assert(res_vec.size() == idx);
+        }
+
         for(int i = 0; i < res_vec.size(); ++i)
         {
           Py_XDECREF(res_vec[i]);
@@ -217,6 +258,8 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert(res_vec.size() > 0);
     Py_XDECREF(delta_x);
     CudaNdarray * Dy_p = res_vec[0];
+    //copy to Dy0
+    do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
 
     //custom grads
     CudaNdarray** custom_grads[] = {%(custom_outputs_str)s}; // output
@@ -227,10 +270,6 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       assert(*custom_grads[i-1]);
     }
 
-    //copy to Dy0
-    do_add(CudaNdarray_DEV_DATA(%(Dy0)s), CudaNdarray_DEV_DATA(Dy_p), CudaNdarray_SIZE(Dy_p));
-
-    //TODO: check
     for(int i = 0; i < res_vec.size(); ++i)
     {
       Py_XDECREF(res_vec[i]);
@@ -396,7 +435,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       cudaMemcpy(
         CudaNdarray_DEV_DATA(*state_vars_seqs_ptr[i]),
         CudaNdarray_DEV_DATA(initial_state_vars[i]),
-        CudaNdarray_SIZE(initial_state_vars[i]) * sizeof(float), cudaMemcpyDeviceToDevice);
+        CudaNdarray_SIZE(initial_state_vars[i]) * sizeof(real), cudaMemcpyDeviceToDevice);
     }
 
     int y = 0;
@@ -441,7 +480,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
         CudaNdarray* dst = *state_vars_seqs_ptr[i];
         float* dst_ptr = CudaNdarray_DEV_DATA(dst) + CudaNdarray_HOST_STRIDES(dst)[0] * (x + 1);
         assert(CudaNdarray_HOST_STRIDES(dst)[0] == CudaNdarray_SIZE(src));
-        cudaMemcpy(dst_ptr, src_ptr, CudaNdarray_SIZE(src) * sizeof(float), cudaMemcpyDeviceToDevice);
+        cudaMemcpy(dst_ptr, src_ptr, CudaNdarray_SIZE(src) * sizeof(real), cudaMemcpyDeviceToDevice);
       }
 
       if(!leftBorder)

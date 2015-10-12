@@ -40,6 +40,7 @@ def make_bwd_fun(recurrent_transform):
 
   Dz_re = tt.fmatrix("Dz_re")
   state_var_new_grads = {state_updates[k]: v.type("D_" + v.name) for (k, v) in state_vars_prev}
+  state_var_new_grads_list = [state_var_new_grads[state_updates[k]] for k in state_vars_prev]
   known_grads = {z_re: Dz_re}
   known_grads.update(state_var_new_grads)
 
@@ -54,7 +55,7 @@ def make_bwd_fun(recurrent_transform):
   updates = [(out_Dy_p, Dy_p)]
   updates += [(out, out + grad) for out, grad in zip(out_custom_grads, custom_grads)]  # we accumulate the custom input grads
   updates += [(out, grad) for out, grad in zip(out_state_var_prev_grads, state_var_prev_grads)]
-  bwd_fun = theano.function(inputs=[y_p] + custom_vars + [Dz_re] + state_vars_prev,
+  bwd_fun = theano.function(inputs=[y_p] + custom_vars + state_vars_prev + [Dz_re] + state_var_new_grads_list,
                             outputs=[],
                             updates=updates,
                             on_unused_input="warn")
