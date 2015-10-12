@@ -133,7 +133,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.y_m[self.i], axis=-1, keepdims=True)
-    self.output = self.p_y_given_x
+    self.output = self.p_y_given_x.reshape(self.output.shape)
 
   def cost(self):
     """

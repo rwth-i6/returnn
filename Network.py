@@ -231,6 +231,8 @@ class LayerNetwork(object):
           network.recurrent = True
         return network.add_layer(layer_class(**params))
     for layer_name in json_content:
+      if layer_name in network.hidden or layer_name in network.output:
+        continue
       trg = target
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
@@ -437,6 +439,7 @@ class LayerNetwork(object):
       self.errors[name] = self.output[name].errors()
     self.add_cost_and_constraints(self.output[name])
     self.declare_train_params()
+    return self.output[name].index
 
   def get_objective(self):
     return self.total_cost + self.constraints
