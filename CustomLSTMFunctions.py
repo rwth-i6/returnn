@@ -88,7 +88,6 @@ def setup_parent_functions(fn, recurrent_transform_id):
 def _setup_func(fn, recurrent_transform):
   fwd_names = ["_fun_fwd", "_fun_fwd_res0", "_fun_fwd_res1"]
   bwd_names = ["_fun_bwd", "_fun_reset", "_fun_bwd_res0", "_fun_bwd_res1"]
-  recurrent_transform.create_vars_for_custom()
   vs_fwd = make_fwd_fun(recurrent_transform)
   vs_bwd = make_bwd_fun(recurrent_transform)
   assert len(vs_fwd) == len(fwd_names)

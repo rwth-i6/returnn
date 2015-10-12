@@ -28,7 +28,9 @@ class RecurrentTransformBase(object):
     self.state_vars_initial = {}
     self.custom_vars = {}
     self.for_custom = for_custom
-    if not for_custom:
+    if for_custom:
+      self.create_vars_for_custom()
+    else:
       transforms_by_id[id(self)] = self
       self.create_vars()
 
@@ -54,7 +56,6 @@ class RecurrentTransformBase(object):
     Called via CustomLSTMFunctions.
     """
     assert self.for_custom
-    assert self.tt is cuda
     self.y_p = self.tt.fmatrix("y_p")
 
     layer_transform_instance = self.layer.recurrent_transform   # this is a different instance
