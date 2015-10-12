@@ -248,7 +248,7 @@ class Device(object):
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     # initialize batch
-    self.used_data_keys = set(self.trainnet.y.keys())
+    self.used_data_keys = set(self.trainnet.j.keys())
     assert "data" in self.used_data_keys
     self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
                                borrow=True, name='y_%s' % k)

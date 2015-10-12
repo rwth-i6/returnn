@@ -43,10 +43,10 @@ class HDFDataset(CachedDataset):
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
     tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
-    seq_start = [numpy.array([0,0])]
     if 'times' in fin:
       self.timestamps.extend(fin[attr_times][...].tolist())
     seq_lengths = fin[attr_seqLengths][...]
+    seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(seq_lengths.tolist(), seq_lengths.tolist()))
     for l in seq_lengths:
