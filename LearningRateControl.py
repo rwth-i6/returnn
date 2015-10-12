@@ -101,12 +101,24 @@ class LearningRateControl(object):
   def setEpochError(self, epoch, error):
     """
     :type epoch: int
-    :type error: dict[str,float]
+    :type error: dict[str,float|dict[str,float]]
     """
     if epoch not in self.epochData:
       print >> log.v4, "Learning rate not set for epoch %i. Assuming default." % epoch
       self.getLearningRateForEpoch(epoch)  # This will set it.
     assert isinstance(error, dict)
+    error = error.copy()
+    for k, v in list(error.items()):
+      if isinstance(v, dict):  # like error = {"dev_score": {"cost:output1": .., "cost:output2": ...}, ...}
+        del error[k]
+        if len(v) == 1:
+          error[k] = v.values()[0]
+          continue
+        for k1, v1 in v.items():
+          if ":" in k1: k1 = k1[k1.index(":") + 1:]
+          error[k + "_" + k1] = v1
+    for v in error.values():
+      assert isinstance(v, float)
     self.epochData[epoch].error.update(error)
 
   def getErrorKey(self, epoch):
@@ -118,6 +130,9 @@ class LearningRateControl(object):
     if len(epoch_data.error) == 1 and "old_format_score" in epoch_data.error:
       return "old_format_score"
     if self.errorMeasureKey:
+      if self.errorMeasureKey not in epoch_data.error:
+        if self.errorMeasureKey + "_output" in epoch_data.error:  # for multiple outputs, try default output
+          return self.errorMeasureKey + "_output"
       return self.errorMeasureKey
     for key in ["dev_score", "train_score"]:  # To keep old setups producing the same behavior, keep this order.
       if key in epoch_data.error:
