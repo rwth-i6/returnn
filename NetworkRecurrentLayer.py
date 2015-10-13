@@ -272,6 +272,8 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmp'
       else:
         unit = 'lstmc'
+    elif unit in ("lstmc", "lstmp") and str(theano.config.device).startswith('cpu'):
+      unit = "lstme"
     if lm and recurrent_transform != 'none': # TODO hack
       recurrent_transform += "_lm"
     kwargs.setdefault("depth", depth)
