@@ -72,7 +72,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     assert W_re.ndim == 2
 
     custom_input_grads = [var.type() for var in args[:self._get_num_custom_vars()]]
-    initial_state_var_grads = [var[0].type() for var in args[self._get_num_custom_vars():]]
+    CudaNdarrayType = theano.sandbox.cuda.CudaNdarrayType
+    # One ndim less because initial state var grads vs whole seq state vars.
+    initial_state_var_grads = [CudaNdarrayType(dtype="float32", broadcastable=(False,) * (var.ndim - 1))()
+                               for var in args[self._get_num_custom_vars():]]
     return theano.Apply(self, [Y, H, c, y0, i, Dd, DY, W_re] + args,
                         # DZ, Dc, Dy0, DW_re, custom input grads, initial state var grads
                         [H.type(), c.type(), y0.type(), W_re.type()] + custom_input_grads + initial_state_var_grads)
@@ -456,7 +459,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       int ndim = initial_ndim + 1; // add time-dim
       const int* initial_dims = CudaNdarray_HOST_DIMS(initial_state_vars[i]);
       int dims[] = {Z_dim[0], 0, 0, 0};
-      assert(ARRAY_LEN(dims) <= ndim);
+      assert(ARRAY_LEN(dims) >= ndim);
       for(int d = 0; d < initial_ndim; ++d)
         dims[d + 1] = initial_dims[d];
       *state_vars_seqs_ptr[i] = (CudaNdarray*) CudaNdarray_NewDims(ndim, dims);
