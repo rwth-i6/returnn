@@ -390,7 +390,6 @@ class RecurrentUnitLayer(Layer):
         self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
         self.lmmask = T.zeros_like(self.index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
-      #lmflag = T.any(int(self.train_flag) * self.y_in[self.attrs['target']].reshape(self.index.shape), axis=0) # B
 
     if self.attrs['dropconnect'] > 0.0:
       srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))

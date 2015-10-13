@@ -259,36 +259,6 @@ class AttentionRBF(AttentionBase):
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
 
 
-class AttentionRBFLMO(AttentionRBF):
-  """
-  attention over rbf kernel of base outputs and time dependent activation
-  """
-  name = "attention_rbf_lmo"
-  def create_vars(self):
-    super(AttentionRBFLM, self).create_vars()
-    #self.y_in = self.add_input(self.layer.y_in)
-    self.W_lm_in = self.add_param(self.layer.W_lm_in)
-    self.W_lm_out = self.add_param(self.layer.W_lm_out)
-    #self.test_flag = self.add_var(theano.shared(value=numpy.asarray(1.0 if self.layer.train_flag else 0.0,dtype='float32'),name='test_flag')) #T.constant(0.0 if self.layer.train_flag else 1.0, 'float32'), 'train_flag')
-    self.loop_weight = self.add_var(theano.shared(value=numpy.asarray(self.layer.attrs['droplm'] if self.layer.train_flag else 1.0,dtype='float32'),name='loop_weight'))
-    #l = sqrt(6.) / sqrt(self.layer.unit.n_out + self.y_in[self.layer.attrs['target']].n_out)
-    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.unit.n_out, self.layer.y_in[self.layer.attrs['target']].n_out)), dtype=theano.config.floatX)
-    #self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in"))
-    #l = sqrt(6.) / sqrt(self.layer.unit.n_in + self.layer.y_in[self.layer.attrs['target']].n_out)
-    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.y_in[self.layer.attrs['target']].n_out, self.layer.unit.n_in)), dtype=theano.config.floatX)
-    #self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out"))
-
-  def step(self, y_p):
-    z_re, updates = super(AttentionRBFLM, self).step(y_p)
-
-    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
-
-    h_e = T.exp(T.dot(y_p, self.W_lm_in)) * self.loop_weight
-    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)+T.constant(10e-12,dtype='float32')), self.W_lm_out)
-
-    return z_re, updates
-
-
 class AttentionRBFLM(AttentionRBF):
   """
   attention over rbf kernel of base outputs and time dependent activation
@@ -296,23 +266,15 @@ class AttentionRBFLM(AttentionRBF):
   name = "attention_rbf_lm"
   def create_vars(self):
     super(AttentionRBFLM, self).create_vars()
-    #self.y_in = self.add_input(self.layer.y_in)
     self.W_lm_in = self.add_param(self.layer.W_lm_in)
     self.W_lm_out = self.add_param(self.layer.W_lm_out)
-    #self.test_flag = self.add_var(theano.shared(value=numpy.asarray(1.0 if self.layer.train_flag else 0.0,dtype='float32'),name='test_flag')) #T.constant(0.0 if self.layer.train_flag else 1.0, 'float32'), 'train_flag')
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
-    #l = sqrt(6.) / sqrt(self.layer.unit.n_out + self.y_in[self.layer.attrs['target']].n_out)
-    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.unit.n_out, self.layer.y_in[self.layer.attrs['target']].n_out)), dtype=theano.config.floatX)
-    #self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in"))
-    #l = sqrt(6.) / sqrt(self.layer.unit.n_in + self.layer.y_in[self.layer.attrs['target']].n_out)
-    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.y_in[self.layer.attrs['target']].n_out, self.layer.unit.n_in)), dtype=theano.config.floatX)
-    #self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out"))
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
 
   def step(self, y_p):
     z_re, updates = super(AttentionRBFLM, self).step(y_p)
 
-    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
     z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
