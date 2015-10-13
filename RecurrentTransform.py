@@ -314,8 +314,8 @@ class AttentionRBFLM(AttentionRBF):
 
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
 
-    h_e = T.exp(T.dot(y_p, self.W_lm_in)) * (T.ones_like(self.t) - self.lmmask[T.cast(self.t,'int32')])
-    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)+T.constant(10e-30,dtype='float32')), self.W_lm_out)
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     updates[self.t] = self.t + T.ones_like(self.t)
     return z_re, updates
