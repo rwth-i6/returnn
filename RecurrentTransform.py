@@ -12,6 +12,10 @@ class RecurrentTransformBase(object):
   def __init__(self, force_gpu=False, layer=None, for_custom=False):
     """
     :type layer: NetworkRecurrentLayer.RecurrentUnitLayer
+    :param bool for_custom: When used with LSTMC + LSTMCustomOp, there are two instances of this class:
+      One via the network initialization as part of the layer (for_custom == False)
+      and another one via CustomLSTMFunctions (for_custom == True).
+      The symbolic vars will look different. See self.create_vars_for_custom().
     """
     self.force_gpu = force_gpu
     if force_gpu:
@@ -59,11 +63,12 @@ class RecurrentTransformBase(object):
     for k, v in layer_transform_instance.custom_vars.items():
       assert getattr(layer_transform_instance, k) is v
       assert v.name == k
-      self.add_var(self._create_var_for_custom(v))
+      self.custom_vars[k] = self._create_var_for_custom(v)
+    self.state_vars_initial = None  # must not be used in custom op. we will get that from outside
     for k, v in layer_transform_instance.state_vars.items():
       assert getattr(layer_transform_instance, k) is v
       assert v.name == k
-      self.add_state_var(self._create_var_for_custom(v))
+      self.state_vars[k] = self._create_var_for_custom(v)
 
   def init_vars(self):
     pass
@@ -364,7 +369,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
 
-    t_old = T.switch(T.gt(self.i, 0), self.t, T.zeros((self.B.shape[1],), dtype="float32"))  # (batch,)
+    t_old = self.t  # (batch,)
     t = t_old + dt
     t_bc = t.dimshuffle('x', 0)  # (time,batch)
 

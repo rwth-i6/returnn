@@ -39,7 +39,7 @@ def make_bwd_fun(recurrent_transform):
   state_vars_prev = recurrent_transform.get_sorted_state_vars()
 
   Dz_re = tt.fmatrix("Dz_re")
-  state_var_new_grads = {state_updates[k]: v.type("D_" + v.name) for (k, v) in state_vars_prev}
+  state_var_new_grads = {state_updates[v]: v.type("D_" + v.name) for v in state_vars_prev}
   state_var_new_grads_list = [state_var_new_grads[state_updates[k]] for k in state_vars_prev]
   known_grads = {z_re: Dz_re}
   known_grads.update(state_var_new_grads)

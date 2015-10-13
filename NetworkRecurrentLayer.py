@@ -345,11 +345,16 @@ class RecurrentUnitLayer(Layer):
     z = self.b if self.W_in else 0
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.attrs['sparse']:
-        if s.output.ndim == 3: out_dim = s.output.shape[2]
-        elif s.output.ndim == 2: out_dim = 1
-        else: assert False, s.output.ndim
-        #z += W[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W.shape[1]))
-        z += W[T.cast(x_t.output[:,:,0], 'int32')]
+        if x_t.output.ndim == 3: out_dim = x_t.output.shape[2]
+        elif x_t.output.ndim == 2: out_dim = 1
+        else: assert False, x_t.output.ndim
+        #z += W[T.cast(s.output, 'int32')].reshape((x_t.output.shape[0],x_t.output.shape[1],out_dim * W.shape[1]))
+        if x_t.output.ndim == 3:
+          z += W[T.cast(x_t.output[:,:,0], 'int32')]
+        elif x_t.output.ndim == 2:
+          z += W[T.cast(x_t.output, 'int32')]
+        else:
+          assert False, x_t.output.ndim
       elif m is None:
         z += T.dot(x_t.output, W)
       else:
