@@ -248,8 +248,8 @@ class AttentionRBF(AttentionBase):
   name = "attention_rbf"
   def create_vars(self):
     super(AttentionRBF, self).create_vars()
-    #self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
-    #self.add_input(self.B, 'B')
+    self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
+    self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
 
   def step(self, y_p):
@@ -277,7 +277,8 @@ class AttentionRBFLM(AttentionRBF):
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
-    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     updates[self.t] = self.t + T.ones_like(self.t)
     return z_re, updates
