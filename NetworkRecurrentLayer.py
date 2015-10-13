@@ -245,6 +245,7 @@ class RecurrentUnitLayer(Layer):
 
   def __init__(self,
                n_out, # number of cells
+               n_units = None,  # when initialized via Network.from_hdf_model_topology
                direction = 1, # forward (1), backward (-1) or bidirectional (0)
                truncation = -1, # truncate the gradient after this amount of time steps
                sampling = 1, # scan every nth frame only
@@ -278,6 +279,8 @@ class RecurrentUnitLayer(Layer):
       recurrent_transform += "_lm"
     kwargs.setdefault("depth", depth)
     kwargs.setdefault("n_out", n_out)
+    if n_units is not None:
+      assert n_units == n_out
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)
