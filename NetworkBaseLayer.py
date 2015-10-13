@@ -272,6 +272,7 @@ class SourceLayer(Container):
     self.set_attr('n_out', n_out)
     self.set_attr('sparse', sparse)
     self.set_attr('delay', delay)
+    self.index = index
 
 
 class Layer(Container):

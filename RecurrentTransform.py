@@ -404,14 +404,16 @@ def get_dummy_recurrent_transform(recurrent_transform_name):
   from NetworkBaseLayer import SourceLayer
   if getattr(RecurrentUnitLayer, "rng", None) is None:
     RecurrentUnitLayer.initialize_rng()
-  layer = RecurrentUnitLayer(n_out=5, index=numpy.array([[]]), sources=[],
-                             base=[SourceLayer(n_out=1, x_out=numpy.array([[[1.0]]]))],
+  index = theano.shared(numpy.array([[1]], dtype="int8"), name="i")
+  x_out = theano.shared(numpy.array([[[1.0]]], dtype="float32"), name="x")
+  layer = RecurrentUnitLayer(n_out=5, index=index, sources=[],
+                             base=[SourceLayer(n_out=x_out.get_value().shape[2], x_out=x_out, index=index)],
                              attention=recurrent_transform_name)
   assert isinstance(layer.recurrent_transform, cls)
   return layer.recurrent_transform
 
 
-transform_classes = {}; ":type: dict[str,]"
+transform_classes = {}; ":type: dict[str,class]"
 transforms_by_id = {}; ":type: dict[int,RecurrentTransformBase]"
 
 def _setup():
