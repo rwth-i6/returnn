@@ -264,6 +264,7 @@ class LayerNetwork(object):
       print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
     network = cls(n_in_model, n_out_model)
     network.recurrent = False
+    network.y['data'].n_out = network.n_out['data'][0]
     def traverse(model, layer_name, output_index):
       index = output_index
       mask = input_mask
