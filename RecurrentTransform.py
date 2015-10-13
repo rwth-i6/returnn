@@ -360,20 +360,20 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
     self.B = T.concatenate(src, axis=2) + self.xb  # base (output of encoder). (time,batch,encoder-dim)
-    self.B.name = "B"
-    self.add_input(self.B)
+    self.add_input(self.B, name="B")
 
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
 
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
     self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
+    self.std_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="std_max"))
 
   def step(self, y_p):
     # self.B is (time,batch,dim)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re))  # (batch,2)
-    dt = T.nnet.sigmoid(a[:, 0]) * self.t_max  # (batch,)
-    std = T.nnet.sigmoid(a[:, 1]) * 5  # (batch,)
+    dt = a[:, 0] * self.t_max  # (batch,)
+    std = a[:, 1] * self.std_max  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
 
     t_old = self.t  # (batch,)
