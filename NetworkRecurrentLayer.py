@@ -275,8 +275,6 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmc'
     elif unit in ("lstmc", "lstmp") and str(theano.config.device).startswith('cpu'):
       unit = "lstme"
-    if lm and recurrent_transform != 'none': # TODO hack
-      recurrent_transform += "_lm"
     kwargs.setdefault("depth", depth)
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
@@ -298,6 +296,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     self.set_attr('attention_sigma', attention_sigma)
+    if lm and recurrent_transform != 'none': # TODO hack
+      recurrent_transform += "_lm"
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:

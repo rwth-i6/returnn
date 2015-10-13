@@ -264,6 +264,19 @@ class LayerNetwork(object):
       print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
     network = cls(n_in_model, n_out_model)
     network.recurrent = False
+
+    if 'target' in model['n_out'].attrs:
+        target = model['n_out'].attrs['target']
+    dtype = 'int32' if not 'dtype' in model['n_out'].attrs else model['n_out'].attrs['dtype']
+    if target != "null" and target not in network.y:
+      assert target in network.n_out
+      if network.n_out[target][1] == 1:
+        ndim = 2
+      else:
+        ndim = 3
+      network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+      network.y[target].n_out = network.n_out[target][0]
+
     network.y['data'].n_out = network.n_out['data'][0]
     def traverse(model, layer_name, output_index):
       index = output_index

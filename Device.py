@@ -1058,7 +1058,7 @@ class Device(object):
              [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_input_givens(self, network):
     # self.i == self.j["data"]
-    return [(network.y["data"], self.y["data"])] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    return [(network.y[k], self.y[k]) for k in self.used_data_keys] + [(network.j[k], self.j[k]) for k in self.used_data_keys]
   def make_sprint_givens(self, network):
     return self.make_input_givens(network)
   def make_ctc_givens(self, network):
