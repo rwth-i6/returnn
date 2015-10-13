@@ -3,14 +3,8 @@ import os
 import theano
 import theano.tensor as T
 import numpy
-from Device import have_gpu
 from Log import log
-
-if have_gpu():
-  import theano.sandbox.cuda as theano_cuda
-  tt = theano_cuda
-else:
-  tt = T
+import theano.sandbox.cuda as theano_cuda
 
 
 def make_fwd_fun(recurrent_transform):
