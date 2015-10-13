@@ -181,7 +181,7 @@ class AttentionBase(RecurrentTransformBase):
     l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = (T.concatenate(src, axis=2) + self.xb) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)  # == B
+    self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
     self.B.name = "B"
     self.add_input(self.B)
     #if n_in != unit.n_out:
@@ -248,8 +248,8 @@ class AttentionRBF(AttentionBase):
   name = "attention_rbf"
   def create_vars(self):
     super(AttentionRBF, self).create_vars()
-    self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
-    self.add_input(self.B, 'B')
+    #self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
+    #self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
 
   def step(self, y_p):
@@ -259,11 +259,11 @@ class AttentionRBF(AttentionBase):
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
 
 
-class AttentionRBFLM(AttentionRBF):
+class AttentionRBFLMO(AttentionRBF):
   """
   attention over rbf kernel of base outputs and time dependent activation
   """
-  name = "attention_rbf_lm"
+  name = "attention_rbf_lmo"
   def create_vars(self):
     super(AttentionRBFLM, self).create_vars()
     #self.y_in = self.add_input(self.layer.y_in)
@@ -286,6 +286,38 @@ class AttentionRBFLM(AttentionRBF):
     h_e = T.exp(T.dot(y_p, self.W_lm_in)) * self.loop_weight
     z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)+T.constant(10e-12,dtype='float32')), self.W_lm_out)
 
+    return z_re, updates
+
+
+class AttentionRBFLM(AttentionRBF):
+  """
+  attention over rbf kernel of base outputs and time dependent activation
+  """
+  name = "attention_rbf_lm"
+  def create_vars(self):
+    super(AttentionRBFLM, self).create_vars()
+    #self.y_in = self.add_input(self.layer.y_in)
+    self.W_lm_in = self.add_param(self.layer.W_lm_in)
+    self.W_lm_out = self.add_param(self.layer.W_lm_out)
+    #self.test_flag = self.add_var(theano.shared(value=numpy.asarray(1.0 if self.layer.train_flag else 0.0,dtype='float32'),name='test_flag')) #T.constant(0.0 if self.layer.train_flag else 1.0, 'float32'), 'train_flag')
+    self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
+    #l = sqrt(6.) / sqrt(self.layer.unit.n_out + self.y_in[self.layer.attrs['target']].n_out)
+    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.unit.n_out, self.layer.y_in[self.layer.attrs['target']].n_out)), dtype=theano.config.floatX)
+    #self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in"))
+    #l = sqrt(6.) / sqrt(self.layer.unit.n_in + self.layer.y_in[self.layer.attrs['target']].n_out)
+    #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.y_in[self.layer.attrs['target']].n_out, self.layer.unit.n_in)), dtype=theano.config.floatX)
+    #self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out"))
+    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
+
+  def step(self, y_p):
+    z_re, updates = super(AttentionRBFLM, self).step(y_p)
+
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
+
+    h_e = T.exp(T.dot(y_p, self.W_lm_in)) * (T.ones_like(self.t) - self.lmmask[T.cast(self.t,'int32')])
+    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)+T.constant(10e-30,dtype='float32')), self.W_lm_out)
+
+    updates[self.t] = self.t + T.ones_like(self.t)
     return z_re, updates
 
 
