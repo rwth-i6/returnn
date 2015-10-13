@@ -268,14 +268,11 @@ class AttentionRBFLM(AttentionRBF):
 
   def step(self, y_p):
     z_re, updates = super(AttentionRBFLM, self).step(y_p)
-    z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
 
-    #y = self.y_in[self.attrs['target']] #.reshape(self.index.shape)
-    #y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
-    #h_e = T.exp(T.dot(outputs[0][::direction or 1], self.W_lm_in))
-    #h_t = T.dot(h_e / T.sum(h_e,axis=2,keepdims=True), self.W_lm_out).reshape((index.shape[0],index.shape[1],unit.n_in))
-    ##h_t = self.W_lm_out[T.argmax(T.dot(outputs[0][::direction or 1], self.W_lm_in), axis=2)].reshape((index.shape[0],index.shape[1],unit.n_in))
-    #self.constraints += T.sum(T.sum(T.sqr(y_t - h_t),axis=2))
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * self.loop_weight #* self.test_flag
+
+    h_e = T.exp(T.dot(y_p, self.W_lm_in)) * self.loop_weight
+    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)+T.constant(10e-12,dtype='float32')), self.W_lm_out)
 
     return z_re, updates
 

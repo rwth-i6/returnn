@@ -222,7 +222,7 @@ class LayerNetwork(object):
       if cl == 'softmax':
         if not 'target' in params:
           params['target'] = target
-        params['index'] = output_index
+        params['index'] = network.j[target] #output_index
         return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)
