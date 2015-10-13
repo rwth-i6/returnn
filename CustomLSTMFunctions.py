@@ -44,9 +44,12 @@ def make_bwd_fun(recurrent_transform):
   known_grads = {z_re: Dz_re}
   known_grads.update(state_var_new_grads)
 
-  Dy_p = T.grad(None, y_p, known_grads=known_grads, disconnected_inputs="ignore")
-  custom_grads = [T.grad(None, var, known_grads=known_grads, disconnected_inputs="ignore") for var in custom_vars]
-  state_var_prev_grads = [T.grad(None, var, known_grads=known_grads, disconnected_inputs="ignore") for var in state_vars_prev]
+  all_wrt = [y_p] + custom_vars + state_vars_prev
+  all_grads = T.grad(None, all_wrt, known_grads=known_grads, disconnected_inputs="ignore")
+  assert len(all_grads) == 1 + len(custom_vars) + len(state_vars_prev)
+  Dy_p = all_grads[0]
+  custom_grads = all_grads[1:len(custom_vars)+1]
+  state_var_prev_grads = all_grads[len(custom_vars)+1:]
 
   out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
   out_custom_grads = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in custom_vars]
