@@ -38,11 +38,18 @@ def make_bwd_fun(recurrent_transform):
   custom_vars = recurrent_transform.get_sorted_custom_vars()
   state_vars_prev = recurrent_transform.get_sorted_state_vars()
 
-  Dz_re = tt.fmatrix("Dz_re")
+  Dz_re = recurrent_transform.tt.fmatrix("Dz_re")
   state_var_new_grads = {state_updates[v]: v.type("D_" + v.name) for v in state_vars_prev}
   state_var_new_grads_list = [state_var_new_grads[state_updates[k]] for k in state_vars_prev]
   known_grads = {z_re: Dz_re}
   known_grads.update(state_var_new_grads)
+  if recurrent_transform.force_gpu:
+    # We need the symbolic host representation.
+    # See HostFromGpu.grad(). It expects that the output_grads are on the host, i.e. from type T.TensorType.
+    # When this is taken out of known_grads, it will fail because they are all CudaNdarrayType.
+    # This should anyway be optimized all away and fully taken to the GPU in the final function.
+    for k, v in known_grads.items():
+      known_grads[k] = theano_cuda.host_from_gpu(v)
 
   all_wrt = [y_p] + custom_vars + state_vars_prev
   all_grads = T.grad(None, all_wrt, known_grads=known_grads, disconnected_inputs="ignore")
