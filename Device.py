@@ -992,7 +992,8 @@ class Device(object):
       if not self.proc.is_alive():
         print >> log.v4, "Dev %s proc not alive anymore" % self.name
         return None, None
-      timeout = 60 * 60  # 60 minutes execution timeout
+      # 60 minutes execution timeout by default
+      timeout = self.config.float("device_timeout", 60 * 60)
       while timeout > 0:
         try:
           if self.output_queue.poll(1):
