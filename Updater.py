@@ -58,7 +58,7 @@ class Updater:
     self.adadelta_offset = adadelta_offset
     self.params = {}
     self.pid = -1
-    assert not (self.adagrad and self.adadelta and self.adasecant)
+    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
     if self.adadelta:
       self.momentum = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
@@ -464,7 +464,7 @@ class Updater:
         epsilon=1e-8
         gamma=1-1e-8
         beta1=0.1
-        beta2=0.001,
+        beta2=0.001
 
         i_t = i + 1.
         fix1 = 1. - (1. - beta1)**i_t
@@ -485,7 +485,6 @@ class Updater:
         updates.append((m, m_t))
         updates.append((v, v_t))
         updates.append((param, param_i_t) )
-        updates.append((i, i_t))
         return updates
 
       elif self.adagrad:
@@ -517,7 +516,7 @@ class Updater:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))
     updates.extend([(p, p + upd[p]) for p in upd if upd[p]])
-
+    updates.append((i, i+1))
     if self.adasecant:
       updates.append((step, step + 1))
     #for u in updates:
