@@ -261,7 +261,7 @@ class Device(object):
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
       exclude = []
-      self.gradients = {}
+      self.gradients = {}; ":type: dict[theano.SharedVariable,theano.Variable]"
       if config.bool('debug_gradient_norm', False):
         # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
         # See self.fast_check_model_is_broken_from_result().
@@ -287,6 +287,8 @@ class Device(object):
         gparams.append(theano.Out(gparam, borrow = True))
         if self.gradient_norm is not None:
           self.gradient_norm += T.sum(gparam ** 2)
+    else:
+      self.gradients = None
     if log.verbose[4]: progress_bar()
 
     # initialize functions
@@ -428,7 +430,7 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    batch_dim = self.y["data"].get_value().shape[1]
+    batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if task == "train" or task == "theano_graph" or task == "eval":
       func = self.tester if task == "eval" else self.trainer
