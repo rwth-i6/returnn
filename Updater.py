@@ -17,6 +17,7 @@ class Updater:
       "adagrad": config.bool('adagrad', False),
       "adadelta": config.bool('adadelta', False),
       "adasecant": config.bool('adasecant', False),
+      "adam": config.bool('adam', False),
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
@@ -32,12 +33,13 @@ class Updater:
     kwargs.setdefault('adagrad', False)
     kwargs.setdefault('adadelta', False)
     kwargs.setdefault('adasecant', False)
+    kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
     """
     :type momentum: float
     :type gradient_clip: float
@@ -51,6 +53,7 @@ class Updater:
     self.adagrad = adagrad
     self.adadelta = adadelta
     self.adasecant = adasecant
+    self.adam = adam
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.params = {}
@@ -181,6 +184,7 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
+    i = theano.shared(numpy.float32(1))
     for param in grads.keys():
       deltas = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
       if self.max_norm > 0:
@@ -454,6 +458,35 @@ class Updater:
 
         if self.use_corrected_grad:
           updates.append((old_grad, corrected_grad))
+
+      elif self.adam:
+        #def adam(loss, all_params, learning_rate=0.0002, beta1=0.1, beta2=0.001,
+        epsilon=1e-8
+        gamma=1-1e-8
+        beta1=0.1
+        beta2=0.001,
+
+        i_t = i + 1.
+        fix1 = 1. - (1. - beta1)**i_t
+        fix2 = 1. - (1. - beta2)**i_t
+        beta1_t = 1-(1-beta1)*gamma**(i_t-1)   # ADDED
+        learning_rate_t = self.learning_rate_var * (T.sqrt(fix2) / fix1)
+
+        m = theano.shared(
+            numpy.zeros(param.get_value().shape, dtype=theano.config.floatX))
+        v = theano.shared(
+            numpy.zeros(param.get_value().shape, dtype=theano.config.floatX))
+
+        m_t = (beta1_t * deltas) + ((1. - beta1_t) * m) # CHANGED from b_t to use beta1_t
+        v_t = (beta2 * deltas**2) + ((1. - beta2) * v)
+        g_t = m_t / (T.sqrt(v_t) + epsilon)
+        param_i_t = param - (learning_rate_t * g_t)
+
+        updates.append((m, m_t))
+        updates.append((v, v_t))
+        updates.append((param, param_i_t) )
+        updates.append((i, i_t))
+        return updates
 
       elif self.adagrad:
         epsilon = 1e-6
