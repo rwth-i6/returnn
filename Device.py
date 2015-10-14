@@ -463,9 +463,10 @@ class Device(object):
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
-    #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
-    #if model_broken_info:
-    #  self.handle_model_broken(model_broken_info)
+    model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
+    if model_broken_info:
+      if self.config.bool("dump_model_broken_info", False):
+        self.dump_model_broken_info(model_broken_info)
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
@@ -481,15 +482,19 @@ class Device(object):
     output_dict = self.make_result_dict(output, outputs_format)
     # Check only params which are small, i.e. not the whole gparams.
     RelevantAttribs = ["cost", "gradient_norm"]
-    values = {attrib: numpy.asarray(output_dict[attrib])
-              for attrib in RelevantAttribs
-              if attrib in output_dict}
+    def is_relevant_attrib(k):
+      for rk in RelevantAttribs:
+        if k == rk or k.startswith(rk + ":"):
+          return True
+      return False
+    values = {k: numpy.asarray(v)
+              for k, v in output_dict.items() if is_relevant_attrib(k)}
     for attrib, value in values.items():
       if not numpy.isfinite(value).all():
         return ", ".join(["%s = %s" % (k, v) for (k, v) in values.items()])
     return
 
-  def handle_model_broken(self, info):
+  def dump_model_broken_info(self, info):
     print >> log.v1, "Model broken: %s" % info
     try:
       dump_file_name = "model_broken_dump.pickle.log"
