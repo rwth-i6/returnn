@@ -579,7 +579,7 @@ class RecurrentUnitLayer(Layer):
         y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
         y_t = self.W_lm_out[y].reshape((index.shape[0]*index.shape[1],unit.n_in))
         h_e = T.exp(T.dot(outputs[0][::direction or 1], self.W_lm_in))
-        h_z = h_e / T.sum(h_e,axis=2,keepdims=True).reshape((index.shape[0]*index.shape[1],h_e.shape[1]))
+        h_z = (h_e / T.sum(h_e,axis=2,keepdims=True)).reshape((index.shape[0]*index.shape[1],h_e.shape[2]))
         #h_t = self.W_lm_out[T.argmax(T.dot(outputs[0][::direction or 1], self.W_lm_in), axis=2)].reshape((index.shape[0],index.shape[1],unit.n_in))
         #self.constraints += T.sum(T.sum(T.sqr(y_t[j] - h_t[j]),axis=1))
         self.constraints += -T.sum(T.log(h_z[j,y[j]]))
