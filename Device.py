@@ -463,10 +463,16 @@ class Device(object):
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
-    model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
-    if model_broken_info:
+    model_broken_short_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
+    if model_broken_short_info:
+      print >>log.v3, "Model looks broken:", model_broken_short_info
       if self.config.bool("dump_model_broken_info", False):
-        self.dump_model_broken_info(model_broken_info)
+        self.dump_model_broken_info(model_broken_short_info)
+      if self.config.bool("debug_shell_model_broken", False):
+        import better_exchook
+        better_exchook.debug_shell(locals(), globals())
+        print >>log.v1, "Exit now"
+        sys.exit(1)
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
@@ -495,7 +501,6 @@ class Device(object):
     return
 
   def dump_model_broken_info(self, info):
-    print >> log.v1, "Model broken: %s" % info
     try:
       dump_file_name = "model_broken_dump.pickle.log"
       if os.path.exists(dump_file_name):
