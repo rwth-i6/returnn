@@ -185,6 +185,10 @@ class Updater:
     else:
       grads = self.net_train_param_deltas
     i = theano.shared(numpy.float32(1))
+    i_t = i + 1.
+    beta1=0.9
+    beta2=0.999
+    a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
     for param in grads.keys():
       deltas = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
       if self.max_norm > 0:
@@ -460,32 +464,20 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.adam:
-        #def adam(loss, all_params, learning_rate=0.0002, beta1=0.1, beta2=0.001,
+        value = param.get_value(borrow=True)
         epsilon=1e-8
-        gamma=1-1e-8
-        beta1=0.1
-        beta2=0.001
+        m_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
 
-        i_t = i + 1.
-        fix1 = 1. - (1. - beta1)**i_t
-        fix2 = 1. - (1. - beta2)**i_t
-        beta1_t = 1-(1-beta1)*gamma**(i_t-1)   # ADDED
-        learning_rate_t = self.learning_rate_var * (T.sqrt(fix2) / fix1)
+        m_t = beta1*m_prev + (1-beta1)*deltas
+        v_t = beta2*v_prev + (1-beta2)*deltas**2
+        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
 
-        m = theano.shared(
-            numpy.zeros(param.get_value().shape, dtype=theano.config.floatX))
-        v = theano.shared(
-            numpy.zeros(param.get_value().shape, dtype=theano.config.floatX))
-
-        m_t = (beta1_t * deltas) + ((1. - beta1_t) * m) # CHANGED from b_t to use beta1_t
-        v_t = (beta2 * deltas**2) + ((1. - beta2) * v)
-        g_t = m_t / (T.sqrt(v_t) + epsilon)
-        param_i_t = param - (learning_rate_t * g_t)
-
-        updates.append((m, m_t))
-        updates.append((v, v_t))
-        updates.append((param, param_i_t) )
-        return updates
+        updates.append((m_prev, m_t))
+        updates.append((v_prev, v_t))
+        updates.append((param, param - step))
 
       elif self.adagrad:
         epsilon = 1e-6
@@ -516,7 +508,7 @@ class Updater:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))
     updates.extend([(p, p + upd[p]) for p in upd if upd[p]])
-    updates.append((i, i+1))
+    updates.append((i, i_t))
     if self.adasecant:
       updates.append((step, step + 1))
     #for u in updates:

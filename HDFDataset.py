@@ -46,8 +46,12 @@ class HDFDataset(CachedDataset):
     if 'times' in fin:
       self.timestamps.extend(fin[attr_times][...].tolist())
     seq_lengths = fin[attr_seqLengths][...]
+    if 'targets' in fin:
+      self.target_keys = fin['targets/labels'].keys()
+    else:
+      self.target_keys = ['classes']
     if len(seq_lengths.shape) == 1:
-      seq_lengths = numpy.array(zip(seq_lengths.tolist(), seq_lengths.tolist()))
+      seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in xrange(len(self.target_keys)+1)]))
 
     seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
     if not self._seq_start:
@@ -96,7 +100,6 @@ class HDFDataset(CachedDataset):
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
-      self.target_keys = fin['targets/labels'].keys()
       for name in fin['targets/data']:
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
         self.data_dtype[name] = str(fin['targets/data'][name].dtype)
@@ -105,7 +108,6 @@ class HDFDataset(CachedDataset):
         else:
           self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
     else:
-      self.target_keys = ['classes']
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
       self.data_dtype['classes'] = 'int32'
     self.data_dtype["data"] = fin['inputs'].dtype
