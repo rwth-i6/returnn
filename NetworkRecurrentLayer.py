@@ -160,6 +160,9 @@ class LSTMC(Unit):
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
 
+    # See OpLSTMCustom.LSTMCustomOp.
+    # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
+    # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     result = op(z[::-(2 * go_backwards - 1)],
                 outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
     return [ result[0], result[2].dimshuffle('x',0,1) ]

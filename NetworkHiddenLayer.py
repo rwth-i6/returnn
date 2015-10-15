@@ -1,5 +1,9 @@
 
+import theano
+import numpy
 from theano import tensor as T
+from theano.tensor.nnet import conv
+from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined
 from TheanoUtil import class_idx_seq_to_1_of_k
@@ -401,10 +405,6 @@ class InputBase(Layer):
     self.make_output(self.sources[0].W_in[0].dimshuffle(0,'x',1).repeat(self.index.shape[1],axis=1))
     self.set_attr('n_out', self.sources[0].W_in[0].get_value().shape[1])
 
-import theano
-from theano.tensor.nnet import conv
-import numpy
-
 class ConvPoolLayer(ForwardLayer):
   layer_class = "convpool"
 
@@ -559,3 +559,106 @@ class LossLayer(Layer):
       self.error = T.sum(T.sqr(y_m[i] - y.reshape(y_m.shape)[i]))
     else:
       raise NotImplementedError()
+
+############################################ START HERE #####################################################
+class ConvLayer(ForwardLayer):
+  layer_class = "conv_layer"
+
+  def __init__(self, dimension_row, dimension_col, n_features, filter_row, filter_col,
+               pool_size=(2, 2), border_mode='valid', ignore_border=True, **kwargs):
+    kwargs['n_out'] = filter_row * filter_col
+    super(ConvLayer, self).__init__(**kwargs)
+    # self.set_attr('batch_size', batch_size)  # batch size of training per layerConvOp
+    self.set_attr('dimension_row', dimension_row)  # image height
+    self.set_attr('dimension_col', dimension_col)  # image width
+    self.set_attr('n_features', n_features)  # number of filter feature maps
+    self.set_attr('filter_row', filter_row)  # filter height
+    self.set_attr('filter_col', filter_col)  # filter width
+    # self.set_attr('stack_size', stack_size)  # number of color channel (default is Gray scale) for the input layer and the number of features/filters from previous layer for the convolution layer
+    self.set_attr('pool_size', pool_size)  # max pooling size (default is 2 * 2)
+    self.set_attr('border_mode', border_mode)  # mode of calculation the beginning border (default is valid, there is another choice [i.e. full]
+    self.set_attr('ignore_border', ignore_border)  # mode of calculation of the ending border (default is True)
+
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    assert n_in == dimension_row * dimension_col
+
+    # print 's.attrs[\'sparse\']:', [s.attrs['sparse'] for s in self.sources]
+    # print 's.attrs[\'n_out\':]', [s.attrs['n_out'] for s in self.sources]
+    # print 's.output:', [s.output[0] for s in self.sources]
+    # print 's.name:', [s.name for s in self.sources]
+    # print 's.act:', [s.act for s in self.sources]
+    #
+    # theano.printing.Print("theano:")(self.sources[0].output[0].shape)
+    # print 'concatenate:', T.concatenate([s.output for s in self.sources], axis = -1)
+    # print 'dimshuffle:', T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(0,1,2,'x')
+    # print 'output shape:', [s.output[0].shape[0] for s in self.sources]
+
+    # (batch, stack, row, col) => (self.sources[0].shape[0], self.sources[0].shape[1],dimension_row, dimension_col)
+    self.input = T.concatenate([s.output for s in self.sources], axis=-1).dimshuffle(0,1,2,'x')
+
+    print self.index.shape[0], self.index.shape[1], (self.index.shape[0] == self.sources[0].output[0].shape[0])
+    stack_size = self.sources[0].output[0].shape[0]  # it's time from input (3D tensor -> (time, batch, feature)
+    print stack_size
+
+    # theano.printing.Print("test:", self.index.shape[0])
+    self.batch = self.sources[0].output[0].shape[1]
+    self.input = self.input.reshape((self.batch, stack_size, dimension_row, dimension_col))
+
+    # x = T.matrix('x')
+    # self.input = x.reshape((batch_size, stack_size, filter_row, filter_col))
+
+    print self.input[0], self.input[1], self.input[2], self.input[3]
+    self.filter_shape = (n_features, stack_size, filter_row, filter_col)
+    print self.filter_shape
+    # assert self.image_shape[1] == self.filter_shape[1]
+
+    self.W = self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size)
+    print self.W
+    self.b = self._create_bias(n_features=n_features)
+    print self.b
+
+    self.conv_out = conv.conv2d(
+      input=self.input,
+      filters=self.W,
+      filter_shape=self.filter_shape,
+      border_mode=border_mode,
+      image_shape=(None, stack_size, None, None)
+    )
+    print self.conv_out
+
+    self.pooled_out = downsample.max_pool_2d(
+      input=self.conv_out,
+      ds=pool_size,
+      ignore_border=ignore_border
+    )
+
+    print self.pooled_out
+
+    self.output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+    print self.output
+    print 'end'
+    self.make_output(self.output)
+
+  def _create_weights(self, filter_shape, pool_size):
+    rng = numpy.random.RandomState(23455)
+    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+
+    W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+    return theano.shared(
+      numpy.asarray(
+        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+        dtype=theano.config.floatX
+      ),
+      borrow=True
+    )
+
+  def _create_bias(self, n_features):
+    return theano.shared(
+      numpy.zeros(
+        (n_features,),
+        dtype=theano.config.floatX
+      ),
+      borrow=True
+    )
+############################################# END HERE ######################################################

@@ -11,6 +11,8 @@ import signal
 import time
 import pickle
 from thread import start_new_thread
+import Debug
+
 
 
 def have_gpu():
@@ -66,6 +68,7 @@ def get_device_attributes():
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
+                 "GeForce GT 540M" : (2688, 837, 2 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
@@ -261,7 +264,7 @@ class Device(object):
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       gparams = []
       exclude = []
-      self.gradients = {}
+      self.gradients = {}; ":type: dict[theano.SharedVariable,theano.Variable]"
       if config.bool('debug_gradient_norm', False):
         # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
         # See self.fast_check_model_is_broken_from_result().
@@ -287,6 +290,8 @@ class Device(object):
         gparams.append(theano.Out(gparam, borrow = True))
         if self.gradient_norm is not None:
           self.gradient_norm += T.sum(gparam ** 2)
+    else:
+      self.gradients = None
     if log.verbose[4]: progress_bar()
 
     # initialize functions
@@ -339,7 +344,7 @@ class Device(object):
         gparams_outputs_format = []
         for param in self.trainnet.train_params_vars:
           gparams_outputs_format += ["gparam:%s" % param.name]
-        assert len(gparams_outputs_format) == gparams
+        assert len(gparams_outputs_format) == len(gparams)
         self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
@@ -428,7 +433,7 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    batch_dim = self.y["data"].get_value().shape[1]
+    batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if task == "train" or task == "theano_graph" or task == "eval":
       func = self.tester if task == "eval" else self.trainer
@@ -437,6 +442,9 @@ class Device(object):
       while batch_end < batch_dim:
         batch_start = batch_end
         batch_end = min(batch_start + block_size, batch_dim)
+        if self.config.bool("debug_shell_first_compute", False):
+          print >>log.v1, "debug_shell_first_compute"
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
         block_output = func(batch_start, batch_end)
         if not output:
           output = block_output
@@ -463,9 +471,14 @@ class Device(object):
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
-    #model_broken_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
-    #if model_broken_info:
-    #  self.handle_model_broken(model_broken_info)
+    model_broken_short_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
+    if model_broken_short_info:
+      print >>log.v3, "Model looks broken:", model_broken_short_info
+      if self.config.bool("dump_model_broken_info", False):
+        self.dump_model_broken_info(model_broken_short_info)
+      if self.config.bool("debug_shell_model_broken", False):
+        print >>log.v1, "debug_shell_model_broken"
+        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
@@ -481,16 +494,19 @@ class Device(object):
     output_dict = self.make_result_dict(output, outputs_format)
     # Check only params which are small, i.e. not the whole gparams.
     RelevantAttribs = ["cost", "gradient_norm"]
-    values = {attrib: numpy.asarray(output_dict[attrib])
-              for attrib in RelevantAttribs
-              if attrib in output_dict}
+    def is_relevant_attrib(k):
+      for rk in RelevantAttribs:
+        if k == rk or k.startswith(rk + ":"):
+          return True
+      return False
+    values = {k: numpy.asarray(v)
+              for k, v in output_dict.items() if is_relevant_attrib(k)}
     for attrib, value in values.items():
       if not numpy.isfinite(value).all():
         return ", ".join(["%s = %s" % (k, v) for (k, v) in values.items()])
     return
 
-  def handle_model_broken(self, info):
-    print >> log.v1, "Model broken: %s" % info
+  def dump_model_broken_info(self, info):
     try:
       dump_file_name = "model_broken_dump.pickle.log"
       if os.path.exists(dump_file_name):
@@ -982,7 +998,8 @@ class Device(object):
       if not self.proc.is_alive():
         print >> log.v4, "Dev %s proc not alive anymore" % self.name
         return None, None
-      timeout = 60 * 60  # 60 minutes execution timeout
+      # 60 minutes execution timeout by default
+      timeout = self.config.float("device_timeout", 60 * 60)
       while timeout > 0:
         try:
           if self.output_queue.poll(1):
