@@ -11,6 +11,7 @@ import signal
 import time
 import pickle
 from thread import start_new_thread
+import Debug
 
 
 def have_gpu():
@@ -439,6 +440,9 @@ class Device(object):
       while batch_end < batch_dim:
         batch_start = batch_end
         batch_end = min(batch_start + block_size, batch_dim)
+        if self.config.bool("debug_shell_first_compute", False):
+          print >>log.v1, "debug_shell_first_compute"
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
         block_output = func(batch_start, batch_end)
         if not output:
           output = block_output
@@ -471,10 +475,8 @@ class Device(object):
       if self.config.bool("dump_model_broken_info", False):
         self.dump_model_broken_info(model_broken_short_info)
       if self.config.bool("debug_shell_model_broken", False):
-        import better_exchook
-        better_exchook.debug_shell(locals(), globals())
-        print >>log.v1, "Exit now"
-        sys.exit(1)
+        print >>log.v1, "debug_shell_model_broken"
+        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
