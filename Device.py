@@ -341,7 +341,7 @@ class Device(object):
         gparams_outputs_format = []
         for param in self.trainnet.train_params_vars:
           gparams_outputs_format += ["gparam:%s" % param.name]
-        assert len(gparams_outputs_format) == gparams
+        assert len(gparams_outputs_format) == len(gparams)
         self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
