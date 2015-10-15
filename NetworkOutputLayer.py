@@ -114,6 +114,7 @@ class OutputLayer(Layer):
     else:
       raise NotImplementedError()
 
+
 class FramewiseOutputLayer(OutputLayer):
   def __init__(self, **kwargs):
     super(FramewiseOutputLayer, self).__init__(**kwargs)
@@ -187,6 +188,27 @@ class FramewiseOutputLayer(OutputLayer):
         #return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
     else:
       assert False, "unknown loss: %s" % self.loss
+
+
+class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer with self.W_lm_in
+  layer_class = "decoder"
+
+  def __init__(self, **kwargs):
+    kwargs['loss'] = 'ce'
+    super(DecoderOutputLayer, self).__init__(**kwargs)
+
+  def initialize(self):
+    output = 0
+    for s in self.sources:
+      output += T.dot(s.output,s.W_lm_in)
+    self.params = {}
+    self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
+    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
+    elif self.loss == 'sse': self.p_y_given_x = self.y_m
+    elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
+    else: assert False, "invalid loss: " + self.loss
+    self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
+    self.output = self.p_y_given_x.reshape(self.output.shape)
 
 
 class SequenceOutputLayer(OutputLayer):
