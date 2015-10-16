@@ -191,7 +191,7 @@ class FramewiseOutputLayer(OutputLayer):
 
 
 class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer with self.W_lm_in
-  layer_class = "decoder"
+#  layer_class = "decoder"
 
   def __init__(self, **kwargs):
     kwargs['loss'] = 'ce'
