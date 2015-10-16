@@ -303,9 +303,14 @@ class Engine:
                        (self.start_epoch, self.final_epoch)
 
     self.check_last_epoch()
+    self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
     epoch = self.start_epoch # Epochs start at 1.
     while epoch <= final_epoch:
+      if self.max_seq_length != sys.maxint:
+        if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
+          print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
+        self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       self.train_data.init_seq_order(epoch=epoch)
       self.epoch = epoch
@@ -315,9 +320,6 @@ class Engine:
 
       self.init_train_epoch()
       self.train_epoch()
-
-      if self.max_seq_length != sys.maxint:
-        self.max_seq_length += self.inc_seq_length
 
       if self.stop_train_after_epoch_request:
         self.stop_train_after_epoch_request = False
