@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms
+from Util import hms, hdf5_dimension
 import errno
 import time
 
@@ -100,7 +100,7 @@ class Engine:
     elif load_model_epoch_filename:
       # Don't use the model epoch as the start epoch in training.
       # We use this as an import for training.
-      epoch_model = (None, load_model_epoch_filename)
+      epoch_model = (hdf5_dimension(load_model_epoch_filename, 'epoch'), load_model_epoch_filename)
 
     else:
       epoch_model = (None, None)
@@ -293,13 +293,15 @@ class Engine:
     self.training_finished = False
 
     assert self.start_epoch >= 1, "Epochs start at 1."
-    if self.start_epoch > self.final_epoch:
+    final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxint
+    if self.start_epoch > final_epoch:
       print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
                        (self.start_epoch, self.final_epoch)
 
     self.check_last_epoch()
 
-    for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
+    epoch = self.start_epoch # Epochs start at 1.
+    while epoch <= final_epoch:
       # In case of random seq ordering, we want to reorder each epoch.
       self.train_data.init_seq_order(epoch=epoch)
       self.epoch = epoch
@@ -313,6 +315,8 @@ class Engine:
       if self.stop_train_after_epoch_request:
         self.stop_train_after_epoch_request = False
         break
+
+      epoch += 1
 
     if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
       assert self.epoch

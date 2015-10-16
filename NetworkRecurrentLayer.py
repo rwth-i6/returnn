@@ -572,7 +572,7 @@ class RecurrentUnitLayer(Layer):
       if not isinstance(outputs, list):
         outputs = [outputs]
 
-      if self.attrs['lm'] and self.train_flag:
+      if False and self.attrs['lm'] and self.train_flag:
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
         j = (index.flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C
