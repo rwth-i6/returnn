@@ -79,6 +79,7 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
+    self.i = theano.shared(numpy.float32(0))
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
@@ -174,6 +175,7 @@ class Updater:
     return param
 
   def reset(self):
+    self.i.set_value(numpy.float32(0))
     return # this needs to be done smarter
     for param in self.params:
       param.set_value(self.params[param])
@@ -190,7 +192,7 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
-    i = theano.shared(numpy.float32(0))
+    i = self.i
     i_t = i + 1.
     beta1=0.9
     beta2=0.999
