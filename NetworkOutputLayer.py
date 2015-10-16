@@ -196,6 +196,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
   def __init__(self, **kwargs):
     kwargs['loss'] = 'ce'
     super(DecoderOutputLayer, self).__init__(**kwargs)
+    self.set_attr('loss', 'decode')
 
   def initialize(self):
     output = 0
@@ -203,10 +204,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
       output += T.dot(s.output,s.W_lm_in)
     self.params = {}
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
-    elif self.loss == 'sse': self.p_y_given_x = self.y_m
-    elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
-    else: assert False, "invalid loss: " + self.loss
+    self.p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
 

@@ -21,6 +21,7 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
+      "start_step": config.float('start_step', 0),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
@@ -35,11 +36,12 @@ class Updater:
     kwargs.setdefault('adasecant', False)
     kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
+    kwargs.setdefault('start_step', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, start_step):
     """
     :type momentum: float
     :type gradient_clip: float
@@ -54,6 +56,7 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.start_step = start_step
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.params = {}
@@ -79,7 +82,7 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
-    self.i = theano.shared(numpy.float32(0))
+    self.i = theano.shared(numpy.float32(self.start_step))
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
