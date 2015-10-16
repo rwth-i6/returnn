@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms
+from Util import hms, hdf5_dimension
 import errno
 import time
 
@@ -100,7 +100,7 @@ class Engine:
     elif load_model_epoch_filename:
       # Don't use the model epoch as the start epoch in training.
       # We use this as an import for training.
-      epoch_model = (None, load_model_epoch_filename)
+      epoch_model = (hdf5_dimension(load_model_epoch_filename, 'epoch'), load_model_epoch_filename)
 
     else:
       epoch_model = (None, None)
@@ -176,6 +176,10 @@ class Engine:
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
     self.share_batches = config.bool('share_batches', False)
     self.batch_variance = config.float('batch_variance', 0.0)
+    self.max_seq_length = config.float('max_seq_length', 0)
+    self.inc_seq_length = config.float('inc_seq_length', 0)
+    if self.max_seq_length == 0:
+      self.max_seq_length = sys.maxint
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -293,13 +297,20 @@ class Engine:
     self.training_finished = False
 
     assert self.start_epoch >= 1, "Epochs start at 1."
-    if self.start_epoch > self.final_epoch:
+    final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxint
+    if self.start_epoch > final_epoch:
       print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
                        (self.start_epoch, self.final_epoch)
 
     self.check_last_epoch()
+    self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
-    for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
+    epoch = self.start_epoch # Epochs start at 1.
+    while epoch <= final_epoch:
+      if self.max_seq_length != sys.maxint:
+        if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
+          print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
+        self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       self.train_data.init_seq_order(epoch=epoch)
       self.epoch = epoch
@@ -313,6 +324,8 @@ class Engine:
       if self.stop_train_after_epoch_request:
         self.stop_train_after_epoch_request = False
         break
+
+      epoch += 1
 
     if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
       assert self.epoch
@@ -398,6 +411,7 @@ class Engine:
     train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                      batch_size=self.batch_size,
                                                      max_seqs=self.max_seqs,
+                                                     max_seq_length=int(self.max_seq_length),
                                                      batch_variance=self.batch_variance)
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
@@ -436,7 +450,7 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
+      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs, max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()

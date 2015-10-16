@@ -21,6 +21,7 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
+      "start_step": config.float('start_step', 0),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
@@ -35,11 +36,12 @@ class Updater:
     kwargs.setdefault('adasecant', False)
     kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
+    kwargs.setdefault('start_step', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, start_step):
     """
     :type momentum: float
     :type gradient_clip: float
@@ -54,6 +56,7 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.start_step = start_step
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.params = {}
@@ -79,6 +82,7 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
+    self.i = theano.shared(numpy.float32(self.start_step))
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
@@ -158,16 +162,23 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name = "", broadcastable = None, reset = True):
+  def var(self, value, name = "", broadcastable = None, reset = False):
     if broadcastable:
-      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name, broadcastable=broadcastable)
+      if name:
+        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name, broadcastable=broadcastable)
+      else:
+        param = theano.shared(value = numpy.asarray(value).astype('float32'), broadcastable=broadcastable)
     else:
-      param = theano.shared(value = numpy.asarray(value).astype('float32'), name = name)
+      if name:
+        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name)
+      else:
+        param = theano.shared(value = numpy.asarray(value).astype('float32'))
     if reset:
       self.params[param] = value
     return param
 
   def reset(self):
+    self.i.set_value(numpy.float32(0))
     return # this needs to be done smarter
     for param in self.params:
       param.set_value(self.params[param])
@@ -184,7 +195,7 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
-    i = theano.shared(numpy.float32(1))
+    i = self.i
     i_t = i + 1.
     beta1=0.9
     beta2=0.999
@@ -207,14 +218,14 @@ class Updater:
         # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
         self.use_adagrad = False
         self.use_adadelta = False #True #True
-        self.skip_nan_inf = True
-        self.start_var_reduction = -1
+        self.skip_nan_inf = False
+        self.start_var_reduction = 0
         self.use_corrected_grad = True  #True
-        self.decay = 0.9 #0.95
+        self.decay = 0.95
         ### default
         self.delta_clip = 50.0
-        self.outlier_detection = False # True #True
-        self.gamma_clip = None #1.8
+        self.outlier_detection = True
+        self.gamma_clip = 1.8
         ### aggressive
         #self.delta_clip = None
         #self.outlier_detection = False
@@ -224,16 +235,16 @@ class Updater:
         #self.outlier_detection = True #False
         #self.gamma_clip = 1.8 #None #1.8
 
-        if self.skip_nan_inf:
+        #if self.skip_nan_inf:
           #If norm of the gradients of a parameter is inf or nan don't update that parameter
           #That might be useful for RNNs.
-          grads[param] = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
+          #grads[param] = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
 
-        grads[param] = T.unbroadcast(grads[param], -1)
+        #grads[param] = T.unbroadcast(grads[param], -1)
 
         #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
 
-        grads[param].name = "grad_%s" % param.name
+        #grads[param].name = "grad_%s" % param.name
         mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
         slow_constant = 2.1
         #mean_corrected_grad = self.var(param.get_value() * 0 + eps, name="mean_corrected_grad_%s" % param.name)
@@ -268,18 +279,18 @@ class Updater:
         # mean_square_dx := E[(\Delta x)^2]_{t-1}
         mean_square_dx = self.var(value = param.get_value() * 0., name="msd_" + param.name, broadcastable=param.broadcastable)
         if self.use_corrected_grad:
-            old_grad = self.var(value = param.get_value() * 0. + eps, broadcastable=param.broadcastable)
+            old_grad = self.var(value = param.get_value() * 0. + eps, name="old_grad_" + param.name, broadcastable=param.broadcastable)
 
         #The uncorrected gradient of previous of the previous update:
-        old_plain_grad = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
-        mean_curvature = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
-        mean_curvature_sqr = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable)
+        old_plain_grad = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable, name="old_plain_grad_" + param.name)
+        mean_curvature = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable, name="mean_curvature_" + param.name)
+        mean_curvature_sqr = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable, name="mean_curvature_sqr_" + param.name)
 
         # Initialize the E[\Delta]_{t-1}
-        mean_dx = self.var(param.get_value() * 0., broadcastable=param.broadcastable)
+        mean_dx = self.var(param.get_value() * 0., broadcastable=param.broadcastable, name="mean_dx_" + param.name)
 
         # Block-wise normalize the gradient:
-        norm_grad = grads[param]
+        norm_grad = deltas #grads[param]
 
         #For the first time-step, assume that delta_x_t := norm_grad
         cond = T.eq(step, 0)
@@ -375,13 +386,14 @@ class Updater:
         nc_sq_ave = new_curvature_sqr_ave
 
         epsilon = self.learning_rate_var #lr_scalers.get(param, 1.) * self.learning_rate_var
-        scaled_lr = self.var(1) #lr_scalers.get(param, 1.) * theano.shared(1.0, dtype = theano.config.floatX)
+        scaled_lr = 1.0 #self.var(1) #lr_scalers.get(param, 1.) * theano.shared(1.0, dtype = theano.config.floatX)
         rms_dx_tm1 = T.sqrt(msdx + epsilon)
 
         rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
 
         #This is where the update step is being defined
-        delta_x_t = - scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
+        #delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
+        delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
         delta_x_t.name = "delta_x_t_" + param.name
 
         # This part seems to be necessary for only RNNs
@@ -436,7 +448,8 @@ class Updater:
             (delta_x_t * cur_curvature) * (1 / taus_x_t)
         )
 
-        upd[param] += delta_x_t
+        upd[param] = delta_x_t
+        #upd[param] = - self.learning_rate_var * deltas
 
         # Apply updates
         updates.append((mean_square_grad, new_mean_squared_grad))
@@ -477,7 +490,8 @@ class Updater:
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
-        updates.append((param, param - step))
+        #updates.append((param, param - step))
+        upd[param] += -step
 
       elif self.adagrad:
         epsilon = 1e-6

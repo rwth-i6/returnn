@@ -207,6 +207,9 @@ class ObjAsDict:
     except AttributeError as e:
       raise KeyError(e)
 
+  def items(self):
+    return vars(self.__obj).items()
+
 
 class DictAsObj:
   def __init__(self, dikt):

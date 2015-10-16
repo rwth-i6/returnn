@@ -188,3 +188,27 @@ def initCudaNotInMainProcCheck():
     use_original(device=device, **kwargs)
   cuda.use = use_wrapped
   cuda.use.device_number = None
+
+
+def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
+  from Log import log
+  print >>log.v1, "Debug shell:"
+  from Util import ObjAsDict
+  import DebugHelpers
+  user_global_ns_new = dict(ObjAsDict(DebugHelpers).items())
+  if user_global_ns:
+    user_global_ns_new.update(user_global_ns)  # may overwrite vars from DebugHelpers
+  user_global_ns_new["debug"] = DebugHelpers  # make this available always
+  print "Available debug functions/utils (via DebugHelpers):"
+  for k, v in sorted(vars(DebugHelpers).items()):
+    if k[:1] == "_": continue
+    print "  %s (%s)" % (k, type(v))
+  print "Also DebugHelpers available as 'debug'."
+  if not user_ns:
+    user_ns = {}
+  import better_exchook
+  better_exchook.debug_shell(user_ns, user_global_ns_new)
+  if exit_afterwards:
+    print >>log.v1, "Debug shell exit. Exit now."
+    sys.exit(1)
+

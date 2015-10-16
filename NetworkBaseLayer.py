@@ -278,7 +278,7 @@ class SourceLayer(Container):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, target=None, sparse = False, carry = False, cost_scale=1.0, **kwargs):
+  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, target=None, sparse = False, carry=False, sparse_filtering=False, cost_scale=1.0, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -295,6 +295,7 @@ class Layer(Container):
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
+    self.set_attr('sparse_filtering', sparse_filtering)
     self.set_attr('carry', carry)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
@@ -427,7 +428,12 @@ class Layer(Container):
       self.output = (self.output - T.mean(self.output,axis=1,keepdims=True)) / T.std(self.output,axis=1,keepdims=True)
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
-
+    if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
+      fs = T.sqrt(self.output ** 2 + 1e-8)              # numerical stability
+      l2fs = T.sqrt(T.sum(fs ** 2, axis=1))   # l2 norm of row
+      nfs = fs / l2fs.dimshuffle(0, 'x')      # normalize rows
+      l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
+      self.output = nfs / l2fn.dimshuffle('x', 0)   # normalize columns
   def to_json(self):
     attrs = super(Layer, self).to_json()
     attrs['class'] = self.layer_class

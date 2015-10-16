@@ -7,7 +7,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer
+from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer, DecoderOutputLayer
 from Log import log
 
 class LayerNetwork(object):
@@ -219,7 +219,7 @@ class LayerNetwork(object):
       params["mask"] = mask # overwrite
       params['index'] = index
       params['y_in'] = network.y
-      if cl == 'softmax':
+      if cl == 'softmax' or cl == 'decoder':
         if not 'target' in params:
           params['target'] = target
         params['index'] = network.j[target] #output_index
@@ -336,7 +336,7 @@ class LayerNetwork(object):
       if 'target' in model[layer_name].attrs:
         index = network.j[model[layer_name].attrs['target']]
       cl = model[layer_name].attrs['class']
-      if cl == 'softmax' or cl == "lstm_softmax":
+      if cl == 'softmax' or cl == "decoder":
         params = { 'dropout' : 0.0,
                    'name' : 'output',
                    'mask' : mask,
@@ -373,7 +373,7 @@ class LayerNetwork(object):
           pass
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect", 'recurrent_transform']: # uugh i hate this so much
+        for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect", 'recurrent_transform', 'sparse_filtering']: # uugh i hate this so much
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:
@@ -428,6 +428,8 @@ class LayerNetwork(object):
       layer_class = SequenceOutputLayer
     elif self.loss == 'cedec':
       layer_class = LstmOutputLayer
+    elif self.loss == 'decode':
+      layer_class = DecoderOutputLayer
     else:
       layer_class = FramewiseOutputLayer
 

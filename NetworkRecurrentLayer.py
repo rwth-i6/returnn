@@ -160,6 +160,9 @@ class LSTMC(Unit):
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
 
+    # See OpLSTMCustom.LSTMCustomOp.
+    # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
+    # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     result = op(z[::-(2 * go_backwards - 1)],
                 outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
     return [ result[0], result[2].dimshuffle('x',0,1) ]
@@ -269,7 +272,7 @@ class RecurrentUnitLayer(Layer):
     if unit == 'lstm':
       if str(theano.config.device).startswith('cpu'):
         unit = 'lstme'
-      elif recurrent_transform == 'none':
+      elif recurrent_transform == 'none' and not lm:
         unit = 'lstmp'
       else:
         unit = 'lstmc'
@@ -296,7 +299,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     self.set_attr('attention_sigma', attention_sigma)
-    if lm and recurrent_transform != 'none': # TODO hack
+    if lm: # TODO hack
       recurrent_transform += "_lm"
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
@@ -569,7 +572,7 @@ class RecurrentUnitLayer(Layer):
       if not isinstance(outputs, list):
         outputs = [outputs]
 
-      if self.attrs['lm'] and self.train_flag:
+      if False and self.attrs['lm'] and self.train_flag:
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
         j = (index.flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C

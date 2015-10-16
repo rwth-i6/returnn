@@ -11,6 +11,8 @@ import signal
 import time
 import pickle
 from thread import start_new_thread
+import Debug
+
 
 
 def have_gpu():
@@ -66,6 +68,7 @@ def get_device_attributes():
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
+                 "GeForce GT 540M" : (2688, 837, 2 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
@@ -341,7 +344,7 @@ class Device(object):
         gparams_outputs_format = []
         for param in self.trainnet.train_params_vars:
           gparams_outputs_format += ["gparam:%s" % param.name]
-        assert len(gparams_outputs_format) == gparams
+        assert len(gparams_outputs_format) == len(gparams)
         self.train_outputs_format += gparams_outputs_format
         outputs += gparams
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
@@ -439,6 +442,9 @@ class Device(object):
       while batch_end < batch_dim:
         batch_start = batch_end
         batch_end = min(batch_start + block_size, batch_dim)
+        if self.config.bool("debug_shell_first_compute", False):
+          print >>log.v1, "debug_shell_first_compute"
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
         block_output = func(batch_start, batch_end)
         if not output:
           output = block_output
@@ -471,10 +477,8 @@ class Device(object):
       if self.config.bool("dump_model_broken_info", False):
         self.dump_model_broken_info(model_broken_short_info)
       if self.config.bool("debug_shell_model_broken", False):
-        import better_exchook
-        better_exchook.debug_shell(locals(), globals())
-        print >>log.v1, "Exit now"
-        sys.exit(1)
+        print >>log.v1, "debug_shell_model_broken"
+        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
