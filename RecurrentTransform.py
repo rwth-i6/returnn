@@ -388,7 +388,6 @@ class AttentionTimeGauss(RecurrentTransformBase):
     return z_re, {self.t: t}
 
 
-
 def get_dummy_recurrent_transform(recurrent_transform_name):
   """
   :type recurrent_transform_name: str
