@@ -55,3 +55,21 @@ def test_NumbersDict_eq_1():
   assert_equal(r1.dict, {'classes': True, 'data': True})
   assert_equal(r1, NumbersDict({'classes': True, 'data': True}))
   assert_true(r2)
+
+
+def test_collect_class_init_kwargs():
+  class A(object):
+    def __init__(self, a):
+      pass
+  class B(A):
+    def __init__(self, b, **kwargs):
+      super(B, self).__init__(**kwargs)
+      pass
+  class C(B):
+    def __init__(self, b, c, **kwargs):
+      super(C, self).__init__(**kwargs)
+      pass
+
+  kwargs = collect_class_init_kwargs(C)
+  print kwargs
+  assert_equal(sorted(kwargs), ["a", "b", "c"])
