@@ -8,6 +8,7 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer, DecoderOutputLayer
+from Util import collect_class_init_kwargs
 from Log import log
 
 class LayerNetwork(object):
@@ -373,7 +374,8 @@ class LayerNetwork(object):
           pass
         params['y_in'] = network.y
         layer_class = get_layer_class(cl)
-        for p in ['carry', 'depth', 'truncation', 'projection', 'reverse', 'sharpgates', 'sampling', 'carry_time', 'unit', 'direction', 'psize', 'pact', 'pdepth', 'attention', 'L1', 'L2', 'lm', 'dual', 'acts', 'acth', 'filename', 'dset', 'entropy_weight', "droplm", "dropconnect", 'recurrent_transform', 'sparse_filtering']: # uugh i hate this so much
+        for p in collect_class_init_kwargs(layer_class):
+          if p in params: continue  # don't overwrite existing
           if p in model[layer_name].attrs.keys():
             params[p] = model[layer_name].attrs[p]
         if 'encoder' in model[layer_name].attrs:

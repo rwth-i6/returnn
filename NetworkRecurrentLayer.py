@@ -269,7 +269,7 @@ class RecurrentUnitLayer(Layer):
                depth = 1,
                **kwargs):
     unit_given = unit
-    if unit == 'lstm':
+    if unit == 'lstm':  # auto selection
       if str(theano.config.device).startswith('cpu'):
         unit = 'lstme'
       elif recurrent_transform == 'none' and not lm:
@@ -295,7 +295,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('lm', lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
-    self.set_attr('attention', attention.encode("utf8"))
+    self.set_attr('attention', attention.encode("utf8") if attention else None)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     self.set_attr('attention_sigma', attention_sigma)
@@ -400,6 +400,8 @@ class RecurrentUnitLayer(Layer):
       connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
       non_sequences += [connectmask, connectmass]
 
+    if not attention:
+      attention = "none"
     if attention == "default":
       attention = "attention_dot"
     if attention == 'input': # attention is just a sequence dependent bias (lstmp compatible)
