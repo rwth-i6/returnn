@@ -57,7 +57,7 @@ class CachedDataset(Dataset):
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
 
     if self._seq_index == seq_index:
-      return
+      return False
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
@@ -96,6 +96,7 @@ class CachedDataset(Dataset):
         self.alloc_intervals[jdi][0] = seq_index[alloc_start_seq]
         self.alloc_intervals[jdi][1] = seq_index[alloc_end_seq]
     self._init_start_cache()
+    return True
 
   def _init_alloc_intervals(self):
     assert self.num_seqs > 0

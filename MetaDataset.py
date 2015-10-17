@@ -82,8 +82,7 @@ class MetaDataset(CachedDataset2):
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len)
     self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
 
-    for dataset in self.datasets.values():
-      dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered)
+    return any([dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered) for dataset in self.datasets.values()])
 
   def _load_seqs(self, start, end):
     for dataset in self.datasets.values():

@@ -234,6 +234,7 @@ class ExternSprintDataset(SprintDataset):
 
   def init_seq_order(self, epoch=None, seq_list=None):
     self.init_epoch(epoch=epoch, seq_list=seq_list)
+    return True
 
   @property
   def num_seqs(self):

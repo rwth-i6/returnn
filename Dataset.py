@@ -221,7 +221,7 @@ class Dataset(object):
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
-    pass
+    return False
 
   def initialize(self):
     """

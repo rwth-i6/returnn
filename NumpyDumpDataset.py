@@ -62,6 +62,7 @@ class NumpyDumpDataset(Dataset):
       self.seq_ordering = "default"
     self._seq_index = [i + self.start_seq for i in self.get_seq_order_for_epoch(epoch, self.num_seqs)]
     self.cached_seqs[:] = []
+    return True
 
   def _load_seqs(self, start, end):
     self._cleanup_old_seq_cache(start)
