@@ -171,6 +171,27 @@ class LM(RecurrentTransformBase):
     return z_re, { self.t : self.t + 1 }
 
 
+class NTM(RecurrentTransformBase):
+  """
+  Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
+  """
+
+  def create_vars(self):
+    layer = self.layer
+    base = layer.base
+    assert base, "attention networks are only defined for decoder networks"
+    unit = layer.unit
+
+    self.M = layer.add_param(theano.shared(value=numpy.zeros((layer.attrs['ntm_naddrs'],layer.attrs['ntm_ncells']), dtype='float32'), name="M"))
+    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+
+  def step(self, y_p):
+
+    
+
+    return z_re, {}
+
+
 class AttentionBase(RecurrentTransformBase):
   """
   Attention base class
