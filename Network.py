@@ -336,8 +336,11 @@ class LayerNetwork(object):
       if 'encoder' in model[layer_name].attrs:
         index = output_index
       if 'target' in model[layer_name].attrs:
+        network.j.setdefault(model[layer_name].attrs['target'], T.bmatrix('j_%s' % model[layer_name].attrs['target']))
+        if not model[layer_name].attrs['target'] in network.y:
+          network.y[model[layer_name].attrs['target']] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+          network.y[model[layer_name].attrs['target']].n_out = network.n_out[model[layer_name].attrs['target']][0]
         index = network.j[model[layer_name].attrs['target']]
-        network.j.setdefault(target, T.bmatrix('j_%s' % target))
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "decoder":
         params = { 'dropout' : 0.0,
