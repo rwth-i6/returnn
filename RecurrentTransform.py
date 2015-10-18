@@ -156,8 +156,8 @@ class LM(RecurrentTransformBase):
   name = "none_lm"
 
   def create_vars(self):
-    self.W_lm_in = self.add_param(self.layer.W_lm_in)
-    self.W_lm_out = self.add_param(self.layer.W_lm_out)
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
     self.t = self.add_state_var(T.zeros((self.layer.index.shape[1],), dtype="float32"), name="t")
 

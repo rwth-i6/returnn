@@ -384,11 +384,11 @@ class RecurrentUnitLayer(Layer):
         self.attrs['target'] = 'classes'
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
+      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name)
       self.add_param(self.W_lm_in)
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
+      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out"+self.name)
       self.add_param(self.W_lm_out)
       if self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
