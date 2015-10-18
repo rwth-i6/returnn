@@ -147,7 +147,7 @@ class TaskThread(threading.Thread):
     def epoch_norm_factor_for_result(self, key):
       if key.startswith("error:"):
         if self.network.loss in ('ctc', 'ce_ctc'):
-          assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
+          assert self.num_frames == self.data.get_num_codesteps()[1]  # Wrong otherwise. E.g. chunking.
           return 1.0 / self.data.num_running_chars
       # Default: Normalize by number of frames.
       #return 1.0 / self.num_frames["data"]

@@ -50,6 +50,7 @@ class HDFDataset(CachedDataset):
       self.target_keys = fin['targets/labels'].keys()
     else:
       self.target_keys = ['classes']
+
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in xrange(len(self.target_keys)+1)]))
 
@@ -68,7 +69,7 @@ class HDFDataset(CachedDataset):
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
     self._num_timesteps = sum([s[0] for s in self._seq_lengths])
-    self._num_codesteps = sum([s[1] for s in self._seq_lengths])
+    self._num_codesteps = [ sum([s[i] for s in self._seq_lengths]) for i in xrange(1,len(self._seq_lengths[0])) ]
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if len(fin['inputs'].shape) == 1:  # sparse
@@ -104,9 +105,9 @@ class HDFDataset(CachedDataset):
         tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
         self.data_dtype[name] = str(fin['targets/data'][name].dtype)
         if self.data_dtype[name] == 'int32':
-          self.targets[name] = numpy.zeros((self._num_codesteps,), dtype=theano.config.floatX) - 1
+          self.targets[name] = numpy.zeros((self._num_codesteps[self.target_keys.index(name)],), dtype=theano.config.floatX) - 1
         else:
-          self.targets[name] = numpy.zeros((self._num_codesteps,tdim), dtype=theano.config.floatX) - 1
+          self.targets[name] = numpy.zeros((self._num_codesteps[self.target_keys.index(name)],tdim), dtype=theano.config.floatX) - 1
     else:
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
       self.data_dtype['classes'] = 'int32'
