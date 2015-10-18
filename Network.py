@@ -209,6 +209,7 @@ class LayerNetwork(object):
       if 'encoder' in obj:
         index = output_index
       if 'target' in obj:
+        network.j.setdefault(target, T.bmatrix('j_%s' % target))
         index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
@@ -336,6 +337,7 @@ class LayerNetwork(object):
         index = output_index
       if 'target' in model[layer_name].attrs:
         index = network.j[model[layer_name].attrs['target']]
+        network.j.setdefault(target, T.bmatrix('j_%s' % target))
       cl = model[layer_name].attrs['class']
       if cl == 'softmax' or cl == "decoder":
         params = { 'dropout' : 0.0,
