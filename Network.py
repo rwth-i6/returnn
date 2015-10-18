@@ -267,7 +267,7 @@ class LayerNetwork(object):
     network.recurrent = False
 
     if 'target' in model['n_out'].attrs:
-        target = model['n_out'].attrs['target']
+      target = model['n_out'].attrs['target']
     dtype = 'int32' if not 'dtype' in model['n_out'].attrs else model['n_out'].attrs['dtype']
     if target != "null" and target not in network.y:
       assert target in network.n_out
@@ -391,6 +391,14 @@ class LayerNetwork(object):
       target = 'classes'
       if 'target' in model[layer_name].attrs:
         target = model[layer_name].attrs['target']
+      if target != "null" and target not in network.y:
+        assert target in network.n_out
+        if network.n_out[target][1] == 1:
+          ndim = 2
+        else:
+          ndim = 3
+        network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+        network.y[target].n_out = network.n_out[target][0]
       if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network.j[target])
