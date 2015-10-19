@@ -82,7 +82,7 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
-    self.i = theano.shared(numpy.float32(self.start_step))
+    self.i = theano.shared(numpy.float32(self.start_step), name="updater_i")
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
@@ -93,7 +93,7 @@ class Updater:
                                                                   dtype=theano.config.floatX))
                                      for p in network.train_params_vars}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
-    self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0))
+    self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
 
     if self.momentum > 0:

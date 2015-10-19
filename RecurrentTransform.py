@@ -138,8 +138,10 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def create_vars_for_custom(self):
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
+  def create_vars(self):
+    n_out = self.layer.attrs['n_out']
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    self.W_att_in = self.add_param(self.layer.create_random_uniform_weights(n=n_out, m=n_in, name="W_att_in"))
 
   def step(self, y_p):
     z_re = T.dot(y_p, self.W_att_in)
@@ -169,6 +171,34 @@ class LM(RecurrentTransformBase):
     z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
 
     return z_re, { self.t : self.t + 1 }
+
+
+class NTM(RecurrentTransformBase):
+  """
+  Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
+  """
+
+  def create_vars(self):
+    layer = self.layer
+
+    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M'))
+    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+    self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
+    self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
+    self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
+    self.nheads = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_nheads']), name="nheads"))
+    self.shift = self.add_input(theano.shared(
+      value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[np.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
+      name='shift') # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
+
+    for h in xrange(self.layer.attrs['ntm_nheads']):
+      self.heads
+
+  def step(self, y_p):
+    
+
+
+    return z_re, {}
 
 
 class AttentionBase(RecurrentTransformBase):
@@ -407,7 +437,6 @@ class AttentionTimeGauss(RecurrentTransformBase):
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
 
     return z_re, {self.t: t}
-
 
 
 def get_dummy_recurrent_transform(recurrent_transform_name):
