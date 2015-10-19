@@ -181,7 +181,7 @@ class NTM(RecurrentTransformBase):
   def create_vars(self):
     layer = self.layer
 
-    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M'))
+    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
     self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
     self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
     self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
@@ -189,7 +189,7 @@ class NTM(RecurrentTransformBase):
     self.nheads = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_nheads']), name="nheads"))
     self.shift = self.add_input(theano.shared(
       value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[np.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
-      name='shift') # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
+      name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
 
     for h in xrange(self.layer.attrs['ntm_nheads']):
       self.heads
