@@ -180,12 +180,19 @@ class NTM(RecurrentTransformBase):
 
   def create_vars(self):
     layer = self.layer
-    base = layer.base
-    assert base, "attention networks are only defined for decoder networks"
-    unit = layer.unit
 
-    self.M = layer.add_param(theano.shared(value=numpy.zeros((layer.attrs['ntm_naddrs'],layer.attrs['ntm_ncells']), dtype='float32'), name="M"))
+    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
     self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+    self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
+    self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
+    self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
+    self.nheads = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_nheads']), name="nheads"))
+    self.shift = self.add_input(theano.shared(
+      value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[np.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
+      name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
+
+    for h in xrange(self.layer.attrs['ntm_nheads']):
+      self.heads
 
   def step(self, y_p):
 
@@ -430,7 +437,6 @@ class AttentionTimeGauss(RecurrentTransformBase):
     z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
 
     return z_re, {self.t: t}
-
 
 
 def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):
