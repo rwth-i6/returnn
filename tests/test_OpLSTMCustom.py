@@ -5,6 +5,7 @@ import theano.tensor as T
 import numpy
 from Device import have_gpu
 import RecurrentTransform
+import theano.sandbox.cuda as cuda
 from Log import log
 import better_exchook
 
@@ -12,9 +13,9 @@ log.initialize(verbosity=[5])
 better_exchook.replace_traceback_format_tb()
 
 
-def get_attention(att_class):
+def get_attention(att_class, **kwargs):
   import OpLSTMCustom
-  recurrent_transform = RecurrentTransform.get_dummy_recurrent_transform(att_class.name)
+  recurrent_transform = RecurrentTransform.get_dummy_recurrent_transform(att_class.name, **kwargs)
   assert isinstance(recurrent_transform, att_class)
   f = OpLSTMCustom.register_func(recurrent_transform)
   return f
@@ -249,8 +250,46 @@ def test_attention_dot_grads():
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_attention_time_gauss():
-  att = get_attention(RecurrentTransform.AttentionTimeGauss)
-  # TODO...
+  n_T = 4
+  n_batch = 2
+  n_inp_dim = 3
+  n_cells = 5
+  n_B = 5
+
+  custom_op = get_attention(RecurrentTransform.AttentionTimeGauss,
+                            n_out=n_cells, n_batches=n_batch, n_input_t=n_B, n_input_dim=n_inp_dim)
+  att = custom_op.recurrent_transform
+
+  Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
+  W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  W_att_quadr_val = numpy.eye(n_B).astype('float32')
+  W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
+  B_val = numpy.random.ranf((n_B,n_batch,n_cells)).astype('float32')
+  c_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  y0_val = numpy.random.ranf((n_batch, n_cells)).astype('float32')
+  i_val = numpy.ones((n_T, n_batch), dtype='int8')
+
+  Z = T.ftensor3('Z')
+  B = T.ftensor3('B') #base
+  W_re = T.fmatrix('W_re')
+  W_att_quadr = T.fmatrix("W_att_quadr")
+  W_att_in = T.fmatrix('W_att_in')
+  c = T.fmatrix('c') #initial state
+  y0 = T.fmatrix('y0') #initial activation
+  i = T.matrix('i',dtype='int8')
+  t0 = T.fvector('t0')
+  custom_vars = att.get_sorted_custom_vars()
+  initial_state_vars = att.get_sorted_state_vars_initial()
+  custom_op_inputs = [Z, c, y0, i, W_re] + custom_vars + initial_state_vars
+  custom_op_outputs = custom_op(*custom_op_inputs)
+  custom_op_outputs = [cuda.host_from_gpu(v) for v in custom_op_outputs]
+  f = theano.function(inputs=[Z, c, y0, i, W_re], outputs=custom_op_outputs)
+  res = f(Z_val, c_val, y0_val, i_val, W_re_val)
+
+  print res
+  # res: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
+  (Y, H, d), state_var_seqs = res[:3], res[3:]
+  #assert False
 
 
 if __name__ == '__main__':

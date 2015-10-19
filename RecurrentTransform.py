@@ -433,7 +433,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
 
 
-def get_dummy_recurrent_transform(recurrent_transform_name):
+def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):
   """
   :type recurrent_transform_name: str
   :rtype: RecurrentTransformBase
@@ -444,9 +444,9 @@ def get_dummy_recurrent_transform(recurrent_transform_name):
   from NetworkBaseLayer import SourceLayer
   if getattr(RecurrentUnitLayer, "rng", None) is None:
     RecurrentUnitLayer.initialize_rng()
-  index = theano.shared(numpy.array([[1]], dtype="int8"), name="i")
-  x_out = theano.shared(numpy.array([[[1.0]]], dtype="float32"), name="x")
-  layer = RecurrentUnitLayer(n_out=5, index=index, sources=[],
+  index = theano.shared(numpy.array([[1] * n_batches] * n_input_t, dtype="int8"), name="i")
+  x_out = theano.shared(numpy.array([[[1.0] * n_input_dim] * n_batches] * n_input_t, dtype="float32"), name="x")
+  layer = RecurrentUnitLayer(n_out=n_out, index=index, sources=[],
                              base=[SourceLayer(n_out=x_out.get_value().shape[2], x_out=x_out, index=index)],
                              attention=recurrent_transform_name)
   assert isinstance(layer.recurrent_transform, cls)
