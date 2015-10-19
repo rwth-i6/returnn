@@ -103,6 +103,7 @@ class SprintDataset(Dataset):
       self.cond.notify_all()
       # No need to wait/check for Sprint thread here.
       # SprintInterface.getSegmentList() will wait for us.
+    return True
 
   def _cleanupOldSeqCache(self, seqEnd):
     i = 0

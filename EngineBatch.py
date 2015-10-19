@@ -132,7 +132,13 @@ class BatchSetGenerator:
     """
     self.dataset = dataset
     self.generator = generator
-    self.buffer = []; " :type: list[Batch] "
+    self.cache = []; " :type: list[Batch] "
+    self.reached_end = False
+    self.reset()
+
+  def reset(self):
+    self.buffer = self.cache[:]
+    self.cache_active = self.reached_end
     self.reached_end = False
     self.last_batch = None; " :type: Batch "
     self.current_batch_idx = 0
@@ -147,6 +153,8 @@ class BatchSetGenerator:
       return False
     else:
       self.buffer += [batch]
+      if not self.cache_active:
+        self.cache += [batch]
       return True
 
   def _read_next_up_to_n(self, n):

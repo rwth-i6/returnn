@@ -30,6 +30,7 @@ class CachedDataset2(Dataset):
     self._num_timesteps_accumulated = 0
     self._num_seqs = None
     self.epoch = epoch
+    return True
 
   def _cleanup_old_seqs(self, seq_idx_end):
     i = 0

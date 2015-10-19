@@ -34,6 +34,7 @@ class Engine:
     self.start_epoch = None
     self.training_finished = False
     self.stop_train_after_epoch_request = False
+    self.dataset_batches = {}
     self.pretrain = None; " :type: Pretrain.Pretrain "
     self.init_train_epoch_posthook = None
 
@@ -306,20 +307,28 @@ class Engine:
     self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
     epoch = self.start_epoch # Epochs start at 1.
+    rebatch = True
     while epoch <= final_epoch:
       if self.max_seq_length != sys.maxint:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
           print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
+          rebatch = True
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
-      self.train_data.init_seq_order(epoch=epoch)
+      rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
       self.epoch = epoch
 
-      for dataset in self.get_eval_datasets().values():
-        dataset.init_seq_order(self.epoch)
+      for dataset_name,dataset in self.get_eval_datasets().items():
+        if dataset.init_seq_order(self.epoch) and dataset_name in self.dataset_batches:
+          del self.dataset_batches[dataset_name]
+
+      if rebatch and 'train' in self.dataset_batches:
+        del self.dataset_batches['train']
 
       self.init_train_epoch()
       self.train_epoch()
+
+      rebatch = False
 
       if self.stop_train_after_epoch_request:
         self.stop_train_after_epoch_request = False
@@ -408,11 +417,15 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
-                                                     batch_size=self.batch_size,
-                                                     max_seqs=self.max_seqs,
-                                                     max_seq_length=int(self.max_seq_length),
-                                                     batch_variance=self.batch_variance)
+    if not 'train' in self.dataset_batches:
+      self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
+                                                                       batch_size=self.batch_size,
+                                                                       max_seqs=self.max_seqs,
+                                                                       max_seq_length=int(self.max_seq_length),
+                                                                       batch_variance=self.batch_variance)
+    else:
+      self.dataset_batches['train'].reset()
+    train_batches = self.dataset_batches['train']
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
@@ -450,8 +463,11 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs, max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
-      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
+      if not dataset_name in self.dataset_batches:
+        self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs, max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
+      else:
+        self.dataset_batches[dataset_name].reset()
+      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()
       eval_dump_str += [" %s: score %s error %s" % (

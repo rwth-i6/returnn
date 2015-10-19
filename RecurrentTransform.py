@@ -138,8 +138,10 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def create_vars_for_custom(self):
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
+  def create_vars(self):
+    n_out = self.layer.attrs['n_out']
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    self.W_att_in = self.add_param(self.layer.create_random_uniform_weights(n=n_out, m=n_in, name="W_att_in"))
 
   def step(self, y_p):
     z_re = T.dot(y_p, self.W_att_in)
@@ -156,8 +158,8 @@ class LM(RecurrentTransformBase):
   name = "none_lm"
 
   def create_vars(self):
-    self.W_lm_in = self.add_param(self.layer.W_lm_in)
-    self.W_lm_out = self.add_param(self.layer.W_lm_out)
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
     self.t = self.add_state_var(T.zeros((self.layer.index.shape[1],), dtype="float32"), name="t")
 
@@ -169,6 +171,27 @@ class LM(RecurrentTransformBase):
     z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
 
     return z_re, { self.t : self.t + 1 }
+
+
+class NTM(RecurrentTransformBase):
+  """
+  Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
+  """
+
+  def create_vars(self):
+    layer = self.layer
+    base = layer.base
+    assert base, "attention networks are only defined for decoder networks"
+    unit = layer.unit
+
+    self.M = layer.add_param(theano.shared(value=numpy.zeros((layer.attrs['ntm_naddrs'],layer.attrs['ntm_ncells']), dtype='float32'), name="M"))
+    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+
+  def step(self, y_p):
+
+
+
+    return z_re, {}
 
 
 class AttentionBase(RecurrentTransformBase):

@@ -57,7 +57,7 @@ class CachedDataset(Dataset):
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
 
     if self._seq_index == seq_index:
-      return
+      return False
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
@@ -96,6 +96,7 @@ class CachedDataset(Dataset):
         self.alloc_intervals[jdi][0] = seq_index[alloc_start_seq]
         self.alloc_intervals[jdi][1] = seq_index[alloc_end_seq]
     self._init_start_cache()
+    return True
 
   def _init_alloc_intervals(self):
     assert self.num_seqs > 0
@@ -214,8 +215,9 @@ class CachedDataset(Dataset):
     alloc_data[alloc_offset:alloc_offset + num_frames] = data[perm]
     # Permute targets.
     for k in self.targets:
-      targets = self.targets[k][self._seq_start[start][1]:self._seq_start[start][1] + num_frames]
-      self.targets[k][self._seq_start[start][1]:self._seq_start[start][1] + self._seq_start[end][1] - self._seq_start[start][1]] = targets[perm]
+      idx = self.target_keys.index(k) + 1
+      targets = self.targets[k][self._seq_start[idx]:self._seq_start[start][idx] + num_frames]
+      self.targets[k][self._seq_start[start][idx]:self._seq_start[start][idx] + self._seq_start[end][idx] - self._seq_start[start][idx]] = targets[perm]
 
   def _set_alloc_intervals_data(self, idc, data):
     """
@@ -470,8 +472,9 @@ class CachedDataset(Dataset):
     return 1 if len(self.targets[key].shape) == 1 else self.targets[key].shape[1]
 
   def get_targets(self, target, sorted_seq_idx):
-    seq_start = self.get_seq_start(sorted_seq_idx)[1]
-    seq_len = self.get_seq_length_2d(sorted_seq_idx)[1]
+    idx = self.target_keys.index(target) + 1
+    seq_start = self.get_seq_start(sorted_seq_idx)[idx]
+    seq_len = self.get_seq_length_2d(sorted_seq_idx)[idx]
     return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_target_list(self):

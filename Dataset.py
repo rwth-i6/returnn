@@ -133,8 +133,7 @@ class Dataset(object):
 
   def get_num_codesteps(self):
     if self._num_codesteps is None:
-      return self.get_num_timesteps()
-    assert self._num_codesteps > 0
+      return [self.get_num_timesteps()]
     return self._num_codesteps
 
   def load_seqs(self, start, end):
@@ -217,11 +216,13 @@ class Dataset(object):
     """
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
-    pass
+    return False
 
   def initialize(self):
     """

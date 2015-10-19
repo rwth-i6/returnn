@@ -32,6 +32,7 @@ class GeneratingDataset(Dataset):
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
     self.added_data = []; " :type: list[DatasetSeq] "
+    return True
 
   def _cleanup_old_seqs(self, seq_idx_end):
     i = 0
@@ -301,3 +302,58 @@ class CopyTaskDataset(GeneratingDataset):
     seq = [self.random.randint(0, self.nsymbols) for i in range(seq_len)]
     seq_np = numpy.array(seq, dtype="int8")
     return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
+
+import SimpleHTTPServer
+import SocketServer
+import BaseHTTPServer
+from TaskSystem import AsyncTask, ProcConnectionDied
+import json
+import cgi
+
+
+class QueueTaskDataset(GeneratingDataset):
+  def __init__(self, input_dim, output_dim, **kwargs):
+    # Sparse data.
+    super(QueueTaskDataset, self).__init__(input_dim=input_dim,
+                                           output_dim={"data": [input_dim, 1],
+                                                       "classes": [output_dim, 1]},
+                                          **kwargs)
+    proc = AsyncTask(func=self.server, name="data queue", mustExec=True)
+    self.queue = proc.conn
+
+  def server(self, asyncTask):
+    class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+      def do_POST(self):
+        if len(self.path) == 0:
+          self.send_response(404)
+          return
+        self.path = self.path[1:]
+        if self.path in ['classify']:
+          ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
+          if ctype == 'application/x-www-form-urlencoded':
+            length = int(self.headers.getheader('content-length'))
+            params = cgi.parse_qs(self.rfile.read(length), keep_blank_values = 1)
+            asyncTask.conn.send(self.path)
+            asyncTask.conn.send(self.params)
+            ret = asyncTask.conn.recv()
+          self.send_response(200)
+          self.send_header('Content-Type', 'application/json')
+          self.wfile.write("\n")
+          self.wfile.write(json.dumps(ret))
+          self.end_headers()
+
+      def do_GET(self):
+        if len(self.path.replace('/', '')) == 0:
+          self.send_response(200)
+        else:
+          self.send_response(404)
+
+      def log_message(self, format, *args): pass
+    class ThreadingServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+      pass
+
+    httpd = ThreadingServer(("", 3333), RequestHandler)
+    httpd.serve_forever()
+
+  def generate_seq(self, seq_idx):
+    return DatasetSeq(seq_idx=seq_idx, **self.queue.recv())
