@@ -138,8 +138,10 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def create_vars_for_custom(self):
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
+  def create_vars(self):
+    n_out = self.layer.attrs['n_out']
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    self.W_att_in = self.add_param(self.layer.create_random_uniform_weights(n=n_out, m=n_in, name="W_att_in"))
 
   def step(self, y_p):
     z_re = T.dot(y_p, self.W_att_in)
@@ -187,7 +189,7 @@ class NTM(RecurrentTransformBase):
 
   def step(self, y_p):
 
-    
+
 
     return z_re, {}
 
