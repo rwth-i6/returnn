@@ -216,6 +216,8 @@ class Dataset(object):
     """
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.

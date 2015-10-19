@@ -70,7 +70,7 @@ class MetaDataset(CachedDataset2):
     need_reinit = self.epoch is None or self.epoch != epoch
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not need_reinit:
-      return
+      return False
 
     if seq_list:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
@@ -82,7 +82,9 @@ class MetaDataset(CachedDataset2):
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len)
     self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
 
-    return any([dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered) for dataset in self.datasets.values()])
+    for dataset in self.datasets.values():
+      dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered)
+    return True
 
   def _load_seqs(self, start, end):
     for dataset in self.datasets.values():
@@ -167,7 +169,7 @@ class ConcatDataset(CachedDataset2):
     super(ConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self.dataset_seq_idx_offsets = [0]
     if not need_reinit:
-      return
+      return False
 
     if seq_list:  # reference order
       seq_lists = []
@@ -185,6 +187,7 @@ class ConcatDataset(CachedDataset2):
     assert len(seq_lists) == len(self.datasets)
     for dataset, sub_list in zip(self.datasets, seq_lists):
       dataset.init_seq_order(epoch=epoch, seq_list=sub_list)
+    return True
 
   def _get_dataset_for_seq_idx(self, seq_idx):
     i = 0
@@ -313,7 +316,7 @@ class CombinedDataset(CachedDataset2):
     need_reinit = self.epoch is None or self.epoch != epoch
     super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not need_reinit:
-      return
+      return False
 
     # We just select for which seq-idx we will use which dataset.
     # The ordering of the seqs in the datasets will not be set here
@@ -336,6 +339,7 @@ class CombinedDataset(CachedDataset2):
 
     for dataset in self.datasets.values():
       dataset.init_seq_order(epoch=epoch)
+    return True
 
   def _load_seqs(self, start, end):
     for dataset in self.datasets.values():
