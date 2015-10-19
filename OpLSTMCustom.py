@@ -358,7 +358,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     from Device import have_gpu
     assert have_gpu()
 
-    assert len(args) == self._get_num_custom_vars() + self._get_num_state_vars()
+    assert len(args) == self._get_num_custom_vars() + self._get_num_state_vars(), self.recurrent_transform
     custom_inputs = args[:self._get_num_custom_vars()]
     initial_state_vars = args[self._get_num_custom_vars():]
 

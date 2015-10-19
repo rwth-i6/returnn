@@ -5,6 +5,12 @@ import theano.tensor as T
 import numpy
 from Device import have_gpu
 import RecurrentTransform
+from Log import log
+import better_exchook
+
+log.initialize(verbosity=[5])
+better_exchook.replace_traceback_format_tb()
+
 
 def get_attention(att_class):
   import OpLSTMCustom
@@ -34,6 +40,7 @@ def test_does_not_crash():
   n_batch = 4
   n_inp_dim = 3
   n_cells = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
@@ -67,6 +74,7 @@ def test_fwd_pass_compatible_with_OpLSTM():
   n_batch = 4
   n_inp_dim = 3
   n_cells = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
@@ -77,7 +85,7 @@ def test_fwd_pass_compatible_with_OpLSTM():
 
   Y_val = numpy.asarray(f(Z_val, c_val, y0_val, i_val, W_re_val, W_att_in_val))
   Y2_val = numpy.asarray(g(Z_val, W_re_val, c_val, y0_val, i_val, W_att_in_val))
-  assert numpy.allclose(Y_val, Y2_val), (Y_val, Y2_val)
+  assert numpy.allclose(Y_val, Y2_val)
   print "success"
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
@@ -113,6 +121,7 @@ def test_bwd_pass_compatible_with_OpLSTM():
   n_batch = 4
   n_inp_dim = 3
   n_cells = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
@@ -126,11 +135,11 @@ def test_bwd_pass_compatible_with_OpLSTM():
   DZ_val, DW_re_val, Dc_val, Dy0_val, DW_att_in_val = [numpy.asarray(x) for x in vals]
   vals2 = g(Z_val, W_re_val, c_val, y0_val, i_val, W_att_in_val)
   DZ2_val, DW_re2_val, Dc2_val, Dy02_val, DW_att_in2_val = [numpy.asarray(x) for x in vals2]
-  assert numpy.allclose(DZ_val, DZ2_val, atol=5e-7, rtol=1e-4), (DZ_val, DZ2_val)
-  assert numpy.allclose(DW_re_val, DW_re2_val, atol=5e-7, rtol=1e-4), (DW_re_val, DW_re2_val)
-  assert numpy.allclose(Dc_val, Dc2_val), (Dc_val, Dc2_val)
-  assert numpy.allclose(Dy0_val, Dy02_val), (Dy0_val, Dy02_val)
-  assert numpy.allclose(DW_att_in_val, DW_att_in2_val, atol=5e-7, rtol=1e-4), (DW_att_in_val, DW_att_in2_val)
+  assert numpy.allclose(DZ_val, DZ2_val, atol=5e-7, rtol=1e-4)
+  assert numpy.allclose(DW_re_val, DW_re2_val, atol=5e-7, rtol=1e-4)
+  assert numpy.allclose(Dc_val, Dc2_val)
+  assert numpy.allclose(Dy0_val, Dy02_val)
+  assert numpy.allclose(DW_att_in_val, DW_att_in2_val, atol=5e-7, rtol=1e-4)
   print "success"
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
@@ -139,6 +148,7 @@ def test_grads():
   n_batch = 4
   n_inp_dim = 3
   n_cells = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_in_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
@@ -188,6 +198,7 @@ def test_attention_dot_does_not_crash():
   n_T = 5
   n_batch = 4
   n_cells = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   B_val = numpy.random.ranf((n_B,n_batch,n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
@@ -209,6 +220,7 @@ def test_attention_dot_grads():
   n_inp_dim = 3
   n_cells = 8
   n_B = 8
+  numpy.random.seed(1234)
   Z_val = numpy.random.ranf((n_T,n_batch,4*n_cells)).astype('float32')
   W_re_val = numpy.random.ranf((n_cells, 4 * n_cells)).astype('float32')
   W_att_quadr_val = numpy.eye(n_B).astype('float32')
@@ -233,6 +245,12 @@ def test_attention_dot_grads():
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val, W_att_quadr_val], eps=1e-3)
 
   print "success"
+
+
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
+def test_attention_time_gauss():
+  att = get_attention(RecurrentTransform.AttentionTimeGauss)
+  # TODO...
 
 
 if __name__ == '__main__':
