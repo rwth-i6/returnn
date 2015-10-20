@@ -8,9 +8,11 @@ import RecurrentTransform
 import theano.sandbox.cuda as cuda
 from Log import log
 import better_exchook
+import CustomLSTMFunctions
 
 log.initialize(verbosity=[5])
 better_exchook.replace_traceback_format_tb()
+CustomLSTMFunctions.debug_function_hook = True
 
 
 def get_attention(att_class, **kwargs):
@@ -281,15 +283,29 @@ def test_attention_time_gauss():
   custom_vars = att.get_sorted_custom_vars()
   initial_state_vars = att.get_sorted_state_vars_initial()
   custom_op_inputs = [Z, c, y0, i, W_re] + custom_vars + initial_state_vars
+  print "input args num:", len(custom_op_inputs)
+  print "input args:", custom_op_inputs
   custom_op_outputs = custom_op(*custom_op_inputs)
+  print "output args num:", len(custom_op_outputs)
   custom_op_outputs = [cuda.host_from_gpu(v) for v in custom_op_outputs]
   f = theano.function(inputs=[Z, c, y0, i, W_re], outputs=custom_op_outputs)
+
   res = f(Z_val, c_val, y0_val, i_val, W_re_val)
 
-  print res
+  #print res
   # res: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
   (Y, H, d), state_var_seqs = res[:3], res[3:]
-  #assert False
+
+  # print "running custom dumped data"
+  # custom_op_inputs = [theano.shared(numpy.load("../op.i.%i" % i)) for i in range(12)]
+  # custom_op_outputs = custom_op(*custom_op_inputs)
+  # custom_op_outputs = [cuda.host_from_gpu(v) for v in custom_op_outputs]
+  # f = theano.function(inputs=[], outputs=custom_op_outputs)
+  # res = f()
+
+  print res
+
+  assert False
 
 
 if __name__ == '__main__':
