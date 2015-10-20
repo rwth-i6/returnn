@@ -7,7 +7,7 @@ from collections import OrderedDict
 import h5py
 import json
 from Network import LayerNetwork
-from EngineTask import TrainTaskThread, EvalTaskThread, SprintCacheForwardTaskThread, HDFForwardTaskThread
+from EngineTask import TrainTaskThread, EvalTaskThread, SprintCacheForwardTaskThread, HDFForwardTaskThread, ClassificationTaskThread
 import SprintCache
 from Log import log
 from Updater import Updater
@@ -15,10 +15,16 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms
+from Util import hms, hdf5_dimension
 import errno
 import time
-
+import SimpleHTTPServer
+import SocketServer
+import BaseHTTPServer
+import json
+import cgi
+from GeneratingDataset import StaticDataset
+import hashlib
 
 class Engine:
 
@@ -34,6 +40,7 @@ class Engine:
     self.start_epoch = None
     self.training_finished = False
     self.stop_train_after_epoch_request = False
+    self.dataset_batches = {}
     self.pretrain = None; " :type: Pretrain.Pretrain "
     self.init_train_epoch_posthook = None
 
@@ -100,7 +107,7 @@ class Engine:
     elif load_model_epoch_filename:
       # Don't use the model epoch as the start epoch in training.
       # We use this as an import for training.
-      epoch_model = (None, load_model_epoch_filename)
+      epoch_model = (hdf5_dimension(load_model_epoch_filename, 'epoch'), load_model_epoch_filename)
 
     else:
       epoch_model = (None, None)
@@ -176,6 +183,10 @@ class Engine:
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
     self.share_batches = config.bool('share_batches', False)
     self.batch_variance = config.float('batch_variance', 0.0)
+    self.max_seq_length = config.float('max_seq_length', 0)
+    self.inc_seq_length = config.float('inc_seq_length', 0)
+    if self.max_seq_length == 0:
+      self.max_seq_length = sys.maxint
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -293,26 +304,43 @@ class Engine:
     self.training_finished = False
 
     assert self.start_epoch >= 1, "Epochs start at 1."
-    if self.start_epoch > self.final_epoch:
+    final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxint
+    if self.start_epoch > final_epoch:
       print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
                        (self.start_epoch, self.final_epoch)
 
     self.check_last_epoch()
+    self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
-    for epoch in xrange(self.start_epoch, self.final_epoch + 1):  # Epochs start at 1.
+    epoch = self.start_epoch # Epochs start at 1.
+    rebatch = True
+    while epoch <= final_epoch:
+      if self.max_seq_length != sys.maxint:
+        if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
+          print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
+          rebatch = True
+        self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
-      self.train_data.init_seq_order(epoch=epoch)
+      rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
       self.epoch = epoch
 
-      for dataset in self.get_eval_datasets().values():
-        dataset.init_seq_order(self.epoch)
+      for dataset_name,dataset in self.get_eval_datasets().items():
+        if dataset.init_seq_order(self.epoch) and dataset_name in self.dataset_batches:
+          del self.dataset_batches[dataset_name]
+
+      if rebatch and 'train' in self.dataset_batches:
+        del self.dataset_batches['train']
 
       self.init_train_epoch()
       self.train_epoch()
 
+      rebatch = False
+
       if self.stop_train_after_epoch_request:
         self.stop_train_after_epoch_request = False
         break
+
+      epoch += 1
 
     if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
       assert self.epoch
@@ -395,10 +423,15 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    train_batches = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
-                                                     batch_size=self.batch_size,
-                                                     max_seqs=self.max_seqs,
-                                                     batch_variance=self.batch_variance)
+    if not 'train' in self.dataset_batches:
+      self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
+                                                                       batch_size=self.batch_size,
+                                                                       max_seqs=self.max_seqs,
+                                                                       max_seq_length=int(self.max_seq_length),
+                                                                       batch_variance=self.batch_variance)
+    else:
+      self.dataset_batches['train'].reset()
+    train_batches = self.dataset_batches['train']
 
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
@@ -436,8 +469,11 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      batches = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs)
-      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=batches,
+      if not dataset_name in self.dataset_batches:
+        self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs, max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
+      else:
+        self.dataset_batches[dataset_name].reset()
+      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
                               report_prefix=self.get_epoch_str() + " eval")
       tester.join()
       eval_dump_str += [" %s: score %s error %s" % (
@@ -523,23 +559,138 @@ class Engine:
     forwarder.join()
     cache.close()
 
-  def classify(self, device, data, label_file):
+  # example (http):
+  # classify: curl -X POST http://localhost:3333/classify -H "Content-Type: application/json" -d '{"data":[[-0.7, 0.98],[0.62, 1.3]], "classes" : [0,0]}'
+  # result: (GET) http://localhost:3333/hash
+  #
+  # example (rpc/python):
+  # import jsonrpclib
+  # rpc = jsonrpclib.Server('http://localhost:3334')
+  # rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
+  # print rpc.result(ret['result']['hash'])
+
+  def daemon(self):
+    network = self.network
+    devices = self.devices
+    classifiers = {}
+
+    def _classify(params):
+      ret = { }
+      output_dim = {}
+      hash = hashlib.new('ripemd160')
+      hash.update(json.dumps(params))
+      hash = hash.hexdigest()
+      for k in params:
+        try:
+          params[k] = numpy.asarray(params[k], dtype='float32')
+          if k != 'data':
+            output_dim[k] = network.n_out[k] # = [network.n_in,2] if k == 'data' else network.n_out[k]
+        except:
+          ret['error'] = 'unable to convert %s to an array' % k
+          break
+      if not 'error' in ret:
+        try:
+          data = StaticDataset(data=[params], output_dim=output_dim)
+          data.init_seq_order()
+        except:
+          ret['error'] = "invalid data: %s" % params
+        else:
+          batches = data.generate_batches(recurrent_net=network.recurrent,
+                                          batch_size=sys.maxint, max_seqs=1)
+          if not hash in classifiers:
+            classifiers[hash] = ClassificationTaskThread(network, devices, data, batches)
+            classifiers[hash].json_params = params
+            print >> log.v3, "classifier started:", hash
+          ret['result'] = { 'hash' : hash }
+      return ret
+
+    def _result(hash):
+      if not classifiers[hash].isAlive():
+        return { 'result' : { k : classifiers[hash].result[k].tolist() for k in classifiers[hash].result } }
+      else:
+        return { 'error' : "classification in progress"}
+
+
+    class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+      def do_POST(self):
+        if len(self.path) == 0:
+          self.send_response(404)
+          return
+        self.path = self.path[1:]
+        ret = {}
+        if self.path in ['classify']:
+          ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
+          if ctype == 'application/json':
+            length = int(self.headers.getheader('content-length'))
+            params = cgi.parse_qs(self.rfile.read(length),keep_blank_values=1)
+            try:
+              content = params.keys()[0].decode('utf-8') # this is weird
+              params = json.loads(content)
+            except:
+              ret['error'] = 'unable to decode object'
+            else:
+              ret.update(_classify(params))
+          else:
+            ret['error'] = 'invalid header: %s' % ctype
+        else:
+          ret['error'] = 'invalid command: %s' % self.path
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.wfile.write("\n")
+        self.wfile.write(json.dumps(ret))
+        self.end_headers()
+
+      def do_GET(self):
+        if len(self.path.replace('/', '')) == 0:
+          self.send_response(200)
+        else:
+          if len(self.path) == 0:
+            self.send_response(404)
+            return
+          ret = { 'error' : "" }
+          self.path = self.path[1:].split('/')
+          if self.path[0] in ['result']:
+            if self.path[1] in classifiers:
+              if not classifiers[self.path[1]].isAlive():
+                ret['result'] = { k : classifiers[self.path[1]].result[k].tolist() for k in classifiers[self.path[1]].result }
+              else:
+                ret['error'] = "classification in progress"
+            else:
+              ret['error'] = "unknown hash: " % self.path[1]
+          else:
+            ret['error'] = "invalid command: %s" % self.path[0]
+          self.send_response(200)
+          self.send_header('Content-Type', 'application/json')
+          self.wfile.write("\n")
+          self.wfile.write(json.dumps(ret))
+          self.end_headers()
+
+      def log_message(self, format, *args): pass
+    class ThreadingServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+      pass
+
+    httpd = ThreadingServer(("", 3333), RequestHandler)
+    print >> log.v3, "httpd listening on port", 3333
+    from thread import start_new_thread
+    try:
+      from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
+    except:
+      httpd.serve_forever()
+    else:
+      start_new_thread(httpd.serve_forever, ())
+      server = SimpleJSONRPCServer(('localhost', 3334))
+      server.register_function(_classify, 'classify')
+      server.register_function(_result, 'result')
+      print >> log.v3, "json-rpc listening on port", 3334
+      server.serve_forever()
+
+  def classify(self, data, output_file):
+    out = open(output_file, 'w')
     batches = data.generate_batches(recurrent_net=self.network.recurrent,
                                     batch_size=data.num_timesteps, max_seqs=1)
-    num_data_batches = len(batches)
-    num_batches = 0
-    # TODO: This code is broken.
-    out = open(label_file, 'w')
-    while num_batches < num_data_batches:
-      alloc_devices = self.allocate_devices(data, batches, num_batches)
-      for batch, device in enumerate(alloc_devices):
-        device.run('classify', self.network)
-        labels = numpy.concatenate(device.result()[0], axis = 1)
-        print >> log.v5, "labeling", len(labels), "time steps for sequence", data.tags[num_batches + batch]
-        print >> out, data.tags[num_batches + batch],
-        for label in labels: print >> out, data.labels[label],
-        print >> out, ''
-      num_batches += len(alloc_devices)
+    forwarder = ClassificationTaskThread(self.network, self.devices, data, batches)
+    forwarder.join()
+    print >> out, forwarder.output
     out.close()
 
   def analyze(self, device, data, statistics):

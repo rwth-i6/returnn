@@ -133,8 +133,7 @@ class Dataset(object):
 
   def get_num_codesteps(self):
     if self._num_codesteps is None:
-      return self.get_num_timesteps()
-    assert self._num_codesteps > 0
+      return [self.get_num_timesteps()]
     return self._num_codesteps
 
   def load_seqs(self, start, end):
@@ -217,11 +216,13 @@ class Dataset(object):
     """
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
-    pass
+    return False
 
   def initialize(self):
     """
@@ -393,7 +394,7 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
@@ -424,6 +425,8 @@ class Dataset(object):
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
+        if length.max_value() > max_seq_length:
+          continue
         if length.max_value() > batch_size:
           print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
         dt, ds = batch.try_sequence_as_slice(length)
@@ -449,14 +452,14 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint):
     """
     :type recurrent_net: bool
     :type batch_size: int
     :type max_seqs: int
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance))
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance, max_seq_length))
 
   def shapes_for_batches(self, batches, data_keys):
     """

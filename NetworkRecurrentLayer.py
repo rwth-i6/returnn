@@ -264,15 +264,16 @@ class RecurrentUnitLayer(Layer):
                attention_beam = 3, # soft attention context window
                base = None,
                lm = False, # language model
+               force_lm = False, # assumes y to be given during test
                droplm = 1.0, # language model drop during training
                dropconnect = 0.0, # recurrency dropout
                depth = 1,
                **kwargs):
     unit_given = unit
-    if unit == 'lstm':
+    if unit == 'lstm':  # auto selection
       if str(theano.config.device).startswith('cpu'):
         unit = 'lstme'
-      elif recurrent_transform == 'none':
+      elif recurrent_transform == 'none' and not lm:
         unit = 'lstmp'
       else:
         unit = 'lstmc'
@@ -293,13 +294,14 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('sampling', sampling)
     self.set_attr('direction', direction)
     self.set_attr('lm', lm)
+    self.set_attr('force_lm', force_lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
-    self.set_attr('attention', attention.encode("utf8"))
+    self.set_attr('attention', attention.encode("utf8") if attention else None)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     self.set_attr('attention_sigma', attention_sigma)
-    if lm and recurrent_transform != 'none': # TODO hack
+    if lm: # TODO hack
       recurrent_transform += "_lm"
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
@@ -382,13 +384,13 @@ class RecurrentUnitLayer(Layer):
         self.attrs['target'] = 'classes'
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in")
+      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name)
       self.add_param(self.W_lm_in)
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out")
+      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out"+self.name)
       self.add_param(self.W_lm_out)
-      if self.attrs['droplm'] > 0.0 and self.train_flag:
+      if self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
         self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
@@ -400,6 +402,8 @@ class RecurrentUnitLayer(Layer):
       connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
       non_sequences += [connectmask, connectmass]
 
+    if not attention:
+      attention = "none"
     if attention == "default":
       attention = "attention_dot"
     if attention == 'input': # attention is just a sequence dependent bias (lstmp compatible)
@@ -443,21 +447,10 @@ class RecurrentUnitLayer(Layer):
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
-        if len(self.W_in) == 0:
-          if self.depth == 1:
-            if self.attrs['lm']:
-              y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
-              n_cls = self.y_in[self.attrs['target']].n_out
-              y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
-              real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
-              #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
-              sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask + self.b
-              #sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
-              #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
-            else:
-              sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
-          else:
-            sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
+        if self.depth == 1:
+          sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
+        else:
+          sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, self.depth, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
       else:
         if self.depth == 1:
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
@@ -465,6 +458,15 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
+      if self.attrs['lm']:
+        y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
+        n_cls = self.y_in[self.attrs['target']].n_out
+        y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
+        real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
+        #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
+        sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask + self.b
+        #sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
+        #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
       if sequences == 0:
         sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if self.attrs['attention'] == 'input' else 0)
 
@@ -572,7 +574,7 @@ class RecurrentUnitLayer(Layer):
       if not isinstance(outputs, list):
         outputs = [outputs]
 
-      if self.attrs['lm'] and self.train_flag:
+      if False and self.attrs['lm'] and self.train_flag:
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
         j = (index.flatten() > 0).nonzero() # (TB)
         #y_f = T.extra_ops.to_one_hot(T.reshape(self.y_in[self.attrs['target']], (self.y_in[self.attrs['target']].shape[0] * self.y_in[self.attrs['target']].shape[1]), ndim=1), n_cls) # (TB)C

@@ -147,7 +147,7 @@ class TaskThread(threading.Thread):
     def epoch_norm_factor_for_result(self, key):
       if key.startswith("error:"):
         if self.network.loss in ('ctc', 'ce_ctc'):
-          assert self.num_frames == self.data.get_num_codesteps()  # Wrong otherwise. E.g. chunking.
+          assert self.num_frames == self.data.get_num_codesteps()[1]  # Wrong otherwise. E.g. chunking.
           return 1.0 / self.data.num_running_chars
       # Default: Normalize by number of frames.
       #return 1.0 / self.num_frames["data"]
@@ -707,3 +707,15 @@ class HDFForwardTaskThread(TaskThread):
       self.toffset += features.shape[1]
       self.tags.append(self.data.get_tag(seq_idx))
       self.times.extend(self.data.get_times(seq_idx))
+
+
+class ClassificationTaskThread(TaskThread):
+    def __init__(self, network, devices, data, batches):
+      super(ClassificationTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
+      self.result = {}
+
+    def evaluate(self, batchess, results, result_format, num_frames):
+      assert len(batchess) == 1
+      assert len(batchess[0]) == 1
+      assert batchess[0][0].get_num_seqs() == 1
+      self.result[self.data.get_tag(batchess[0][0].start_seq)] = numpy.concatenate(results, axis=1)

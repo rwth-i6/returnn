@@ -138,8 +138,10 @@ class RecurrentTransformBase(object):
 class AttentionTest(RecurrentTransformBase):
   name = "test"
 
-  def create_vars_for_custom(self):
-    self.W_att_in = self.add_param(self.tt.fmatrix("W_att_in"))
+  def create_vars(self):
+    n_out = self.layer.attrs['n_out']
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    self.W_att_in = self.add_param(self.layer.create_random_uniform_weights(n=n_out, m=n_in, name="W_att_in"))
 
   def step(self, y_p):
     z_re = T.dot(y_p, self.W_att_in)
@@ -150,6 +152,55 @@ class DummyTransform(RecurrentTransformBase):
   name = "none"
   def step(self, y_p):
     return T.zeros((y_p.shape[0],y_p.shape[1]*4),dtype='float32'), {}
+
+
+class LM(RecurrentTransformBase):
+  name = "none_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
+    self.t = self.add_state_var(T.zeros((self.layer.index.shape[1],), dtype="float32"), name="t")
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    #z_re = T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
+
+    return z_re, { self.t : self.t + 1 }
+
+
+class NTM(RecurrentTransformBase):
+  """
+  Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
+  """
+  name = 'ntm'
+
+  def create_vars(self):
+    import scipy
+    layer = self.layer
+
+    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
+    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+    self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
+    self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
+    self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
+    self.nheads = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_nheads']), name="nheads"))
+    self.shift = self.add_input(theano.shared(
+      value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[numpy.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
+      name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
+
+    #for h in xrange(self.layer.attrs['ntm_nheads']):
+    #  self.heads
+
+  def step(self, y_p):
+
+
+
+    return z_re, {}
 
 
 class AttentionBase(RecurrentTransformBase):
@@ -181,7 +232,8 @@ class AttentionBase(RecurrentTransformBase):
     l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
-    self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
+    #self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
+    self.B = T.concatenate(src, axis=2) + self.xb  # == B
     self.B.name = "B"
     self.add_input(self.B)
     #if n_in != unit.n_out:
@@ -251,10 +303,11 @@ class AttentionRBF(AttentionBase):
     self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
     self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
+    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
 
   def step(self, y_p):
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
-    f_e = T.exp(f_z)
+    f_e = T.exp(f_z) #* self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
 
@@ -388,8 +441,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     return z_re, {self.t: t}
 
 
-
-def get_dummy_recurrent_transform(recurrent_transform_name):
+def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):
   """
   :type recurrent_transform_name: str
   :rtype: RecurrentTransformBase
@@ -400,9 +452,9 @@ def get_dummy_recurrent_transform(recurrent_transform_name):
   from NetworkBaseLayer import SourceLayer
   if getattr(RecurrentUnitLayer, "rng", None) is None:
     RecurrentUnitLayer.initialize_rng()
-  index = theano.shared(numpy.array([[1]], dtype="int8"), name="i")
-  x_out = theano.shared(numpy.array([[[1.0]]], dtype="float32"), name="x")
-  layer = RecurrentUnitLayer(n_out=5, index=index, sources=[],
+  index = theano.shared(numpy.array([[1] * n_batches] * n_input_t, dtype="int8"), name="i")
+  x_out = theano.shared(numpy.array([[[1.0] * n_input_dim] * n_batches] * n_input_t, dtype="float32"), name="x")
+  layer = RecurrentUnitLayer(n_out=n_out, index=index, sources=[],
                              base=[SourceLayer(n_out=x_out.get_value().shape[2], x_out=x_out, index=index)],
                              attention=recurrent_transform_name)
   assert isinstance(layer.recurrent_transform, cls)

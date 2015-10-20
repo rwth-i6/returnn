@@ -16,6 +16,7 @@ class GeneratingDataset(Dataset):
     if "data" not in output_dim:
       output_dim["data"] = [input_dim, 2]  # not sparse
     self.num_outputs = output_dim
+    self.expected_load_seq_start = 0
     self._num_seqs = num_seqs
     self.random = numpy.random.RandomState(0)
 
@@ -32,6 +33,7 @@ class GeneratingDataset(Dataset):
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
     self.added_data = []; " :type: list[DatasetSeq] "
+    return True
 
   def _cleanup_old_seqs(self, seq_idx_end):
     i = 0

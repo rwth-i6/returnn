@@ -678,3 +678,13 @@ class NumbersDict:
       return "%s(%r)" % (self.__class__.__name__, self.value)
     return "%s(numbers_dict=%r, broadcast_value=%r)" % (
            self.__class__.__name__, self.dict, self.value)
+
+
+def collect_class_init_kwargs(cls):
+  kwargs = set()
+  for cls_ in inspect.getmro(cls):
+    if not inspect.ismethod(cls_.__init__):  # Python function. could be builtin func or so
+      continue
+    arg_spec = inspect.getargspec(cls_.__init__)
+    kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
+  return kwargs
