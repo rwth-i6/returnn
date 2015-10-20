@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined
 from Log import log
 from Network import LayerNetwork
 from SprintCommunicator import SprintCommunicator
@@ -621,6 +621,10 @@ class Device(object):
       device_name = 'cpu%i' % device_id
     output_queue.send(device_id)
     output_queue.send(device_name)
+
+    custom_dev_init_code = config.value('custom_dev_init_code', None)
+    if custom_dev_init_code:
+      custom_exec(custom_dev_init_code, "<custom dev init code string>", {}, dict_joined(globals(), locals()))
 
     self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)

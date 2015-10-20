@@ -374,9 +374,6 @@ def needData():
 def executeMainTask():
   st = time.time()
   task = config.value('task', 'train')
-  custom_init_code = config.value('custom_init_code', None)
-  if custom_init_code:
-    custom_exec(custom_init_code, "<custom init code string>", locals(), globals())
   if task == 'train':
     assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
