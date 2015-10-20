@@ -688,3 +688,8 @@ def collect_class_init_kwargs(cls):
     arg_spec = inspect.getargspec(cls_.__init__)
     kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
   return kwargs
+
+
+def custom_exec(source, source_filename, user_ns, user_global_ns):
+  co = compile(source, source_filename, "exec")
+  eval(co, user_ns, user_global_ns)
