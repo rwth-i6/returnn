@@ -177,8 +177,10 @@ class NTM(RecurrentTransformBase):
   """
   Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
   """
+  name = 'ntm'
 
   def create_vars(self):
+    import scipy
     layer = self.layer
 
     self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
@@ -188,11 +190,11 @@ class NTM(RecurrentTransformBase):
     self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
     self.nheads = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_nheads']), name="nheads"))
     self.shift = self.add_input(theano.shared(
-      value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[np.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
+      value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[numpy.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
       name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
 
-    for h in xrange(self.layer.attrs['ntm_nheads']):
-      self.heads
+    #for h in xrange(self.layer.attrs['ntm_nheads']):
+    #  self.heads
 
   def step(self, y_p):
     

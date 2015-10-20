@@ -403,6 +403,9 @@ def executeMainTask():
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
+  elif task == "daemon":
+    engine.init_network_from_config(config)
+    engine.daemon()
   else:
     assert False, "unknown task: %s" % task
 

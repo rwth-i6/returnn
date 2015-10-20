@@ -707,3 +707,15 @@ class HDFForwardTaskThread(TaskThread):
       self.toffset += features.shape[1]
       self.tags.append(self.data.get_tag(seq_idx))
       self.times.extend(self.data.get_times(seq_idx))
+
+
+class ClassificationTaskThread(TaskThread):
+    def __init__(self, network, devices, data, batches):
+      super(ClassificationTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
+      self.result = {}
+
+    def evaluate(self, batchess, results, result_format, num_frames):
+      assert len(batchess) == 1
+      assert len(batchess[0]) == 1
+      assert batchess[0][0].get_num_seqs() == 1
+      self.result[self.data.get_tag(batchess[0][0].start_seq)] = numpy.concatenate(results, axis=1)

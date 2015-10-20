@@ -365,7 +365,7 @@ class Device(object):
                                     no_default_updates=True,
                                     name="tester")
 
-    elif self.network_task == 'forward':
+    elif self.network_task in ['forward', 'daemon']:
       extractions = config.list('extract', ['log-posteriors'])
       source = []
       givens = self.make_input_givens(self.testnet)
