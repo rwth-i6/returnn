@@ -560,21 +560,56 @@ class Engine:
     cache.close()
 
 
-  # examples:
-  # classify: curl -X POST http://localhost:3333/classify -H "Content-Type: application/json" -d '{"data":[[-0.7, 0.98],[0.62, 1.3]], "classes" : [0,0]}'
-  # result: (GET) http://localhost:3333/hash
-
   def daemon(self):
     network = self.network
     devices = self.devices
     classifiers = {}
+
+    def _classify(params):
+      ret = { }
+      output_dim = {}
+      hash = hashlib.new('ripemd160')
+      hash.update(json.dumps(params))
+      hash = hash.hexdigest()
+      for k in params:
+        try:
+          params[k] = numpy.asarray(params[k], dtype='float32')
+          if k != 'data':
+            output_dim[k] = network.n_out[k] # = [network.n_in,2] if k == 'data' else network.n_out[k]
+        except:
+          ret['error'] = 'unable to convert %s to an array' % k
+          break
+      if not 'error' in ret:
+        try:
+          data = StaticDataset(data=[params], output_dim=output_dim)
+          data.init_seq_order()
+        except:
+          ret['error'] = "invalid data: %s" % params
+        else:
+          batches = data.generate_batches(recurrent_net=network.recurrent,
+                                          batch_size=sys.maxint, max_seqs=1)
+          if not hash in classifiers:
+            classifiers[hash] = ClassificationTaskThread(network, devices, data, batches)
+            classifiers[hash].json_params = params
+            print >> log.v3, "classifier started:", hash
+          ret['result'] = { 'hash' : hash }
+      return ret
+
+    # example (http):
+    # classify: curl -X POST http://localhost:3333/classify -H "Content-Type: application/json" -d '{"data":[[-0.7, 0.98],[0.62, 1.3]], "classes" : [0,0]}'
+    # result: (GET) http://localhost:3333/hash
+    # example (rpc/python):
+    # import jsonrpclib
+    # rpc = jsonrpclib.Server('http://localhost:3334')
+    # rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
+
     class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       def do_POST(self):
         if len(self.path) == 0:
           self.send_response(404)
           return
         self.path = self.path[1:]
-        ret = { 'success' : False, 'error' : "" }
+        ret = {}
         if self.path in ['classify']:
           ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
           if ctype == 'application/json':
@@ -583,35 +618,10 @@ class Engine:
             try:
               content = params.keys()[0].decode('utf-8') # this is weird
               params = json.loads(content)
-              hash = hashlib.new('ripemd160')
-              hash.update(content)
-              ret['hash'] = hash.hexdigest()
             except:
               ret['error'] = 'unable to decode object'
             else:
-              output_dim = {}
-              for k in params:
-                try:
-                  params[k] = numpy.asarray(params[k], dtype='float32')
-                  if k != 'data':
-                    output_dim[k] = network.n_out[k] # = [network.n_in,2] if k == 'data' else network.n_out[k]
-                except:
-                  ret['error'] = 'unable to convert %s to an array' % k
-                  break
-              if not ret['error']:
-                try:
-                  data = StaticDataset(data=[params], output_dim=output_dim)
-                  data.init_seq_order()
-                except:
-                  ret['error'] = "invalid data: %s" % " ".join(params.keys())
-                else:
-                  batches = data.generate_batches(recurrent_net=network.recurrent,
-                                                  batch_size=sys.maxint, max_seqs=1)
-                  if not ret['hash'] in classifiers:
-                    classifiers[ret['hash']] = ClassificationTaskThread(network, devices, data, batches)
-                    classifiers[ret['hash']].json_params = params
-                    print >> log.v3, "classifier started:", ret['hash']
-                  ret['success'] = True
+              ret.update(_classify(params))
           else:
             ret['error'] = 'invalid header: %s' % ctype
         else:
@@ -629,13 +639,12 @@ class Engine:
           if len(self.path) == 0:
             self.send_response(404)
             return
-          ret = { 'success' : False, 'error' : "" }
+          ret = { 'error' : "" }
           self.path = self.path[1:].split('/')
           if self.path[0] in ['result']:
             if self.path[1] in classifiers:
               if not classifiers[self.path[1]].isAlive():
                 ret['result'] = { k : classifiers[self.path[1]].result[k].tolist() for k in classifiers[self.path[1]].result }
-                ret['success'] = True
               else:
                 ret['error'] = "classification in progress"
             else:
@@ -653,8 +662,21 @@ class Engine:
       pass
 
     httpd = ThreadingServer(("", 3333), RequestHandler)
-    print >> log.v3, "server ready..."
-    httpd.serve_forever()
+    print >> log.v3, "httpd listening on port", 3333
+    from thread import start_new_thread
+    try:
+      from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
+    except:
+      httpd.serve_forever()
+    else:
+      start_new_thread(httpd.serve_forever, ())
+
+      def classify(**kwargs): _classify(kwargs)
+
+      server = SimpleJSONRPCServer(('localhost', 3334))
+      server.register_function(_classify, 'classify')
+      print >> log.v3, "json-rpc listening on port", 3334
+      server.serve_forever()
 
   def classify(self, data, output_file):
     out = open(output_file, 'w')
