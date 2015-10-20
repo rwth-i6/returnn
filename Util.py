@@ -216,6 +216,13 @@ class DictAsObj:
     self.__dict__ = dikt
 
 
+def dict_joined(*ds):
+  res = {}
+  for d in ds:
+    res.update(d)
+  return res
+
+
 def obj_diff_str(self, other):
   if self is None and other is None:
     return "No diff."
