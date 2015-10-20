@@ -559,6 +559,15 @@ class Engine:
     forwarder.join()
     cache.close()
 
+  # example (http):
+  # classify: curl -X POST http://localhost:3333/classify -H "Content-Type: application/json" -d '{"data":[[-0.7, 0.98],[0.62, 1.3]], "classes" : [0,0]}'
+  # result: (GET) http://localhost:3333/hash
+  #
+  # example (rpc/python):
+  # import jsonrpclib
+  # rpc = jsonrpclib.Server('http://localhost:3334')
+  # rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
+  # print rpc.result(ret['result']['hash'])
 
   def daemon(self):
     network = self.network
@@ -595,13 +604,12 @@ class Engine:
           ret['result'] = { 'hash' : hash }
       return ret
 
-    # example (http):
-    # classify: curl -X POST http://localhost:3333/classify -H "Content-Type: application/json" -d '{"data":[[-0.7, 0.98],[0.62, 1.3]], "classes" : [0,0]}'
-    # result: (GET) http://localhost:3333/hash
-    # example (rpc/python):
-    # import jsonrpclib
-    # rpc = jsonrpclib.Server('http://localhost:3334')
-    # rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
+    def _result(hash):
+      if not classifiers[hash].isAlive():
+        return { 'result' : { k : classifiers[hash].result[k].tolist() for k in classifiers[hash].result } }
+      else:
+        return { 'error' : "classification in progress"}
+
 
     class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       def do_POST(self):
@@ -670,11 +678,9 @@ class Engine:
       httpd.serve_forever()
     else:
       start_new_thread(httpd.serve_forever, ())
-
-      def classify(**kwargs): _classify(kwargs)
-
       server = SimpleJSONRPCServer(('localhost', 3334))
       server.register_function(_classify, 'classify')
+      server.register_function(_result, 'result')
       print >> log.v3, "json-rpc listening on port", 3334
       server.serve_forever()
 
