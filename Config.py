@@ -68,7 +68,7 @@ class Config:
     for key, value in dikt.items():
       self.set(key, value)
 
-  def value(self, key, default, index=None):
+  def value(self, key, default, index=None, list_join_str=","):
     """
     :type key: str
     :type default: T
@@ -79,7 +79,7 @@ class Config:
       l = self.typed_dict[key]
       if index is None:
         if isinstance(l, (list,tuple)):
-          return ",".join([str(v) for v in l])
+          return list_join_str.join([str(v) for v in l])
         else:
           return str(l)
       else:
@@ -87,7 +87,7 @@ class Config:
     if key in self.dict:
       l = self.dict[key]
       if index is None:
-        return ",".join(l)
+        return list_join_str.join(l)
       else:
         return l[index]
     return default

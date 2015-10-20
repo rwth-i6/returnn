@@ -622,7 +622,7 @@ class Device(object):
     output_queue.send(device_id)
     output_queue.send(device_name)
 
-    custom_dev_init_code = config.value('custom_dev_init_code', None)
+    custom_dev_init_code = config.value('custom_dev_init_code', None, list_join_str="\n")
     if custom_dev_init_code:
       custom_exec(custom_dev_init_code, "<custom dev init code string>", {}, dict_joined(globals(), locals()))
 
