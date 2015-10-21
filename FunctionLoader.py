@@ -126,6 +126,15 @@ struct FunLoader
     return call_helper(py_args);
   }
 
+  void debug_print(CudaNdarray* v) {
+    PyObject* numpy_array_obj = CudaNdarray_CreateArrayObj(v);
+    if(!numpy_array_obj) { PyErr_Print(); goto end; }
+    PyObject_Print(numpy_array_obj, stdout, Py_PRINT_RAW);
+    printf("\\n");
+  end:
+    Py_XDECREF(numpy_array_obj);
+  }
+
 };
 
 """

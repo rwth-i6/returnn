@@ -216,6 +216,13 @@ class DictAsObj:
     self.__dict__ = dikt
 
 
+def dict_joined(*ds):
+  res = {}
+  for d in ds:
+    res.update(d)
+  return res
+
+
 def obj_diff_str(self, other):
   if self is None and other is None:
     return "No diff."
@@ -688,3 +695,10 @@ def collect_class_init_kwargs(cls):
     arg_spec = inspect.getargspec(cls_.__init__)
     kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
   return kwargs
+
+
+def custom_exec(source, source_filename, user_ns, user_global_ns):
+  if not source.endswith("\n"):
+    source += "\n"
+  co = compile(source, source_filename, "exec")
+  eval(co, user_ns, user_global_ns)
