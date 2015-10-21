@@ -133,7 +133,7 @@ class LayerNetwork(object):
                          **cls.init_args_from_config(config))
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input = False, target = 'classes', train_flag = False):
+  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input=False, target='classes', train_flag=False):
     """
     :type json_content: dict[str]
     :type n_in: int
@@ -260,6 +260,7 @@ class LayerNetwork(object):
     except Exception:
       n_out_model = {'classes':[model.attrs['n_out'],1]}
     n_in_model = model.attrs['n_in']
+    n_out_model.pop('data')
     if n_in and n_in != n_in_model:
       print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
     if n_out and n_out != n_out_model:
@@ -336,13 +337,19 @@ class LayerNetwork(object):
       if 'encoder' in model[layer_name].attrs:
         index = output_index
       if 'target' in model[layer_name].attrs:
-        network.j.setdefault(model[layer_name].attrs['target'], T.bmatrix('j_%s' % model[layer_name].attrs['target']))
-        if not model[layer_name].attrs['target'] in network.y:
-          network.y[model[layer_name].attrs['target']] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-          network.y[model[layer_name].attrs['target']].n_out = network.n_out[model[layer_name].attrs['target']][0]
+        target =  model[layer_name].attrs['target']
+        if target != "null" and target not in network.y:
+          assert target in network.n_out
+          if network.n_out[target][1] == 1:
+            ndim = 2
+          else:
+            ndim = 3
+          network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+          network.y[target].n_out = network.n_out[target][0]
+        network.j.setdefault(target, T.bmatrix('j_%s' % target))
         index = network.j[model[layer_name].attrs['target']]
       cl = model[layer_name].attrs['class']
-      if cl == 'softmax' or cl == "decoder":
+      if cl == 'softmax':
         params = { 'dropout' : 0.0,
                    'name' : 'output',
                    'mask' : mask,
@@ -356,10 +363,11 @@ class LayerNetwork(object):
           params['centroids'] = centroids
         if 'copy_input' in model[layer_name].attrs:
           params['copy_input'] = copy_input
-        if not 'target' in params:
-          params['target'] = target
-        params['index'] = output_index
+        #if not 'target' in params:
+        #  params['target'] = target
+        params['index'] = index #output_index
         params['sources'] = x_in
+        params['y_in'] = network.y
         params.pop('from', None)
         params.pop('class', None)
         network.make_classifier(**params)
@@ -389,9 +397,12 @@ class LayerNetwork(object):
           params['base'] = base
         if 'centroids' in model[layer_name].attrs:
           params['centroids'] = centroids
+        if 'target' in model[layer_name].attrs:
+          params['target'] = model[layer_name].attrs['target']
         if layer_class.recurrent:
           network.recurrent = True
         return network.add_layer(layer_class(**params))
+
     for layer_name in model:
       target = 'classes'
       if 'target' in model[layer_name].attrs:
@@ -581,7 +592,7 @@ class LayerNetwork(object):
     """
     for name in self.hidden:
       if not name in model:
-        print >> log.v2, "unable to load layer ", name
+        print >> log.v2, "unable to load layer", name
       else:
         self.hidden[name].load(model)
     for name in self.output:

@@ -566,7 +566,7 @@ class Engine:
   # example (rpc/python):
   # import jsonrpclib
   # rpc = jsonrpclib.Server('http://localhost:3334')
-  # rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
+  # ret = rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
   # print rpc.result(ret['result']['hash'])
 
   def daemon(self):
@@ -671,12 +671,12 @@ class Engine:
 
     httpd = ThreadingServer(("", 3333), RequestHandler)
     print >> log.v3, "httpd listening on port", 3333
-    from thread import start_new_thread
     try:
       from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
     except:
       httpd.serve_forever()
     else:
+      from thread import start_new_thread
       start_new_thread(httpd.serve_forever, ())
       server = SimpleJSONRPCServer(('localhost', 3334))
       server.register_function(_classify, 'classify')

@@ -77,8 +77,10 @@ class Container(object):
       from NetworkLayer import get_layer_class
       assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
         "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+    for p in self.params:
+      if p not in grp:
+        print >> log.v4, "unable to load parameter %s in %s" % (p, self.name)
     for p in grp:
-
       if p in self.params:
         assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
           "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
