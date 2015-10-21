@@ -431,7 +431,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     # gauss window
     idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
-    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
+    f_e = T.exp(-((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
     norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time,batch)
     w_t = f_e * norm
     w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,dim)
