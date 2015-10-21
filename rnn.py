@@ -21,7 +21,7 @@ from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack
+from Util import initThreadJoinHack, custom_exec
 from SprintCommunicator import SprintCommunicator
 
 

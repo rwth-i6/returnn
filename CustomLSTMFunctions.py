@@ -7,6 +7,8 @@ from Log import log
 import theano.sandbox.cuda as theano_cuda
 
 
+debug_function_hook = None
+
 def make_fwd_fun(recurrent_transform):
   y_p = recurrent_transform.y_p
   z_re, state_updates = recurrent_transform.step(y_p)
@@ -23,6 +25,8 @@ def make_fwd_fun(recurrent_transform):
     custom_out += [state_shared_vars[v]]
   fwd_fun = theano.function(inputs=[y_p] + custom_vars + state_vars, outputs=[],
                             updates=updates, on_unused_input="warn")
+  if debug_function_hook:
+    fwd_fun = debug_make_theano_function_wrapper(fwd_fun, "att_%i_fwd" % id(recurrent_transform), debug_function_hook)
   return fwd_fun, z_re_shared, custom_out
 
 
@@ -68,6 +72,8 @@ def make_bwd_fun(recurrent_transform):
   custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(out_custom_grads, custom_vars)]
   custom_reset_fn = theano.function(inputs=custom_vars, outputs=None, updates=custom_reset_updates)
 
+  if debug_function_hook:
+    bwd_fun = debug_make_theano_function_wrapper(bwd_fun, "att_%i_bwd" % id(recurrent_transform), debug_function_hook)
   return bwd_fun, custom_reset_fn, out_Dy_p, out_custom_grads + out_state_var_prev_grads
 
 
@@ -98,3 +104,12 @@ def _setup_func(fn, recurrent_transform):
   assert len(vs_bwd) == len(bwd_names)
   for v, postfix in zip(vs_fwd + vs_bwd, fwd_names + bwd_names):
     globals()[fn + postfix] = v
+
+def debug_make_theano_function_wrapper(f, name, hook):
+  def theano_func_wrapped(*args, **kwargs):
+    res = f(*args, **kwargs)
+    print "called", name, "args:", args, "kwargs:", kwargs, "res:", res
+    if hook and hook is not True:
+      hook(f=f, name=name, args=args, kwargs=kwargs, res=res)
+    return res
+  return theano_func_wrapped

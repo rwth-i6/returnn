@@ -1,6 +1,7 @@
 
 import theano
 import numpy
+import theano.printing
 from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
@@ -564,7 +565,7 @@ class LossLayer(Layer):
 class ConvLayer(ForwardLayer):
   layer_class = "conv_layer"
 
-  def __init__(self, dimension_row, dimension_col, n_features, filter_row, filter_col,
+  def __init__(self, dimension_row, dimension_col, n_features, filter_row, filter_col, stack_size=1,
                pool_size=(2, 2), border_mode='valid', ignore_border=True, **kwargs):
     kwargs['n_out'] = filter_row * filter_col
     super(ConvLayer, self).__init__(**kwargs)
@@ -574,7 +575,7 @@ class ConvLayer(ForwardLayer):
     self.set_attr('n_features', n_features)  # number of filter feature maps
     self.set_attr('filter_row', filter_row)  # filter height
     self.set_attr('filter_col', filter_col)  # filter width
-    # self.set_attr('stack_size', stack_size)  # number of color channel (default is Gray scale) for the input layer and the number of features/filters from previous layer for the convolution layer
+    self.set_attr('stack_size', stack_size)  # number of color channel (default is Gray scale) for the input layer and the number of features/filters from previous layer for the convolution layer
     self.set_attr('pool_size', pool_size)  # max pooling size (default is 2 * 2)
     self.set_attr('border_mode', border_mode)  # mode of calculation the beginning border (default is valid, there is another choice [i.e. full]
     self.set_attr('ignore_border', ignore_border)  # mode of calculation of the ending border (default is True)
@@ -586,7 +587,11 @@ class ConvLayer(ForwardLayer):
     # print 's.attrs[\'n_out\':]', [s.attrs['n_out'] for s in self.sources]
     # print 's.output:', [s.output[0] for s in self.sources]
     # print 's.name:', [s.name for s in self.sources]
-    # print 's.act:', [s.act for s in self.sources]
+    # # print 's.act:', [s.act for s in self.sources]
+    # print 'source:', self.sources
+    # print 'index:', self.index[0]
+    # print 'index2:', self.sources[0].index
+    # print self.sources[0].
     #
     # theano.printing.Print("theano:")(self.sources[0].output[0].shape)
     # print 'concatenate:', T.concatenate([s.output for s in self.sources], axis = -1)
@@ -596,26 +601,26 @@ class ConvLayer(ForwardLayer):
     # (batch, stack, row, col) => (self.sources[0].shape[0], self.sources[0].shape[1],dimension_row, dimension_col)
     self.input = T.concatenate([s.output for s in self.sources], axis=-1).dimshuffle(0,1,2,'x')
 
-    print self.index.shape[0], self.index.shape[1], (self.index.shape[0] == self.sources[0].output[0].shape[0])
-    stack_size = self.sources[0].output[0].shape[0]  # it's time from input (3D tensor -> (time, batch, feature)
-    print stack_size
+    # print self.index.shape[0], self.index.shape[1], (self.index.shape[0] == self.sources[0].output[0].shape[0])
+    # stack_size = 1 # it's time from input (3D tensor -> (time, batch, feature)
+    # print stack_size
 
-    # theano.printing.Print("test:", self.index.shape[0])
+    # theano.printing.Print("test:", attrs=['shape'])(self.index)
     self.batch = self.sources[0].output[0].shape[1]
     self.input = self.input.reshape((self.batch, stack_size, dimension_row, dimension_col))
 
     # x = T.matrix('x')
     # self.input = x.reshape((batch_size, stack_size, filter_row, filter_col))
 
-    print self.input[0], self.input[1], self.input[2], self.input[3]
+    # print self.input[0], self.input[1], self.input[2], self.input[3]
     self.filter_shape = (n_features, stack_size, filter_row, filter_col)
-    print self.filter_shape
+    # print self.filter_shape
     # assert self.image_shape[1] == self.filter_shape[1]
 
     self.W = self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size)
-    print self.W
+    # print self.W
     self.b = self._create_bias(n_features=n_features)
-    print self.b
+    # print self.b
 
     self.conv_out = conv.conv2d(
       input=self.input,
@@ -624,20 +629,28 @@ class ConvLayer(ForwardLayer):
       border_mode=border_mode,
       image_shape=(None, stack_size, None, None)
     )
-    print self.conv_out
+    # print self.conv_out
 
+    theano.printing.Print("test:")(self.input)
     self.pooled_out = downsample.max_pool_2d(
       input=self.conv_out,
       ds=pool_size,
       ignore_border=ignore_border
     )
 
-    print self.pooled_out
+    # print self.pooled_out
 
-    self.output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
-    print self.output
-    print 'end'
-    self.make_output(self.output)
+    output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+    output = output.reshape((output.shape[0], output.shape[1], output.shape[2] * output.shape[3]))
+    self.output = output.dimshuffle(1, 0, 2)
+
+    # print 'output:', output
+    # output = self.output.dimshuffle(0, 1, 3)
+    # output = T.dtensor3('output')
+    # output = output.reshape((self.output[0], self.output[1], self.output[2]*self.output[3]))
+    # self.output = self.output.reshape((self.output[0], self.output[1], self.output[2] * self.output[3]))
+    # self.make_output(self.output)
+    # self.make_output(output)
 
   def _create_weights(self, filter_shape, pool_size):
     rng = numpy.random.RandomState(23455)
@@ -662,3 +675,30 @@ class ConvLayer(ForwardLayer):
       borrow=True
     )
 ############################################# END HERE ######################################################
+
+
+class test(ForwardLayer):
+  layer_class = "test"
+
+  def __init__(self, testing, dimension_row, dimension_col, **kwargs):
+    kwargs['n_out'] = sum(source.attrs['n_out'] for source in kwargs['sources'])
+    super(test, self).__init__(**kwargs)
+    self.set_attr("testing", testing)
+    self.set_attr('dimension_row', dimension_row)  # image height
+    self.set_attr('dimension_col', dimension_col)  # image width
+
+    stack_size = 1
+    self.batch = self.sources[0].output[0].shape[1]
+    self.input = T.concatenate([s.output for s in self.sources], axis=-1).dimshuffle(0,1,2,'x')
+    self.input = self.input.reshape((self.batch, stack_size, dimension_row, dimension_col))
+
+    # print self.input.ndim, self.output.ndim
+    #
+    # temp = self.input[2]*self.input[3]
+    #
+    # self.output = self.input
+    # self.output = self.output.flatten(3).reshape((self.input[0], self.input[1], temp), ndim=3)
+    theano.printing.Print("test:")(self.input)
+
+    # self.output = self.input  #self.input.reshape((self.input[0], self.input[1], self.input[2]))
+    # self.make_output(self.output)
