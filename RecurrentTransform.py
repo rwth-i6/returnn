@@ -138,8 +138,8 @@ class RecurrentTransformBase(object):
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
-    :return: z_re
-    :rtype: theano.Variable
+    :return: z_re, updates
+    :rtype: (theano.Variable, dict[theano.Variable, theano.Variable])
     """
     raise NotImplementedError
 

@@ -70,6 +70,9 @@ class _NoOpLayer(Layer):
 
 
 class CopyLayer(_NoOpLayer):
+  """
+  It's mostly the Identity function. But it will make sparse to non-sparse.
+  """
   layer_class = "copy"
 
   def __init__(self, activation=None, **kwargs):
