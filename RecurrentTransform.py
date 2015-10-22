@@ -126,6 +126,15 @@ class RecurrentTransformBase(object):
   def get_sorted_state_vars_initial(self):
     return [v for (k, v) in sorted(self.state_vars_initial.items())]
 
+  def set_sorted_state_vars(self, state_vars):
+    assert len(state_vars) == len(self.state_vars)
+    for (k, v), v_new in zip(sorted(self.state_vars.items()), state_vars):
+      assert getattr(self, k) is v
+      assert v.name == k
+      v_new.name = k
+      self.state_vars[k] = v_new
+      setattr(self, k, v_new)
+
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
