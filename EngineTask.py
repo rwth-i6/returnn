@@ -582,7 +582,6 @@ class TrainTaskThread(TaskThread):
             consnet[i] = basenet[i].get_value()
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       self.network.update_step += sum([ dev.get_num_updates() for dev in self.devices ])
-      print self.network.update_step
       for p, q in zip(self.network.train_params_vars, consnet):
         p.set_value(q)
         encoded.append(q)
