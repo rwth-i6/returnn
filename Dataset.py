@@ -71,6 +71,7 @@ class Dataset(object):
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
     self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
+    self.epoch = None
 
   def sliding_window(self, xr):
     """
@@ -222,6 +223,7 @@ class Dataset(object):
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
+    self.epoch = epoch
     return False
 
   def initialize(self):

@@ -36,7 +36,6 @@ class Updater:
     kwargs.setdefault('adasecant', False)
     kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
-    kwargs.setdefault('start_step', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
@@ -82,7 +81,7 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
-    self.i = theano.shared(numpy.float32(self.start_step), name="updater_i")
+    self.i = theano.shared(numpy.float32(0), name="updater_i")
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
@@ -178,7 +177,7 @@ class Updater:
     return param
 
   def reset(self):
-    self.i.set_value(numpy.float32(0))
+    #self.i.set_value(numpy.float32(0))
     return # this needs to be done smarter
     for param in self.params:
       param.set_value(self.params[param])

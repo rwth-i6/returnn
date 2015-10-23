@@ -279,7 +279,7 @@ class StaticDataset(GeneratingDataset):
 
 class CopyTaskDataset(GeneratingDataset):
 
-  def __init__(self, nsymbols, minlen, maxlen, **kwargs):
+  def __init__(self, nsymbols, minlen=0, maxlen=0, minlen_epoch_factor=0, maxlen_epoch_factor=0, **kwargs):
     # Sparse data.
     super(CopyTaskDataset, self).__init__(input_dim=nsymbols,
                                           output_dim={"data": [nsymbols, 1],
@@ -290,9 +290,15 @@ class CopyTaskDataset(GeneratingDataset):
     self.nsymbols = nsymbols
     self.minlen = minlen
     self.maxlen = maxlen
+    self.minlen_epoch_factor = minlen_epoch_factor
+    self.maxlen_epoch_factor = maxlen_epoch_factor
 
   def get_random_seq_len(self):
-    return self.random.randint(self.minlen, self.maxlen + 1)
+    assert isinstance(self.epoch, int)
+    minlen = int(self.minlen + self.minlen_epoch_factor * self.epoch)
+    maxlen = int(self.maxlen + self.maxlen_epoch_factor * self.epoch)
+    assert 0 < minlen <= maxlen
+    return self.random.randint(minlen, maxlen + 1)
 
   def generate_seq(self, seq_idx):
     """

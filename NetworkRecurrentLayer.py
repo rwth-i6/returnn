@@ -435,8 +435,6 @@ class RecurrentUnitLayer(Layer):
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     self.recurrent_transform = recurrent_transform_inst
-    if self.recurrent_transform:
-      non_sequences += self.recurrent_transform.get_sorted_non_sequence_inputs()
 
     self.out_dec = self.index.shape[0]
     # scan over sequence
@@ -474,6 +472,9 @@ class RecurrentUnitLayer(Layer):
         #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
       if sequences == self.b:
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['attention'] == 'input' else 0)
+
+      if self.recurrent_transform:
+        outputs_info += self.recurrent_transform.get_sorted_state_vars_initial()
 
       def stepr(x_t, z_t, i_t, *args):
         mask,mass = 0,0
@@ -537,26 +538,29 @@ class RecurrentUnitLayer(Layer):
 
       o_output = T.as_tensor(numpy.ones((unit.n_units,), dtype='float32'))
       o_h = T.as_tensor(numpy.ones((unit.n_units,), dtype='float32'))
-      def step(x_t, z_t, i_t, *args):
+      def step(x_t, z_t, i_t, y_p, c_p, *other_args):
+        # See Unit.scan() for seqs.
+        # args: seqs (x_t = unit.xc, z_t, i_t), outputs (# unit.n_act, y_p, c_p, ...), non_seqs (none)
+        other_outputs = []
         if self.recurrent_transform:
-          attention_non_seq_inputs = args[len(args) - len(self.recurrent_transform.input_vars):]
-          args = args[:len(args) - len(self.recurrent_transform.input_vars)]
-        updates = {}
-        if self.recurrent_transform:
-          z_r, r_updates = self.recurrent_transform.step(args[0])
+          state_vars = other_args[:len(self.recurrent_transform.state_vars)]
+          self.recurrent_transform.set_sorted_state_vars(state_vars)
+          z_r, r_updates = self.recurrent_transform.step(y_p)
           z_t += z_r
-          updates.update(r_updates)
-        z_t += T.dot(args[0], W_re)
+          for v in self.recurrent_transform.get_sorted_state_vars():
+            other_outputs += [r_updates[v]]
+        z_t += T.dot(y_p, W_re)
         partition = z_t.shape[1] / 4
         ingate = T.nnet.sigmoid(z_t[:,:partition])
         forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
         outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
         input = T.tanh(z_t[:,3*partition:4*partition])
-        c_t = forgetgate * args[1] + ingate * input
+        c_t = forgetgate * c_p + ingate * input
         y_t = outgate * T.tanh(c_t)
         i_output = T.outer(i_t, o_output)
         i_h = T.outer(i_t, o_h)
-        return y_t * i_output, c_t * i_h + args[1] * (1 - i_h) #, updates
+        # return: next outputs (# unit.n_act, y_t, c_t, ...)
+        return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
 
       index_f = T.cast(index, theano.config.floatX)
       unit.set_parent(self)

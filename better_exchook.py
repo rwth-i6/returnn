@@ -100,7 +100,7 @@ def parse_py_statement(line):
 
 
 import keyword
-pykeywords = set(keyword.kwlist)
+pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 def grep_full_py_identifiers(tokens):
 	global pykeywords
@@ -234,9 +234,77 @@ def fallback_findfile(filename):
 	if altfn[-4:-1] == ".py": altfn = altfn[:-1] # *.pyc or whatever
 	return altfn
 
+def is_source_code_missing_open_brackets(source_code):
+	open_brackets = "[{("
+	close_brackets = "]})"
+	last_close_bracket = [-1]  # stack
+	counters = [0] * len(open_brackets)
+	# Go in reverse order through the tokens.
+	# Thus, we first should see the closing brackets, and then the matching opening brackets.
+	for t_type, t_content in reversed(list(parse_py_statement(source_code))):
+		if t_type != "op": continue  # we are from now on only interested in ops (including brackets)
+		if t_content in open_brackets:
+			idx = open_brackets.index(t_content)
+			if last_close_bracket[-1] == idx:  # ignore if we haven't seen the closing one
+				counters[idx] -= 1
+				del last_close_bracket[-1]
+		elif t_content in close_brackets:
+			idx = close_brackets.index(t_content)
+			counters[idx] += 1
+			last_close_bracket += [idx]
+	return not all([c == 0 for c in counters])
+
+def get_source_code(filename, lineno, module_globals):
+	import linecache
+	linecache.checkcache(filename)
+	source_code = linecache.getline(filename, lineno, module_globals)
+	# In case of a multi-line statement, lineno is usually the last line.
+	# We are checking for missing open brackets and add earlier code lines.
+	while is_source_code_missing_open_brackets(source_code):
+		if lineno <= 0: break
+		lineno -= 1
+		source_code = "".join([linecache.getline(filename, lineno, module_globals), source_code])
+	return source_code
+
+def add_indent_lines(prefix, s):
+	if not s: return prefix
+	lines = s.splitlines(True)
+	return "".join([prefix + lines[0]] + [" " * len(prefix) + l for l in lines[1:]])
+
+def get_indent_prefix(s):
+	return s[:len(s) - len(s.lstrip())]
+
+def get_same_indent_prefix(lines):
+	if not lines: return ""
+	prefix = get_indent_prefix(lines[0])
+	if not prefix: return ""
+	if all([l.startswith(prefix) for l in lines]):
+		return prefix
+	return None
+
+def remove_indent_lines(s):
+	if not s: return ""
+	lines = s.splitlines(True)
+	prefix = get_same_indent_prefix(lines)
+	if prefix is None:  # not in expected format. just lstrip all lines
+		return "".join([l.lstrip() for l in lines])
+	return "".join([l[len(prefix):] for l in lines])
+
+def replace_tab_indent(s, replace="    "):
+	prefix = get_indent_prefix(s)
+	return prefix.replace("\t", replace) + s[len(prefix):]
+
+def replace_tab_indents(s, replace="    "):
+	lines = s.splitlines(True)
+	return "".join([replace_tab_indent(l, replace) for l in lines])
+
+
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False):
 	out = []
-	def output(ln): out.append(ln + "\n")
+	def output(s1, s2=None):
+		if s2 is not None:
+			s1 = add_indent_lines(s1, s2)
+		out.append(s1 + "\n")
 	if tb is None:
 		try:
 			tb = sys._getframe()
@@ -250,7 +318,6 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 		if isframe(tb): output('Traceback (most recent call first)')
 		else: output('Traceback (most recent call last):') # expect traceback-object (or compatible)
 	try:
-		import linecache
 		if limit is None:
 			if hasattr(sys, 'tracebacklimit'):
 				limit = sys.tracebacklimit
@@ -263,7 +330,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 			return obj
 		def _trySet(old, prefix, func):
 			if old is not None: return old
-			try: return prefix + func()
+			try: return add_indent_lines(prefix, func())
 			except KeyError: return old
 			except Exception as e:
 				return prefix + "!" + e.__class__.__name__ + ": " + str(e)
@@ -283,14 +350,13 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 				if altfn:
 					output("    -- couldn't find file, trying this instead: " + altfn)
 					filename = altfn
-			linecache.checkcache(filename)
-			line = linecache.getline(filename, lineno, f.f_globals)
-			if line:
-				line = line.strip()
-				output('    line: ' + line)
+			source_code = get_source_code(filename, lineno, f.f_globals)
+			if source_code:
+				source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
+				output('    line: ', source_code)
 				output('    locals:')
 				alreadyPrintedLocals = set()
-				for tokenstr in grep_full_py_identifiers(parse_py_statement(line)):
+				for tokenstr in grep_full_py_identifiers(parse_py_statement(source_code)):
 					splittedtoken = tuple(tokenstr.split("."))
 					for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
 						if token in alreadyPrintedLocals: continue
@@ -299,7 +365,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 						tokenvalue = _trySet(tokenvalue, "<global> ", lambda: pretty_print(_resolveIdentifier(f.f_globals, token)))
 						tokenvalue = _trySet(tokenvalue, "<builtin> ", lambda: pretty_print(_resolveIdentifier(f.f_builtins, token)))
 						tokenvalue = tokenvalue or "<not found>"
-						output('      ' + ".".join(token) + " = " + tokenvalue)
+						output('      ' + ".".join(token) + " = ", tokenvalue)
 						alreadyPrintedLocals.add(token)
 				if len(alreadyPrintedLocals) == 0: output("       no locals")
 			else:
@@ -367,7 +433,40 @@ def replace_traceback_format_tb():
 	import traceback
 	traceback.format_tb = format_tb
 
+
+
+def test_is_source_code_missing_open_brackets():
+	assert is_source_code_missing_open_brackets("a") is False
+	assert is_source_code_missing_open_brackets("a)") is True
+	assert is_source_code_missing_open_brackets("fn()") is False
+	assert is_source_code_missing_open_brackets("fn().b()") is False
+	assert is_source_code_missing_open_brackets("fn().b()[0]") is False
+	assert is_source_code_missing_open_brackets("fn({a[0]: 'b'}).b()[0]") is False
+	assert is_source_code_missing_open_brackets("a[0]: 'b'}).b()[0]") is True
+
+def test_add_indent_lines():
+	assert add_indent_lines("foo ", " bar") == "foo  bar"
+	assert add_indent_lines("foo ", " bar\n baz") == "foo  bar\n     baz"
+
+def test_get_same_indent_prefix():
+	assert get_same_indent_prefix(["a", "b"]) == ""
+	assert get_same_indent_prefix([" a"]) == " "
+	assert get_same_indent_prefix([" a", "  b"]) == " "
+
+def test_remove_indent_lines():
+	assert remove_indent_lines(" a\n  b") == "a\n b"
+	assert remove_indent_lines("  a\n b") == "a\nb"
+	assert remove_indent_lines("\ta\n\t b") == "a\n b"
+
 if __name__ == "__main__":
+	if " ".join(sys.argv[1:]) == "test":
+		for k, v in sorted(globals().items()):
+			if not k.startswith("test_"): continue
+			print("running: %s()" % k)
+			v()
+		print("ok.")
+		sys.exit()
+
 	# some examples
 	# this code produces this output: https://gist.github.com/922622
 
@@ -383,6 +482,12 @@ if __name__ == "__main__":
 	try:
 		f = lambda x: None
 		f(x, y)
+	except Exception:
+		better_exchook(*sys.exc_info())
+
+	try:
+		(lambda x: None)(__name__,
+						 42)  # multiline
 	except Exception:
 		better_exchook(*sys.exc_info())
 

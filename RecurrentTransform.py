@@ -126,11 +126,20 @@ class RecurrentTransformBase(object):
   def get_sorted_state_vars_initial(self):
     return [v for (k, v) in sorted(self.state_vars_initial.items())]
 
+  def set_sorted_state_vars(self, state_vars):
+    assert len(state_vars) == len(self.state_vars)
+    for (k, v), v_new in zip(sorted(self.state_vars.items()), state_vars):
+      assert getattr(self, k) is v
+      assert v.name == k
+      v_new.name = k
+      self.state_vars[k] = v_new
+      setattr(self, k, v_new)
+
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
-    :return: z_re
-    :rtype: theano.Variable
+    :return: z_re, updates
+    :rtype: (theano.Variable, dict[theano.Variable, theano.Variable])
     """
     raise NotImplementedError
 
@@ -408,19 +417,29 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
     self.add_input(self.B, name="B")
+    self.B_index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), "B_index")
 
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
+    self.W_t_frac = self.add_param(layer.create_random_uniform_weights(n=1, m=2, p=n_out, name="W_t_frac"))
     self.b_att_re = self.add_param(layer.create_bias(2, name='b_att_re'))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
+    self.W_state_in = self.add_param(layer.create_random_uniform_weights(n=3, m=n_out * 4, name="W_state_in"))
 
+    self.c = self.add_state_var(T.constant(0), name="c")
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
-    self.t_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="t_max"))
-    self.std_max = self.add_var(theano.shared(numpy.cast['float32'](5), name="std_max"))
+    self.t_max = self.add_var(theano.shared(numpy.cast['float32'](2), name="t_max"))
+    self.std_max = self.add_var(theano.shared(numpy.cast['float32'](2), name="std_max"))
 
   def step(self, y_p):
-    # self.B is (time,batch,dim)
+    # y_p is (batch,n_out)
+    # B is (time,batch,n_in)
+    # B_index is (time,batch)
+    n_batch = self.B.shape[1]
+
+    t_frac = T.cast((self.t + 1) / (self.c.dimshuffle('x') + 1), dtype="float32")  # (batch,)
+    t_frac_row = t_frac.reshape((n_batch, 1))  # (batch,1)
     b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
-    a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)
+    a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + T.dot(t_frac_row, self.W_t_frac) + b)  # (batch,2)
     dt = a[:, 0] * self.t_max  # (batch,)
     std = a[:, 1] * self.std_max  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)
@@ -431,14 +450,19 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     # gauss window
     idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
-    f_e = T.exp(((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
+    f_e = T.exp(-((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
     norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time,batch)
     w_t = f_e * norm
-    w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,dim)
+    w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,n_in)
+    B_index_bc = self.B_index.dimshuffle(0, 1, 'x')  # (time,batch,n_in)
 
-    z_re = T.dot(T.sum(self.B * w_t_bc, axis=0, keepdims=False), self.W_att_in)
+    att = T.sum(self.B * w_t_bc * B_index_bc, axis=0, keepdims=False)  # (batch,n_in)
+    z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
+    state_t_frac = T.constant(1, dtype="float32").dimshuffle('x', 'x') - t_frac_row  # (batch,1)
+    state = T.concatenate([state_t_frac, a], axis=1)  # (batch,3)
+    z_re += T.dot(state, self.W_state_in)
 
-    return z_re, {self.t: t}
+    return z_re, {self.t: t, self.c: self.c + 1}
 
 
 def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):
