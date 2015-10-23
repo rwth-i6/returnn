@@ -252,7 +252,8 @@ class Device(object):
       self.trainnet.declare_train_params(**train_param_args)
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet.update_step = model.attrs['update_step']
+      if 'update_step'in model.attrs:
+        self.trainnet.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
     self.used_data_keys = set(self.trainnet.j.keys())
