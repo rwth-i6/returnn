@@ -235,12 +235,6 @@ class Device(object):
     import h5py
     self.T = T
     self.network_task = config.value('task', 'train')
-    update_step = 0
-    if config.has('load'):
-      model = h5py.File(config.value('load', ''), "r")
-      if "update_step" in model.attrs:
-        update_step = model.attrs["update_step"]
-      model.close()
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
       self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
@@ -256,6 +250,10 @@ class Device(object):
       self.testnet = LayerNetwork.from_config_topology(config, mask="unity", train_flag=False)
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
+    if config.has('load'):
+      model = h5py.File(config.value('load', ''), "r")
+      self.trainnet.update_step = model.attrs['update_step']
+      model.close()
     # initialize batch
     self.used_data_keys = set(self.trainnet.j.keys())
     assert "data" in self.used_data_keys
@@ -325,8 +323,6 @@ class Device(object):
         self.updater = Updater.initFromConfig(self.config)
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
-      self.updater.i.set_value(config.int("update_step", update_step))
-      self.trainnet.update_step = config.int("update_step", update_step)
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]

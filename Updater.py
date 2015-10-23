@@ -21,7 +21,6 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "start_step": config.float('start_step', 0),
       "momentum": config.float("momentum", 0)}
     return cls(**kwargs)
 
@@ -40,7 +39,7 @@ class Updater:
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, start_step):
+  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
     """
     :type momentum: float
     :type gradient_clip: float
@@ -55,10 +54,8 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
-    self.start_step = start_step
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
-    self.i = theano.shared(numpy.float32(0), name="updater_i")
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
@@ -94,6 +91,7 @@ class Updater:
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
+    self.i = theano.shared(numpy.float32(network.update_step), name="updater_i")
 
     if self.momentum > 0:
       self.deltas = {p: theano.shared(
@@ -194,8 +192,7 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
-    i = self.i
-    i_t = i + 1.
+    i_t = self.i + 1.
     beta1=0.9
     beta2=0.999
     a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
@@ -521,7 +518,7 @@ class Updater:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))
     updates.extend([(p, p + upd[p]) for p in upd if upd[p]])
-    updates.append((i, i_t))
+    updates.append((self.i, i_t))
     if self.adasecant:
       updates.append((step, step + 1))
     #for u in updates:
