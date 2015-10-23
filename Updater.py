@@ -58,6 +58,7 @@ class Updater:
     self.start_step = start_step
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
+    self.i = theano.shared(numpy.float32(0), name="updater_i")
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
@@ -81,7 +82,6 @@ class Updater:
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
     assert not self.isInitialized
-    self.i = theano.shared(numpy.float32(0), name="updater_i")
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:

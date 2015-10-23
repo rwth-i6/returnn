@@ -326,6 +326,8 @@ class Device(object):
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
       self.updater.i.set_value(update_step)
+      update_step = config.int("update_step", update_step)
+      print ">>>>>>>",update_step
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
