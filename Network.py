@@ -40,8 +40,10 @@ class LayerNetwork(object):
     self.recurrent = False  # any of the from_...() functions will set this
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.known_grads = {}; " :type: dict[theano.Variable,theano.Variable]"
+    self.json_content = "{}"
     self.costs = {}
     self.total_cost = T.constant(0)
+    self.update_step = 0
     self.errors = {}
     self.ctc_priors = None
 
@@ -142,6 +144,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
+    network.json_content = json.dumps(json_content)
     assert isinstance(json_content, dict)
     network.recurrent = False
     network.y['data'].n_out = network.n_out['data'][0]
@@ -555,6 +558,8 @@ class LayerNetwork(object):
     :type epoch: int
     """
     grp = model.create_group('training')
+    model.attrs['json'] = self.json_content
+    model.attrs['update_step'] = self.update_step
     model.attrs['epoch'] = epoch
     model.attrs['output'] = 'output' #self.output.keys
     model.attrs['n_in'] = self.n_in
