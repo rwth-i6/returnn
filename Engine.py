@@ -423,7 +423,7 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    if not 'train' in self.dataset_batches:
+    if not 'train' in self.dataset_batches or self.batch_variance > 0.0:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
@@ -432,7 +432,6 @@ class Engine:
     else:
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
-
     start_batch = self.start_batch if self.epoch == self.start_epoch else 0
     trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
                               learning_rate=self.learning_rate, updater=self.updater,

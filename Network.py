@@ -337,7 +337,7 @@ class LayerNetwork(object):
       if 'encoder' in model[layer_name].attrs:
         index = output_index
       if 'target' in model[layer_name].attrs:
-        target =  model[layer_name].attrs['target']
+        target = model[layer_name].attrs['target']
         if target != "null" and target not in network.y:
           assert target in network.n_out
           if network.n_out[target][1] == 1:
