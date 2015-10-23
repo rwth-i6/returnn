@@ -325,9 +325,8 @@ class Device(object):
         self.updater = Updater.initFromConfig(self.config)
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
-      self.updater.i.set_value(update_step)
-      update_step = config.int("update_step", update_step)
-      #print ">>>>>>>",update_step
+      self.updater.i.set_value(config.int("update_step", update_step))
+      self.trainnet.update_step = config.int("update_step", update_step)
 
       # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
@@ -702,6 +701,11 @@ class Device(object):
           converted = param.reshape(our_param_shape)
           our_p_train.set_value(converted)
           our_p_test.set_value(converted)
+      elif cmd == 'get-num-updates':
+        if self.updater:
+          output_queue.send(int(self.updater.i.get_value()))
+        else:
+          output_queue.send(0)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
         output_queue.send(len(network_params))
@@ -875,6 +879,17 @@ class Device(object):
       assert self.main_pid == os.getpid()
       self.input_queue.send("set-learning-rate")
       self.input_queue.send(learning_rate)
+
+  def get_num_updates(self):
+    if self.blocking:
+      if self.updater:
+        self.updater.i.get_value()
+      else:
+        return 0
+    else:
+      assert self.main_pid == os.getpid()
+      self.input_queue.send("get-num-updates")
+      return int(self.output_queue.recv())
 
   def maybe_update_network(self, network):
     """
