@@ -34,13 +34,17 @@ def eval_shell_env(token):
 
 def eval_shell_str(s):
   """
-  :type s: str
+  :type s: str | list[str]
   :rtype: list[str]
 
   Parses `s` as shell like arguments (via shlex.split) and evaluates shell environment variables (eval_shell_env).
   """
   tokens = []
-  for token in shlex.split(s):
+  if isinstance(s, (list, tuple)):
+    l = s
+  else:
+    l = shlex.split(s)
+  for token in l:
     if token.startswith("$"):
       tokens += eval_shell_str(eval_shell_env(token))
     else:
