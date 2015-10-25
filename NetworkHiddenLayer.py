@@ -1,7 +1,7 @@
 
 import theano
 import numpy
-from theano import tensor as T, function, printing
+from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
@@ -621,7 +621,7 @@ class ConvLayer(_NoOpLayer):
     else:
       assert False, 'invalid border_mode %r' % border_mode
 
-    n_out = conv_n_out * stack_size * n_features / (pool_size[0] * pool_size[1])
+    n_out = conv_n_out * n_features / (pool_size[0] * pool_size[1])
     super(ConvLayer, self).__init__(**kwargs)
 
     # set all attributes of this class
@@ -681,7 +681,7 @@ class ConvLayer(_NoOpLayer):
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
-    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter * stack_size)
+    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
     self.make_output(self.output)
 
