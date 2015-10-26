@@ -1,11 +1,11 @@
+
 from math import sqrt
 import numpy
 from theano import tensor as T
 import theano
 from Log import log
 from TheanoUtil import time_batch_make_flat
-
-__author__ = 'az'
+import json
 
 
 class Container(object):
@@ -57,11 +57,13 @@ class Container(object):
       value = self.params[p].get_value()
       dset = grp.create_dataset(p, value.shape, dtype='f')
       dset[...] = value
-    for p in self.attrs.keys():
+    for p, v in self.attrs.items():
+      if isinstance(v, dict):
+        v = json.dumps(v, sort_keys=True)
       try:
-        grp.attrs[p] = self.attrs[p]
+        grp.attrs[p] = v
       except TypeError:
-        print >> log.v3, "warning: invalid type of attribute", "\"" + p + "\"", "(" + str(type(self.attrs[p])) + ")", "in layer", self.name
+        print >> log.v3, "warning: invalid type of attribute %r (%s) in layer %s" % (p, type(v), self.name)
 
   def load(self, head):
     """

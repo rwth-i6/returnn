@@ -431,15 +431,14 @@ class AttentionTimeGauss(RecurrentTransformBase):
     # y_p is (batch,n_out)
     # B is (time,batch,n_in)
     # B_index is (time,batch)
-    n_time = self.B.shape[0]
+    attribs = self.layer.attrs["recurrent_transform_attribs"]
     n_batch = self.B.shape[1]
 
-    # TODO: Make them configurable via layer attribs.
-    self.t_min = T.constant(0.5, dtype="float32")
-    self.t_max = T.constant(1.5, dtype="float32")
-    self.std_min = T.constant(1, dtype="float32")
-    self.std_max = T.constant(2, dtype="float32")
-    self.n_beam = T.constant(20, dtype="int32")
+    self.t_min = T.constant(attribs.get("t_min", 0.5), dtype="float32")
+    self.t_max = T.constant(attribs.get("t_max", 1.5), dtype="float32")
+    self.std_min = T.constant(attribs.get("std_min", 1), dtype="float32")
+    self.std_max = T.constant(attribs.get("std_max", 2), dtype="float32")
+    self.n_beam = T.constant(attribs.get("beam", 20), dtype="int32")
 
     b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)

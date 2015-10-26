@@ -9,6 +9,7 @@ from math import sqrt
 from OpLSTM import LSTMOpInstance
 from FastLSTM import LSTMOp2Instance
 import RecurrentTransform
+import json
 
 
 class RecurrentLayer(HiddenLayer):
@@ -260,6 +261,7 @@ class RecurrentUnitLayer(Layer):
                n_dec = 0, # number of time steps to decode
                attention = "none", # soft attention (none, input, time) # deprecated
                recurrent_transform = "none",
+               recurrent_transform_attribs = None,
                attention_sigma = 1.0,
                attention_beam = 3, # soft attention context window
                base = None,
@@ -300,6 +302,9 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention', attention.encode("utf8") if attention else None)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
+    if isinstance(recurrent_transform_attribs, str):
+      recurrent_transform_attribs = json.loads(recurrent_transform_attribs)
+    self.set_attr('recurrent_transform_attribs', recurrent_transform_attribs)
     self.set_attr('attention_sigma', attention_sigma)
     if lm: # TODO hack
       recurrent_transform += "_lm"
