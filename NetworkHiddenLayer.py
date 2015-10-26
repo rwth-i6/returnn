@@ -165,6 +165,21 @@ class BinOpLayer(_NoOpLayer):
     return getattr(T, op)
 
 
+class GenericCodeLayer(_NoOpLayer):
+  layer_class = "generic_code"
+
+  def __init__(self, code, n_out, **kwargs):
+    """
+    :param str code: generic Python code used for eval(). must return some output
+    """
+    super(GenericCodeLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    code = code.encode("utf8")
+    self.set_attr('code', code)
+    output = eval(code, {"self": self, "s": self.sources, "T": T, "theano": theano, "numpy": numpy, "f32": numpy.float32})
+    self.make_output(output)
+
+
 class DualStateLayer(ForwardLayer):
   layer_class = "dual"
 
