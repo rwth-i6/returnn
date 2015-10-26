@@ -440,7 +440,6 @@ class AttentionTimeGauss(RecurrentTransformBase):
     self.std_min = T.constant(1, dtype="float32")
     self.std_max = T.constant(2, dtype="float32")
     self.n_beam = T.constant(20, dtype="int32")
-    n_beam = T.switch(T.le(self.n_beam, n_time), self.n_beam, n_time)
 
     b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)
@@ -452,7 +451,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     t_bc = t.dimshuffle('x', 0)  # (beam,batch)
 
     t_int = T.iround(t)  # (batch,)
-    idxs_0 = (T.arange(n_beam) - n_beam / 2).dimshuffle(0, 'x')  # (beam,batch)
+    idxs_0 = (T.arange(self.n_beam) - self.n_beam / 2).dimshuffle(0, 'x')  # (beam,batch)
     idxs = idxs_0 + t_int.dimshuffle('x', 0)  # (beam,batch). centered around t_int
 
     # gauss window
