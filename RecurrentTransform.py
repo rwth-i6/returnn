@@ -135,6 +135,11 @@ class RecurrentTransformBase(object):
       self.state_vars[k] = v_new
       setattr(self, k, v_new)
 
+  def get_state_vars_seq(self, state_var):
+    assert state_var.name in self.state_vars
+    idx = sorted(self.state_vars.keys()).index(state_var.name)
+    return self.layer.recurrent_transform_state_var_seqs[idx]
+
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
@@ -142,6 +147,12 @@ class RecurrentTransformBase(object):
     :rtype: (theano.Variable, dict[theano.Variable, theano.Variable])
     """
     raise NotImplementedError
+
+  def cost(self):
+    """
+    :rtype: theano.Variable | None
+    """
+    return None
 
 
 class AttentionTest(RecurrentTransformBase):
@@ -473,6 +484,17 @@ class AttentionTimeGauss(RecurrentTransformBase):
     z_re += T.dot(state, self.W_state_in)
 
     return z_re, {self.t: self.t + dt, self.c: self.c + 1}
+
+  def cost(self):
+    times = T.sum(self.B_index, axis=0)  # (batch,)
+    t_seq = self.get_state_vars_seq(self.t)  # (time,batch)
+    # Get the last frame. -2 because the last update is not used.
+    # We need an extra check for small batches, would crash otherwise.
+    is_small_batch = T.le(t_seq.shape[0], 1)
+    last_frame_idx = T.switch(is_small_batch, 0, -2)
+    t_last = t_seq[last_frame_idx, :]  # (batch,)
+    t_last = T.switch(is_small_batch, self.state_vars_initial["t"], t_last)
+    return T.sum((t_last - (times - 1)) ** 2)  # times - 1 are the last frames of the seq
 
 
 def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):

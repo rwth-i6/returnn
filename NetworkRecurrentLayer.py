@@ -164,9 +164,11 @@ class LSTMC(Unit):
     # See OpLSTMCustom.LSTMCustomOp.
     # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
-    result = op(z[::-(2 * go_backwards - 1)],
+    op_res = op(z[::-(2 * go_backwards - 1)],
                 outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
-    return [ result[0], result[2].dimshuffle('x',0,1) ]
+    result = [ op_res[0], op_res[2].dimshuffle('x',0,1) ] + op_res[3:]
+    assert len(result) == len(outputs_info)
+    return result
 
 
 class LSTMQ(Unit):
@@ -588,6 +590,9 @@ class RecurrentUnitLayer(Layer):
       if not isinstance(outputs, list):
         outputs = [outputs]
 
+      if self.recurrent_transform:
+        self.recurrent_transform_state_var_seqs = outputs[-len(self.recurrent_transform.state_vars):]
+
       if False and self.attrs['lm'] and self.train_flag:
         #self.y_m = outputs[-1].reshape((outputs[-1].shape[0]*outputs[-1].shape[1],outputs[-1].shape[2])) # (TB)C
         j = (index.flatten() > 0).nonzero() # (TB)
@@ -627,3 +632,12 @@ class RecurrentUnitLayer(Layer):
     #self.act[1] = T.switch(T.eq(jindex, T.zeros_like(jindex)), T.zeros_like(self.act[1]), self.act[1])
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)
+
+  def cost(self):
+    """
+    :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
+    :returns: cost, known_grads
+    """
+    if self.recurrent_transform:
+      return self.recurrent_transform.cost(), None
+    return None, None
