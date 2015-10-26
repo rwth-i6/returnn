@@ -445,16 +445,16 @@ class AttentionTimeGauss(RecurrentTransformBase):
     attribs = self.layer.attrs["recurrent_transform_attribs"]
     n_batch = self.B.shape[1]
 
-    self.t_min = T.constant(attribs.get("t_min", 0.5), dtype="float32")
-    self.t_max = T.constant(attribs.get("t_max", 1.5), dtype="float32")
+    self.dt_min = T.constant(attribs.get("dt_min", 0.5), dtype="float32")
+    self.dt_max = T.constant(attribs.get("dt_max", 1.5), dtype="float32")
     self.std_min = T.constant(attribs.get("std_min", 1), dtype="float32")
     self.std_max = T.constant(attribs.get("std_max", 2), dtype="float32")
     self.n_beam = T.constant(attribs.get("beam", 20), dtype="int32")
 
     b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)
-    dt = a[:, 0] * self.t_max  # (batch,)
-    std = a[:, 1] * self.std_max  # (batch,)
+    dt = self.dt_min + a[:, 0] * (self.dt_max - self.dt_min)  # (batch,)
+    std = self.std_min + a[:, 1] * (self.std_max - self.std_min)  # (batch,)
     std_t_bc = std.dimshuffle('x', 0)  # (beam,batch)
 
     t = self.t  # (batch,). that's the old t, which starts at zero.
