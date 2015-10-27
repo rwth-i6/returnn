@@ -28,7 +28,7 @@ class Container(object):
     :param str bias_init: see self.create_bias()
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
-    self.attrs = {}; """ :type: dict[str,str|float|int|bool] """
+    self.attrs = {}; """ :type: dict[str,str|float|int|bool|dict] """
     if layer_class:
       self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
