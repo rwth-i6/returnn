@@ -86,7 +86,8 @@ class RecurrentTransformBase(object):
     """
     pass
 
-  def add_param(self, v):
+  def add_param(self, v, name = None):
+    if name: v.name = name
     assert v.name
     if not self.for_custom:
       self.layer.add_param(v, v.name + "_" + self.name)
@@ -328,8 +329,8 @@ class AttentionRBFLM(AttentionRBF):
   name = "attention_rbf_lm"
   def create_vars(self):
     super(AttentionRBFLM, self).create_vars()
-    self.W_lm_in = self.add_param(self.layer.W_lm_in)
-    self.W_lm_out = self.add_param(self.layer.W_lm_out)
+    self.W_lm_in = self.add_param(self.layer.W_lm_in, name = "W_lm_in")
+    self.W_lm_out = self.add_param(self.layer.W_lm_out, name = "W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
 
