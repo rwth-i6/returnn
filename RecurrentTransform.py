@@ -136,6 +136,11 @@ class RecurrentTransformBase(object):
       self.state_vars[k] = v_new
       setattr(self, k, v_new)
 
+  def get_state_vars_seq(self, state_var):
+    assert state_var.name in self.state_vars
+    idx = sorted(self.state_vars.keys()).index(state_var.name)
+    return self.layer.recurrent_transform_state_var_seqs[idx]
+
   def step(self, y_p):
     """
     :param theano.Variable y_p: output of last time-frame. 2d (batch,dim)
@@ -143,6 +148,12 @@ class RecurrentTransformBase(object):
     :rtype: (theano.Variable, dict[theano.Variable, theano.Variable])
     """
     raise NotImplementedError
+
+  def cost(self):
+    """
+    :rtype: theano.Variable | None
+    """
+    return None
 
 
 class AttentionTest(RecurrentTransformBase):
@@ -418,52 +429,73 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
     self.add_input(self.B, name="B")
-    self.B_index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), "B_index")
+    self.B_index = self.add_input(self.layer.base[0].index, "B_index")
 
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
-    self.W_t_frac = self.add_param(layer.create_random_uniform_weights(n=1, m=2, p=n_out, name="W_t_frac"))
     self.b_att_re = self.add_param(layer.create_bias(2, name='b_att_re'))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
     self.W_state_in = self.add_param(layer.create_random_uniform_weights(n=3, m=n_out * 4, name="W_state_in"))
 
-    self.c = self.add_state_var(T.constant(0), name="c")
+    self.c = self.add_state_var(T.constant(0, dtype="int32"), name="c")
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
-    self.t_max = self.add_var(theano.shared(numpy.cast['float32'](2), name="t_max"))
-    self.std_max = self.add_var(theano.shared(numpy.cast['float32'](2), name="std_max"))
 
   def step(self, y_p):
     # y_p is (batch,n_out)
     # B is (time,batch,n_in)
     # B_index is (time,batch)
+    attribs = self.layer.attrs["recurrent_transform_attribs"]
     n_batch = self.B.shape[1]
+
+    self.dt_min = T.constant(attribs.get("dt_min", 0.5), dtype="float32")
+    self.dt_max = T.constant(attribs.get("dt_max", 1.5), dtype="float32")
+    self.std_min = T.constant(attribs.get("std_min", 1), dtype="float32")
+    self.std_max = T.constant(attribs.get("std_max", 2), dtype="float32")
+    self.n_beam = T.constant(attribs.get("beam", 20), dtype="int32")
+
+    b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
+    a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)
+    dt = self.dt_min + a[:, 0] * (self.dt_max - self.dt_min)  # (batch,)
+    std = self.std_min + a[:, 1] * (self.std_max - self.std_min)  # (batch,)
+    std_t_bc = std.dimshuffle('x', 0)  # (beam,batch)
+
+    t = self.t  # (batch,). that's the old t, which starts at zero.
+    t_bc = t.dimshuffle('x', 0)  # (beam,batch)
+
+    t_int = T.iround(t)  # (batch,)
+    idxs_0 = (T.arange(self.n_beam) - self.n_beam / 2).dimshuffle(0, 'x')  # (beam,batch)
+    idxs = idxs_0 + t_int.dimshuffle('x', 0)  # (beam,batch). centered around t_int
+
+    # gauss window
+    f_e = T.exp(-(T.cast(t_bc - idxs, dtype="float32") ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
+    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (beam,batch)
+    w_t = f_e * norm  # (beam,batch)
+    w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (beam,batch,n_in)
+
+    times_bc = T.sum(self.B_index, axis=0).dimshuffle('x', 0)  # (*,batch)
+    idxs_wrapped = (idxs + times_bc) % times_bc  # (beam,batch) in [0,n_time-1] range
+    batches = T.arange(n_batch)  # (batch,)
+    B_beam = self.B[idxs_wrapped[:, batches], batches, :]  # (beam,batch,n_in)
+    att = T.sum(B_beam * w_t_bc, axis=0, keepdims=False)  # (batch,n_in)
+    z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
 
     t_frac = T.cast((self.t + 1) / (self.c.dimshuffle('x') + 1), dtype="float32")  # (batch,)
     t_frac_row = t_frac.reshape((n_batch, 1))  # (batch,1)
-    b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
-    a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + T.dot(t_frac_row, self.W_t_frac) + b)  # (batch,2)
-    dt = a[:, 0] * self.t_max  # (batch,)
-    std = a[:, 1] * self.std_max  # (batch,)
-    std_t_bc = std.dimshuffle('x', 0)
-
-    t_old = self.t  # (batch,)
-    t = t_old + dt
-    t_bc = t.dimshuffle('x', 0)  # (time,batch)
-
-    # gauss window
-    idxs = T.cast(T.arange(self.B.shape[0]), dtype="float32").dimshuffle(0, 'x')  # (time,batch)
-    f_e = T.exp(-((t_bc - idxs) ** 2) / (2 * std_t_bc ** 2))  # (time,batch)
-    norm = T.constant(1.0, dtype="float32") / (std_t_bc * T.constant(sqrt(2 * pi), dtype="float32"))  # (time,batch)
-    w_t = f_e * norm
-    w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (time,batch,n_in)
-    B_index_bc = self.B_index.dimshuffle(0, 1, 'x')  # (time,batch,n_in)
-
-    att = T.sum(self.B * w_t_bc * B_index_bc, axis=0, keepdims=False)  # (batch,n_in)
-    z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
     state_t_frac = T.constant(1, dtype="float32").dimshuffle('x', 'x') - t_frac_row  # (batch,1)
     state = T.concatenate([state_t_frac, a], axis=1)  # (batch,3)
     z_re += T.dot(state, self.W_state_in)
 
-    return z_re, {self.t: t, self.c: self.c + 1}
+    return z_re, {self.t: self.t + dt, self.c: self.c + 1}
+
+  def cost(self):
+    times = T.sum(self.B_index, axis=0)  # (batch,)
+    t_seq = self.get_state_vars_seq(self.t)  # (time,batch)
+    # Get the last frame. -2 because the last update is not used.
+    # We need an extra check for small batches, would crash otherwise.
+    is_small_batch = T.le(t_seq.shape[0], 1)
+    last_frame_idx = T.switch(is_small_batch, 0, -2)
+    t_last = t_seq[last_frame_idx, :]  # (batch,)
+    t_last = T.switch(is_small_batch, self.state_vars_initial["t"], t_last)
+    return T.sum((t_last - (times - 1)) ** 2)  # times - 1 are the last frames of the seq
 
 
 def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2, n_input_t=2, n_input_dim=2):

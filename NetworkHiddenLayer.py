@@ -1,7 +1,7 @@
 
 import theano
 import numpy
-from theano import tensor as T, function, printing
+from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
@@ -163,6 +163,21 @@ class BinOpLayer(_NoOpLayer):
       op = m[op]
     # Assume it's in theano.tensor.
     return getattr(T, op)
+
+
+class GenericCodeLayer(_NoOpLayer):
+  layer_class = "generic_code"
+
+  def __init__(self, code, n_out, **kwargs):
+    """
+    :param str code: generic Python code used for eval(). must return some output
+    """
+    super(GenericCodeLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    code = code.encode("utf8")
+    self.set_attr('code', code)
+    output = eval(code, {"self": self, "s": self.sources, "T": T, "theano": theano, "numpy": numpy, "f32": numpy.float32})
+    self.make_output(output)
 
 
 class DualStateLayer(ForwardLayer):
@@ -621,7 +636,7 @@ class ConvLayer(_NoOpLayer):
     else:
       assert False, 'invalid border_mode %r' % border_mode
 
-    n_out = conv_n_out * stack_size * n_features / (pool_size[0] * pool_size[1])
+    n_out = conv_n_out * n_features / (pool_size[0] * pool_size[1])
     super(ConvLayer, self).__init__(**kwargs)
 
     # set all attributes of this class
@@ -681,7 +696,7 @@ class ConvLayer(_NoOpLayer):
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
-    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter * stack_size)
+    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
     self.make_output(self.output)
 

@@ -144,7 +144,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     network = cls(n_in, n_out)
-    network.json_content = json.dumps(json_content)
+    network.json_content = json.dumps(json_content, sort_keys=True)
     assert isinstance(json_content, dict)
     network.recurrent = False
     network.y['data'].n_out = network.n_out['data'][0]
@@ -577,10 +577,7 @@ class LayerNetwork(object):
   def to_json_content(self):
     out = {}
     for name in self.output:
-      outattrs = self.output[name].attrs.copy()
-      outattrs['from'] = outattrs['from'].split(',')
-      outattrs['class'] = 'softmax'
-      out[name] = outattrs
+      out[name] = self.output[name].to_json()
     for h in self.hidden.keys():
       out[h] = self.hidden[h].to_json()
     return out

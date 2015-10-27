@@ -98,6 +98,11 @@ def parse_py_statement(line):
 	if state == 3: yield ("id", curtoken)
 	elif state == 6: yield ("comment", curtoken)
 
+def parse_py_statements(source_code):
+	for line in source_code.splitlines():
+		for t in parse_py_statement(line):
+			yield t
+
 
 import keyword
 pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
@@ -241,7 +246,7 @@ def is_source_code_missing_open_brackets(source_code):
 	counters = [0] * len(open_brackets)
 	# Go in reverse order through the tokens.
 	# Thus, we first should see the closing brackets, and then the matching opening brackets.
-	for t_type, t_content in reversed(list(parse_py_statement(source_code))):
+	for t_type, t_content in reversed(list(parse_py_statements(source_code))):
 		if t_type != "op": continue  # we are from now on only interested in ops (including brackets)
 		if t_content in open_brackets:
 			idx = open_brackets.index(t_content)
