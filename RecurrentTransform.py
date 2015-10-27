@@ -492,15 +492,19 @@ class AttentionTimeGauss(RecurrentTransformBase):
     # Get the last frame. -2 because the last update is not used.
     B_index = self.B_index
     B_times = T.sum(B_index, axis=0)
+    #B_times = T.printing.Print("B_times")(B_times)
     B_last = B_times - 1  # last frame idx of the base seq
     O_index = self.layer.index
     O_times = T.sum(O_index, axis=0)
+    #O_times = T.printing.Print("O_times")(O_times)
     O_last = O_times - 2  # last frame. one less because initial states are in extra vector.
     # We need an extra check for small batches, would crash otherwise.
     O_last_clipped = T.clip(O_last, 0, t_seq.shape[0] - 1)
+    batches = T.arange(t_seq.shape[1])  # (batch,)
     t_last = T.switch(T.lt(O_last, 0),
                       self.state_vars_initial["t"],
-                      t_seq[O_last_clipped, :])  # (batch,)
+                      t_seq[O_last_clipped[batches], batches])  # (batch,)
+    #t_last = T.printing.Print("t_last")(t_last)
     return T.sum((t_last - B_last) ** 2)
 
 
