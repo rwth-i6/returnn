@@ -4,6 +4,7 @@ import theano
 import theano.tensor as T
 import theano.sandbox.cuda as cuda
 import numpy
+from MultiBatchBeam import multi_batch_beam
 
 
 class RecurrentTransformBase(object):
@@ -429,14 +430,15 @@ class AttentionTimeGauss(RecurrentTransformBase):
 
     self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
     self.add_input(self.B, name="B")
-    self.B_index = self.add_input(self.layer.base[0].index, "B_index")
+    self.B_index = self.layer.base[0].index  # not an input
+    self.B_times = self.add_input(T.cast(T.sum(self.B_index, axis=0), dtype="float32"), "B_times")  # float32 for gpu
 
     self.W_att_re = self.add_param(layer.create_random_uniform_weights(n=n_out, m=2, p=n_out, name="W_att_re"))
     self.b_att_re = self.add_param(layer.create_bias(2, name='b_att_re'))
     self.W_att_in = self.add_param(layer.create_random_uniform_weights(n=n_in, m=n_out * 4, name="W_att_in"))
     self.W_state_in = self.add_param(layer.create_random_uniform_weights(n=3, m=n_out * 4, name="W_state_in"))
 
-    self.c = self.add_state_var(T.constant(0, dtype="int32"), name="c")
+    self.c = self.add_state_var(T.constant(0, dtype="float32"), name="c")  # float32 for gpu
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")  # (batch,)
 
   def step(self, y_p):
@@ -449,9 +451,8 @@ class AttentionTimeGauss(RecurrentTransformBase):
     dt_max = T.constant(attribs.get("dt_max", 1.5), dtype="float32")
     std_min = T.constant(attribs.get("std_min", 1), dtype="float32")
     std_max = T.constant(attribs.get("std_max", 2), dtype="float32")
-    n_beam = T.constant(attribs.get("beam", 20), dtype="int32")
-    B_index = self.B_index
-    times = T.sum(B_index, axis=0)
+    n_beam = T.constant(attribs.get("beam", 20), dtype="float32")
+    B_times = self.B_times
 
     b = self.b_att_re.dimshuffle('x', 0)  # (batch,2)
     a = T.nnet.sigmoid(T.dot(y_p, self.W_att_re) + b)  # (batch,2)
@@ -462,9 +463,10 @@ class AttentionTimeGauss(RecurrentTransformBase):
     t = self.t  # (batch,). that's the old t, which starts at zero.
     t_bc = t.dimshuffle('x', 0)  # (beam,batch)
 
-    t_int = T.iround(t)  # (batch,)
-    idxs_0 = (T.arange(n_beam) - n_beam / 2).dimshuffle(0, 'x')  # (beam,batch)
-    idxs = idxs_0 + t_int.dimshuffle('x', 0)  # (beam,batch). centered around t_int
+    t_round = T.round(t)  # (batch,). +0.5 so that a later int-cast will be like round().
+    start_idxs = t_round - n_beam / numpy.float32(2)  # (batch,), beams, centered around t_int
+    idxs_0 = T.arange(n_beam).dimshuffle(0, 'x')  # (beam,batch). all on cpu, but static, no round trip
+    idxs = T.cast(idxs_0, dtype="float32") + t_round.dimshuffle('x', 0)  # (beam,batch). centered around t_int
 
     # gauss window
     f_e = T.exp(-(T.cast(t_bc - idxs, dtype="float32") ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
@@ -472,10 +474,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     w_t = f_e * norm  # (beam,batch)
     w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (beam,batch,n_in)
 
-    times_bc = times.dimshuffle('x', 0)  # (*,batch)
-    idxs_wrapped = (idxs + times_bc) % times_bc  # (beam,batch) in [0,n_time-1] range
-    batches = T.arange(n_batch)  # (batch,)
-    B_beam = self.B[idxs_wrapped[:, batches], batches, :]  # (beam,batch,n_in)
+    B_beam = multi_batch_beam(self.B, start_idxs, B_times, n_beam, "wrap_around")
     att = T.sum(B_beam * w_t_bc, axis=0, keepdims=False)  # (batch,n_in)
     z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
 
