@@ -44,9 +44,10 @@ def parseSprintLayer(lines, float_type):
   return bias, weights
 
 
-def loadSprintNetwork(params_prefix_path, float_type):
+def loadSprintNetwork(params_prefix_path, first_layer, float_type):
   """
   :type params_prefix_path: str
+  :type first_layer: int
   :type float_type: str
   :rtype: list[(numpy.ndarray, numpy.ndarray)]
   """
@@ -56,7 +57,7 @@ def loadSprintNetwork(params_prefix_path, float_type):
   global layerCount
   layers = []
   for l in itertools.count():
-    fn = "%s-%s-layer-%s.bin" % (params_prefix_path, float_type, l + 1)
+    fn = "%s-%s-layer-%s.bin" % (params_prefix_path, float_type, l + first_layer)
     if not os.path.exists(fn):
       if l == 0:
         raise Exception("Did not found any Sprint NN layer. First: %r" % fn)
@@ -120,32 +121,29 @@ def saveCrnnNetwork(epoch, layers):
     network = pretrain.get_network_for_epoch(epoch)
   else:
     network = LayerNetwork.from_config_topology(config)
-  nHiddenLayers = len(network.description.hidden_info)
+  nHiddenLayers = len(network.hidden)
 
   # print network topology
   print "Crnn Network layer topology:"
   print "input dim:", network.n_in
   print "hidden layer count:", nHiddenLayers
-  #print "output dim:", network.n_out
+  print "output dim:", network.n_out["classes"]
   print "net weights #:", network.num_params()
   print "net params:", network.train_params_vars
-  print "net output:", network.output
+  print "net output:", network.output["output"]
 
   assert network.n_in == inputDim
   #assert network.n_out == outputDim
   assert nHiddenLayers + 1 == layerCount  # hidden + output layer
   assert len(layers) == layerCount
-  assert len(network.description.hidden_info) == len(network.hidden)
-  for i in xrange(len(network.description.hidden_info)):
-    layerName = "hidden_%i" % i
-    hidden = network.hidden[layerName]
+  for i, (layerName, hidden) in enumerate(sorted(network.hidden.items())):
     # Some checks whether this is a forward-layer.
     assert isinstance(hidden, ForwardLayer)
 
     saveCrnnLayer(hidden, *layers[i])
 
-  assert isinstance(network.output, OutputLayer)
-  saveCrnnLayer(network.output, *layers[len(layers) - 1])
+  assert isinstance(network.output["output"], OutputLayer)
+  saveCrnnLayer(network.output["output"], *layers[len(layers) - 1])
 
   import h5py
   print("Save Crnn model under %s" % filename)
@@ -159,9 +157,11 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--sprintLoadParams', required=True,
                       help='Sprint NN params path prefix')
+  parser.add_argument('--sprintFirstLayer', default=1, type=int,
+                      help='Sprint NN params first layer (default 1)')
   parser.add_argument('--crnnSaveEpoch', type=int, required=True,
                       help='save this train epoch number in Crnn model')
-  parser.add_argument('--crnnConfigFile', default=configFile,
+  parser.add_argument('--crnnConfigFile', required=True,
                       help='CRNN config file')
   parser.add_argument('--sprintArchiverExec', default=archiverExec,
                       help='path to Sprint/RASR archiver executable')
@@ -184,7 +184,9 @@ def main():
   outputDim = config.int('num_outputs', None)
   assert inputDim and outputDim
 
-  layers = loadSprintNetwork(params_prefix_path=args.sprintLoadParams, float_type=args.floatType)
+  layers = loadSprintNetwork(params_prefix_path=args.sprintLoadParams,
+                             first_layer=args.sprintFirstLayer,
+                             float_type=args.floatType)
   saveCrnnNetwork(epoch=args.crnnSaveEpoch, layers=layers)
 
   print("Done.")
