@@ -201,6 +201,37 @@ class NTM(RecurrentTransformBase):
   """
   name = 'ntm'
 
+  class Head(object):
+    def __init__(self, idx, parent, naddrs, ncells, max_shift):
+      layer = parent.layer
+      suffix = "_%s_%d"%(layer.name,idx)
+      self.W_key = parent.add_param(layer.create_random_uniform_weights(n=naddrs,m=ncells, name="W_key"+suffix))
+      self.b_key = parent.add_param(layer.create_bias(ncells, name="b_shift"+suffix))
+      self.W_shift = parent.add_param(layer.create_random_uniform_weights(n=naddrs,m=max_shift, name="W_shift"+suffix))
+      self.b_shift = parent.add_param(layer.create_bias(max_shift, name="b_shift"+suffix))
+      self.W_beta = parent.add_param(layer.create_bias(naddrs, name="W_beta"+suffix))
+      self.W_gamma = parent.add_param(layer.create_bias(naddrs, name="W_gamma"+suffix))
+      self.W_g = parent.add_param(layer.create_bias(naddrs, name="W_g"+suffix))
+      self.W_erase = parent.add_param(layer.create_random_uniform_weights(n=naddrs,m=ncells, name="W_erase"+suffix))
+      self.b_erase = parent.add_param(layer.create_bias(ncells, name="b_erase"+suffix))
+      self.W_add = parent.add_param(layer.create_random_uniform_weights(n=naddrs,m=ncells, name="W_add"+suffix))
+      self.b_add = parent.add_param(layer.create_bias(ncells, name="b_add"+suffix))
+
+    def softmax(self, x):
+      ex = exp(x)
+      return ex / sum(ex,axis=-1,keepdims=True)
+
+    def step(self, y_p):
+      key_t = T.dot(y_p, self.W_key) + self.b_key
+      shift_t = self.softmax(T.dot(y_p, self.W_shift) + self.b_shift)
+      beta_t = self.softmax(T.dot(y_p, self.W_beta))
+      gamma_t = self.softmax(T.dot(y_p, self.W_beta)) + 1.0
+      g_t = T.nnet.sigmoid(T.dot(y_p, self.W_g))
+      erase_t = T.dot(y_p, self.W_erase) + self.b_erase
+      add_t = T.dot(y_p, self.W_add) + self.b_add
+      return key_t, beta_t, g_t, shift_t, gamma_t, erase_t, add_t
+
+
   def create_vars(self):
     import scipy
     layer = self.layer
@@ -214,6 +245,10 @@ class NTM(RecurrentTransformBase):
     self.shift = self.add_input(theano.shared(
       value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[numpy.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
       name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
+
+    self.heads = []
+    for n in xrange(self.nheads):
+      self.heads.append(Head(n,self,self.naddrs,self.ncells,self.max_shift))
 
     #for h in xrange(self.layer.attrs['ntm_nheads']):
     #  self.heads
