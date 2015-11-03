@@ -82,7 +82,7 @@ def _theano_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mod
   return beam
 
 
-def _another_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+def _simplified_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
   assert array.ndim >= 2
   assert start_idxs.ndim == 1
   assert batch_lens.ndim == 1
@@ -148,15 +148,10 @@ class MultiBatchBeamOp(theano.Op):
     idxs = idxs_bc + start_idxs_bc  # (beam,batch)
     batch_lens_bc = batch_lens.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
     idxs_wrapped = idxs % batch_lens_bc
-    idxs_flat_offsets = numpy.tile(numpy.arange(n_batches), n_beam)  # (beam*batch)
-    idxs_wrapped_flat = idxs_wrapped.reshape(n_beam * n_batches)
-    idxs_wrapped_flat = idxs_wrapped_flat * n_batches + idxs_flat_offsets  # (beam*batch)
     array_remaining_dims = sorted(set(range(array.ndim)) - set([self.idx_dim, self.batch_dim]))
     array_trans_dims_order = [self.idx_dim, self.batch_dim] + array_remaining_dims
-    array_trans = array.transpose(*array_trans_dims_order)
-    array_trans_flat = array_trans.reshape(n_idx * n_batches, *array_trans.shape[2:])
-    beam_trans_flat = array_trans_flat[idxs_wrapped_flat]
-    beam_trans = beam_trans_flat.reshape(n_beam, n_batches, *array_trans.shape[2:])
+    array_trans = array.transpose(*array_trans_dims_order)  # (time,batch,...)
+    beam_trans = array_trans[idxs_wrapped, numpy.arange(n_batches)]
     beam = beam_trans.transpose(*map(array_trans_dims_order.index, range(array.ndim)))
     if self.wrap_mode == "pad_zero":
       pass  # TODO...

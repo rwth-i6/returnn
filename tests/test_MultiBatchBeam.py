@@ -8,7 +8,7 @@ better_exchook.replace_traceback_format_tb()
 
 
 naive_multi_batch_beam = MultiBatchBeam._naive_multi_batch_beam
-another_numpy_multi_batch_beam = MultiBatchBeam._another_numpy_multi_batch_beam
+simplified_numpy_multi_batch_beam = MultiBatchBeam._simplified_numpy_multi_batch_beam
 
 def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
@@ -23,7 +23,7 @@ def theano_multi_batch_beam(*args, **kwargs):
 
 def compare_implementations(*args, **kwargs):
   results = {}
-  for method in ["numpy", "naive", "theano", "another_numpy"]:
+  for method in ["numpy", "naive", "theano", "simplified_numpy"]:
     m = globals()["%s_multi_batch_beam" % method]
     try:
       res = m(*args, **kwargs)
