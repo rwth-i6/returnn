@@ -177,10 +177,11 @@ class SprintDataset(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end
+    print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end,
     if start == end: return
     with self.lock:
       super(SprintDataset, self).load_seqs(start, end)
+      print >> log.v5, "first features shape:", self._getSeq(start).features.shape
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.

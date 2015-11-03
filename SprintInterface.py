@@ -390,6 +390,7 @@ def prepareForwarding(epoch):
     # Load network.
     import h5py
     last_model_epoch_filename = fns_existing[0]
+    print >>log.v1, "Load model", last_model_epoch_filename
     last_model_hdf = h5py.File(last_model_epoch_filename, "r")
     network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
     network.load_hdf(last_model_hdf)
