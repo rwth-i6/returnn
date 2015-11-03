@@ -30,9 +30,6 @@ def numpy_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_
   output_grad = T.as_tensor(output_grad)
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
   D_array, D_start_idxs, D_batch_lens, D_beam_width = op.grad((array, start_idxs, batch_lens, beam_width), (output_grad, ))
-  numpy.testing.assert_allclose(D_start_idxs.eval(), 0)
-  numpy.testing.assert_allclose(D_batch_lens.eval(), 0)
-  numpy.testing.assert_allclose(D_beam_width.eval(), 0)
   return D_array.eval()
 
 def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1, output_grad=None):
@@ -157,7 +154,7 @@ def test_numpy_perform_2_wrap():
   assert_equal(list(beam[:, 0]), [8, 9, 0, 1])
 
 
-def test_grad_simpe():
+def test_grad_simple():
   array = numpy.array([range(10)], dtype="float32").T
   n_batch = array.shape[1]
   assert n_batch == 1

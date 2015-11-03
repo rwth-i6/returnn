@@ -126,7 +126,7 @@ def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap
   assert D_beam.shape == (beam_width, n_batch) + array.shape[2:]
   # Thus, array is usually in format (time,batch,dim).
 
-  D_array = numpy.zeros_like(array)
+  D_array = numpy.zeros_like(array, dtype=D_beam.dtype)
   for i0 in range(beam_width):
     for i1 in range(n_batch):
       idx = start_idxs[i1] + i0
@@ -207,10 +207,14 @@ class MultiBatchBeamOp(theano.Op):
     D_array = D_array_flat.reshape(array.shape)
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
-    D_start_idxs = T.zeros_like(start_idxs)
-    D_batch_lens = T.zeros_like(batch_lens)
-    D_beam_width = T.zeros_like(beam_width)
+    D_start_idxs = T.DisconnectedType()()
+    D_batch_lens = T.DisconnectedType()()
+    D_beam_width = T.DisconnectedType()()
     return [D_array, D_start_idxs, D_batch_lens, D_beam_width]
+
+  def connection_pattern(self, node):
+    # Only the gradient of the first input (array) will be connected. All others are disconnected.
+    return [[True]] + [[False]] * len(node.inputs[1:])
 
 
 class GpuMultiBatchBeamOp(theano.sandbox.cuda.GpuOp):
