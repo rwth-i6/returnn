@@ -15,6 +15,8 @@ def multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_d
   :param idx_dim: int. where to apply each start_idxs[i]. static.
   :param batch_dim: the same dim as in start_idxs. static.
   :return: ndarray like array, but shape[idx_dim] == beam_width
+
+  See also `_naive_multi_batch_beam` for one naive reference implementation.
   """
   assert array.ndim >= 2
   assert start_idxs.ndim == 1
@@ -26,6 +28,86 @@ def multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_d
 
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
   return op(array, start_idxs, batch_lens, beam_width)
+
+
+def _naive_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+  assert array.ndim >= 2
+  assert start_idxs.ndim == 1
+  assert batch_lens.ndim == 1
+  assert idx_dim < array.ndim
+  assert batch_dim < array.ndim
+  assert idx_dim != batch_dim
+  n_batch = array.shape[batch_dim]
+  assert start_idxs.shape == (n_batch, )
+  assert batch_lens.shape == (n_batch, )
+
+  if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
+  if batch_dim != 1: raise NotImplementedError
+  # Thus, array is usually in format (time,batch,dim).
+
+  beam = numpy.zeros((beam_width, n_batch) + array.shape[2:], dtype=array.dtype)
+  for i0 in range(beam_width):
+    for i1 in range(n_batch):
+      idx = start_idxs[i1] + i0
+      if wrap_mode == "wrap_around":
+        idx = idx % batch_lens[i1]
+      elif wrap_mode == "pad_zero":
+        if idx < 0 or idx >= batch_lens[i1]:
+          continue
+      beam[i0, i1] = array[idx, i1]
+  return beam
+
+
+def _theano_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+  array = T.as_tensor(array)
+  start_idxs = T.as_tensor(start_idxs)
+  batch_lens = T.as_tensor(batch_lens)
+  assert array.ndim >= 2
+  assert start_idxs.ndim == 1
+  assert batch_lens.ndim == 1
+  assert idx_dim < array.ndim
+  assert batch_dim < array.ndim
+  assert idx_dim != batch_dim
+  n_batch = array.shape[batch_dim]
+
+  if idx_dim != 0: raise NotImplementedError
+  if batch_dim != 1: raise NotImplementedError
+  if wrap_mode != "wrap_around": raise NotImplementedError
+
+  idxs_0 = start_idxs.dimshuffle('x', 0)  # (beam,batch)
+  idxs = idxs_0 + T.arange(beam_width).dimshuffle(0, 'x')  # (beam,batch)
+  idxs_wrapped = idxs % batch_lens.dimshuffle('x', 0)  # (beam,batch)
+  batches = T.arange(n_batch)  # (batch,)
+  beam = array[idxs_wrapped[:, batches], batches]  # (beam,batch,...)
+  return beam
+
+
+def _another_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+  assert array.ndim >= 2
+  assert start_idxs.ndim == 1
+  assert batch_lens.ndim == 1
+  assert idx_dim < array.ndim
+  assert batch_dim < array.ndim
+  assert idx_dim != batch_dim
+  n_batch = array.shape[batch_dim]
+  assert start_idxs.shape == (n_batch, )
+  assert batch_lens.shape == (n_batch, )
+  n_beam = int(beam_width)
+
+  if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
+  if batch_dim != 1: raise NotImplementedError
+  if wrap_mode != "wrap_around": raise NotImplementedError
+  # Thus, array is usually in format (time,batch,dim).
+
+  idxs_bc = numpy.arange(n_beam).reshape(n_beam, 1)  # dimshuffle(0, 'x')  (beam,batch)
+  start_idxs_bc = start_idxs.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
+  idxs = idxs_bc + start_idxs_bc  # (beam,batch)
+  batch_lens_bc = batch_lens.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
+  idxs_wrapped = idxs % batch_lens_bc
+  assert idxs_wrapped.shape[1] == array.shape[1]
+  beam = array[idxs_wrapped, numpy.arange(n_batch)]
+  return beam
+
 
 
 class MultiBatchBeamOp(theano.Op):
