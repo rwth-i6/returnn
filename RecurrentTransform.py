@@ -536,6 +536,10 @@ class AttentionTimeGauss(RecurrentTransformBase):
     w_t = f_e * norm  # (beam,batch)
     w_t_bc = w_t.dimshuffle(0, 1, 'x')  # (beam,batch,n_in)
 
+    #B_times_bc = B_times.dimshuffle('x', 0)  # (*,batch)
+    #idxs_wrapped = (T.iround(idxs) + T.iround(B_times_bc)) % T.iround(B_times_bc)  # (beam,batch) in [0,n_time-1] range
+    #batches = T.arange(n_batch)  # (batch,)
+    #B_beam = self.B[idxs_wrapped[:, batches], batches, :]  # (beam,batch,n_in)
     B_beam = multi_batch_beam(self.B, start_idxs, B_times, n_beam, "wrap_around")
     att = T.sum(B_beam * w_t_bc, axis=0, keepdims=False)  # (batch,n_in)
     z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
