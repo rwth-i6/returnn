@@ -277,9 +277,10 @@ class AttentionDot(AttentionBase):
 
   def create_vars(self):
     super(AttentionDot, self).create_vars()
-    self.B = (self.B - T.mean(self.B, axis=0, keepdims=True)) / T.std(self.B,axis=0,keepdims=True)
+    self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
+    self.B = self.B / T.sqrt(T.sum(T.sqr(self.B),axis=2,keepdims=True))
     self.add_input(self.B, 'B')
-    self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), "index")
+    #self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), "index")
 
   def step(self, y_p):
 
@@ -294,7 +295,8 @@ class AttentionDot(AttentionBase):
     #   att_x = xc[focus_start:focus_end]
 
     #f_z = T.sum(B * T.tanh(T.dot(y_p, W_att_quadr)).dimshuffle('x',0,1).repeat(B.shape[0],axis=0), axis=2, keepdims=True)
-    f_z = T.sum(self.B * T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) / T.cast(self.B.shape[0],'float32'), axis=2, keepdims=True)
+    y_f = T.tanh(T.dot(y_p, self.W_att_re))
+    f_z = T.sum(self.B * (y_f / T.sqrt(T.sum(T.sqr(y_f),axis=1,keepdims=True))).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0), axis=2, keepdims=True)
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True) #- T.sum(T.ones_like(self.index)-self.index,axis=0,keepdims=True).dimshuffle(0,1,'x').repeat(f_e.shape[2],axis=2))
 
@@ -331,6 +333,31 @@ class AttentionRBF(AttentionBase):
     f_e = T.exp(f_z) #* self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
+
+
+class AttentionDotLM(AttentionDot):
+  """
+  attention over rbf kernel of base outputs and time dependent activation
+  """
+  name = "attention_dot_lm"
+  def create_vars(self):
+    super(AttentionDotLM, self).create_vars()
+    self.W_lm_in = self.add_param(self.layer.W_lm_in, name = "W_lm_in")
+    self.W_lm_out = self.add_param(self.layer.W_lm_out, name = "W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
+    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
+
+  def step(self, y_p):
+    z_re, updates = super(AttentionDotLM, self).step(y_p)
+
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+
+    updates[self.t] = self.t + T.ones_like(self.t)
+    return z_re, updates
 
 
 class AttentionRBFLM(AttentionRBF):

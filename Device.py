@@ -375,6 +375,10 @@ class Device(object):
       source = []
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
+        t = None
+        if ':' in extract:
+          t = int(extract.split(':')[1])
+          extract = extract.split(':')[0]
         if extract == "classification":
           source.append(self.testnet.output['output'].y_pred)
         elif extract == "log-posteriors":
@@ -412,7 +416,9 @@ class Device(object):
           source.append(T.reshape(hidden.output[target], (hidden.output[target].shape[0] * hidden.output[target].shape[1], hidden.output[target].shape[2])))
         elif extract in self.testnet.hidden:
           hidden = self.testnet.hidden[extract]
-          source.append(T.reshape(hidden.output, (hidden.index.shape[0] * hidden.index.shape[1], hidden.output.shape[2])))
+          signal = hidden.output[t].dimshuffle('x',0,1) if t is not None else hidden.outputs
+          sidx = hidden.index[t].dimshuffle('x',0) if t is not None else hidden.index
+          source.append(T.reshape(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2), (signal.shape[0] * signal.shape[1], signal.shape[2])))
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],

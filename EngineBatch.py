@@ -115,6 +115,8 @@ class Batch:
       return 0
     return self.end_seq - self.start_seq
 
+import random
+
 
 class BatchSetGenerator:
   """
@@ -134,10 +136,12 @@ class BatchSetGenerator:
     self.generator = generator
     self.cache = []; " :type: list[Batch] "
     self.reached_end = False
+    random.seed(1234)
     self.reset()
 
   def reset(self):
     self.buffer = self.cache[:]
+    random.shuffle(self.buffer)
     self.cache_active = self.reached_end
     self.reached_end = False
     self.last_batch = None; " :type: Batch "
@@ -189,6 +193,8 @@ class BatchSetGenerator:
     :rtype: float
     :returns 0-1
     """
+    if self.cache_active:
+      return self.current_batch_idx / float(len(self.cache))
     if not self.last_batch:
       return 0.0
     # We cannot use the batch idx because we don't know the number

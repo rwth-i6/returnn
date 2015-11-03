@@ -216,11 +216,10 @@ class StateToAct(ForwardLayer):
     super(StateToAct, self).__init__(**kwargs)
     self.set_attr("dual", dual)
     self.params = {}
-    #self.make_output(T.concatenate([s.act[-1][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1).repeat(self.sources[0].output.shape[0], axis=0))
-    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=-1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
+    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
     if dual and len(self.act) > 1:
-      self.make_output(self.act[1])
+      self.make_output(T.tanh(self.act[1]))
       self.act[0] = T.tanh(self.act[1])
     else:
       self.make_output(self.act[0])
@@ -228,6 +227,16 @@ class StateToAct(ForwardLayer):
       self.output = self.output.repeat(self.index.shape[0],axis=0)
     else:
       self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
+
+
+class TimeConcatLayer(HiddenLayer):
+  layer_class = "time_concat"
+
+  def __init__(self, **kwargs):
+    kwargs['n_out'] = kwargs['sources'][0].attrs['n_out']
+    super(TimeConcatLayer, self).__init__(**kwargs)
+    self.make_output(T.concatenate([x.output for x in self.sources],axis=0))
+    self.index = T.concatenate([x.index for x in self.sources],axis=0)
 
 
 class HDF5DataLayer(Layer):

@@ -192,6 +192,7 @@ class Engine:
 
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
+    self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
     assert model_epoch_filename or self.start_epoch
@@ -540,20 +541,9 @@ class Engine:
     """
     cache = h5py.File(output_file, "w")
     batches = data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=data.get_num_timesteps(), max_seqs=1)
+                                    batch_size=data.get_num_timesteps(),
+                                    max_seqs=self.max_seqs)
     merge = {}
-    if combine_labels != '':
-      for index, label in enumerate(data.labels["classes"]):
-        merged = combine_labels.join(label.split(combine_labels)[:-1])
-        if merged == '': merged = label
-        if not merged in merge.keys():
-          merge[merged] = []
-        merge[merged].append(index)
-      import codecs
-      label_file = codecs.open(output_file + ".labels", encoding = 'utf-8', mode = 'w')
-      for key in merge.keys():
-        label_file.write(key + "\n")
-      label_file.close()
     forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
     forwarder.join()
     cache.close()
