@@ -189,6 +189,7 @@ class MultiBatchBeamOp(theano.Op):
 
   def infer_shape(self, node, input_shapes):
     array, start_idxs, batch_lens, beam_width = node.inputs
+    beam_width = T.cast(beam_width, dtype="int64")
     array_shape, start_idxs_shape, batch_lens_shape, beam_width_shape = input_shapes
     beam_shape = [beam_width if i == self.idx_dim else array_shape[i] for i in range(len(array_shape))]
     return [tuple(beam_shape)]
