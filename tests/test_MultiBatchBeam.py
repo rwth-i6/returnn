@@ -11,10 +11,13 @@ naive_multi_batch_beam = MultiBatchBeam._naive_multi_batch_beam
 simplified_numpy_multi_batch_beam = MultiBatchBeam._simplified_numpy_multi_batch_beam
 
 def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+  array = T.as_tensor(array)
+  start_idxs = T.as_tensor(start_idxs)
+  batch_lens = T.as_tensor(batch_lens)
+  beam_width = T.as_tensor(beam_width)
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
-  beam_out = [None]
-  op.perform(None, (array, start_idxs, batch_lens, beam_width), (beam_out,))
-  return beam_out[0]
+  beam = op(array, start_idxs, batch_lens, beam_width)
+  return beam.eval()
 
 def theano_cpu_multi_batch_beam(*args, **kwargs):
   res = MultiBatchBeam._theano_cpu_multi_batch_beam(*args, **kwargs)
@@ -165,3 +168,17 @@ def test_grad_simple():
   D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
   assert D_array.shape == array.shape
   assert_equal(list(D_array[:, 0]), [2, 3] + [0] * 6 + [0, 1])
+
+
+def test_random_wrap():
+  n_time = 100
+  n_batch = 10
+  n_dim = 5
+  beam_width = 20
+  numpy.random.seed(123)
+  array = numpy.random.random(n_time * n_batch * n_dim).reshape(n_time, n_batch, n_dim)
+  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
+  beam = compare_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around")
+  D_beam = numpy.random.random(beam.shape)
+  D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
