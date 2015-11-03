@@ -16,15 +16,61 @@ def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode,
   op.perform(None, (array, start_idxs, batch_lens, beam_width), (beam_out,))
   return beam_out[0]
 
-def theano_multi_batch_beam(*args, **kwargs):
-  res = MultiBatchBeam._theano_multi_batch_beam(*args, **kwargs)
+def theano_cpu_multi_batch_beam(*args, **kwargs):
+  res = MultiBatchBeam._theano_cpu_multi_batch_beam(*args, **kwargs)
   return res.eval()
+
+naive_multi_batch_beam_grad = MultiBatchBeam._naive_multi_batch_beam_grad
+
+def numpy_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1, output_grad=None):
+  array = T.as_tensor(array)
+  start_idxs = T.as_tensor(start_idxs)
+  batch_lens = T.as_tensor(batch_lens)
+  beam_width = T.as_tensor(beam_width)
+  output_grad = T.as_tensor(output_grad)
+  op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
+  D_array, D_start_idxs, D_batch_lens, D_beam_width = op.grad((array, start_idxs, batch_lens, beam_width), (output_grad, ))
+  numpy.testing.assert_allclose(D_start_idxs.eval(), 0)
+  numpy.testing.assert_allclose(D_batch_lens.eval(), 0)
+  numpy.testing.assert_allclose(D_beam_width.eval(), 0)
+  return D_array.eval()
+
+def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1, output_grad=None):
+  array = T.as_tensor(array)
+  start_idxs = T.as_tensor(start_idxs)
+  batch_lens = T.as_tensor(batch_lens)
+  beam_width = T.as_tensor(beam_width)
+  output_grad = T.as_tensor(output_grad)
+  res = MultiBatchBeam._theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim, batch_dim)
+  D_array = T.grad(None, wrt=array, known_grads={res: output_grad})
+  return D_array.eval()
 
 
 def compare_implementations(*args, **kwargs):
   results = {}
-  for method in ["numpy", "naive", "theano", "simplified_numpy"]:
+  for method in ["numpy", "naive", "theano_cpu", "simplified_numpy"]:
     m = globals()["%s_multi_batch_beam" % method]
+    try:
+      res = m(*args, **kwargs)
+    except NotImplementedError:
+      pass
+    else:
+      results[method] = res
+  assert len(results) > 1
+  for k, v in sorted(results.items()):
+    print "%s:" % k
+    print v
+  reference = sorted(results.keys())[0]
+  for k in sorted(results.keys())[1:]:
+    assert_equal(results[k].shape, results[reference].shape)
+    numpy.testing.assert_almost_equal(results[k], results[reference])
+  return results[reference]
+
+
+def compare_grad_implementations(*args, **kwargs):
+  results = {}
+  for method in ["numpy", "naive", "theano_cpu"]:
+    m = globals()["%s_multi_batch_beam_grad" % method]
     try:
       res = m(*args, **kwargs)
     except NotImplementedError:
@@ -109,3 +155,16 @@ def test_numpy_perform_2_wrap():
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around")
   assert beam.shape == (4, 1)
   assert_equal(list(beam[:, 0]), [8, 9, 0, 1])
+
+
+def test_grad_simpe():
+  array = numpy.array([range(10)], dtype="float32").T
+  n_batch = array.shape[1]
+  assert n_batch == 1
+  start_idxs = numpy.array([-2])
+  batch_lens = numpy.array([array.shape[0]])
+  beam_width = 4
+  D_beam = numpy.arange(4, dtype="float32").reshape(beam_width, n_batch)
+  D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
+  assert D_array.shape == array.shape
+  assert_equal(list(D_array[:, 0]), [2, 3] + [0] * 6 + [0, 1])

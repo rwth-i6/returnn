@@ -58,7 +58,7 @@ def _naive_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode
   return beam
 
 
-def _theano_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
+def _theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1):
   array = T.as_tensor(array)
   start_idxs = T.as_tensor(start_idxs)
   batch_lens = T.as_tensor(batch_lens)
@@ -107,6 +107,36 @@ def _simplified_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width
   assert idxs_wrapped.shape[1] == array.shape[1]
   beam = array[idxs_wrapped, numpy.arange(n_batch)]
   return beam
+
+
+def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, idx_dim=0, batch_dim=1, output_grad=None):
+  assert array.ndim >= 2
+  assert start_idxs.ndim == 1
+  assert batch_lens.ndim == 1
+  assert idx_dim < array.ndim
+  assert batch_dim < array.ndim
+  assert idx_dim != batch_dim
+  n_batch = array.shape[batch_dim]
+  assert start_idxs.shape == (n_batch, )
+  assert batch_lens.shape == (n_batch, )
+  D_beam = output_grad
+
+  if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
+  if batch_dim != 1: raise NotImplementedError
+  assert D_beam.shape == (beam_width, n_batch) + array.shape[2:]
+  # Thus, array is usually in format (time,batch,dim).
+
+  D_array = numpy.zeros_like(array)
+  for i0 in range(beam_width):
+    for i1 in range(n_batch):
+      idx = start_idxs[i1] + i0
+      if wrap_mode == "wrap_around":
+        idx = idx % batch_lens[i1]
+      elif wrap_mode == "pad_zero":
+        if idx < 0 or idx >= batch_lens[i1]:
+          continue
+      D_array[idx, i1] = D_beam[i0, i1]
+  return D_array
 
 
 
@@ -158,8 +188,10 @@ class MultiBatchBeamOp(theano.Op):
     beam_out[0] = beam
 
   def infer_shape(self, node, input_shapes):
-    array, start_idxs, batch_lens, beam_width = input_shapes
-    return [tuple(beam_width if i == self.idx_dim else array[i] for i in range(len(array)))]
+    array, start_idxs, batch_lens, beam_width = node.inputs
+    array_shape, start_idxs_shape, batch_lens_shape, beam_width_shape = input_shapes
+    beam_shape = [beam_width if i == self.idx_dim else array_shape[i] for i in range(len(array_shape))]
+    return [tuple(beam_shape)]
 
   def grad(self, inputs, output_grads):
     array, start_idxs, batch_lens, beam_width = inputs
@@ -170,7 +202,8 @@ class MultiBatchBeamOp(theano.Op):
     all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
     assert self.wrap_mode == "wrap_around"
     idxs = multi_batch_beam(all_idxs, start_idxs, batch_lens, beam_width, self.wrap_mode, self.idx_dim, self.batch_dim)
-    D_array = T.set_subtensor(zero_array_flat[idxs.flatten()], D_beam.flatten())
+    D_array_flat = T.set_subtensor(zero_array_flat[idxs.flatten()], D_beam.flatten())
+    D_array = D_array_flat.reshape(array.shape)
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
     D_start_idxs = T.zeros_like(start_idxs)
