@@ -247,37 +247,50 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    zero_array_flat = T.zeros_like(array, dtype="float32").flatten()
+    D_array_tmp_shape = [array.shape[i] for i in range(array.ndim)]
+    if self.wrap_mode == "pad":
+      D_array_tmp_shape[self.idx_dim] += 2  # for pad_left/pad_right
+    D_array_tmp_flat = T.zeros([T.prod(D_array_tmp_shape)], dtype="float32")  # with pad values
+    pad_shape = [array.shape[i] for i in range(array.ndim) if i != self.idx_dim]
+    if self.wrap_mode == "pad":
+      # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
+      pad_index_offset = T.prod(array.shape)
+      pad_vec_size = T.prod(pad_shape)
+      pad_left_idxs = T.arange(pad_vec_size) + pad_index_offset
+      pad_right_idxs = pad_left_idxs + pad_vec_size
+      pad_left_idxs = pad_left_idxs.reshape(pad_shape)
+      pad_right_idxs = pad_right_idxs.reshape(pad_shape)
+    else:
+      pad_index_offset = None
+      pad_left_idxs = pad_right_idxs = 0
     all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
     idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
-                            wrap_mode=self.wrap_mode, pad_left=-1, pad_right=-1,
+                            wrap_mode=self.wrap_mode,
+                            pad_left=pad_left_idxs, pad_right=pad_right_idxs,
                             idx_dim=self.idx_dim, batch_dim=self.batch_dim)
-    if self.wrap_mode == "wrap_around":
-      idxs_gt0 = idxs
+    D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
+    if self.wrap_mode == "pad":
+      D_array = D_array_tmp_flat[:pad_index_offset].reshape(array.shape)
+      D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_shape)
+      D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_shape)
     else:
-      assert self.wrap_mode == "pad"
-      idxs_gt0 = T.switch(T.ge(idxs, 0), idxs, 0)
-    D_array_flat = T.set_subtensor(zero_array_flat[idxs_gt0.flatten()], D_beam.flatten())
-    if self.wrap_mode != "wrap_around":
-      D_array_flat = T.set_subtensor(D_array_flat[idxs_gt0.flatten()],
-                                     T.switch(T.lt(idxs.flatten(), 0),
-                                              numpy.float32(0),
-                                              D_array_flat[idxs_gt0.flatten()]))
-    D_array = D_array_flat.reshape(array.shape)
+      D_array = D_array_tmp_flat.reshape(array.shape)
+      D_pad_left = D_pad_right = T.zeros(pad_shape, dtype="float32")
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
     D_start_idxs = T.DisconnectedType()()
     D_batch_lens = T.DisconnectedType()()
     D_beam_width = T.DisconnectedType()()
-    D_pad_left = T.DisconnectedType()()  # TODO: that's not really correct...
-    D_pad_right = T.DisconnectedType()()  # TODO: that's not really correct...
+
     return [D_array, D_start_idxs, D_batch_lens, D_beam_width, D_pad_left, D_pad_right]
 
   def connection_pattern(self, node):
     # Only the gradient of the first input (array) will be connected.
     # All others are disconnected (because round() or floor() is used on them.).
     # (TODO: Also pad_left/pad_right is connected.)
-    return [[True]] + [[False]] * len(node.inputs[1:])
+    pattern = [[True], [False], [False], [False], [True], [True]]
+    assert len(pattern) == len(node.inputs)
+    return pattern
 
 
 class GpuMultiBatchBeamOp(theano.sandbox.cuda.GpuOp):

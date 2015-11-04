@@ -198,3 +198,9 @@ def test_random_pad():
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right)
   D_beam = numpy.random.random(beam.shape)
   D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, output_grad=D_beam)
+
+def test_inc_subtensor():
+  # If there are some indexes multiple times in the subtensor,
+  # we expect for inc_subtensor that they are all accumulated.
+  a = T.inc_subtensor(T.arange(10)[[0, 3, 5, 0]], numpy.array([-1,-2,-3,-4])).eval()
+  assert_equal(list(a), [-5,  1,  2,  1,  4,  2,  6,  7,  8,  9])
