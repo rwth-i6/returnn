@@ -528,7 +528,7 @@ class AttentionTimeGauss(RecurrentTransformBase):
     t_round = T.round(t)  # (batch,). +0.5 so that a later int-cast will be like round().
     start_idxs = t_round - n_beam / numpy.float32(2)  # (batch,), beams, centered around t_int
     idxs_0 = T.arange(n_beam).dimshuffle(0, 'x')  # (beam,batch). all on cpu, but static, no round trip
-    idxs = T.cast(idxs_0, dtype="float32") + t_round.dimshuffle('x', 0)  # (beam,batch). centered around t_int
+    idxs = T.cast(idxs_0, dtype="float32") + start_idxs.dimshuffle('x', 0)  # (beam,batch). centered around t_int
 
     # gauss window
     f_e = T.exp(-(T.cast(t_bc - idxs, dtype="float32") ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
@@ -540,6 +540,8 @@ class AttentionTimeGauss(RecurrentTransformBase):
     #idxs_wrapped = (T.iround(idxs) + T.iround(B_times_bc)) % T.iround(B_times_bc)  # (beam,batch) in [0,n_time-1] range
     #batches = T.arange(n_batch)  # (batch,)
     #B_beam = self.B[idxs_wrapped[:, batches], batches, :]  # (beam,batch,n_in)
+    #from MultiBatchBeam import _theano_cpu_multi_batch_beam
+    #B_beam = _theano_cpu_multi_batch_beam(self.B, start_idxs, B_times, n_beam, "wrap_around")
     B_beam = multi_batch_beam(self.B, start_idxs, B_times, n_beam, "wrap_around")
     att = T.sum(B_beam * w_t_bc, axis=0, keepdims=False)  # (batch,n_in)
     z_re = T.dot(att, self.W_att_in)  # (batch,n_out*4)
