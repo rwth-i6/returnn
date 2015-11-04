@@ -681,9 +681,9 @@ class HDFForwardTaskThread(TaskThread):
         times[...] = self.times
 
     def evaluate(self, batchess, results, result_format, num_frames):
-      features = numpy.concatenate(results, axis=1)
+      features = numpy.concatenate(results, axis=1)[0]
       if not "inputs" in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[2]), dtype='f', maxshape=(self.data.num_seqs, features.shape[2]))
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[2]), dtype='f', maxshape=(None, features.shape[2]))
       # Currently we support just a single seq -> i.e. a single dev with a single batch.
       assert len(batchess) == 1
       assert len(batchess[0]) == 1
@@ -693,22 +693,24 @@ class HDFForwardTaskThread(TaskThread):
       tt = 0
       feats = []
       for seq_idx in range(batch.start_seq,batch.end_seq):
+        #print "<<<<<<<<<",features.shape
         seqfeats = features[:,seq_idx - batch.start_seq,:]
+        #print ">>>>>>>>>",seqfeats.shape
         seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
         if seqfeats.shape[0] == 0:
           seqfeats = features[:,seq_idx - batch.start_seq,:]
-        print >> log.v5, "extracting", seqfeats.shape[1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
+        print >> log.v5, "extracting", seqfeats.shape[0], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         self.cache.attrs['inputPattSize'] = seqfeats.shape[1]
         tt += seqfeats.shape[0]
         self.seq_dims[seq_idx] = [seqfeats.shape[1]]
         self.seq_lengths[seq_idx] = seqfeats.shape[0]
-        if self.inputs.shape[0] < self.toffset + seqfeats.shape[0]:
-          self.inputs.resize(self.toffset + seqfeats.shape[0], axis = 0)
         #self.inputs[self.toffset:self.toffset + seqfeats.shape[0]] = numpy.asarray(seqfeats)
         feats.append(seqfeats)
         self.tags.append(self.data.get_tag(seq_idx))
         self.times.extend(self.data.get_times(seq_idx))
+      if self.inputs.shape[0] < self.toffset + tt:
+        self.inputs.resize(self.toffset + tt, axis = 0)
       self.inputs[self.toffset:self.toffset + tt] = numpy.concatenate(feats,axis=0)
       self.toffset += tt
 

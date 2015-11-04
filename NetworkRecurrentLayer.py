@@ -467,7 +467,7 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      if self.attrs['lm']:
+      if self.attrs['lm'] and self.attrs['droplm'] < 1.0:
         y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
         n_cls = self.y_in[self.attrs['target']].n_out
         y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
@@ -751,6 +751,17 @@ class RecurrentChunkLayer(Layer):
         z += self.dot(self.mass * m * x_t.output, W)
     num_batches = self.index.shape[1]
     non_sequences = []
+    sequences = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0], self.index.shape[1], unit.n_in) + z
+    calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), sequences.shape[1], sequences.shape[2])
+    sequences = T.set_subtensor(calloc[:self.index.shape[0]],sequences)
+    ialloc = T.alloc(numpy.cast['int32'](1), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), self.index.shape[1])
+    index = T.set_subtensor(ialloc[:self.index.shape[0]],self.index)
+
+    num_chunks = sequences.shape[0] / chunk_size
+    num_batches = num_batches * num_chunks
+    sequences = sequences.reshape((chunk_size,num_batches,sequences.shape[2]))
+    index = index.reshape((chunk_size,num_batches))
+
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
@@ -767,15 +778,9 @@ class RecurrentChunkLayer(Layer):
         recurrent_transform = recurrent_transform[:-3]
       elif self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-        self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
+        self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
-        self.lmmask = T.zeros_like(self.index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
-
-    if self.attrs['dropconnect'] > 0.0:
-      srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
-      connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(unit.n_out,)), theano.config.floatX)
-      connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
-      non_sequences += [connectmask, connectmass]
+        self.lmmask = T.zeros_like(index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
 
     if not attention:
       attention = "none"
@@ -808,25 +813,16 @@ class RecurrentChunkLayer(Layer):
     self.recurrent_transform = recurrent_transform_inst
     self.out_dec = self.index.shape[0]
     # scan over sequence
-    sequences = z
-    calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), sequences.shape[1], sequences.shape[2])
-    sequences = T.set_subtensor(calloc[:self.index.shape[0]],sequences)
-    ialloc = T.alloc(numpy.cast['int32'](1), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), self.index.shape[1])
-    index = T.set_subtensor(ialloc[:self.index.shape[0]],self.index)
-
-    num_chunks = sequences.shape[0] / chunk_size
-    num_batches = num_batches * num_chunks
-    sequences = sequences.reshape((chunk_size,num_batches,sequences.shape[2]))
-    index = index.reshape((chunk_size,num_batches))
     sources = self.sources
     if encoder:
       outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
     else:
       outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
 
-    if self.attrs['lm']:
-      y = self.y_in[self.attrs['target']].flatten()
-      y_t = self.W_lm_out[y].reshape((index.shape[0],num_batches,unit.n_in))[:-1] # (T-1)BD
+    if self.attrs['lm'] and self.attrs['droplm'] < 1.0:
+      yalloc = T.alloc(numpy.cast['int32'](0), (self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size)) * self.index.shape[1])
+      y = T.set_subtensor(yalloc[:self.index.shape[0] * self.index.shape[1]],self.y_in[self.attrs['target']].flatten())
+      y_t = self.W_lm_out[y].reshape((chunk_size,num_batches,unit.n_in))[:-1] # (T-1)BD
       sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1), y_t], axis=0) * self.lmmask
 
     if self.recurrent_transform:
@@ -879,7 +875,7 @@ class RecurrentChunkLayer(Layer):
 
     #self.index = index[-1].reshape((num_chunks,num_batches/num_chunks))
     for i in xrange(unit.n_act):
-      outputs[i] = outputs[i].reshape((num_chunks * outputs[i].shape[0],outputs[i].shape[1]/num_chunks,outputs[i].shape[2]))[:self.index.shape[0]]
+      outputs[i] = outputs[i].reshape((num_chunks * outputs[i].shape[0],outputs[i].shape[1]/num_chunks,outputs[i].shape[2]))[::direction or 1][:self.index.shape[0]][::direction or 1]
 
     if self.recurrent_transform:
       self.recurrent_transform_state_var_seqs = outputs[-len(self.recurrent_transform.state_vars):]

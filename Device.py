@@ -380,7 +380,7 @@ class Device(object):
           t = int(extract.split(':')[1])
           extract = extract.split(':')[0]
         if extract == "classification":
-          source.append(self.testnet.output['output'].y_pred)
+          source.append(T.argmax(self.testnet.output['output'].y_m, axis=1).reshape(self.testnet.output['output'].index.shape).dimshuffle(0,1,'x'))
         elif extract == "log-posteriors":
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
