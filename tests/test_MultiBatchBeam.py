@@ -8,7 +8,6 @@ better_exchook.replace_traceback_format_tb()
 
 
 naive_multi_batch_beam = MultiBatchBeam._naive_multi_batch_beam
-simplified_numpy_multi_batch_beam = MultiBatchBeam._simplified_numpy_multi_batch_beam
 
 def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
   array = T.as_tensor(array)
@@ -57,7 +56,7 @@ def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, 
 
 def compare_implementations(*args, **kwargs):
   results = {}
-  for method in ["numpy", "naive", "theano_cpu", "simplified_numpy"]:
+  for method in ["numpy", "naive", "theano_cpu"]:
     m = globals()["%s_multi_batch_beam" % method]
     try:
       res = m(*args, **kwargs)

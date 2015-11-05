@@ -116,35 +116,6 @@ def _theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap
   return beam
 
 
-def _simplified_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
-  start_idxs = numpy.round(start_idxs).astype("int64")
-  batch_lens = numpy.round(batch_lens).astype("int64")
-  beam_width = int(numpy.round(beam_width))
-  assert array.ndim >= 2
-  assert start_idxs.ndim == 1
-  assert batch_lens.ndim == 1
-  assert idx_dim < array.ndim
-  assert batch_dim < array.ndim
-  assert idx_dim != batch_dim
-  n_batch = array.shape[batch_dim]
-  assert start_idxs.shape == (n_batch, )
-  assert batch_lens.shape == (n_batch, )
-
-  if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
-  if batch_dim != 1: raise NotImplementedError
-  if wrap_mode != "wrap_around": raise NotImplementedError
-  # Thus, array is usually in format (time,batch,dim).
-
-  idxs_bc = numpy.arange(beam_width).reshape(beam_width, 1)  # dimshuffle(0, 'x')  (beam,batch)
-  start_idxs_bc = start_idxs.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
-  idxs = idxs_bc + start_idxs_bc  # (beam,batch)
-  batch_lens_bc = batch_lens.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
-  idxs_wrapped = idxs % batch_lens_bc
-  assert idxs_wrapped.shape[1] == array.shape[1]
-  beam = array[idxs_wrapped, numpy.arange(n_batch)]
-  return beam
-
-
 def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
   assert array.ndim >= 2
   assert start_idxs.ndim == 1
@@ -267,8 +238,7 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    array_shape = [array.shape[i] for i in range(array.ndim)]
-    prod_array_shape = T.prod(array_shape)
+    prod_array_shape = T.prod(array.shape)
     prod_pad_left_shape = T.prod(pad_left.shape)
     prod_pad_right_shape = T.prod(pad_right.shape)
     D_array_tmp_size = prod_array_shape
