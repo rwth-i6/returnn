@@ -66,7 +66,7 @@ def compare_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "%s:" % k
+    print "fwd %s:" % k
     print v
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
@@ -87,7 +87,7 @@ def compare_grad_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "%s:" % k
+    print "bwd %s:" % k
     print v
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
