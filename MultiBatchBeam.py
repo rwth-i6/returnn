@@ -166,6 +166,41 @@ def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap
   return D_array, D_pad_left, D_pad_right
 
 
+def _theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
+  # Note: This is slow and hacky. This will create an index-array of the size of the original array.
+  # This is calculated on the CPU. The subtensor then can be done on the GPU, but we should avoid the first part.
+  D_beam = output_grad
+  prod_array_shape = T.prod(array.shape)
+  prod_pad_left_shape = T.prod(pad_left.shape)
+  prod_pad_right_shape = T.prod(pad_right.shape)
+  D_array_tmp_size = prod_array_shape
+  if wrap_mode == "pad":
+    D_array_tmp_size += prod_pad_left_shape + prod_pad_right_shape
+  D_array_tmp_flat = T.zeros([D_array_tmp_size], dtype="float32")  # with pad values
+  if wrap_mode == "pad":
+    # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
+    pad_left_idxs = T.arange(prod_pad_left_shape) + prod_array_shape
+    pad_right_idxs = T.arange(prod_pad_right_shape) + prod_array_shape + prod_pad_left_shape
+    pad_left_idxs = pad_left_idxs.reshape(pad_left.shape)
+    pad_right_idxs = pad_right_idxs.reshape(pad_right.shape)
+  else:
+    pad_left_idxs = pad_right_idxs = 0
+  all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
+  idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
+                          wrap_mode=wrap_mode,
+                          pad_left=pad_left_idxs, pad_right=pad_right_idxs,
+                          idx_dim=idx_dim, batch_dim=batch_dim)
+  D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
+  if wrap_mode == "pad":
+    D_array = D_array_tmp_flat[:prod_array_shape].reshape(array.shape)
+    D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_left.shape)
+    D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_right.shape)
+  else:
+    D_array = D_array_tmp_flat.reshape(array.shape)
+    D_pad_left = D_pad_right = T.DisconnectedType()()
+
+  return D_array, D_pad_left, D_pad_right
+
 
 class MultiBatchBeamOp(theano.Op):
   __props__ = ("wrap_mode", "idx_dim", "batch_dim")
@@ -238,34 +273,11 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    prod_array_shape = T.prod(array.shape)
-    prod_pad_left_shape = T.prod(pad_left.shape)
-    prod_pad_right_shape = T.prod(pad_right.shape)
-    D_array_tmp_size = prod_array_shape
-    if self.wrap_mode == "pad":
-      D_array_tmp_size += prod_pad_left_shape + prod_pad_right_shape
-    D_array_tmp_flat = T.zeros([D_array_tmp_size], dtype="float32")  # with pad values
-    if self.wrap_mode == "pad":
-      # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
-      pad_left_idxs = T.arange(prod_pad_left_shape) + prod_array_shape
-      pad_right_idxs = T.arange(prod_pad_right_shape) + prod_array_shape + prod_pad_left_shape
-      pad_left_idxs = pad_left_idxs.reshape(pad_left.shape)
-      pad_right_idxs = pad_right_idxs.reshape(pad_right.shape)
-    else:
-      pad_left_idxs = pad_right_idxs = 0
-    all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
-    idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
-                            wrap_mode=self.wrap_mode,
-                            pad_left=pad_left_idxs, pad_right=pad_right_idxs,
-                            idx_dim=self.idx_dim, batch_dim=self.batch_dim)
-    D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
-    if self.wrap_mode == "pad":
-      D_array = D_array_tmp_flat[:prod_array_shape].reshape(array.shape)
-      D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_left.shape)
-      D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_right.shape)
-    else:
-      D_array = D_array_tmp_flat.reshape(array.shape)
-      D_pad_left = D_pad_right = T.DisconnectedType()()
+    D_array, D_pad_left, D_pad_right = _theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width,
+                                                                         self.wrap_mode, pad_left, pad_right,
+                                                                         self.idx_dim, self.batch_dim,
+                                                                         output_grad=D_beam
+                                                                         )
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
     D_start_idxs = T.DisconnectedType()()
