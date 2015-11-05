@@ -329,7 +329,7 @@ def initThreadJoinHack():
 
   # Mostly the same for Condition.wait().
   cond_wait_orig = threading._Condition.wait
-  def cond_wait_hacked(cond, timeout=None):
+  def cond_wait_hacked(cond, timeout=None, *args):
     if timeout is None and thread.get_ident() == mainThreadId:
       # Use a timeout anyway. This should not matter for the underlying code.
       cond_wait_orig(cond, timeout=0.1)
