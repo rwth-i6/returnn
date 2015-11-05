@@ -1,6 +1,6 @@
 
 import numpy
-from nose.tools import assert_equal
+from nose.tools import assert_equal, assert_is
 import MultiBatchBeam
 from MultiBatchBeam import *
 import better_exchook
@@ -25,25 +25,34 @@ def theano_cpu_multi_batch_beam(*args, **kwargs):
 
 naive_multi_batch_beam_grad = MultiBatchBeam._naive_multi_batch_beam_grad
 
-def numpy_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
+def _eval_or_None(x):
+  if isinstance(x.type, T.DisconnectedType):
+    return None
+  return x.eval()
+
+def theano_op_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
   array = T.as_tensor(array)
   start_idxs = T.as_tensor(start_idxs)
   batch_lens = T.as_tensor(batch_lens)
   beam_width = T.as_tensor(beam_width)
+  pad_left = T.as_tensor(pad_left)
+  pad_right = T.as_tensor(pad_right)
   output_grad = T.as_tensor(output_grad)
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
   D_array, D_start_idxs, D_batch_lens, D_beam_width, D_pad_left, D_pad_right = op.grad((array, start_idxs, batch_lens, beam_width, pad_left, pad_right), (output_grad, ))
-  return D_array.eval()
+  return map(_eval_or_None, [D_array, D_pad_left, D_pad_right])
 
 def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
   array = T.as_tensor(array)
   start_idxs = T.as_tensor(start_idxs)
   batch_lens = T.as_tensor(batch_lens)
   beam_width = T.as_tensor(beam_width)
+  pad_left = T.as_tensor(pad_left)
+  pad_right = T.as_tensor(pad_right)
   output_grad = T.as_tensor(output_grad)
   res = MultiBatchBeam._theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, idx_dim, batch_dim)
-  D_array = T.grad(None, wrt=array, known_grads={res: output_grad})
-  return D_array.eval()
+  D_array, D_pad_left, D_pad_right = T.grad(None, wrt=[array, pad_left, pad_right], known_grads={res: output_grad}, disconnected_inputs="ignore", return_disconnected="Disconnected")
+  return map(_eval_or_None, [D_array, D_pad_left, D_pad_right])
 
 
 def compare_implementations(*args, **kwargs):
@@ -69,7 +78,7 @@ def compare_implementations(*args, **kwargs):
 
 def compare_grad_implementations(*args, **kwargs):
   results = {}
-  for method in ["numpy", "naive", "theano_cpu"]:
+  for method in ["theano_op", "naive", "theano_cpu"]:
     m = globals()["%s_multi_batch_beam_grad" % method]
     try:
       res = m(*args, **kwargs)
@@ -83,8 +92,14 @@ def compare_grad_implementations(*args, **kwargs):
     print v
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
-    assert_equal(results[k].shape, results[reference].shape)
-    numpy.testing.assert_almost_equal(results[k], results[reference])
+    assert_equal(len(results[k]), len(results[reference]))
+    for i in range(len(results[k])):
+      if results[k][i] is None or results[reference][i] is None:
+        assert_is(results[k][i], results[reference][i])
+        continue
+      assert_equal(results[k][i].shape, results[reference][i].shape)
+      # The summation of the grad can be quite numerically unstable, thus the low decimal.
+      numpy.testing.assert_almost_equal(results[k][i], results[reference][i], decimal=4)
   return results[reference]
 
 
@@ -165,7 +180,7 @@ def test_grad_simple():
   batch_lens = numpy.array([array.shape[0]])
   beam_width = 4
   D_beam = numpy.arange(4, dtype="float32").reshape(beam_width, n_batch)
-  D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
+  D_array, _, _ = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
   assert D_array.shape == array.shape
   assert_equal(list(D_array[:, 0]), [2, 3] + [0] * 6 + [0, 1])
 
@@ -181,7 +196,7 @@ def test_random_wrap():
   start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around")
   D_beam = numpy.random.random(beam.shape)
-  D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
+  compare_grad_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around", output_grad=D_beam)
 
 def test_random_pad():
   n_time = 100
@@ -197,7 +212,7 @@ def test_random_pad():
   start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right)
   D_beam = numpy.random.random(beam.shape)
-  D_array = compare_grad_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, output_grad=D_beam)
+  compare_grad_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, output_grad=D_beam)
 
 def test_inc_subtensor():
   # If there are some indexes multiple times in the subtensor,

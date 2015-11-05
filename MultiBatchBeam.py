@@ -156,23 +156,43 @@ def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap
   assert start_idxs.shape == (n_batch, )
   assert batch_lens.shape == (n_batch, )
   D_beam = output_grad
+  pad_left = numpy.asarray(pad_left)
+  pad_right = numpy.asarray(pad_right)
 
   if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
   if batch_dim != 1: raise NotImplementedError
   assert D_beam.shape == (beam_width, n_batch) + array.shape[2:]
   # Thus, array is usually in format (time,batch,dim).
 
-  D_array = numpy.zeros_like(array, dtype=D_beam.dtype)
+  D_array = numpy.zeros_like(array, dtype="float32")
+  if wrap_mode == "pad":
+    D_pad_left = numpy.zeros(array.shape[2:], dtype="float32")
+    D_pad_right = numpy.zeros(array.shape[2:], dtype="float32")
+  else:
+    D_pad_left = D_pad_right = None
+
   for i0 in range(beam_width):
     for i1 in range(n_batch):
       idx = start_idxs[i1] + i0
       if wrap_mode == "wrap_around":
         idx = idx % batch_lens[i1]
       elif wrap_mode == "pad":
-        if idx < 0 or idx >= batch_lens[i1]:
+        if idx < 0:
+          D_pad_left += D_beam[i0, i1]
+          continue
+        if idx >= batch_lens[i1]:
+          D_pad_right += D_beam[i0, i1]
           continue
       D_array[idx, i1] = D_beam[i0, i1]
-  return D_array
+
+  if wrap_mode == "pad":
+    if D_pad_left.ndim > pad_left.ndim:
+      D_pad_left = numpy.sum(D_pad_left, axis=tuple(range(D_pad_left.ndim - pad_left.ndim)))
+    if D_pad_right.ndim > pad_right.ndim:
+      D_pad_right = numpy.sum(D_pad_right, axis=tuple(range(D_pad_right.ndim - pad_right.ndim)))
+    assert D_pad_left.shape == pad_left.shape
+    assert D_pad_right.shape == pad_right.shape
+  return D_array, D_pad_left, D_pad_right
 
 
 
@@ -247,21 +267,21 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    D_array_tmp_shape = [array.shape[i] for i in range(array.ndim)]
+    array_shape = [array.shape[i] for i in range(array.ndim)]
+    prod_array_shape = T.prod(array_shape)
+    prod_pad_left_shape = T.prod(pad_left.shape)
+    prod_pad_right_shape = T.prod(pad_right.shape)
+    D_array_tmp_size = prod_array_shape
     if self.wrap_mode == "pad":
-      D_array_tmp_shape[self.idx_dim] += 2  # for pad_left/pad_right
-    D_array_tmp_flat = T.zeros([T.prod(D_array_tmp_shape)], dtype="float32")  # with pad values
-    pad_shape = [array.shape[i] for i in range(array.ndim) if i != self.idx_dim]
+      D_array_tmp_size += prod_pad_left_shape + prod_pad_right_shape
+    D_array_tmp_flat = T.zeros([D_array_tmp_size], dtype="float32")  # with pad values
     if self.wrap_mode == "pad":
       # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
-      pad_index_offset = T.prod(array.shape)
-      pad_vec_size = T.prod(pad_shape)
-      pad_left_idxs = T.arange(pad_vec_size) + pad_index_offset
-      pad_right_idxs = pad_left_idxs + pad_vec_size
-      pad_left_idxs = pad_left_idxs.reshape(pad_shape)
-      pad_right_idxs = pad_right_idxs.reshape(pad_shape)
+      pad_left_idxs = T.arange(prod_pad_left_shape) + prod_array_shape
+      pad_right_idxs = T.arange(prod_pad_right_shape) + prod_array_shape + prod_pad_left_shape
+      pad_left_idxs = pad_left_idxs.reshape(pad_left.shape)
+      pad_right_idxs = pad_right_idxs.reshape(pad_right.shape)
     else:
-      pad_index_offset = None
       pad_left_idxs = pad_right_idxs = 0
     all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
     idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
@@ -270,12 +290,12 @@ class MultiBatchBeamOp(theano.Op):
                             idx_dim=self.idx_dim, batch_dim=self.batch_dim)
     D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
     if self.wrap_mode == "pad":
-      D_array = D_array_tmp_flat[:pad_index_offset].reshape(array.shape)
-      D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_shape)
-      D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_shape)
+      D_array = D_array_tmp_flat[:prod_array_shape].reshape(array.shape)
+      D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_left.shape)
+      D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_right.shape)
     else:
       D_array = D_array_tmp_flat.reshape(array.shape)
-      D_pad_left = D_pad_right = T.zeros(pad_shape, dtype="float32")
+      D_pad_left = D_pad_right = T.DisconnectedType()()
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
     D_start_idxs = T.DisconnectedType()()
@@ -287,8 +307,9 @@ class MultiBatchBeamOp(theano.Op):
   def connection_pattern(self, node):
     # Only the gradient of the first input (array) will be connected.
     # All others are disconnected (because round() or floor() is used on them.).
-    # (TODO: Also pad_left/pad_right is connected.)
-    pattern = [[True], [False], [False], [False], [True], [True]]
+    pattern = [[True], [False], [False], [False], [False], [False]]
+    if self.wrap_mode == "pad":
+      pattern[-2:] = [[True], [True]]
     assert len(pattern) == len(node.inputs)
     return pattern
 
