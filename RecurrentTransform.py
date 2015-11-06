@@ -218,7 +218,7 @@ class NTM(RecurrentTransformBase):
       self.b_add = parent.add_param(layer.create_bias(ncells, name="b_add"+suffix))
 
     def softmax(self, x):
-      ex = exp(x)
+      ex = T.exp(x)
       return ex / sum(ex,axis=-1,keepdims=True)
 
     def step(self, y_p):
@@ -236,8 +236,8 @@ class NTM(RecurrentTransformBase):
     import scipy
     layer = self.layer
 
-    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
-    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+    self.M = layer.add_state_var(T.ones((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
+    self.W = self.add_state_var(T.ones((layer.attrs['ntm_naddrs'],), dtype='float32') * 1./layer.attrs['ntm_ncells'], name='W')
     self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
     self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
     self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
@@ -246,17 +246,14 @@ class NTM(RecurrentTransformBase):
       value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[numpy.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
       name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
 
-    self.heads = []
-    for n in xrange(self.nheads):
-      self.heads.append(Head(n,self,self.naddrs,self.ncells,self.max_shift))
+    self.heads = [ Head(n,self,self.naddrs,self.ncells,self.max_shift) for n in xrange(self.nheads) ]
+    self.W_read = self.add_param(layer.create_random_uniform_weights(n=self.layer.attrs['ntm_ncells'],m=self.layer.attrs['ntm_ctrl'], name="W_ctrl_%s" % layer.name))
+    weight_init = T.exp(self.W) / T.sum(T.exp(self.W), axis=1, keepdims=True)
 
-    #for h in xrange(self.layer.attrs['ntm_nheads']):
-    #  self.heads
 
   def step(self, y_p):
-
-
-
+    y_c = y_p + T.dot(self.M,self.W_read)
+    
     return z_re, {}
 
 
