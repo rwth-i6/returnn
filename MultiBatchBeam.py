@@ -116,35 +116,6 @@ def _theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap
   return beam
 
 
-def _simplified_numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
-  start_idxs = numpy.round(start_idxs).astype("int64")
-  batch_lens = numpy.round(batch_lens).astype("int64")
-  beam_width = int(numpy.round(beam_width))
-  assert array.ndim >= 2
-  assert start_idxs.ndim == 1
-  assert batch_lens.ndim == 1
-  assert idx_dim < array.ndim
-  assert batch_dim < array.ndim
-  assert idx_dim != batch_dim
-  n_batch = array.shape[batch_dim]
-  assert start_idxs.shape == (n_batch, )
-  assert batch_lens.shape == (n_batch, )
-
-  if idx_dim != 0: raise NotImplementedError  # This is usually the time dim.
-  if batch_dim != 1: raise NotImplementedError
-  if wrap_mode != "wrap_around": raise NotImplementedError
-  # Thus, array is usually in format (time,batch,dim).
-
-  idxs_bc = numpy.arange(beam_width).reshape(beam_width, 1)  # dimshuffle(0, 'x')  (beam,batch)
-  start_idxs_bc = start_idxs.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
-  idxs = idxs_bc + start_idxs_bc  # (beam,batch)
-  batch_lens_bc = batch_lens.reshape(1, n_batch)  # dimshuffle('x', 0)  (beam,batch)
-  idxs_wrapped = idxs % batch_lens_bc
-  assert idxs_wrapped.shape[1] == array.shape[1]
-  beam = array[idxs_wrapped, numpy.arange(n_batch)]
-  return beam
-
-
 def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
   assert array.ndim >= 2
   assert start_idxs.ndim == 1
@@ -194,6 +165,41 @@ def _naive_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap
     assert D_pad_right.shape == pad_right.shape
   return D_array, D_pad_left, D_pad_right
 
+
+def _theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
+  # Note: This is slow and hacky. This will create an index-array of the size of the original array.
+  # This is calculated on the CPU. The subtensor then can be done on the GPU, but we should avoid the first part.
+  D_beam = output_grad
+  prod_array_shape = T.prod(array.shape)
+  prod_pad_left_shape = T.prod(pad_left.shape)
+  prod_pad_right_shape = T.prod(pad_right.shape)
+  D_array_tmp_size = prod_array_shape
+  if wrap_mode == "pad":
+    D_array_tmp_size += prod_pad_left_shape + prod_pad_right_shape
+  D_array_tmp_flat = T.zeros([D_array_tmp_size], dtype="float32")  # with pad values
+  if wrap_mode == "pad":
+    # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
+    pad_left_idxs = T.arange(prod_pad_left_shape) + prod_array_shape
+    pad_right_idxs = T.arange(prod_pad_right_shape) + prod_array_shape + prod_pad_left_shape
+    pad_left_idxs = pad_left_idxs.reshape(pad_left.shape)
+    pad_right_idxs = pad_right_idxs.reshape(pad_right.shape)
+  else:
+    pad_left_idxs = pad_right_idxs = 0
+  all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
+  idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
+                          wrap_mode=wrap_mode,
+                          pad_left=pad_left_idxs, pad_right=pad_right_idxs,
+                          idx_dim=idx_dim, batch_dim=batch_dim)
+  D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
+  if wrap_mode == "pad":
+    D_array = D_array_tmp_flat[:prod_array_shape].reshape(array.shape)
+    D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_left.shape)
+    D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_right.shape)
+  else:
+    D_array = D_array_tmp_flat.reshape(array.shape)
+    D_pad_left = D_pad_right = T.DisconnectedType()()
+
+  return D_array, D_pad_left, D_pad_right
 
 
 class MultiBatchBeamOp(theano.Op):
@@ -267,35 +273,25 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    array_shape = [array.shape[i] for i in range(array.ndim)]
-    prod_array_shape = T.prod(array_shape)
-    prod_pad_left_shape = T.prod(pad_left.shape)
-    prod_pad_right_shape = T.prod(pad_right.shape)
-    D_array_tmp_size = prod_array_shape
-    if self.wrap_mode == "pad":
-      D_array_tmp_size += prod_pad_left_shape + prod_pad_right_shape
-    D_array_tmp_flat = T.zeros([D_array_tmp_size], dtype="float32")  # with pad values
-    if self.wrap_mode == "pad":
-      # Calculate the indices for D_pad_left/D_pad_right in D_array_tmp_flat.
-      pad_left_idxs = T.arange(prod_pad_left_shape) + prod_array_shape
-      pad_right_idxs = T.arange(prod_pad_right_shape) + prod_array_shape + prod_pad_left_shape
-      pad_left_idxs = pad_left_idxs.reshape(pad_left.shape)
-      pad_right_idxs = pad_right_idxs.reshape(pad_right.shape)
-    else:
-      pad_left_idxs = pad_right_idxs = 0
-    all_idxs = T.arange(T.prod(array.shape)).reshape(array.shape)
-    idxs = multi_batch_beam(array=all_idxs, start_idxs=start_idxs, batch_lens=batch_lens, beam_width=beam_width,
-                            wrap_mode=self.wrap_mode,
-                            pad_left=pad_left_idxs, pad_right=pad_right_idxs,
-                            idx_dim=self.idx_dim, batch_dim=self.batch_dim)
-    D_array_tmp_flat = T.inc_subtensor(D_array_tmp_flat[idxs.flatten()], D_beam.flatten())
-    if self.wrap_mode == "pad":
-      D_array = D_array_tmp_flat[:prod_array_shape].reshape(array.shape)
-      D_pad_left = D_array_tmp_flat[pad_left_idxs.flatten()].reshape(pad_left.shape)
-      D_pad_right = D_array_tmp_flat[pad_right_idxs.flatten()].reshape(pad_right.shape)
-    else:
-      D_array = D_array_tmp_flat.reshape(array.shape)
+    grad_op = MultiBatchBeamGradAddOp(self.wrap_mode, self.idx_dim, self.batch_dim)
+    D_array_and_pad_shape = [array.shape[i] for i in range(array.ndim)]
+    D_array_and_pad_shape[self.idx_dim] += 2  # for D_pad_left/D_pad_right
+    D_array_and_pad = T.zeros(D_array_and_pad_shape, dtype="float32")
+    D_array_and_pad = grad_op(D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam)
+
+    if self.idx_dim != 0: raise NotImplementedError  # TODO...
+    D_array = D_array_and_pad[:array.shape[self.idx_dim]]
+    if self.wrap_mode == "wrap_around":
       D_pad_left = D_pad_right = T.DisconnectedType()()
+    elif self.wrap_mode == "pad":
+      D_pad_left = D_array_and_pad[array.shape[self.idx_dim]]
+      D_pad_right = D_array_and_pad[array.shape[self.idx_dim] + 1]
+      if D_pad_left.ndim > pad_left.ndim:
+        D_pad_left = T.sum(D_pad_left, axis=tuple(range(D_pad_left.ndim - pad_left.ndim)))
+      if D_pad_right.ndim > pad_right.ndim:
+        D_pad_right = T.sum(D_pad_right, axis=tuple(range(D_pad_right.ndim - pad_right.ndim)))
+    else:
+      assert False, self.wrap_mode
 
     # Those are all discrete values. The gradient is 0 almost everywhere, except for integers where it is not defined.
     D_start_idxs = T.DisconnectedType()()
@@ -312,6 +308,88 @@ class MultiBatchBeamOp(theano.Op):
       pattern[-2:] = [[True], [True]]
     assert len(pattern) == len(node.inputs)
     return pattern
+
+
+def _len_of_shape(shape):
+  if isinstance(shape, (list,tuple)):
+    return len(shape)
+  if isinstance(shape, T.Apply):
+    if isinstance(shape.op, T.Shape):
+      assert len(shape.inputs) == 1
+      return shape.inputs[0].ndim
+  raise NotImplementedError("cannot handle %r" % shape)
+
+
+inplace_increment = None
+if theano.config.cxx:
+  import theano.gof.cutils  # needed to import cutils_ext
+  try:
+    from cutils_ext.cutils_ext import inplace_increment
+  except ImportError:
+    pass
+
+
+class MultiBatchBeamGradAddOp(theano.Op):
+  __props__ = ("wrap_mode", "idx_dim", "batch_dim", "inplace")
+
+  def __init__(self, wrap_mode, idx_dim=0, batch_dim=1, inplace=False):
+    super(MultiBatchBeamGradAddOp, self).__init__()
+    self.wrap_mode = wrap_mode
+    self.idx_dim = idx_dim
+    self.batch_dim = batch_dim
+    self.inplace = inplace
+    if inplace:
+      # We operate inplace on D_array_and_pad.
+      self.destroy_map = {0: [0]}
+
+  def make_node(self, D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam):
+    # D_array_and_pad is of shape like the original array, but shape[idx_dim] += 2 for D_pad_left and D_pad_right.
+    start_idxs = T.as_tensor_variable(start_idxs)
+    batch_lens = T.as_tensor_variable(batch_lens)
+    beam_width = T.as_tensor_variable(beam_width)
+    D_beam = T.as_tensor_variable(D_beam)
+    assert start_idxs.ndim == 1
+    assert batch_lens.ndim == 1
+    assert beam_width.ndim == 0
+    return theano.Apply(self,
+                        [D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam],
+                        [D_array_and_pad.type("D_array_and_pad")])
+
+  def infer_shape(self, node, input_shapes):
+    return [input_shapes[0]]
+
+  def perform(self, node, inputs, output_storage):
+    D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam = inputs
+    if not self.inplace:
+      D_array_and_pad = D_array_and_pad.copy()
+    out_D_array_and_pad, = output_storage
+    out_D_array_and_pad[0] = D_array_and_pad
+    n_batches = D_array_and_pad.shape[self.batch_dim]
+
+    idxs_bc = numpy.arange(beam_width).reshape(beam_width, 1)  # dimshuffle(0, 'x')  (beam,batch)
+    start_idxs_bc = start_idxs.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
+    idxs = idxs_bc + start_idxs_bc  # (beam,batch)
+    batch_lens_bc = batch_lens.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
+    idx_pad_left = D_array_and_pad.shape[self.idx_dim] - 2
+    idx_pad_right = idx_pad_left + 1
+
+    if self.wrap_mode == "wrap_around":
+      idxs = idxs % batch_lens_bc
+    elif self.wrap_mode == "pad":
+      idxs = numpy.where(idxs >= batch_lens_bc, idx_pad_right, idxs)
+      idxs = numpy.where(idxs < 0, idx_pad_left, idxs)
+    else:
+      assert False, self.wrap_mode
+
+    if self.idx_dim != 0: raise NotImplementedError  # TODO...
+    if self.batch_dim != 1: raise NotImplementedError  # TODO...
+    # In Numpy, x[idx] += y doesn't work if the same index is present
+    # many times: it does it only once. Is it a bug? In any case, for
+    # this reason we implement our own 'inc' iteration.
+    # See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
+    if inplace_increment is None: raise NotImplementedError("need Numpy 1.8 or later")
+    # This is like D_array_and_pad[idxs, numpy.arange(n_batches)] += D_beam .
+    inplace_increment(D_array_and_pad, (idxs, numpy.arange(n_batches)), D_beam)
 
 
 class GpuMultiBatchBeamOp(theano.sandbox.cuda.GpuOp):

@@ -3,12 +3,13 @@ import numpy
 from nose.tools import assert_equal, assert_is
 import MultiBatchBeam
 from MultiBatchBeam import *
+import theano.printing
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
 naive_multi_batch_beam = MultiBatchBeam._naive_multi_batch_beam
-simplified_numpy_multi_batch_beam = MultiBatchBeam._simplified_numpy_multi_batch_beam
 
 def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
   array = T.as_tensor(array)
@@ -57,7 +58,7 @@ def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, 
 
 def compare_implementations(*args, **kwargs):
   results = {}
-  for method in ["numpy", "naive", "theano_cpu", "simplified_numpy"]:
+  for method in ["numpy", "naive", "theano_cpu"]:
     m = globals()["%s_multi_batch_beam" % method]
     try:
       res = m(*args, **kwargs)
@@ -67,7 +68,7 @@ def compare_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "%s:" % k
+    print "fwd %s:" % k
     print v
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
@@ -88,7 +89,7 @@ def compare_grad_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "%s:" % k
+    print "bwd %s:" % k
     print v
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
@@ -219,3 +220,47 @@ def test_inc_subtensor():
   # we expect for inc_subtensor that they are all accumulated.
   a = T.inc_subtensor(T.arange(10)[[0, 3, 5, 0]], numpy.array([-1,-2,-3,-4])).eval()
   assert_equal(list(a), [-5,  1,  2,  1,  4,  2,  6,  7,  8,  9])
+
+def test_inplace_grad_add():
+  n_time = 10
+  n_batch = 5
+  n_dim = 2
+  beam_width = 3
+  wrap_mode = "pad"
+  numpy.random.seed(123)
+  array = numpy.random.random(n_time * n_batch * n_dim).astype("float32").reshape(n_time, n_batch, n_dim)
+  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  start_idxss = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch * n_time)]).reshape(n_time, n_batch)
+  D_beams = numpy.random.random((n_time, beam_width, n_batch, n_dim)).astype("float32")
+  array = theano.shared(array, name="array")
+  batch_lens = T.as_tensor_variable(batch_lens, name="batch_lens")
+  start_idxss = T.as_tensor_variable(start_idxss, name="start_idxss")
+  D_beams = T.as_tensor_variable(D_beams, name="D_beams")
+  pad_left = theano.shared(4, name="pad_left")
+  pad_right = theano.shared(-1, name="pad_right")
+  beam_width = theano.shared(beam_width, name="beam_width")
+
+  def step(start_idxs, last_beam):
+    beam = MultiBatchBeamOp(wrap_mode)(array, start_idxs, batch_lens, beam_width, pad_left, pad_right)
+    return [beam]
+
+  beam_zero = T.zeros((beam_width, n_batch, n_dim))
+  beams, _ = theano.scan(step, sequences=[start_idxss], outputs_info=[beam_zero])
+
+  print "graph for beams:"
+  theano.printing.debugprint(beams)
+
+  D_array, D_pad_left, D_pad_right = T.grad(None, wrt=[array, pad_left, pad_right], known_grads={beams: D_beams})
+  f = theano.function(inputs=[], outputs=[D_array, D_pad_left, D_pad_right])
+
+  print "graph for first output:"
+  theano.printing.debugprint(f.maker.fgraph.outputs[0])
+
+  print "graph toposort:"
+  pprint(f.maker.fgraph.toposort())
+
+  #if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
+  #            for x in f.maker.fgraph.toposort()]):
+  #  print "It seems as if we don't use the GPU although we requested it."
+
+  # TODO...
