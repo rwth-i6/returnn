@@ -250,11 +250,41 @@ class NTM(RecurrentTransformBase):
     self.W_read = self.add_param(layer.create_random_uniform_weights(n=self.layer.attrs['ntm_ncells'],m=self.layer.attrs['ntm_ctrl'], name="W_ctrl_%s" % layer.name))
     weight_init = T.exp(self.W) / T.sum(T.exp(self.W), axis=1, keepdims=True)
 
+  def dist(k, M):
+    k_unit = k / (T.sqrt(T.sum(k**2)) + 1e-5)
+    k_unit = k_unit.dimshuffle(('x', 0))
+    k_unit.name = "k_unit"
+    M_lengths = T.sqrt(T.sum(M**2, axis=1)).dimshuffle((0, 'x'))
+    M_unit = M / (M_lengths + 1e-5)
+    M_unit.name = "M_unit"
+    return T.sum(k_unit * M_unit, axis=1)
 
   def step(self, y_p):
-    y_c = y_p + T.dot(self.M,self.W_read)
-    
-    return z_re, {}
+    z_c = y_p + T.dot(self.M,self.W_read)
+    W_read = self.W_read
+    M = self.M
+    for head in self.heads:
+      key_t, beta_t, g_t, shift_t, gamma_t, erase_t, add_t = head.step(z_c)
+      # 3.3.1 Focusing b Content
+      weight_c = T.exp(beta * dist(key, M))
+      weight_c = weight_c / T.sum(weight_c)
+      # 3.3.2 Focusing by Location
+      weight_g = g * weight_c + (1 - g) * W_read
+      shift = shift.dimshuffle((0, 'x'))
+      weight_shifted = T.sum(shift_t * weight_g[shift_conv], axis=0)
+
+      weight_sharp = weight_shifted ** gamma
+      weight_curr = weight_sharp / T.sum(weight_sharp)
+
+      weight_curr = weight_curr.dimshuffle((0, 'x'))
+
+      erase_head = erase_t.dimshuffle(('x', 0))
+      add_head = add_t.dimshuffle(('x', 0))
+
+      M_erased = M * (1 - (weight_curr * erase_head))
+      M_curr = M_erased + (weight_curr * add_head)
+      M = M_curr
+    return z_re, {self.M : M}
 
 
 class AttentionBase(RecurrentTransformBase):
