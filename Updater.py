@@ -21,12 +21,14 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "momentum": config.float("momentum", 0)}
+      "momentum": config.float("momentum", 0),
+      "nesterov_momentum": config.float("nesterov_momentum", 0)}
     return cls(**kwargs)
 
   @classmethod
   def initRule(cls, rule, **kwargs):
     kwargs.setdefault('momentum', 0)
+    kwargs.setdefault('nesterov_momentum', 0)
     kwargs.setdefault('gradient_clip', -1)
     kwargs.setdefault('adadelta_decay', 0.90)
     kwargs.setdefault('adadelta_offset', 1e-6)
@@ -39,15 +41,17 @@ class Updater:
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
+  def __init__(self, momentum, nesterov_momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
     """
     :type momentum: float
+    :type nesterov_momentum: float
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
     """
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
+    self.nesterov_momentum = nesterov_momentum
     self.gradient_clip = gradient_clip
     self.max_norm = max_norm
     self.adagrad = adagrad
@@ -61,11 +65,14 @@ class Updater:
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
     if self.adadelta:
       self.momentum = 0.0
+      self.nesterov_momentum = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
     if self.adagrad:
       print >> log.v4, "using adagrad"
     if self.momentum:
       print >> log.v4, "using momentum %f" % self.momentum
+    if self.nesterov_momentum:
+      print >> log.v4, "using simplified nesterov momentum %f" % self.nesterov_momentum
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
 
@@ -99,6 +106,15 @@ class Updater:
                                        dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
                      for p in network.train_params_vars}
+
+    if self.nesterov_momentum > 0:
+      #this is actually velocity not deltas
+      self.velocity = {p: theano.shared(
+                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), borrow=True,
+                     name="velocity_%s" % p)
+                     for p in network.train_params_vars}
+
     if self.adagrad:
       self.accu = {}
       for p in self.network.train_params_vars:
@@ -514,6 +530,12 @@ class Updater:
       if self.momentum > 0:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
+      if self.nesterov_momentum > 0:
+        #The following code inspired by https://github.com/lisa-lab/pylearn2/pull/136#issuecomment-10381617 (6) and (7)
+        tmp = self.momentum * self.velocity[param] + upd[param] - param
+        self.velocity[param] = tmp
+        upd[param] += tmp*self.momentum
+
     #if upd:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))
