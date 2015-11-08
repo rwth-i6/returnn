@@ -6,6 +6,8 @@ from Log import log
 from math import sqrt
 from theano.compat.python2x import OrderedDict
 import theano.tensor as T
+import theano.compile
+
 
 class Updater:
 
@@ -21,6 +23,8 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
+      "multiple_models": config.int('update_multiple_models', 0),
+      "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
       "momentum": config.float("momentum", 0),
       "nesterov_momentum": config.float("nesterov_momentum", 0)}
     return cls(**kwargs)
@@ -41,7 +45,7 @@ class Updater:
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
+  def __init__(self, momentum, nesterov_momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, multiple_models=0, multiple_models_average_step=0):
     """
     :type momentum: float
     :type nesterov_momentum: float
@@ -60,6 +64,8 @@ class Updater:
     self.adam = adam
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
+    self.multiple_models = multiple_models
+    self.multiple_models_average_step = multiple_models_average_step
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
@@ -175,17 +181,18 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name = "", broadcastable = None, reset = False):
-    if broadcastable:
-      if name:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name, broadcastable=broadcastable)
-      else:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), broadcastable=broadcastable)
+  def var(self, value, name="", broadcastable=None, reset=False, dtype="float32", zero=False):
+    if zero:
+      if isinstance(value, theano.compile.SharedVariable):
+        value = value.get_value(borrow=True, return_internal_type=True)
+      shape = value.shape
+      value = numpy.zeros(shape, dtype=dtype)
     else:
-      if name:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name)
-      else:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'))
+      value = numpy.asarray(value).astype(dtype)
+    kwargs = {"value": value}
+    if name: kwargs["name"] = name
+    if broadcastable: kwargs["broadcastable"] = broadcastable
+    param = theano.shared(**kwargs)
     if reset:
       self.params[param] = value
     return param
@@ -208,6 +215,8 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
+    self.counter = self.var(0, name="counter", dtype="int64")
+    updates.append((self.counter, self.counter + 1))
     i_t = self.i + 1.
     beta1=0.9
     beta2=0.999
@@ -535,6 +544,31 @@ class Updater:
         tmp = self.momentum * self.velocity[param] + upd[param] - param
         self.velocity[param] = tmp
         upd[param] += tmp*self.momentum
+
+    # Simulate multi GPU training. This might help for regularization.
+    if self.multiple_models:
+      if not self.multiple_models_average_step:
+        self.multiple_models_average_step = self.multiple_models
+      cur_model = self.counter % self.multiple_models
+
+      for param in grads.keys():
+        models = [param]
+        for i in range(self.multiple_models - 1):
+          models += [self.var(param, name="%s_model_%i" % (param.name, i))]
+
+        models_new = []
+        for i, model_param in enumerate(models):
+          is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
+          models_new += [model_param + upd[param] * is_cur_model]
+
+        is_cur_average_step = T.eq(self.counter % self.multiple_models_average_step, 0)
+        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.multiple_models)
+        for i in range(len(models)):
+          models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+
+        updates.extend(zip(models, models_new))
+
+      upd.clear()
 
     #if upd:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
