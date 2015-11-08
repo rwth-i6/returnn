@@ -541,9 +541,9 @@ class Updater:
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:
         #The following code inspired by https://github.com/lisa-lab/pylearn2/pull/136#issuecomment-10381617 (6) and (7)
-        tmp = self.momentum * self.velocity[param] + upd[param] - param
-        self.velocity[param] = tmp
-        upd[param] += tmp*self.momentum
+        tmp = self.nesterov_momentum * self.velocity[param] + upd[param] - param
+        updates.append((self.velocity[param], tmp))
+        upd[param] += tmp*self.nesterov_momentum
 
     # Simulate multi GPU training. This might help for regularization.
     if self.multiple_models:
