@@ -409,6 +409,7 @@ class ChunkShuffleDataset(CachedDataset2):
     super(ChunkShuffleDataset, self).__init__(**kwargs)
     self.dataset = init_dataset(dataset)
     assert self.dataset
+    self.dataset_last_load_seq_end = None
     self.chunk_shuffle_cache = chunk_shuffle_cache
     self.batch_gen = None
     self.batch_gen_batch_size = batch_gen_batch_size
@@ -428,6 +429,7 @@ class ChunkShuffleDataset(CachedDataset2):
     need_reinit = self.epoch is None or self.epoch != epoch
     super(ChunkShuffleDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self.load_seqs_end = 0
+    self.dataset_last_load_seq_end = 0
     self.rng.seed(epoch or 1)
     if not need_reinit:
       return False
@@ -478,24 +480,28 @@ class ChunkShuffleDataset(CachedDataset2):
   def _add_more(self):
     """
     Adds each chunk/batch seq as a single DatasetSeq.
+    See EngineUtil.assign_dev_data() for comparison.
     :returns whether we added some more
     """
     if not self.batch_gen.has_more(): return False
-    batch, = self.batch_gen.peek_next_n(1)
-    assert batch.seqs
-    self.dataset.load_seqs(batch.start_seq, batch.end_seq)
+    batches = self.batch_gen.peek_next_n(1)
+    for batch in batches:
+      assert batch.seqs
+      if batch.end_seq > self.dataset_last_load_seq_end:
+        self.dataset.load_seqs(batch.start_seq, batch.end_seq)
+        self.dataset_last_load_seq_end = batch.end_seq
 
-    used_data_keys = self.get_data_keys()
-    for seq in batch.seqs:
-      res_data = {}
-      for k in used_data_keys:
-        data = self.dataset.get_data(seq.seq_idx, k)
-        if data is not None:
-          res_data[k] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
-      original_tag = self.dataset.get_tag(seq.seq_idx)
-      self._add_data(data=res_data, original_tag=original_tag)
+      used_data_keys = self.get_data_keys()
+      for seq in batch.seqs:
+        res_data = {}
+        for k in used_data_keys:
+          data = self.dataset.get_data(seq.seq_idx, k)
+          if data is not None:
+            res_data[k] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+        original_tag = self.dataset.get_tag(seq.seq_idx)
+        self._add_data(data=res_data, original_tag=original_tag)
 
-    self.batch_gen.advance(1)
+    self.batch_gen.advance(len(batches))
     return True
 
   def _add_more_until(self, end, shuffle=False):
