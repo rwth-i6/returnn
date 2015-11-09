@@ -2,6 +2,7 @@
 from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
+from Log import log
 
 
 class MetaDataset(CachedDataset2):
@@ -389,6 +390,138 @@ class CombinedDataset(CachedDataset2):
     if self.added_data:
       assert super(CombinedDataset, self).get_data_dtype(key) == dtype
     return dtype
+
+
+class ChunkShuffleDataset(CachedDataset2):
+  """
+  This goes through a dataset, caches some recent chunks
+  """
+
+  def __init__(self, dataset,
+               batch_gen_batch_size, batch_gen_max_seqs,
+               batch_gen_recurrent_net=True,
+               **kwargs):
+    """
+    :param dict[str] dataset: kwargs for init_dataset
+    """
+    super(ChunkShuffleDataset, self).__init__(**kwargs)
+    self.dataset = init_dataset(dataset)
+    assert self.dataset
+    self.batch_gen = None
+    self.batch_gen_batch_size = batch_gen_batch_size
+    self.batch_gen_max_seqs = batch_gen_max_seqs
+    self.batch_gen_recurrent_net = batch_gen_recurrent_net
+    self.num_inputs = self.dataset.num_inputs
+    self.num_outputs = self.dataset.num_outputs
+    self.labels = self.dataset.labels
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :type epoch: int|None
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    need_reinit = self.epoch is None or self.epoch != epoch
+    super(ChunkShuffleDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self.dataset_seq_idx_offsets = [0]
+    if not need_reinit:
+      return False
+
+    if seq_list:
+      raise NotImplementedError("predefined order seq_list")
+    if self.seq_ordering != "default":
+      raise NotImplementedError("seq_ordering %s" % self.seq_ordering)
+
+    self.dataset.init_seq_order(epoch=epoch)
+    self.batch_gen = self.dataset.generate_batches(recurrent_net=self.batch_gen_recurrent_net,
+                                                   batch_size=self.batch_gen_batch_size,
+                                                   max_seqs=self.batch_gen_max_seqs)
+    return True
+
+  def _add_data(self, data, original_tag):
+    """
+    :type data: dict[str,numpy.ndarray]
+    :type original_tag: str
+    """
+    features = data["data"]
+    if not self.added_data: seq_idx = 0
+    else: seq_idx = self.added_data[-1].seq_idx
+    tag = "%s.%i" % (original_tag, seq_idx)
+    seq = DatasetSeq(seq_idx=seq_idx, features=features, targets=data, seq_tag=tag)
+    self._num_timesteps_accumulated += seq.num_frames
+    self.added_data += [seq]
+
+  def _add_more(self):
+    """
+    Adds each chunk/batch seq as a single DatasetSeq.
+    :returns whether we added some more
+    """
+    if not self.batch_gen.has_more(): return False
+    batch, = self.batch_gen.peek_next_n(1)
+    assert batch.seqs
+    self.dataset.load_seqs(batch.start_seq, batch.end_seq)
+
+    used_data_keys = self.get_data_keys()
+    for seq in batch.seqs:
+      res_data = {}
+      for k in used_data_keys:
+        data = self.dataset.get_data(seq.seq_idx, k)
+        if data is not None:
+          res_data[k] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+      original_tag = self.dataset.get_tag(seq.seq_idx)
+      self._add_data(data=res_data, original_tag=original_tag)
+
+    self.batch_gen.advance(1)
+    return True
+
+  def is_less_than_num_seqs(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: bool
+    :returns whether seq_idx < num_seqs. In case num_seqs is not known in advance, it will wait
+    until it knows that n is behind the end or that we have the seq.
+    """
+    if self._num_seqs is not None: return seq_idx < self._num_seqs
+    if seq_idx < self.expected_load_seq_start: return True
+    if self.added_data and seq_idx <= self.added_data[-1].seq_idx: return True
+    while self._add_more():
+      assert self.added_data
+      if seq_idx <= self.added_data[-1].seq_idx: return True
+    # We have reached the end.
+    if not self.added_data:
+      self._num_seqs = 0
+      print >>log.v3, "warning: empty dataset"
+    else:
+      self._num_seqs = self.added_data[-1].seq_idx + 1
+    self.reached_final_seq = True
+    return False
+
+  def _load_seqs(self, start, end):
+    """
+    :param int start: inclusive seq idx start
+    :param int end: exclusive seq idx end
+    """
+    # We expect that start increase monotonic on each call
+    # for not-yet-loaded data.
+    # This will already be called with _load_seqs_superset indices.
+    assert start >= self.expected_load_seq_start
+    if start > self.expected_load_seq_start:
+      # Cleanup old data.
+      self._cleanup_old_seqs(start)
+      self.expected_load_seq_start = start
+    # We might not know the num seqs in advance, thus this more generic check.
+    # This will also load the seqs as a side effect.
+    self.is_less_than_num_seqs(end)
+    # TODO shuffling of the chunks...
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq
+    """
+    assert False, "should not be called"
+
+  def get_target_list(self):
+    return self.dataset.get_target_list()
 
 
 def _simple_to_bool(v):
