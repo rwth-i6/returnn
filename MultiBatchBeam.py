@@ -276,24 +276,21 @@ class MultiBatchBeamOp(theano.Op):
     array, start_idxs, batch_lens, beam_width, pad_left, pad_right = inputs
     D_beam, = output_grads
 
-    grad_op = MultiBatchBeamGradAddOp(self.wrap_mode, self.idx_dim, self.batch_dim)
-    D_array_and_pad_shape = [array.shape[i] for i in range(array.ndim)]
-    D_array_and_pad_shape[self.idx_dim] += 2  # for D_pad_left/D_pad_right
-    D_array_and_pad_0 = T.zeros(D_array_and_pad_shape, dtype="float32")
-    D_array_and_pad_0.name = "D_array_and_pad__initial_0"
-    D_array_and_pad = grad_op(D_array_and_pad_0, start_idxs, batch_lens, beam_width, D_beam)
+    if not isinstance(pad_left, theano.Constant):
+      raise NotImplementedError("D_pad_left not implemented...")
+    if not isinstance(pad_right, theano.Constant):
+      raise NotImplementedError("D_pad_right not implemented...")
 
-    if self.idx_dim != 0: raise NotImplementedError  # TODO...
-    D_array = D_array_and_pad[:array.shape[self.idx_dim]]
+    grad_op = MultiBatchBeamGradAddOp(self.wrap_mode, self.idx_dim, self.batch_dim)
+    D_array_0 = T.zeros(array.shape, dtype="float32")
+    D_array_0.name = "D_array__initial_0"
+    D_array = grad_op(D_array_0, start_idxs, batch_lens, beam_width, D_beam)
+
     if self.wrap_mode == "wrap_around":
       D_pad_left = D_pad_right = T.DisconnectedType()()
     elif self.wrap_mode == "pad":
-      D_pad_left = D_array_and_pad[array.shape[self.idx_dim]]
-      D_pad_right = D_array_and_pad[array.shape[self.idx_dim] + 1]
-      if D_pad_left.ndim > pad_left.ndim:
-        D_pad_left = T.sum(D_pad_left, axis=tuple(range(D_pad_left.ndim - pad_left.ndim)))
-      if D_pad_right.ndim > pad_right.ndim:
-        D_pad_right = T.sum(D_pad_right, axis=tuple(range(D_pad_right.ndim - pad_right.ndim)))
+      D_pad_left = T.zeros(pad_left.shape)
+      D_pad_right = T.zeros(pad_right.shape)
     else:
       assert False, self.wrap_mode
 
@@ -346,8 +343,8 @@ class MultiBatchBeamGradAddOp(theano.Op):
       # We operate inplace on D_array_and_pad.
       self.destroy_map = {0: [0]}
 
-  def make_node(self, D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam):
-    # D_array_and_pad is of shape like the original array, but shape[idx_dim] += 2 for D_pad_left and D_pad_right.
+  def make_node(self, D_array, start_idxs, batch_lens, beam_width, D_beam):
+    # XXX: Currently without D_pad_left and D_pad_right.
     start_idxs = T.as_tensor_variable(start_idxs)
     batch_lens = T.as_tensor_variable(batch_lens)
     beam_width = T.as_tensor_variable(beam_width)
@@ -356,32 +353,33 @@ class MultiBatchBeamGradAddOp(theano.Op):
     assert batch_lens.ndim == 1
     assert beam_width.ndim == 0
     return theano.Apply(self,
-                        [D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam],
-                        [D_array_and_pad.type("D_array_and_pad")])
+                        [D_array, start_idxs, batch_lens, beam_width, D_beam],
+                        [D_array.type("D_array")])
 
   def infer_shape(self, node, input_shapes):
     return [input_shapes[0]]
 
   def perform(self, node, inputs, output_storage):
-    D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam = inputs
+    D_array, start_idxs, batch_lens, beam_width, D_beam = inputs
     if not self.inplace:
-      D_array_and_pad = D_array_and_pad.copy()
-    out_D_array_and_pad, = output_storage
-    out_D_array_and_pad[0] = D_array_and_pad
-    n_batches = D_array_and_pad.shape[self.batch_dim]
+      D_array = D_array.copy()
+    out_D_array, = output_storage
+    out_D_array[0] = D_array
+    n_batches = D_array.shape[self.batch_dim]
 
     idxs_bc = numpy.arange(beam_width).reshape(beam_width, 1)  # dimshuffle(0, 'x')  (beam,batch)
     start_idxs_bc = start_idxs.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
     idxs = idxs_bc + start_idxs_bc  # (beam,batch)
     batch_lens_bc = batch_lens.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
-    idx_pad_left = D_array_and_pad.shape[self.idx_dim] - 2
-    idx_pad_right = idx_pad_left + 1
+    assert idxs.shape == D_beam.shape[:2]
 
     if self.wrap_mode == "wrap_around":
       idxs = idxs % batch_lens_bc
     elif self.wrap_mode == "pad":
-      idxs = numpy.where(idxs >= batch_lens_bc, idx_pad_right, idxs)
-      idxs = numpy.where(idxs < 0, idx_pad_left, idxs)
+      idxs = numpy.where(idxs >= batch_lens_bc, -1, idxs)
+      cond_bc = (idxs < 0).reshape(*(D_beam.shape[:2] + (1,) * (D_beam.ndim - 2)))
+      D_beam = numpy.where(cond_bc, numpy.float32(0), D_beam)  # XXX: ignore padding part
+      idxs = numpy.where(idxs < 0, 0, idxs)
     else:
       assert False, self.wrap_mode
 
@@ -393,7 +391,7 @@ class MultiBatchBeamGradAddOp(theano.Op):
     # See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
     if inplace_increment is None: raise NotImplementedError("need Numpy 1.8 or later")
     # This is like D_array_and_pad[idxs, numpy.arange(n_batches)] += D_beam .
-    inplace_increment(D_array_and_pad, (idxs, numpy.arange(n_batches)), D_beam)
+    inplace_increment(D_array, (idxs, numpy.arange(n_batches)), D_beam)
 
 
 # http://deeplearning.net/software/theano/extending/optimization.html
