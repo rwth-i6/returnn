@@ -3,6 +3,7 @@ from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
 from Log import log
+from random import Random
 
 
 class MetaDataset(CachedDataset2):
@@ -398,7 +399,8 @@ class ChunkShuffleDataset(CachedDataset2):
   """
 
   def __init__(self, dataset,
-               batch_gen_batch_size, batch_gen_max_seqs,
+               chunk_shuffle_cache=1000,
+               batch_gen_batch_size=5000, batch_gen_max_seqs=1,
                batch_gen_recurrent_net=True,
                **kwargs):
     """
@@ -407,6 +409,7 @@ class ChunkShuffleDataset(CachedDataset2):
     super(ChunkShuffleDataset, self).__init__(**kwargs)
     self.dataset = init_dataset(dataset)
     assert self.dataset
+    self.chunk_shuffle_cache = chunk_shuffle_cache
     self.batch_gen = None
     self.batch_gen_batch_size = batch_gen_batch_size
     self.batch_gen_max_seqs = batch_gen_max_seqs
@@ -414,6 +417,8 @@ class ChunkShuffleDataset(CachedDataset2):
     self.num_inputs = self.dataset.num_inputs
     self.num_outputs = self.dataset.num_outputs
     self.labels = self.dataset.labels
+    self.rng = Random(0)
+    self.load_seqs_end = None
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -422,7 +427,8 @@ class ChunkShuffleDataset(CachedDataset2):
     """
     need_reinit = self.epoch is None or self.epoch != epoch
     super(ChunkShuffleDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self.dataset_seq_idx_offsets = [0]
+    self.load_seqs_end = 0
+    self.rng.seed(epoch or 1)
     if not need_reinit:
       return False
 
@@ -443,12 +449,31 @@ class ChunkShuffleDataset(CachedDataset2):
     :type original_tag: str
     """
     features = data["data"]
-    if not self.added_data: seq_idx = 0
-    else: seq_idx = self.added_data[-1].seq_idx
+    if not self.added_data:
+      seq_idx = 0
+      assert self.expected_load_seq_start == 0
+    else:
+      seq_idx = self.added_data[-1].seq_idx + 1
     tag = "%s.%i" % (original_tag, seq_idx)
     seq = DatasetSeq(seq_idx=seq_idx, features=features, targets=data, seq_tag=tag)
     self._num_timesteps_accumulated += seq.num_frames
     self.added_data += [seq]
+
+  def _shuffle(self):
+    start_seq_idx = self.added_data[0].seq_idx
+    end_seq_idx = self.added_data[-1].seq_idx
+    assert start_seq_idx < self.load_seqs_end < end_seq_idx
+    start_idx = 0
+    if start_seq_idx < self.load_seqs_end:
+      start_idx = self.load_seqs_end - start_seq_idx
+      assert self.added_data[start_idx].seq_idx == self.load_seqs_end
+      start_seq_idx = self.load_seqs_end
+    sublist = self.added_data[start_idx:]
+    self.rng.shuffle(sublist)
+    for i, seq in enumerate(sublist):
+      seq.seq_idx = i + start_seq_idx
+    assert sublist[-1].seq_idx == end_seq_idx
+    self.added_data[start_idx:] = sublist
 
   def _add_more(self):
     """
@@ -473,6 +498,23 @@ class ChunkShuffleDataset(CachedDataset2):
     self.batch_gen.advance(1)
     return True
 
+  def _add_more_until(self, end, shuffle=False):
+    if self.added_data and end <= self.added_data[-1].seq_idx: return True
+    while self._add_more():
+      assert self.added_data
+      if end <= self.added_data[-1].seq_idx:
+        if shuffle:
+          self._shuffle()
+        return True
+    # We have reached the end.
+    if not self.added_data:
+      self._num_seqs = 0
+      print >>log.v3, "warning: empty dataset"
+    else:
+      self._num_seqs = self.added_data[-1].seq_idx + 1
+    self.reached_final_seq = True
+    return False
+
   def is_less_than_num_seqs(self, seq_idx):
     """
     :type seq_idx: int
@@ -483,17 +525,7 @@ class ChunkShuffleDataset(CachedDataset2):
     if self._num_seqs is not None: return seq_idx < self._num_seqs
     if seq_idx < self.expected_load_seq_start: return True
     if self.added_data and seq_idx <= self.added_data[-1].seq_idx: return True
-    while self._add_more():
-      assert self.added_data
-      if seq_idx <= self.added_data[-1].seq_idx: return True
-    # We have reached the end.
-    if not self.added_data:
-      self._num_seqs = 0
-      print >>log.v3, "warning: empty dataset"
-    else:
-      self._num_seqs = self.added_data[-1].seq_idx + 1
-    self.reached_final_seq = True
-    return False
+    return self._add_more_until(seq_idx)
 
   def _load_seqs(self, start, end):
     """
@@ -508,10 +540,8 @@ class ChunkShuffleDataset(CachedDataset2):
       # Cleanup old data.
       self._cleanup_old_seqs(start)
       self.expected_load_seq_start = start
-    # We might not know the num seqs in advance, thus this more generic check.
-    # This will also load the seqs as a side effect.
-    self.is_less_than_num_seqs(end)
-    # TODO shuffling of the chunks...
+    self.load_seqs_end = end
+    self._add_more_until(end + self.chunk_shuffle_cache, shuffle=True)
 
   def _collect_single_seq(self, seq_idx):
     """
