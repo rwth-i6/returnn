@@ -342,7 +342,7 @@ class Dataset(object):
     return [self.get_data_dim(key)]
 
   def have_seqs(self):
-    return self.num_seqs > 0
+    return self.is_less_than_num_seqs(0)
 
   def len_info(self):
     """
