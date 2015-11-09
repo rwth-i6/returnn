@@ -1,6 +1,7 @@
 
 
 from Dataset import Dataset, DatasetSeq
+import math
 
 
 class CachedDataset2(Dataset):
@@ -56,6 +57,23 @@ class CachedDataset2(Dataset):
     if self._num_seqs is not None:
       return self._num_seqs
     raise NotImplementedError
+
+  def get_complete_frac(self, seq_idx):
+    """
+    :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
+      for this seq in the dataset.
+      This does not have to be exact. This is only for the user.
+    """
+    try:
+      num_seqs = self.num_seqs
+    except Exception:
+      num_seqs = None
+    if num_seqs is not None:
+      return float(seq_idx + 1) / self._num_seqs
+    # Fallback.
+    # We don't know. So:
+    # Some monotonic increasing function in [0,1] which never reaches 1.
+    return max(1.e-20, 1.0 - math.exp(-seq_idx * 1000))
 
   def _find_num_seqs(self, start, end):
     """
