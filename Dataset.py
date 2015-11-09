@@ -543,9 +543,11 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs):
   """
-  :type kwargs: dict[str]
+  :type kwargs: dict[str] | str
   :rtype: Dataset
   """
+  if isinstance(kwargs, (str, unicode)):
+    return init_dataset_via_str(config_str=kwargs)
   kwargs = kwargs.copy()
   assert "class" in kwargs
   clazz_name = kwargs.pop("class")
