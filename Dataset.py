@@ -586,7 +586,10 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     if cache_byte_size is not None:
       kwargs["cache_byte_size"] = cache_byte_size
     cls = HDFDataset
-  data = cls.from_config(config, **kwargs)
+  if config:
+    data = cls.from_config(config, **kwargs)
+  else:
+    data = cls(**kwargs)
   if isinstance(data, HDFDataset):
     for f in config_str.split(","):
       assert os.path.exists(f)
