@@ -188,6 +188,8 @@ class Updater:
       shape = value.shape
       value = numpy.zeros(shape, dtype=dtype)
     else:
+      if isinstance(value, theano.compile.SharedVariable):
+        value = value.get_value()
       value = numpy.asarray(value).astype(dtype)
     kwargs = {"value": value}
     if name: kwargs["name"] = name
