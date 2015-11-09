@@ -1,6 +1,7 @@
 
+import sys
 import numpy
-from nose.tools import assert_equal, assert_is
+from nose.tools import assert_equal, assert_is, assert_is_instance
 import MultiBatchBeam
 from MultiBatchBeam import *
 import theano.printing
@@ -221,6 +222,46 @@ def test_inc_subtensor():
   a = T.inc_subtensor(T.arange(10)[[0, 3, 5, 0]], numpy.array([-1,-2,-3,-4])).eval()
   assert_equal(list(a), [-5,  1,  2,  1,  4,  2,  6,  7,  8,  9])
 
+def test_inplace_grad_add_simple_on_zero():
+  n_time = 10
+  n_batch = 5
+  n_dim = 2
+  beam_width = 3
+  wrap_mode = "pad"
+  numpy.random.seed(123)
+  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
+  D_beam = numpy.random.random((beam_width, n_batch, n_dim)).astype("float32")
+  batch_lens = T.as_tensor_variable(batch_lens, name="batch_lens")
+  start_idxs = T.as_tensor_variable(start_idxs, name="start_idxs")
+  D_beam = T.as_tensor_variable(D_beam, name="D_beam")
+  beam_width = theano.shared(beam_width, name="beam_width")
+
+  D_array_and_pad_0 = T.zeros((n_time + 2, n_batch), dtype="float32")
+  D_array_and_pad_1 = MultiBatchBeamGradAddOp(wrap_mode)(D_array_and_pad_0, start_idxs, batch_lens, beam_width, D_beam)
+  D_array_and_pad_2 = MultiBatchBeamGradAddOp(wrap_mode)(D_array_and_pad_1, start_idxs, batch_lens, beam_width, D_beam)
+
+  print "\ngraph for D_array_and_pad (unoptimized):"
+  theano.printing.debugprint(D_array_and_pad_2)
+
+  f = theano.function(inputs=[], outputs=[D_array_and_pad_2], mode="FAST_RUN")
+
+  print "\ngraph for function (optimized):"
+  theano.printing.debugprint(f.maker.fgraph)
+
+  print "\ngraph toposort:"
+  pprint(f.maker.fgraph.toposort())
+
+  assert_is_instance(f.maker.fgraph, theano.gof.fg.FunctionGraph)
+  out0 = f.maker.fgraph.outputs[0]
+  print "\nout0:", out0, type(out0)
+  assert_is_instance(out0, T.TensorVariable)
+  assert_is_instance(out0.owner, theano.Apply)
+  assert_is_instance(out0.owner.op, MultiBatchBeamGradAddOp)
+  print "\nfinal op in fgraph:", out0.owner.op
+  assert_is(out0.owner.op.inplace, True)
+
+
 def test_inplace_grad_add():
   n_time = 10
   n_batch = 5
@@ -247,20 +288,26 @@ def test_inplace_grad_add():
   beam_zero = T.zeros((beam_width, n_batch, n_dim))
   beams, _ = theano.scan(step, sequences=[start_idxss], outputs_info=[beam_zero])
 
-  print "graph for beams:"
-  theano.printing.debugprint(beams)
+  #print "graph for beams:"
+  #theano.printing.debugprint(beams)
 
   D_array, D_pad_left, D_pad_right = T.grad(None, wrt=[array, pad_left, pad_right], known_grads={beams: D_beams})
-  f = theano.function(inputs=[], outputs=[D_array, D_pad_left, D_pad_right])
+  f = theano.function(inputs=[], outputs=[D_array, D_pad_left, D_pad_right], mode="FAST_RUN")
 
-  print "graph for first output:"
-  theano.printing.debugprint(f.maker.fgraph.outputs[0])
+  print "\ngraph for first output (unoptimized):"
+  theano.printing.debugprint(f.outputs[0])
 
-  print "graph toposort:"
-  pprint(f.maker.fgraph.toposort())
+  print "\ngraph for function (optimized):"
+  theano.printing.debugprint(f.maker.fgraph)
+
+
+  loop_apply = f.outputs[0].variable.owner.inputs[0].owner
+  import theano.scan_module.scan_op
+  assert_is_instance(loop_apply.op, theano.scan_module.scan_op.Scan)
 
   #if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
   #            for x in f.maker.fgraph.toposort()]):
   #  print "It seems as if we don't use the GPU although we requested it."
 
   # TODO...
+  raise Exception("stop")

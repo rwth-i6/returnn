@@ -3,6 +3,9 @@ import numpy
 import theano
 import theano.sandbox.cuda
 import theano.tensor as T
+from theano.gof.opt import OpSub
+from theano.compile import optdb
+from theano import gof
 
 
 def multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
@@ -276,8 +279,9 @@ class MultiBatchBeamOp(theano.Op):
     grad_op = MultiBatchBeamGradAddOp(self.wrap_mode, self.idx_dim, self.batch_dim)
     D_array_and_pad_shape = [array.shape[i] for i in range(array.ndim)]
     D_array_and_pad_shape[self.idx_dim] += 2  # for D_pad_left/D_pad_right
-    D_array_and_pad = T.zeros(D_array_and_pad_shape, dtype="float32")
-    D_array_and_pad = grad_op(D_array_and_pad, start_idxs, batch_lens, beam_width, D_beam)
+    D_array_and_pad_0 = T.zeros(D_array_and_pad_shape, dtype="float32")
+    D_array_and_pad_0.name = "D_array_and_pad__initial_0"
+    D_array_and_pad = grad_op(D_array_and_pad_0, start_idxs, batch_lens, beam_width, D_beam)
 
     if self.idx_dim != 0: raise NotImplementedError  # TODO...
     D_array = D_array_and_pad[:array.shape[self.idx_dim]]
@@ -390,6 +394,24 @@ class MultiBatchBeamGradAddOp(theano.Op):
     if inplace_increment is None: raise NotImplementedError("need Numpy 1.8 or later")
     # This is like D_array_and_pad[idxs, numpy.arange(n_batches)] += D_beam .
     inplace_increment(D_array_and_pad, (idxs, numpy.arange(n_batches)), D_beam)
+
+
+# http://deeplearning.net/software/theano/extending/optimization.html
+# after priority 50 Destructive inplace operations
+
+@gof.local_optimizer([MultiBatchBeamGradAddOp], inplace=True)
+def inplace_MultiBatchBeamGradAddOp(node):
+  if isinstance(node.op, MultiBatchBeamGradAddOp) and not node.op.inplace:
+    kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
+    kwargs["inplace"] = True
+    new_op = node.op.__class__(**kwargs)
+    new_node = new_op(*node.inputs)
+    return [new_node]
+  return False
+
+optdb.register('inplace_MultiBatchBeamGradAddOp',
+               gof.TopoOptimizer(inplace_MultiBatchBeamGradAddOp, failure_callback=gof.TopoOptimizer.warn_inplace),
+               50, 'fast_run', 'inplace')
 
 
 class GpuMultiBatchBeamOp(theano.sandbox.cuda.GpuOp):
