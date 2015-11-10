@@ -281,16 +281,15 @@ class MultiBatchBeamOp(theano.Op):
     if not isinstance(pad_right, theano.Constant):
       raise NotImplementedError("D_pad_right not implemented...")
 
-    grad_op = MultiBatchBeamGradAddOp(self.wrap_mode, self.idx_dim, self.batch_dim)
-    D_array_0 = T.zeros(array.shape, dtype="float32")
-    D_array_0.name = "D_array__initial_0"
-    D_array = grad_op(D_array_0, start_idxs, batch_lens, beam_width, D_beam)
+    grad_op = MultiBatchBeamGradAddOp(wrap_mode=self.wrap_mode, zero_with_shape=True, array_ndim=array.ndim,
+                                      idx_dim=self.idx_dim, batch_dim=self.batch_dim)
+    D_array = grad_op(array.shape, start_idxs, batch_lens, beam_width, D_beam)
 
     if self.wrap_mode == "wrap_around":
       D_pad_left = D_pad_right = T.DisconnectedType()()
     elif self.wrap_mode == "pad":
-      D_pad_left = T.zeros(pad_left.shape)
-      D_pad_right = T.zeros(pad_right.shape)
+      D_pad_left = T.zeros(pad_left.shape, dtype="float32")
+      D_pad_right = T.zeros(pad_right.shape, dtype="float32")
     else:
       assert False, self.wrap_mode
 
@@ -331,40 +330,67 @@ if theano.config.cxx:
 
 
 class MultiBatchBeamGradAddOp(theano.Op):
-  __props__ = ("wrap_mode", "idx_dim", "batch_dim", "inplace")
+  __props__ = ("wrap_mode", "idx_dim", "batch_dim", "inplace", "zero_with_shape", "array_ndim")
 
-  def __init__(self, wrap_mode, idx_dim=0, batch_dim=1, inplace=False):
+  def __init__(self, wrap_mode, idx_dim=0, batch_dim=1, inplace=False, zero_with_shape=False, array_ndim=None):
+    """
+    (D_array / D_array_shape, start_idxs, batch_lens, beam_width, D_beam) -> D_array + grad
+
+    :param str wrap_mode: "wrap_around" or "pad"
+    :param int idx_dim: usually that's time dim
+    :param int batch_dim: batch dim
+    :param bool inplace: operate inplace on input
+    :param bool zero_with_shape: we get D_array_shape as the first input and init D_array with zero
+    :param int array_ndim: ndim of array/D_array. needed for zero_with_shape
+    """
     super(MultiBatchBeamGradAddOp, self).__init__()
     self.wrap_mode = wrap_mode
     self.idx_dim = idx_dim
     self.batch_dim = batch_dim
     self.inplace = inplace
+    self.zero_with_shape = zero_with_shape
+    self.array_ndim = array_ndim
+    if zero_with_shape:
+      assert not inplace
+      assert array_ndim > 0
     if inplace:
-      # We operate inplace on D_array_and_pad.
+      # We operate inplace on D_array.
       self.destroy_map = {0: [0]}
 
-  def make_node(self, D_array, start_idxs, batch_lens, beam_width, D_beam):
+  def make_node(self, D_array_or_shape, start_idxs, batch_lens, beam_width, D_beam):
     # XXX: Currently without D_pad_left and D_pad_right.
     start_idxs = T.as_tensor_variable(start_idxs)
     batch_lens = T.as_tensor_variable(batch_lens)
     beam_width = T.as_tensor_variable(beam_width)
     D_beam = T.as_tensor_variable(D_beam)
+    if self.zero_with_shape:
+      D_array_ndim = self.array_ndim
+    else:
+      D_array_ndim = D_array_or_shape.ndim
     assert start_idxs.ndim == 1
     assert batch_lens.ndim == 1
     assert beam_width.ndim == 0
     return theano.Apply(self,
-                        [D_array, start_idxs, batch_lens, beam_width, D_beam],
-                        [D_array.type("D_array")])
+                        [D_array_or_shape, start_idxs, batch_lens, beam_width, D_beam],
+                        [T.TensorType("float32", (False,) * D_array_ndim)("D_array")])
 
   def infer_shape(self, node, input_shapes):
-    return [input_shapes[0]]
+    if self.zero_with_shape:
+      D_array_ndim = self.array_ndim
+      shape = node.inputs[0]  # This is symbolic.
+      return [[shape[i] for i in range(D_array_ndim)]]
+    else:
+      return [input_shapes[0]]
 
   def perform(self, node, inputs, output_storage):
-    D_array, start_idxs, batch_lens, beam_width, D_beam = inputs
-    if not self.inplace:
-      D_array = D_array.copy()
+    D_array_or_shape, start_idxs, batch_lens, beam_width, D_beam = inputs
     out_D_array, = output_storage
-    out_D_array[0] = D_array
+    if self.inplace:
+      out_D_array[0] = D_array = D_array_or_shape
+    elif self.zero_with_shape:
+      out_D_array[0] = D_array = numpy.zeros(D_array_or_shape, "float32")
+    else:
+      out_D_array[0] = D_array = D_array_or_shape.copy()
     n_batches = D_array.shape[self.batch_dim]
 
     idxs_bc = numpy.arange(beam_width).reshape(beam_width, 1)  # dimshuffle(0, 'x')  (beam,batch)
@@ -395,20 +421,57 @@ class MultiBatchBeamGradAddOp(theano.Op):
 
 
 # http://deeplearning.net/software/theano/extending/optimization.html
-# after priority 50 Destructive inplace operations
+# See also theano/compile/mode.py for reference about the position priority numbers.
+# After priority 50 we can do destructive inplace operations.
+
+@gof.local_optimizer([T.add])
+def add_merge_MultiBatchBeamGradAddOp(node):
+  if node.op != T.add: return False
+  if len(node.inputs) < 2: return False
+  grad_op_idx = None
+  grad_op_v = None
+  grad_op = None
+  for i, input in enumerate(node.inputs):
+    if input.owner and isinstance(input.owner.op, MultiBatchBeamGradAddOp):
+      grad_op = input.owner.op
+      if not grad_op.inplace:  # we cannot merge when we operate inplace on it
+        grad_op_v = input
+        grad_op_idx = i
+        break
+  if grad_op_idx is None: return False
+  sum_inputs = [node.inputs[i] for i in range(len(node.inputs)) if i != grad_op_idx]
+  if grad_op.zero_with_shape:
+    # Make new grad_op without zero_with_shape.
+    kwargs = {k: getattr(grad_op, k) for k in grad_op.__props__}
+    kwargs["zero_with_shape"] = False
+    grad_op = grad_op.__class__(**kwargs)
+  else:
+    old_grad_op_input0 = grad_op_v.owner.inputs[0]
+    sum_inputs = [old_grad_op_input0] + sum_inputs
+  new_grad_op_input0 = T.add(*sum_inputs)
+  new_grad_op_inputs = [new_grad_op_input0] + grad_op_v.owner.inputs[1:]
+  new_v = grad_op(*new_grad_op_inputs)
+  return [new_v]
+
+optdb.register('add_merge_MultiBatchBeamGradAddOp',
+               gof.TopoOptimizer(add_merge_MultiBatchBeamGradAddOp),
+               2.0, 'fast_run')
+
 
 @gof.local_optimizer([MultiBatchBeamGradAddOp], inplace=True)
 def inplace_MultiBatchBeamGradAddOp(node):
-  if isinstance(node.op, MultiBatchBeamGradAddOp) and not node.op.inplace:
+  if isinstance(node.op, MultiBatchBeamGradAddOp) and not node.op.inplace and not node.op.zero_with_shape:
     kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
     kwargs["inplace"] = True
     new_op = node.op.__class__(**kwargs)
-    new_node = new_op(*node.inputs)
-    return [new_node]
+    new_v = new_op(*node.inputs)
+    return [new_v]
   return False
 
 optdb.register('inplace_MultiBatchBeamGradAddOp',
-               gof.TopoOptimizer(inplace_MultiBatchBeamGradAddOp, failure_callback=gof.TopoOptimizer.warn_inplace),
+               gof.TopoOptimizer(inplace_MultiBatchBeamGradAddOp
+                                 , failure_callback=gof.TopoOptimizer.warn_inplace
+                                 ),
                50, 'fast_run', 'inplace')
 
 

@@ -178,6 +178,7 @@ def test_numpy_perform_2_wrap():
 
 def test_grad_simple():
   array = numpy.array([range(10)], dtype="float32").T
+  print "array shape:", array.shape
   n_batch = array.shape[1]
   assert n_batch == 1
   start_idxs = numpy.array([-2])
