@@ -40,7 +40,6 @@ engine = None; """ :type: Engine """
 rnn.initBetterExchook()
 Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
 rnn.initThreadJoinHack()
-Debug.initIPythonKernel()
 
 
 # Start Sprint PythonSegmentOrder interface. {
