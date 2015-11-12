@@ -26,13 +26,15 @@ class Updater:
       "multiple_models": config.int('update_multiple_models', 0),
       "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
       "momentum": config.float("momentum", 0),
-      "nesterov_momentum": config.float("nesterov_momentum", 0)}
+      "nesterov_momentum": config.float("nesterov_momentum", 0),
+      "momentum2": config.float("momentum2", 0) }
     return cls(**kwargs)
 
   @classmethod
   def initRule(cls, rule, **kwargs):
     kwargs.setdefault('momentum', 0)
     kwargs.setdefault('nesterov_momentum', 0)
+    kwargs.setdefault('momentum2', 0)
     kwargs.setdefault('gradient_clip', -1)
     kwargs.setdefault('adadelta_decay', 0.90)
     kwargs.setdefault('adadelta_offset', 1e-6)
@@ -45,10 +47,11 @@ class Updater:
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, multiple_models=0, multiple_models_average_step=0):
+  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, multiple_models=0, multiple_models_average_step=0):
     """
     :type momentum: float
     :type nesterov_momentum: float
+    :type momentum2: float
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
@@ -56,6 +59,7 @@ class Updater:
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
+    self.momentum2 = momentum2
     self.gradient_clip = gradient_clip
     self.max_norm = max_norm
     self.adagrad = adagrad
@@ -72,6 +76,7 @@ class Updater:
     if self.adadelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
+      self.momentum2 = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
     if self.adagrad:
       print >> log.v4, "using adagrad"
@@ -79,6 +84,8 @@ class Updater:
       print >> log.v4, "using momentum %f" % self.momentum
     if self.nesterov_momentum:
       print >> log.v4, "using simplified nesterov momentum %f" % self.nesterov_momentum
+    if self.momentum2:
+      print >> log.v4, "using reverted momentum %f" % self.momentum2
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
 
@@ -111,14 +118,6 @@ class Updater:
                      value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
-                     for p in network.train_params_vars}
-
-    if self.nesterov_momentum > 0:
-      #this is actually velocity not deltas
-      self.velocity = {p: theano.shared(
-                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), borrow=True,
-                     name="velocity_%s" % p)
                      for p in network.train_params_vars}
 
     if self.adagrad:
@@ -543,9 +542,16 @@ class Updater:
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:
         #The following code inspired by https://github.com/lisa-lab/pylearn2/pull/136#issuecomment-10381617 (6) and (7)
-        tmp = self.nesterov_momentum * self.velocity[param] + upd[param] - param.get_value()
-        updates.append((self.velocity[param], tmp))
+        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        tmp = self.nesterov_momentum * velocity + upd[param] - param
+        updates.append((self.velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
+      if self.momentum2 > 0:
+        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        upd[param] += velocity * self.momentum2
+        updates.append((velocity, upd[param]))
 
     # Simulate multi GPU training. This might help for regularization.
     if self.multiple_models:
