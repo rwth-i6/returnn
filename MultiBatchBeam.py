@@ -455,7 +455,7 @@ def add_merge_MultiBatchBeamGradAddOp(node):
 
 optdb.register('add_merge_MultiBatchBeamGradAddOp',
                gof.TopoOptimizer(add_merge_MultiBatchBeamGradAddOp),
-               2.0, 'fast_run')
+               0.1, 'fast_run')
 
 
 @gof.local_optimizer([MultiBatchBeamGradAddOp], inplace=True)
