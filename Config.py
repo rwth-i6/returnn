@@ -44,6 +44,8 @@ class Config:
       value = value.split(',')
     else:
       value = [value]
+    if key in self.typed_dict:
+      del self.typed_dict[key]
     self.dict[key] = value
 
   def has(self, key):
