@@ -387,12 +387,22 @@ def executeMainTask():
     engine.forward_to_hdf(eval_data, output_file, combine_labels)
   elif task == 'theano_graph':
     import theano.printing
+    import theano.compile.io
+    import theano.compile.function_module
     engine.start_epoch = 1
     engine.init_network_from_config(config)
     for task in config.list('theano_graph.task', ['train']):
-      theano.printing.debugprint(engine.devices[-1].get_compute_func(task))
-      theano.printing.pydotprint(engine.devices[-1].get_compute_func(task), format = 'png', var_with_name_simple = True,
-                                 outfile = config.value("theano_graph.prefix", "current") + "." + task + ".png")
+      func = engine.devices[-1].get_compute_func(task)
+      prefix = config.value("theano_graph.prefix", "current") + ".task"
+      print >>log.v1, "dumping to %s.* ..." % prefix
+      theano.printing.debugprint(func, file=open("%s.optimized_func.txt" % prefix, "w"))
+      assert isinstance(func.maker, theano.compile.function_module.FunctionMaker)
+      for inp in func.maker.inputs:
+        assert isinstance(inp, theano.compile.io.In)
+        if inp.update:
+          theano.printing.debugprint(inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
+      theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
+                                 outfile = "%s.png" % prefix)
   elif task == 'analyze':
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.init_network_from_config(config)
