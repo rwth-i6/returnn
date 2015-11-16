@@ -886,7 +886,7 @@ class Device(object):
   def get_num_updates(self):
     if self.blocking:
       if self.updater:
-        self.updater.i.get_value()
+        return self.updater.i.get_value()
       else:
         return 0
     else:
