@@ -516,7 +516,10 @@ class AttentionTimeGauss(RecurrentTransformBase):
     n_in = sum([e.attrs['n_out'] for e in base])
     src = [e.output for e in base]
 
-    self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
+    if len(src) == 1:
+      self.B = src[0]
+    else:
+      self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
     self.add_input(self.B, name="B")
     self.B_index = self.layer.base[0].index  # not an input
     self.B_times = self.add_input(T.cast(T.sum(self.B_index, axis=0), dtype="float32"), "B_times")  # float32 for gpu
