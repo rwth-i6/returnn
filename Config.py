@@ -17,11 +17,17 @@ class Config:
 
   def load_file(self, f):
     if isinstance(f, str):
-      content = open(f).read()
+      filename = f
+      content = open(filename).read()
     else:
       # assume stream-like
+      filename = "<config string>"
       content = f.read()
     content = content.strip()
+    if content.startswith("#!"):  # assume Python
+      from Util import custom_exec
+      custom_exec(content, filename, {}, {"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      return
     if content.startswith("{"):  # assume JSON
       from Util import load_json
       json_content = load_json(content=content)
