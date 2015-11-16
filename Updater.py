@@ -541,10 +541,10 @@ class Updater:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:
-        #The following code inspired by https://github.com/lisa-lab/pylearn2/pull/136#issuecomment-10381617 (6) and (7)
+        #The following code inspired by https://github.com/fidlej/optim/raw/master/dok/nesterov_simple.pdf
         velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), "velocity_%s" % param.name)
-        tmp = self.nesterov_momentum * velocity + upd[param] - param
+        tmp = self.nesterov_momentum * velocity + upd[param]
         updates.append((self.velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
       if self.momentum2 > 0:
