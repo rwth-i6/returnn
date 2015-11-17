@@ -1,7 +1,10 @@
 import logging
 import os
 import sys
-import io
+try:
+  import StringIO
+except ImportError:
+  import io as StringIO
 from threading import RLock
 
 
@@ -11,7 +14,7 @@ class Stream():
     :type log: logging.Logger
     :type lvl: int
     """
-    self.buf = io.StringIO()
+    self.buf = StringIO.StringIO()
     self.log = log
     self.lvl = lvl
     self.lock = RLock()
