@@ -26,8 +26,13 @@ class Config:
     content = content.strip()
     if content.startswith("#!"):  # assume Python
       from Util import custom_exec
+      # Operate inplace on ourselves.
+      # Also, we want that it's available as the globals() dict, so that defined functions behave well
+      # (they would loose the local context otherwise).
       user_ns = self.typed_dict
-      custom_exec(content, filename, user_ns, {"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      # Always overwrite:
+      user_ns.update({"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      custom_exec(content, filename, user_ns, user_ns)
       return
     if content.startswith("{"):  # assume JSON
       from Util import load_json
