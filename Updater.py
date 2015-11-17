@@ -559,7 +559,7 @@ class Updater:
         velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), "velocity_%s" % param.name)
         tmp = self.nesterov_momentum * velocity + upd[param]
-        updates.append((self.velocity, tmp))
+        updates.append((velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
       if self.momentum2 > 0:
         velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
