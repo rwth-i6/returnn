@@ -23,6 +23,21 @@ class HiddenLayer(Layer):
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
+  def get_linear_forward_output(self):
+    z = self.b
+    assert len(self.sources) == len(self.masks) == len(self.W_in)
+    for s, m, W_in in zip(self.sources, self.masks, self.W_in):
+      if s.attrs['sparse']:
+        if s.output.ndim == 3: out_dim = s.output.shape[2]
+        elif s.output.ndim == 2: out_dim = 1
+        else: assert False, s.output.ndim
+        z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W_in.shape[1]))
+      elif m is None:
+        z += self.dot(s.output, W_in)
+      else:
+        z += self.dot(self.mass * m * s.output, W_in)
+    return z
+
 
 class ForwardLayer(HiddenLayer):
   layer_class = "hidden"
@@ -31,18 +46,7 @@ class ForwardLayer(HiddenLayer):
     super(ForwardLayer, self).__init__(**kwargs)
     self.set_attr('sparse_window', sparse_window) # TODO this is ugly
     self.attrs['n_out'] = sparse_window * kwargs['n_out']
-    self.z = self.b
-    assert len(self.sources) == len(self.masks) == len(self.W_in)
-    for s, m, W_in in zip(self.sources, self.masks, self.W_in):
-      if s.attrs['sparse']:
-        if s.output.ndim == 3: out_dim = s.output.shape[2]
-        elif s.output.ndim == 2: out_dim = 1
-        else: assert False, s.output.ndim
-        self.z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0],s.output.shape[1],out_dim * W_in.shape[1]))
-      elif m is None:
-        self.z += self.dot(s.output, W_in)
-      else:
-        self.z += self.dot(self.mass * m * s.output, W_in)
+    self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
 
