@@ -92,6 +92,10 @@ def get_device_attributes():
   return attributes
 
 
+# When we are the child process, we have one single Device instance.
+asyncChildGlobalDevice = None
+
+
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
@@ -156,6 +160,13 @@ class Device(object):
       self.name = device
       self.initialized = False
       start_new_thread(self.startProc, (device,))
+
+  def __str__(self):
+    if self.blocking:
+      async_str = "blocking"
+    else:
+      async_str = "async (pid %i, ppid %i)" % (os.getpid(), os.getppid())
+    return "<Device %s %s>" % (self.name, async_str)
 
   def startProc(self, device_tag):
     assert not self.blocking
@@ -575,6 +586,8 @@ class Device(object):
     """
     device = self.name
     config = self.config
+    global asyncChildGlobalDevice
+    asyncChildGlobalDevice = self
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
