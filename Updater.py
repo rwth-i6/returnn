@@ -27,7 +27,8 @@ class Updater:
       "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
       "momentum": config.float("momentum", 0),
       "nesterov_momentum": config.float("nesterov_momentum", 0),
-      "momentum2": config.float("momentum2", 0) }
+      "momentum2": config.float("momentum2", 0),
+      "rmsprop": config.float("rmsprop", 0) }
     return cls(**kwargs)
 
   @classmethod
@@ -43,11 +44,12 @@ class Updater:
     kwargs.setdefault('adasecant', False)
     kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
+    kwargs.setdefault('rmsprop', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, multiple_models=0, multiple_models_average_step=0):
+  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, rmsprop, multiple_models=0, multiple_models_average_step=0):
     """
     :type momentum: float
     :type nesterov_momentum: float
@@ -55,6 +57,7 @@ class Updater:
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
+    :type rmsprop: float
     """
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
@@ -66,6 +69,7 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.multiple_models = multiple_models
@@ -88,6 +92,8 @@ class Updater:
       print >> log.v4, "using reverted momentum %f" % self.momentum2
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
+    if self.rmsprop:
+      print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
 
   def initVars(self, network, net_param_deltas):
     """
@@ -535,6 +541,14 @@ class Updater:
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd[param] += self.learning_rate_var * dx_new
+      elif self.rmsprop:
+        #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
+        accumulator = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), broadcastable=param.broadcastable)
+        epsilon=1e-6
+        accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
+        updates.append((accumulator, accumulator_new))
+        upd[param] += - ((self.learning_rate_var * deltas)/T.sqrt(accumulator_new + epsilon))
       else:
         upd[param] += - self.learning_rate_var * deltas
       if self.momentum > 0:
