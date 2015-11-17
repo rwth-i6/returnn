@@ -21,7 +21,7 @@ _initLayerClasses()
 
 def get_layer_class(name):
   """
-  :type name: str | class
+  :type name: str
   :rtype: type(NetworkHiddenLayer.HiddenLayer)
   """
   if name in LayerClasses:
