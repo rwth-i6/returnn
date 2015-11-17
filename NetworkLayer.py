@@ -21,9 +21,16 @@ _initLayerClasses()
 
 def get_layer_class(name):
   """
-  :type name: str
+  :type name: str | class
   :rtype: type(NetworkHiddenLayer.HiddenLayer)
   """
   if name in LayerClasses:
     return LayerClasses[name]
-  assert False, "invalid layer type: %s" % name
+  if name.startswith("config."):
+    from Config import get_global_config
+    config = get_global_config()
+    cls = config.typed_value(name[len("config."):])
+    import inspect
+    assert inspect.isclass(cls), "get_layer_class: %s not found"
+    return cls
+  assert False, "get_layer_class: invalid layer type: %s" % name
