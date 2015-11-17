@@ -208,3 +208,20 @@ class Config:
       return int(value.split(':')[0]), int(value.split(':')[1])
     else:
       return int(value), int(value)
+
+
+def get_global_config():
+  """
+  :rtype: Config
+  """
+  import TaskSystem
+  import Device
+  if not TaskSystem.isMainProcess:
+    # We expect that we are a Device subprocess.
+    assert Device.asyncChildGlobalDevice is not None
+    return Device.asyncChildGlobalDevice.config
+  # We are the main process.
+  import sys
+  main_mod = sys.modules["__main__"]  # should be rnn.py
+  # No real error handling here. We anyway don't know what to do then.
+  return main_mod.config
