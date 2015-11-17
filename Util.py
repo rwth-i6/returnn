@@ -705,4 +705,4 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
   if not source.endswith("\n"):
     source += "\n"
   co = compile(source, source_filename, "exec")
-  eval(co, user_ns, user_global_ns)
+  eval(co, user_global_ns, user_ns)
