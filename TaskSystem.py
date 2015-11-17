@@ -312,6 +312,23 @@ class Pickler(pickle.Pickler):
     self.save_global(obj)
   dispatch[types.TypeType] = fixedsave_type
 
+  def save_class(self, cls):
+    try:
+      # First try with a global reference. This works normally. This is the default original pickle behavior.
+      self.save_global(cls)
+      return
+    except pickle.PicklingError:
+      pass
+    # It didn't worked. But we can still serialize it.
+    # Note that this could potentially confuse the code if the class is reference-able in some other way
+    # - then we will end up with two versions of the same class.
+    self.save(types.ClassType)
+    self.save((cls.__name__, cls.__bases__, cls.__dict__))
+    self.write(pickle.REDUCE)
+    self.memoize(cls)
+    return
+  dispatch[types.ClassType] = save_class
+
   # avoid pickling instances of ourself. this mostly doesn't make sense and leads to trouble.
   # however, also doesn't break. it mostly makes sense to just ignore.
   def __getstate__(self): return None
