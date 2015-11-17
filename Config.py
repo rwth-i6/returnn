@@ -26,7 +26,8 @@ class Config:
     content = content.strip()
     if content.startswith("#!"):  # assume Python
       from Util import custom_exec
-      custom_exec(content, filename, {}, {"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      user_ns = self.typed_dict
+      custom_exec(content, filename, user_ns, {"config": self, "__file__": filename, "__name__": "__crnn_config__"})
       return
     if content.startswith("{"):  # assume JSON
       from Util import load_json
