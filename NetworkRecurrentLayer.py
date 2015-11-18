@@ -335,12 +335,12 @@ class RecurrentUnitLayer(Layer):
         n_re *= self.depth
       self.Wp = []
       if psize:
-        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1)) ]
+        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, name="Wp_0_%s"%self.name, depth=1)) ]
         for i in xrange(1, pdepth):
-          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1)))
-        W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
+          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, name="Wp_%d_%s"%(i, self.name), depth=1)))
+        W_re = self.create_random_uniform_weights(psize, unit.n_re, name="W_re_%s" % self.name)
       else:
-        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
+        W_re = self.create_random_uniform_weights(n_re, unit.n_re, name="W_re_%s" % self.name)
       self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
