@@ -53,8 +53,14 @@ class LearningRateControl(object):
     self.initialLearningRate = initialLearningRate
     self.errorMeasureKey = errorMeasureKey
     self.filename = filename
-    if filename and os.path.exists(filename):
-      self.load()
+    if filename:
+      if os.path.exists(filename):
+        print >>log.v4, "Learning-rate-control: loading file %s" % filename
+        self.load()
+      else:
+        print >>log.v4, "Learning-rate-control: file %s does not exist yet" % filename
+    else:
+      print >>log.v4, "Learning-rate-control: no file specified, not saving history (no proper restart possible)"
 
   __repr__ = simpleObjRepr
 
