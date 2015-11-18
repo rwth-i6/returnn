@@ -272,6 +272,7 @@ class RecurrentUnitLayer(Layer):
                droplm = 1.0, # language model drop during training
                dropconnect = 0.0, # recurrency dropout
                depth = 1,
+               bias_random_init_forget_shift=0.0,
                **kwargs):
     unit_given = unit
     if unit == 'lstm':  # auto selection
@@ -301,6 +302,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('force_lm', force_lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
+    if bias_random_init_forget_shift:
+      self.set_attr("bias_random_init_forget_shift", bias_random_init_forget_shift)
     self.set_attr('attention', attention.encode("utf8") if attention else None)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
@@ -344,13 +347,16 @@ class RecurrentUnitLayer(Layer):
       self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
-      value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
+      bias_init_value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
-      value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      value[unit.n_units:2*unit.n_units] = 0
+      bias_init_value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
+    if bias_random_init_forget_shift:
+      assert self.depth == 1
+      assert unit.n_units * 4 == unit.n_in  # (input gate, forget gate, output gate, net input)
+      bias_init_value[unit.n_units:2 * unit.n_units] += bias_random_init_forget_shift
     #self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     #self.params["b_%s"%self.name] = self.b
-    self.b.set_value(value)
+    self.b.set_value(bias_init_value)
     self.W_in = []
     for s in self.sources:
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
