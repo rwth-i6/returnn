@@ -228,5 +228,10 @@ def get_global_config():
   # We are the main process.
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
-  # No real error handling here. We anyway don't know what to do then.
-  return main_mod.config
+  if isinstance(getattr(main_mod, "config", None), Config):
+    return main_mod.config
+  # Maybe __main__ is not rnn.py, or config not yet loaded.
+  # Anyway, try directly. (E.g. for SprintInterface.)
+  import rnn
+  assert isinstance(rnn.config, Config)  # no other option anymore
+  return rnn.config
