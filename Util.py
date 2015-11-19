@@ -705,4 +705,5 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
   if not source.endswith("\n"):
     source += "\n"
   co = compile(source, source_filename, "exec")
+  user_global_ns["__package__"] = __package__  # important so that imports work when CRNN itself is loaded as a package
   eval(co, user_global_ns, user_ns)
