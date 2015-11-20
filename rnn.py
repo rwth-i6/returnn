@@ -21,7 +21,7 @@ from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec
+from Util import initThreadJoinHack, custom_exec, describe_crnn_version
 from SprintCommunicator import SprintCommunicator
 
 
@@ -339,7 +339,7 @@ def init(configFilename, commandLineOptions):
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
-  print >> log.v3, "CRNN starting up, pid %i" % os.getpid()
+  print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
   initFaulthandler()
   if config.bool('multiprocessing', True):
     initCudaNotInMainProcCheck()
