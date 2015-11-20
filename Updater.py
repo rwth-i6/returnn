@@ -227,7 +227,7 @@ class Updater:
     i_t = self.i + 1.
     beta1=0.9
     beta2=0.999
-    #a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
+    a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
     for param in grads.keys():
       deltas = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
       if self.max_norm > 0:
@@ -514,11 +514,7 @@ class Updater:
 
         m_t = beta1*m_prev + (1-beta1)*deltas
         v_t = beta2*v_prev + (1-beta2)*deltas**2
-
-        m_t = m_t / (1. - beta1**i_t)
-        v_t = v_t / (1. - beta2**i_t)
-
-        step = self.learning_rate_var*m_t/(T.sqrt(v_t) + epsilon)
+        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
