@@ -6,6 +6,8 @@ from Log import log
 from math import sqrt
 from theano.compat.python2x import OrderedDict
 import theano.tensor as T
+import theano.compile
+
 
 class Updater:
 
@@ -21,12 +23,19 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "momentum": config.float("momentum", 0)}
+      "multiple_models": config.int('update_multiple_models', 0),
+      "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
+      "momentum": config.float("momentum", 0),
+      "nesterov_momentum": config.float("nesterov_momentum", 0),
+      "momentum2": config.float("momentum2", 0),
+      "rmsprop": config.float("rmsprop", 0) }
     return cls(**kwargs)
 
   @classmethod
   def initRule(cls, rule, **kwargs):
     kwargs.setdefault('momentum', 0)
+    kwargs.setdefault('nesterov_momentum', 0)
+    kwargs.setdefault('momentum2', 0)
     kwargs.setdefault('gradient_clip', -1)
     kwargs.setdefault('adadelta_decay', 0.90)
     kwargs.setdefault('adadelta_offset', 1e-6)
@@ -35,39 +44,56 @@ class Updater:
     kwargs.setdefault('adasecant', False)
     kwargs.setdefault('adam', False)
     kwargs.setdefault('max_norm', 0.0)
+    kwargs.setdefault('rmsprop', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam):
+  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, rmsprop, multiple_models=0, multiple_models_average_step=0):
     """
     :type momentum: float
+    :type nesterov_momentum: float
+    :type momentum2: float
     :type gradient_clip: float
     :type adagrad: bool
     :type adadelta: bool
+    :type rmsprop: float
     """
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
+    self.nesterov_momentum = nesterov_momentum
+    self.momentum2 = momentum2
     self.gradient_clip = gradient_clip
     self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
+    self.multiple_models = multiple_models
+    self.multiple_models_average_step = multiple_models_average_step
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
     if self.adadelta:
       self.momentum = 0.0
+      self.nesterov_momentum = 0.0
+      self.momentum2 = 0.0
       print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
     if self.adagrad:
       print >> log.v4, "using adagrad"
     if self.momentum:
       print >> log.v4, "using momentum %f" % self.momentum
+    if self.nesterov_momentum:
+      print >> log.v4, "using simplified nesterov momentum %f" % self.nesterov_momentum
+    if self.momentum2:
+      print >> log.v4, "using reverted momentum %f" % self.momentum2
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
+    if self.rmsprop:
+      print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
 
   def initVars(self, network, net_param_deltas):
     """
@@ -99,6 +125,7 @@ class Updater:
                                        dtype=theano.config.floatX), borrow=True,
                      name="deltas_%s" % p)
                      for p in network.train_params_vars}
+
     if self.adagrad:
       self.accu = {}
       for p in self.network.train_params_vars:
@@ -159,17 +186,20 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name = "", broadcastable = None, reset = False):
-    if broadcastable:
-      if name:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name, broadcastable=broadcastable)
-      else:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), broadcastable=broadcastable)
+  def var(self, value, name="", broadcastable=None, reset=False, dtype="float32", zero=False):
+    if zero:
+      if isinstance(value, theano.compile.SharedVariable):
+        value = value.get_value(borrow=True, return_internal_type=True)
+      shape = value.shape
+      value = numpy.zeros(shape, dtype=dtype)
     else:
-      if name:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'), name=name)
-      else:
-        param = theano.shared(value = numpy.asarray(value).astype('float32'))
+      if isinstance(value, theano.compile.SharedVariable):
+        value = value.get_value()
+      value = numpy.asarray(value).astype(dtype)
+    kwargs = {"value": value}
+    if name: kwargs["name"] = name
+    if broadcastable: kwargs["broadcastable"] = broadcastable
+    param = theano.shared(**kwargs)
     if reset:
       self.params[param] = value
     return param
@@ -192,6 +222,8 @@ class Updater:
       step = self.var(0, "adasecant_step")
     else:
       grads = self.net_train_param_deltas
+    self.counter = self.var(0, name="counter", dtype="int64")
+    updates.append((self.counter, self.counter + 1))
     i_t = self.i + 1.
     beta1=0.9
     beta2=0.999
@@ -509,11 +541,57 @@ class Updater:
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd[param] += self.learning_rate_var * dx_new
+      elif self.rmsprop:
+        #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
+        accumulator = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), broadcastable=param.broadcastable)
+        epsilon=1e-6
+        accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
+        updates.append((accumulator, accumulator_new))
+        upd[param] += - ((self.learning_rate_var * deltas)/T.sqrt(accumulator_new + epsilon))
       else:
         upd[param] += - self.learning_rate_var * deltas
       if self.momentum > 0:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
+      if self.nesterov_momentum > 0:
+        #The following code inspired by https://github.com/fidlej/optim/raw/master/dok/nesterov_simple.pdf
+        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        tmp = self.nesterov_momentum * velocity + upd[param]
+        updates.append((velocity, tmp))
+        upd[param] += tmp*self.nesterov_momentum
+      if self.momentum2 > 0:
+        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        upd[param] += velocity * self.momentum2
+        updates.append((velocity, upd[param]))
+
+    # Simulate multi GPU training. This might help for regularization.
+    if self.multiple_models:
+      if not self.multiple_models_average_step:
+        self.multiple_models_average_step = self.multiple_models
+      cur_model = self.counter % self.multiple_models
+
+      for param in grads.keys():
+        models = [param]
+        for i in range(self.multiple_models - 1):
+          models += [self.var(param, name="%s_model_%i" % (param.name, i))]
+
+        models_new = []
+        for i, model_param in enumerate(models):
+          is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
+          models_new += [model_param + upd[param] * is_cur_model]
+
+        is_cur_average_step = T.eq(self.counter % self.multiple_models_average_step, 0)
+        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.multiple_models)
+        for i in range(len(models)):
+          models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+
+        updates.extend(zip(models, models_new))
+
+      upd.clear()
+
     #if upd:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))

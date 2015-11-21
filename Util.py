@@ -27,6 +27,50 @@ def cmd(s):
   return result
 
 
+def sysexecOut(*args, **kwargs):
+  from subprocess import Popen, PIPE
+  kwargs.setdefault("shell", False)
+  p = Popen(args, stdin=PIPE, stdout=PIPE, **kwargs)
+  out, _ = p.communicate()
+  if p.returncode != 0: raise CalledProcessError(p.returncode, args)
+  out = out.decode("utf-8")
+  return out
+
+def sysexecRetCode(*args, **kwargs):
+  import subprocess
+  res = subprocess.call(args, shell=False, **kwargs)
+  valid = kwargs.get("valid", (0,1))
+  if valid is not None:
+    if res not in valid: raise CalledProcessError(res, args)
+  return res
+
+def git_commitRev(commit="HEAD", gitdir="."):
+  if commit is None: commit = "HEAD"
+  return sysexecOut("git", "rev-parse", "--short", commit, cwd=gitdir).strip()
+
+def git_isDirty(gitdir="."):
+  r = sysexecRetCode("git", "diff", "--no-ext-diff", "--quiet", "--exit-code", cwd=gitdir)
+  if r == 0: return False
+  if r == 1: return True
+  assert False, "bad return %i" % r
+
+def git_commitDate(commit="HEAD", gitdir="."):
+  return sysexecOut("git", "show", "-s", "--format=%ci", commit, cwd=gitdir).strip()[:-6].replace(":", "").replace("-", "").replace(" ", ".")
+
+def git_describeHeadVersion(gitdir="."):
+  cdate = git_commitDate(gitdir=gitdir)
+  rev = git_commitRev(gitdir=gitdir)
+  is_dirty = git_isDirty(gitdir=gitdir)
+  return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
+
+def describe_crnn_version():
+  mydir = os.path.dirname(__file__)
+  try:
+    return git_describeHeadVersion(gitdir=mydir)
+  except Exception as e:
+    return "unknown(git exception: %r)" % e
+
+
 def eval_shell_env(token):
   if token.startswith("$"):
     return os.environ.get(token[1:], "")
@@ -329,7 +373,7 @@ def initThreadJoinHack():
 
   # Mostly the same for Condition.wait().
   cond_wait_orig = threading._Condition.wait
-  def cond_wait_hacked(cond, timeout=None):
+  def cond_wait_hacked(cond, timeout=None, *args):
     if timeout is None and thread.get_ident() == mainThreadId:
       # Use a timeout anyway. This should not matter for the underlying code.
       cond_wait_orig(cond, timeout=0.1)
@@ -705,4 +749,5 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
   if not source.endswith("\n"):
     source += "\n"
   co = compile(source, source_filename, "exec")
-  eval(co, user_ns, user_global_ns)
+  user_global_ns["__package__"] = __package__  # important so that imports work when CRNN itself is loaded as a package
+  eval(co, user_global_ns, user_ns)

@@ -1,7 +1,10 @@
 import logging
 import os
 import sys
-import StringIO
+try:
+  import StringIO
+except ImportError:
+  import io as StringIO
 from threading import RLock
 
 

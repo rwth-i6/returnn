@@ -171,6 +171,19 @@ def getModNameForModDict(obj):
   modname = mods.get(id(obj), None)
   return modname
 
+def getNormalDict(d):
+  """
+  :type d: dict[str] | dictproxy
+  :rtype: dict[str]
+  It also removes getset_descriptor. New-style classes have those.
+  """
+  r = {}
+  for k, v in d.items():
+    if isinstance(v, types.GetSetDescriptorType): continue
+    r[k] = v
+  return r
+
+
 class Pickler(pickle.Pickler):
   """
   We extend the standard Pickler to be able to pickle some more types,
@@ -294,14 +307,14 @@ class Pickler(pickle.Pickler):
     self.write(pickle.GLOBAL + module + '\n' + name + '\n')
     self.memoize(obj)
 
-  # Some types in the types modules are not correctly referenced,
-  # such as types.FunctionType. This is fixed here.
-  def fixedsave_type(self, obj):
+  def save_type(self, obj):
     try:
       self.save_global(obj)
       return
     except pickle.PicklingError:
       pass
+    # Some types in the types modules are not correctly referenced,
+    # such as types.FunctionType. This is fixed here.
     for modname in ["types"]:
       moddict = sys.modules[modname].__dict__
       for modobjname,modobj in moddict.iteritems():
@@ -309,8 +322,30 @@ class Pickler(pickle.Pickler):
           self.write(pickle.GLOBAL + modname + '\n' + modobjname + '\n')
           self.memoize(obj)
           return
-    self.save_global(obj)
-  dispatch[types.TypeType] = fixedsave_type
+    # Generic serialization of new-style classes.
+    self.save(type)
+    self.save((obj.__name__, obj.__bases__, getNormalDict(obj.__dict__)))
+    self.write(pickle.REDUCE)
+    self.memoize(obj)
+  dispatch[types.TypeType] = save_type
+
+  # This is about old-style classes.
+  def save_class(self, cls):
+    try:
+      # First try with a global reference. This works normally. This is the default original pickle behavior.
+      self.save_global(cls)
+      return
+    except pickle.PicklingError:
+      pass
+    # It didn't worked. But we can still serialize it.
+    # Note that this could potentially confuse the code if the class is reference-able in some other way
+    # - then we will end up with two versions of the same class.
+    self.save(types.ClassType)
+    self.save((cls.__name__, cls.__bases__, cls.__dict__))
+    self.write(pickle.REDUCE)
+    self.memoize(cls)
+    return
+  dispatch[types.ClassType] = save_class
 
   # avoid pickling instances of ourself. this mostly doesn't make sense and leads to trouble.
   # however, also doesn't break. it mostly makes sense to just ignore.

@@ -221,7 +221,7 @@ class NTM(RecurrentTransformBase):
       self.b_add = parent.add_param(layer.create_bias(ncells, name="b_add"+suffix))
 
     def softmax(self, x):
-      ex = exp(x)
+      ex = T.exp(x)
       return ex / sum(ex,axis=-1,keepdims=True)
 
     def step(self, y_p):
@@ -239,8 +239,8 @@ class NTM(RecurrentTransformBase):
     import scipy
     layer = self.layer
 
-    self.M = layer.add_state_var(T.zeros((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
-    self.aw = self.add_state_var(T.zeros((layer.attrs['ntm_naddrs'],), dtype='float32'), name='aw')
+    self.M = layer.add_state_var(T.ones((layer.attrs['ntm_naddrs'], layer.attrs['ntm_ncells']), dtype='float32'), name='M')
+    self.W = self.add_state_var(T.ones((layer.attrs['ntm_naddrs'],), dtype='float32') * 1./layer.attrs['ntm_ncells'], name='W')
     self.max_shift = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_shift']), name="max_shift"))
     self.naddrs = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_naddrs']), name="naddrs"))
     self.ncells = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['ntm_ncells']), name="ncells"))
@@ -249,18 +249,44 @@ class NTM(RecurrentTransformBase):
       value=scipy.linalg.circulant(numpy.arange(self.layer.attrs['ntm_naddrs'])).T[numpy.arange(-(self.layer.attrs['ntm_shift']//2),(self.layer.attrs['ntm_shift']//2)+1)][::-1],
       name='shift')) # no theano alternative available, this is from https://github.com/shawntan/neural-turing-machines/blob/master/model.py#L25
 
-    self.heads = []
-    for n in xrange(self.nheads):
-      self.heads.append(Head(n,self,self.naddrs,self.ncells,self.max_shift))
+    self.heads = [ Head(n,self,self.naddrs,self.ncells,self.max_shift) for n in xrange(self.nheads) ]
+    self.W_read = self.add_param(layer.create_random_uniform_weights(n=self.layer.attrs['ntm_ncells'],m=self.layer.attrs['ntm_ctrl'], name="W_ctrl_%s" % layer.name))
+    weight_init = T.exp(self.W) / T.sum(T.exp(self.W), axis=1, keepdims=True)
 
-    #for h in xrange(self.layer.attrs['ntm_nheads']):
-    #  self.heads
+  def dist(k, M):
+    k_unit = k / (T.sqrt(T.sum(k**2)) + 1e-5)
+    k_unit = k_unit.dimshuffle(('x', 0))
+    k_unit.name = "k_unit"
+    M_lengths = T.sqrt(T.sum(M**2, axis=1)).dimshuffle((0, 'x'))
+    M_unit = M / (M_lengths + 1e-5)
+    M_unit.name = "M_unit"
+    return T.sum(k_unit * M_unit, axis=1)
 
   def step(self, y_p):
+    z_c = y_p + T.dot(self.M,self.W_read)
+    W_read = self.W_read
+    M = self.M
+    W = self.W
+    for head in self.heads:
+      key_t, beta_t, g_t, shift_t, gamma_t, erase_t, add_t = head.step(z_c)
+      # 3.3.1 Focusing b Content
+      weight_c = T.exp(beta * dist(key, M))
+      weight_c = weight_c / T.sum(weight_c)
+      # 3.3.2 Focusing by Location
+      weight_g = g * weight_c + (1 - g) * W_read
+      shift = shift.dimshuffle((0, 'x'))
+      weight_shifted = T.sum(shift_t * weight_g[shift_conv], axis=0)
 
+      weight_sharp = weight_shifted ** gamma
+      W = weight_sharp / T.sum(weight_sharp)
 
+      W = W.dimshuffle((0, 'x'))
 
-    return z_re, {}
+      erase_head = erase_t.dimshuffle(('x', 0))
+      add_head = add_t.dimshuffle(('x', 0))
+
+      M = (M * (1 - (W * erase_head))) + (W * add_head)
+    return z_re, {self.M : M, self.W : W}
 
 
 class AttentionBase(RecurrentTransformBase):
@@ -352,6 +378,27 @@ class AttentionDot(AttentionBase):
     # elif attention_step > 0:
     #   result = [focus+attention_step,beam] + result
 
+    return z_re, {}
+
+
+class AttentionConcat(AttentionBase):
+  """
+  attention similar to neural programmer paper
+  """
+  name = "attention_concat"
+
+  def create_vars(self):
+    super(AttentionConcat, self).create_vars()
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + self.layer.unit.n_re)
+    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in + layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
+    self.W_att_proj = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_proj"))
+
+  def step(self, y_p):
+    f_z = T.tanh(T.dot(self.W_att_proj, T.concatenate([y_p.dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0), self.B], axis=2)))
+    f_e = T.exp(f_z)
+    w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+    z_re = T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in)
     return z_re, {}
 
 
@@ -493,7 +540,10 @@ class AttentionTimeGauss(RecurrentTransformBase):
     n_in = sum([e.attrs['n_out'] for e in base])
     src = [e.output for e in base]
 
-    self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
+    if len(src) == 1:
+      self.B = src[0]
+    else:
+      self.B = T.concatenate(src, axis=2)  # base (output of encoder). (time,batch,encoder-dim)
     self.add_input(self.B, name="B")
     self.B_index = self.layer.base[0].index  # not an input
     self.B_times = self.add_input(T.cast(T.sum(self.B_index, axis=0), dtype="float32"), "B_times")  # float32 for gpu

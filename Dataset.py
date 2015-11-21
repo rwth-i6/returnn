@@ -342,7 +342,7 @@ class Dataset(object):
     return [self.get_data_dim(key)]
 
   def have_seqs(self):
-    return self.num_seqs > 0
+    return self.is_less_than_num_seqs(0)
 
   def len_info(self):
     """
@@ -543,9 +543,11 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs):
   """
-  :type kwargs: dict[str]
+  :type kwargs: dict[str] | str
   :rtype: Dataset
   """
+  if isinstance(kwargs, (str, unicode)):
+    return init_dataset_via_str(config_str=kwargs)
   kwargs = kwargs.copy()
   assert "class" in kwargs
   clazz_name = kwargs.pop("class")
@@ -584,7 +586,10 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     if cache_byte_size is not None:
       kwargs["cache_byte_size"] = cache_byte_size
     cls = HDFDataset
-  data = cls.from_config(config, **kwargs)
+  if config:
+    data = cls.from_config(config, **kwargs)
+  else:
+    data = cls(**kwargs)
   if isinstance(data, HDFDataset):
     for f in config_str.split(","):
       assert os.path.exists(f)

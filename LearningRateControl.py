@@ -31,6 +31,7 @@ class LearningRateControl(object):
     """
     return {
       "initialLearningRate": config.float('learning_rate', 1.0),
+      "initialLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
       "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
       "filename": config.value('learning_rate_file', None)}
 
@@ -43,18 +44,31 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, initialLearningRate, errorMeasureKey=None, filename=None):
+  def __init__(self, initialLearningRate, initialLearningRates=None, errorMeasureKey=None, filename=None):
     """
     :param float initialLearningRate: learning rate for epoch 1
+    :param list[float] | dict[int,float] initialLearningRates: learning rates
     :param str errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
     :param str filename: load from and save to file
     """
     self.epochData = {1: self.EpochData(initialLearningRate)}
+    if initialLearningRates:
+      if isinstance(initialLearningRates, list):
+        initialLearningRates = {i + 1: v for (i, v) in enumerate(initialLearningRates)}
+      assert isinstance(initialLearningRates, dict)
+      for epoch, v in initialLearningRates.items():
+        self.setLearningRateForEpoch(epoch, v)
     self.initialLearningRate = initialLearningRate
     self.errorMeasureKey = errorMeasureKey
     self.filename = filename
-    if filename and os.path.exists(filename):
-      self.load()
+    if filename:
+      if os.path.exists(filename):
+        print >>log.v4, "Learning-rate-control: loading file %s" % filename
+        self.load()
+      else:
+        print >>log.v4, "Learning-rate-control: file %s does not exist yet" % filename
+    else:
+      print >>log.v4, "Learning-rate-control: no file specified, not saving history (no proper restart possible)"
 
   __repr__ = simpleObjRepr
 

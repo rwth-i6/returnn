@@ -26,4 +26,14 @@ def get_layer_class(name):
   """
   if name in LayerClasses:
     return LayerClasses[name]
-  assert False, "invalid layer type: %s" % name
+  if name.startswith("config."):
+    from Config import get_global_config
+    config = get_global_config()
+    cls = config.typed_value(name[len("config."):])
+    import inspect
+    assert inspect.isclass(cls), "get_layer_class: %s not found" % name
+    if cls.layer_class is None:
+      # Will make Layer.save() (to HDF) work correctly.
+      cls.layer_class = name
+    return cls
+  assert False, "get_layer_class: invalid layer type: %s" % name

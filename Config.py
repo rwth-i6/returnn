@@ -17,11 +17,23 @@ class Config:
 
   def load_file(self, f):
     if isinstance(f, str):
-      content = open(f).read()
+      filename = f
+      content = open(filename).read()
     else:
       # assume stream-like
+      filename = "<config string>"
       content = f.read()
     content = content.strip()
+    if content.startswith("#!"):  # assume Python
+      from Util import custom_exec
+      # Operate inplace on ourselves.
+      # Also, we want that it's available as the globals() dict, so that defined functions behave well
+      # (they would loose the local context otherwise).
+      user_ns = self.typed_dict
+      # Always overwrite:
+      user_ns.update({"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      custom_exec(content, filename, user_ns, user_ns)
+      return
     if content.startswith("{"):  # assume JSON
       from Util import load_json
       json_content = load_json(content=content)
@@ -44,6 +56,8 @@ class Config:
       value = value.split(',')
     else:
       value = [value]
+    if key in self.typed_dict:
+      del self.typed_dict[key]
     self.dict[key] = value
 
   def has(self, key):
@@ -199,3 +213,25 @@ class Config:
       return int(value.split(':')[0]), int(value.split(':')[1])
     else:
       return int(value), int(value)
+
+
+def get_global_config():
+  """
+  :rtype: Config
+  """
+  import TaskSystem
+  import Device
+  if not TaskSystem.isMainProcess:
+    # We expect that we are a Device subprocess.
+    assert Device.asyncChildGlobalDevice is not None
+    return Device.asyncChildGlobalDevice.config
+  # We are the main process.
+  import sys
+  main_mod = sys.modules["__main__"]  # should be rnn.py
+  if isinstance(getattr(main_mod, "config", None), Config):
+    return main_mod.config
+  # Maybe __main__ is not rnn.py, or config not yet loaded.
+  # Anyway, try directly. (E.g. for SprintInterface.)
+  import rnn
+  assert isinstance(rnn.config, Config)  # no other option anymore
+  return rnn.config
