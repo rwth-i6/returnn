@@ -381,6 +381,7 @@ class RecurrentUnitLayer(Layer):
       assert False
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
     num_batches = self.index.shape[1]
+    self.num_batches = num_batches
     if direction == 0:
       assert False # this is broken
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
@@ -762,6 +763,8 @@ class RecurrentChunkLayer(Layer):
     sequences = sequences.reshape((chunk_size,num_batches,sequences.shape[2]))
     index = index.reshape((chunk_size,num_batches))
 
+    self.num_batches = num_batches
+
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
@@ -780,7 +783,7 @@ class RecurrentChunkLayer(Layer):
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
         self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
-        self.lmmask = T.zeros_like(index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
+        self.lmmask = T.zeros_like(sequences, dtype='float32')
 
     if not attention:
       attention = "none"

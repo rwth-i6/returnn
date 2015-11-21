@@ -182,15 +182,18 @@ class LM(RecurrentTransformBase):
   def create_vars(self):
     self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
     self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
-    self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
-    self.t = self.add_state_var(T.zeros((self.layer.index.shape[1],), dtype="float32"), name="t")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((self.layer.num_batches,), dtype="float32"), name="t")
 
   def step(self, y_p):
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
     #z_re = T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-    z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
+    if self.layer.attrs['droplm'] < 1.0:
+      z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
+    else:
+      z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)]
 
     return z_re, { self.t : self.t + 1 }
 
