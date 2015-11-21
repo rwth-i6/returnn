@@ -58,6 +58,7 @@ class LearningRateControl(object):
       assert isinstance(initialLearningRates, dict)
       for epoch, v in initialLearningRates.items():
         self.setLearningRateForEpoch(epoch, v)
+    self.initialLearningRates = initialLearningRates
     self.initialLearningRate = initialLearningRate
     self.errorMeasureKey = errorMeasureKey
     self.filename = filename
