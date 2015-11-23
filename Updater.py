@@ -13,43 +13,35 @@ class Updater:
 
   @classmethod
   def initFromConfig(cls, config):
-    import rnn
-    kwargs = {
-      "gradient_clip": config.float('gradient_clip', -1),
-      "adagrad": config.bool('adagrad', False),
-      "adadelta": config.bool('adadelta', False),
-      "adasecant": config.bool('adasecant', False),
-      "adam": config.bool('adam', False),
-      "max_norm" : config.float('max_norm', 0.0),
-      "adadelta_decay": config.float('adadelta_decay', 0.90),
-      "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "update_multiple_models": config.int('update_multiple_models', 0),
-      "update_multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
-      "momentum": config.float("momentum", 0),
-      "nesterov_momentum": config.float("nesterov_momentum", 0),
-      "momentum2": config.float("momentum2", 0),
-      "rmsprop": config.float("rmsprop", 0) }
+    kwargs = {}
+    for k, v in cls._get_kwarg_defaults():
+      if isinstance(v, float): g = config.float
+      elif isinstance(v, int): g = config.int
+      elif isinstance(v, bool): g = config.bool
+      else: assert False, "invalid default type: %s = (%s) %s" % (k, type(v), v)
+      kwargs[k] = g(k, v)
     return cls(**kwargs)
 
   @classmethod
   def initRule(cls, rule, **kwargs):
-    kwargs.setdefault('momentum', 0)
-    kwargs.setdefault('nesterov_momentum', 0)
-    kwargs.setdefault('momentum2', 0)
-    kwargs.setdefault('gradient_clip', -1)
-    kwargs.setdefault('adadelta_decay', 0.90)
-    kwargs.setdefault('adadelta_offset', 1e-6)
-    kwargs.setdefault('adagrad', False)
-    kwargs.setdefault('adadelta', False)
-    kwargs.setdefault('adasecant', False)
-    kwargs.setdefault('adam', False)
-    kwargs.setdefault('max_norm', 0.0)
-    kwargs.setdefault('rmsprop', 0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, rmsprop, update_multiple_models=0, update_multiple_models_average_step=0):
+  @classmethod
+  def _get_kwarg_defaults(cls):
+    import inspect
+    arg_spec = inspect.getargspec(cls.__init__)
+    N_defs = len(arg_spec.defaults)
+    N_args = len(arg_spec.args)
+    defaults = {arg_spec.args[N_args - N_defs + i]: d for i, d in enumerate(arg_spec.defaults)}
+    return defaults
+
+  # Note that the default value type is important for initFromConfig to determine
+  # whether to call config.bool/config.int/etc.
+  def __init__(self, momentum=0.0, nesterov_momentum=0.0, momentum2=0.0, gradient_clip=-1.0, adagrad=False,
+               adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6, max_norm=0.0, adasecant=False, adam=False,
+               rmsprop=0.0, update_multiple_models=0, update_multiple_models_average_step=0):
     """
     :type momentum: float
     :type nesterov_momentum: float
