@@ -49,7 +49,7 @@ class Updater:
                adam=False,
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
-               update_multiple_models_average_step_i=0):
+               update_multiple_models_average_step_i=0, update_multiple_models_averaging=True):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
@@ -64,6 +64,7 @@ class Updater:
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
     self.update_multiple_models = update_multiple_models
+    self.update_multiple_models_averaging = update_multiple_models_averaging
     self.update_multiple_models_average_step = update_multiple_models_average_step
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
     self.params = {}
@@ -576,10 +577,11 @@ class Updater:
           is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
           models_new += [model_param + upd[param] * is_cur_model]
 
-        is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, average_step_i)
-        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
-        for i in range(len(models)):
-          models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+        if self.update_multiple_models_averaging:
+          is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, average_step_i)
+          average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
+          for i in range(len(models)):
+            models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
 
         updates.extend(zip(models, models_new))
 
