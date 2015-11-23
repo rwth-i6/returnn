@@ -39,18 +39,16 @@ class Updater:
 
   # Note that the default value type is important for initFromConfig to determine
   # whether to call config.bool/config.int/etc.
-  def __init__(self, momentum=0.0, nesterov_momentum=0.0, momentum2=0.0, gradient_clip=-1.0, adagrad=False,
-               adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6, max_norm=0.0, adasecant=False, adam=False,
-               rmsprop=0.0, update_multiple_models=0, update_multiple_models_average_step=0):
-    """
-    :type momentum: float
-    :type nesterov_momentum: float
-    :type momentum2: float
-    :type gradient_clip: float
-    :type adagrad: bool
-    :type adadelta: bool
-    :type rmsprop: float
-    """
+  def __init__(self,
+               momentum=0.0, nesterov_momentum=0.0, momentum2=0.0,
+               gradient_clip=-1.0,
+               adagrad=False,
+               adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6,
+               max_norm=0.0,
+               adasecant=False,
+               adam=False,
+               rmsprop=0.0,
+               update_multiple_models=0, update_multiple_models_average_step=0):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
