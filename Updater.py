@@ -23,8 +23,8 @@ class Updater:
       "max_norm" : config.float('max_norm', 0.0),
       "adadelta_decay": config.float('adadelta_decay', 0.90),
       "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "multiple_models": config.int('update_multiple_models', 0),
-      "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
+      "update_multiple_models": config.int('update_multiple_models', 0),
+      "update_multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
       "momentum": config.float("momentum", 0),
       "nesterov_momentum": config.float("nesterov_momentum", 0),
       "momentum2": config.float("momentum2", 0),
@@ -49,7 +49,7 @@ class Updater:
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, rmsprop, multiple_models=0, multiple_models_average_step=0):
+  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, rmsprop, update_multiple_models=0, update_multiple_models_average_step=0):
     """
     :type momentum: float
     :type nesterov_momentum: float
@@ -72,8 +72,8 @@ class Updater:
     self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
-    self.multiple_models = multiple_models
-    self.multiple_models_average_step = multiple_models_average_step
+    self.update_multiple_models = update_multiple_models
+    self.update_multiple_models_average_step = update_multiple_models_average_step
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
@@ -568,14 +568,14 @@ class Updater:
         updates.append((velocity, upd[param]))
 
     # Simulate multi GPU training. This might help for regularization.
-    if self.multiple_models:
-      if not self.multiple_models_average_step:
-        self.multiple_models_average_step = self.multiple_models
-      cur_model = self.counter % self.multiple_models
+    if self.update_multiple_models:
+      if not self.update_multiple_models_average_step:
+        self.update_multiple_models_average_step = self.update_multiple_models
+      cur_model = self.counter % self.update_multiple_models
 
       for param in grads.keys():
         models = [param]
-        for i in range(self.multiple_models - 1):
+        for i in range(self.update_multiple_models - 1):
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []
@@ -583,8 +583,8 @@ class Updater:
           is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
           models_new += [model_param + upd[param] * is_cur_model]
 
-        is_cur_average_step = T.eq(self.counter % self.multiple_models_average_step, 0)
-        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.multiple_models)
+        is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, 0)
+        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
         for i in range(len(models)):
           models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
 
