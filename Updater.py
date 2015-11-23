@@ -49,7 +49,8 @@ class Updater:
                adam=False,
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
-               update_multiple_models_average_step_i=0, update_multiple_models_averaging=True):
+               update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
+               update_multiple_models_param_is_cur_model=False):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
@@ -67,6 +68,7 @@ class Updater:
     self.update_multiple_models_averaging = update_multiple_models_averaging
     self.update_multiple_models_average_step = update_multiple_models_average_step
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
+    self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.params = {}
     self.pid = -1
     assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
@@ -573,15 +575,24 @@ class Updater:
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []
-        for i, model_param in enumerate(models):
-          is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
-          models_new += [model_param + upd[param] * is_cur_model]
+        if self.update_multiple_models_param_is_cur_model:
+          # Current model is always the first one.
+          models_new += [models[0] + upd[param]]
+          models_new += models[1:]
+        else:
+          for i, model_param in enumerate(models):
+            is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
+            models_new += [model_param + upd[param] * is_cur_model]
 
         if self.update_multiple_models_averaging:
           is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, average_step_i)
           average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
           for i in range(len(models)):
             models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+
+        if self.update_multiple_models_param_is_cur_model:
+          # Rotate, so that the next model becomes the first one.
+          models_new = models_new[1:] + models_new[:-1]
 
         updates.extend(zip(models, models_new))
 
