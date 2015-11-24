@@ -23,6 +23,7 @@ class CachedDataset2(Dataset):
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
+    super(CachedDataset2, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
     self.expected_load_seq_start = 0
