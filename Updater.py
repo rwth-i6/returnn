@@ -14,7 +14,7 @@ class Updater:
   @classmethod
   def initFromConfig(cls, config):
     kwargs = {}
-    for k, v in cls._get_kwarg_defaults():
+    for k, v in cls._get_kwarg_defaults().items():
       if isinstance(v, float): g = config.float
       elif isinstance(v, int): g = config.int
       elif isinstance(v, bool): g = config.bool
