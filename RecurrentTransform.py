@@ -390,12 +390,12 @@ class AttentionConcat(AttentionBase):
   def create_vars(self):
     super(AttentionConcat, self).create_vars()
     n_in = sum([e.attrs['n_out'] for e in self.layer.base])
-    l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + self.layer.unit.n_re)
-    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in + layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_in + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in + self.layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
     self.W_att_proj = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_proj"))
 
   def step(self, y_p):
-    f_z = T.tanh(T.dot(self.W_att_proj, T.concatenate([y_p.dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0), self.B], axis=2)))
+    f_z = T.tanh(T.dot(T.concatenate([y_p.dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0), self.B], axis=2), self.W_att_proj))
     f_e = T.exp(f_z)
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     z_re = T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in)
