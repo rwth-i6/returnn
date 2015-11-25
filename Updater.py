@@ -47,6 +47,7 @@ class Updater:
                max_norm=0.0,
                adasecant=False,
                adam=False,
+               adamax=False,
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
@@ -61,6 +62,7 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.adamax = adamax
     self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
@@ -71,7 +73,7 @@ class Updater:
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.params = {}
     self.pid = -1
-    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
+    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam and self.adamax)
     if self.adadelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
@@ -89,6 +91,8 @@ class Updater:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
     if self.rmsprop:
       print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
+    if self.adamax:
+      print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
 
   def initVars(self, network, net_param_deltas):
     """
@@ -514,6 +518,18 @@ class Updater:
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
         #updates.append((param, param - step))
+        upd[param] += -step
+
+      elif self.adamax:
+        value = param.get_value(borrow=True)
+        epsilon=1e-8
+        m_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
+        v_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
+        m_t = beta1*m_prev + (1-beta1)*deltas
+        v_t = T.max(beta2*v_prev, T.abs(deltas))
+        step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
+        updates.append((m_prev, m_t))
+        updates.append((v_prev, v_t))
         upd[param] += -step
 
       elif self.adagrad:
