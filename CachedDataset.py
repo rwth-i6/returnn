@@ -51,6 +51,7 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
+    super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if seq_list:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
     else:
