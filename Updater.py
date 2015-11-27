@@ -526,7 +526,7 @@ class Updater:
         m_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
         v_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
         m_t = beta1*m_prev + (1-beta1)*deltas
-        v_t = max(beta2*v_prev, abs(deltas))
+        v_t = T.maximum(beta2*v_prev, abs(deltas) + epsilon)
         step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
