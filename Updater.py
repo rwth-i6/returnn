@@ -15,9 +15,9 @@ class Updater:
   def initFromConfig(cls, config):
     kwargs = {}
     for k, v in cls._get_kwarg_defaults().items():
-      if isinstance(v, float): g = config.float
-      elif isinstance(v, int): g = config.int
-      elif isinstance(v, bool): g = config.bool
+      if type(v) == bool: g = config.bool
+      elif type(v) == float: g = config.float
+      elif type(v) == int: g = config.int
       else: assert False, "invalid default type: %s = (%s) %s" % (k, type(v), v)
       kwargs[k] = g(k, v)
     return cls(**kwargs)
