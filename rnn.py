@@ -417,7 +417,6 @@ def main(argv):
     return_code = 1
     print >> getattr(log, "v3", sys.stderr), "KeyboardInterrupt"
   finalize()
-  print(config.accessed_values)
   if return_code:
     sys.exit(return_code)
 
