@@ -237,6 +237,9 @@ class LayerNetwork(object):
     for layer_name in json_content:
       if layer_name in network.hidden or layer_name in network.output:
         continue
+      if layer_name == "data":
+        print >>log.v3, "warning: layer with name 'data' will be ignored (this name is reserved)"
+        continue
       trg = target
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
