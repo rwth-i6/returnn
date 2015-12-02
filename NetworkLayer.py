@@ -19,7 +19,7 @@ def _initLayerClasses():
 
 _initLayerClasses()
 
-def get_layer_class(name):
+def get_layer_class(name, raise_exception=True):
   """
   :type name: str
   :rtype: type(NetworkHiddenLayer.HiddenLayer)
@@ -31,9 +31,15 @@ def get_layer_class(name):
     config = get_global_config()
     cls = config.typed_value(name[len("config."):])
     import inspect
-    assert inspect.isclass(cls), "get_layer_class: %s not found" % name
+    if not inspect.isclass(cls):
+      if raise_exception:
+        raise Exception("get_layer_class: %s not found" % name)
+      else:
+        return None
     if cls.layer_class is None:
       # Will make Layer.save() (to HDF) work correctly.
       cls.layer_class = name
     return cls
-  assert False, "get_layer_class: invalid layer type: %s" % name
+  if raise_exception:
+    return Exception("get_layer_class: invalid layer type: %s" % name)
+  return None
