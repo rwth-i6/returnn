@@ -181,21 +181,6 @@ def getDevicesInitArgs(config):
   return devices
 
 
-def isUpdateOnDevice(config):
-  """
-  :type config: Config
-  :rtype: bool
-  """
-  devArgs = getDevicesInitArgs(config)
-  if config.value("update_on_device", "auto") == "auto":
-    return len(devArgs) == 1
-  updateOnDevice = config.bool("update_on_device", None)
-  assert isinstance(updateOnDevice, bool)
-  if updateOnDevice:
-    assert len(devArgs) == 1, "Devices: update_on_device works only with a single device."
-  return updateOnDevice
-
-
 def initDevices():
   """
   :rtype: list[Device]
@@ -432,6 +417,7 @@ def main(argv):
     return_code = 1
     print >> getattr(log, "v3", sys.stderr), "KeyboardInterrupt"
   finalize()
+  print(config.accessed_values)
   if return_code:
     sys.exit(return_code)
 
