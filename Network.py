@@ -171,14 +171,14 @@ class LayerNetwork(object):
         network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
         network.y[target].n_out = network.n_out[target][0]
       if not 'from' in obj:
-        source = [SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data')]
+        source = [SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i)]
         index = network.i
       elif obj['from']:
         if not isinstance(obj['from'], list):
           obj['from'] = [ obj['from'] ]
         for prev in obj['from']:
           if prev == 'data':
-            source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+            source.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
             index = network.i
           elif prev != "null":
             index = traverse(content, prev, target, index)
@@ -197,7 +197,7 @@ class LayerNetwork(object):
           obj['base'] = [obj['base']]
         for prev in obj['base']:
           if prev == 'data':
-            base.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+            base.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
           else:
             traverse(content, prev, target, index)
             base.append(network.get_layer(prev))
