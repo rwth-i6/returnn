@@ -151,6 +151,10 @@ class LayerNetwork(object):
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
     def traverse(content, layer_name, target, output_index):
+      if layer_name in network.hidden:
+        return network.hidden[layer_name].index
+      if layer_name in network.output:
+        return network.output[layer_name].index
       source = []
       obj = content[layer_name].copy()
       cl = obj.pop('class', None)
@@ -177,19 +181,15 @@ class LayerNetwork(object):
             source.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
             index = network.i
           elif prev != "null":
-            if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-              index = traverse(content, prev, target, index)
-            else:
-              index = network.hidden[prev].index if prev in network.hidden else network.output[prev].index
-            source.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+            index = traverse(content, prev, target, index)
+            source.append(network.get_layer(prev))
       if 'encoder' in obj:
         encoder = []
         if not isinstance(obj['encoder'], list):
           obj['encoder'] = [obj['encoder']]
         for prev in obj['encoder']:
-          if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-            traverse(content, prev, target, index)
-          encoder.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+          traverse(content, prev, target, index)
+          encoder.append(network.get_layer(prev))
         obj['encoder'] = encoder
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
         base = []
@@ -199,16 +199,15 @@ class LayerNetwork(object):
           if prev == 'data':
             base.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
           else:
-            if not network.hidden.has_key(prev) and not network.output.has_key(prev):
-              traverse(content, prev, target, index)
-            base.append(network.hidden[prev] if prev in network.hidden else network.output[prev])
+            traverse(content, prev, target, index)
+            base.append(network.get_layer(prev))
         obj['base'] = base
       if 'copy_input' in obj:
         index = traverse(content, obj['copy_input'], target, index)
-        obj['copy_input'] = network.hidden[obj['copy_input']] if obj['copy_input'] in network.hidden else network.output[obj['copy_input']]
+        obj['copy_input'] = network.get_layer(obj['copy_input'])
       if 'centroids' in obj:
         index = traverse(content, obj['centroids'], target, index)
-        obj['centroids'] = network.hidden[obj['centroids']] if obj['centroids'] in network.hidden else network.output[obj['centroids']]
+        obj['centroids'] = network.get_layer(obj['centroids'])
       if 'encoder' in obj:
         index = output_index
       if 'target' in obj:
@@ -422,6 +421,13 @@ class LayerNetwork(object):
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network.j[target])
     return network
+
+  def get_layer(self, layer_name):
+    if layer_name in self.hidden:
+      return self.hidden[layer_name]
+    if layer_name in self.output:
+      return self.output[layer_name]
+    return None
 
   def add_layer(self, layer):
     """
