@@ -394,6 +394,7 @@ def prepareForwarding(epoch):
     network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
     network.load_hdf(last_model_hdf)
     engine.network = network
+    engine.print_network_info()
 
   else:
     # Load network.
