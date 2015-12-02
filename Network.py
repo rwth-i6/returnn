@@ -295,7 +295,7 @@ class LayerNetwork(object):
         x_in = []
         for s in model[layer_name].attrs['from'].split(','):
           if s == 'data':
-            x_in.append(SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data'))
+            x_in.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
             index = network.i
           elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
             if not network.hidden.has_key(s):
@@ -309,16 +309,16 @@ class LayerNetwork(object):
             s = Layer.guess_source_layer_name(layer_name)
             if not s:
               # Fix for data input. Just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name=""))
+              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name="", index=network.i))
             else:
               if not network.hidden.has_key(s):
                 index = traverse(model, s, index)
               else:
                 index = network.hidden[s].index
               # Add just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name=""))
+              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name="", index=network.i))
       else:
-        x_in = [ SourceLayer(network.n_in, network.x, sparse = sparse_input, name = 'data') ]
+        x_in = [ SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i) ]
       if 'encoder' in model[layer_name].attrs:
         encoder = []
         for s in model[layer_name].attrs['encoder'].split(','):
