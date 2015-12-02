@@ -233,7 +233,7 @@ class LayerNetwork(object):
         params.update({'name': layer_name})
         if layer_class.recurrent:
           network.recurrent = True
-        return network.add_layer(layer_class(**params))
+        return network.add_layer(layer_class(**params)).index
     for layer_name in json_content:
       if layer_name in network.hidden or layer_name in network.output:
         continue
@@ -406,7 +406,7 @@ class LayerNetwork(object):
           params['target'] = model[layer_name].attrs['target']
         if layer_class.recurrent:
           network.recurrent = True
-        return network.add_layer(layer_class(**params))
+        return network.add_layer(layer_class(**params)).index
 
     for layer_name in model:
       target = 'classes'
@@ -435,11 +435,12 @@ class LayerNetwork(object):
   def add_layer(self, layer):
     """
     :type layer: NetworkHiddenLayer.HiddenLayer
+    :rtype NetworkHiddenLayer.HiddenLayer
     """
     assert layer.name
     self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
-    return layer.output_index()
+    return layer
 
   def add_cost_and_constraints(self, layer):
     self.constraints += layer.make_constraints()
