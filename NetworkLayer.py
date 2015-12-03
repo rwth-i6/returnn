@@ -41,5 +41,5 @@ def get_layer_class(name, raise_exception=True):
       cls.layer_class = name
     return cls
   if raise_exception:
-    return Exception("get_layer_class: invalid layer type: %s" % name)
+    raise Exception("get_layer_class: invalid layer type: %s" % name)
   return None
