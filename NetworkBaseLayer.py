@@ -47,21 +47,11 @@ class Container(object):
     else:
       return T.tensordot(vec, mat, 1)
 
-  def _check_layer_class(self):
-    if self.layer_class is None:
-      self.layer_class = "<None>"
-      return
-    if self.layer_class.startswith("<"): return  # we handled it before
-    from NetworkLayer import get_layer_class
-    if get_layer_class(self.layer_class, raise_exception=False) is not self.__class__:
-      self.layer_class = "<unknown_%s>" % self.layer_class
-
   def save(self, head):
     """
     :type head: h5py.File
     """
     grp = head.create_group(self.name)
-    self._check_layer_class()
     grp.attrs['class'] = self.layer_class
     for p in self.params.keys():
       value = self.params[p].get_value()
