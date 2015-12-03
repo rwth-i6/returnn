@@ -75,9 +75,11 @@ class Container(object):
       print >> log.v3, "warning: unable to load parameters for layer", self.name
       return
 
-    if grp.attrs['class'] != self.layer_class:
+    grp_class = grp.attrs['class']
+    if grp_class == "<unknown_softmax>": grp_class = "softmax"  # bug in some CRNN version. can be ignored.
+    if grp_class != self.layer_class:
       from NetworkLayer import get_layer_class
-      assert get_layer_class(grp.attrs['class']) is get_layer_class(self.layer_class), \
+      assert get_layer_class(grp_class) is get_layer_class(self.layer_class), \
         "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in self.params:
       if p not in grp:
