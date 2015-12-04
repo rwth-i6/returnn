@@ -182,15 +182,18 @@ class LM(RecurrentTransformBase):
   def create_vars(self):
     self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
     self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
-    self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
-    self.t = self.add_state_var(T.zeros((self.layer.index.shape[1],), dtype="float32"), name="t")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((self.layer.num_batches,), dtype="float32"), name="t")
 
   def step(self, y_p):
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
     #z_re = T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-    z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
+    if self.layer.attrs['droplm'] < 1.0:
+      z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (1 - self.lmmask[T.cast(self.t[0],'int32')])
+    else:
+      z_re = self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)]
 
     return z_re, { self.t : self.t + 1 }
 
@@ -375,6 +378,27 @@ class AttentionDot(AttentionBase):
     # elif attention_step > 0:
     #   result = [focus+attention_step,beam] + result
 
+    return z_re, {}
+
+
+class AttentionConcat(AttentionBase):
+  """
+  attention similar to neural programmer paper
+  """
+  name = "attention_concat"
+
+  def create_vars(self):
+    super(AttentionConcat, self).create_vars()
+    n_in = sum([e.attrs['n_out'] for e in self.layer.base])
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_in + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in + self.layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
+    self.W_att_proj = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_proj"))
+
+  def step(self, y_p):
+    f_z = T.tanh(T.dot(T.concatenate([y_p.dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0), self.B], axis=2), self.W_att_proj))
+    f_e = T.exp(f_z)
+    w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+    z_re = T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in)
     return z_re, {}
 
 

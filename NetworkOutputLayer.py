@@ -24,7 +24,7 @@ from TheanoUtil import time_batch_make_flat
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, copy_input=None, **kwargs):
+  def __init__(self, loss, y, copy_input=None, grad_clip_z=None, **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -34,6 +34,8 @@ class OutputLayer(Layer):
     self.y_data_flat = time_batch_make_flat(y)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
+    if grad_clip_z is not None:
+      self.set_attr("grad_clip_z", grad_clip_z)
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -57,6 +59,9 @@ class OutputLayer(Layer):
     else:
       self.z = copy_input.output
     assert self.z.ndim == 3
+    if grad_clip_z is not None:
+      grad_clip_z = numpy.float32(grad_clip_z)
+      self.z = theano.gradient.grad_clip(self.z, -grad_clip_z, grad_clip_z)
 
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)

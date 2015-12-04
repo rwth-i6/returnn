@@ -393,7 +393,7 @@ class Device(object):
         if extract == "classification":
           source.append(T.argmax(self.testnet.output['output'].y_m, axis=1).reshape(self.testnet.output['output'].index.shape).dimshuffle(0,1,'x'))
         elif extract == "log-posteriors":
-          source.append(T.log(self.testnet.output['output'].p_y_given_x))
+          source.append(T.log(self.testnet.output['output'].p_y_given_x).reshape((self.testnet.output['output'].index.shape[0], self.testnet.output['output'].index.shape[1], self.testnet.output['output'].p_y_given_x.shape[1])) * T.cast(self.testnet.output['output'].index.dimshuffle(0,1,'x').repeat(self.testnet.output['output'].p_y_given_x.shape[1],axis=2),'float32'))
         elif extract == "posteriors":
           source.append(self.testnet.output['output'].p_y_given_x)
         elif extract == "ctc-sil":

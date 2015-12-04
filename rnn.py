@@ -21,7 +21,7 @@ from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec
+from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version
 from SprintCommunicator import SprintCommunicator
 
 
@@ -181,21 +181,6 @@ def getDevicesInitArgs(config):
   return devices
 
 
-def isUpdateOnDevice(config):
-  """
-  :type config: Config
-  :rtype: bool
-  """
-  devArgs = getDevicesInitArgs(config)
-  if config.value("update_on_device", "auto") == "auto":
-    return len(devArgs) == 1
-  updateOnDevice = config.bool("update_on_device", None)
-  assert isinstance(updateOnDevice, bool)
-  if updateOnDevice:
-    assert len(devArgs) == 1, "Devices: update_on_device works only with a single device."
-  return updateOnDevice
-
-
 def initDevices():
   """
   :rtype: list[Device]
@@ -339,7 +324,8 @@ def init(configFilename, commandLineOptions):
   initThreadJoinHack()
   initConfig(configFilename, commandLineOptions)
   initLog()
-  print >> log.v3, "CRNN starting up, pid %i" % os.getpid()
+  print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
+  print >> log.v3, "Theano:", describe_theano_version()
   initFaulthandler()
   if config.bool('multiprocessing', True):
     initCudaNotInMainProcCheck()

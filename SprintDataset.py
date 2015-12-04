@@ -96,7 +96,7 @@ class SprintDataset(Dataset):
     """
     Called by CRNN train thread when we enter a new epoch.
     """
-    super(SprintDataset, self).init_seq_order()
+    super(SprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     with self.lock:
       self.crnnEpoch = epoch
       self.predefined_seq_list_order = seq_list

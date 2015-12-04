@@ -13,49 +13,45 @@ class Updater:
 
   @classmethod
   def initFromConfig(cls, config):
-    import rnn
-    kwargs = {
-      "gradient_clip": config.float('gradient_clip', -1),
-      "adagrad": config.bool('adagrad', False),
-      "adadelta": config.bool('adadelta', False),
-      "adasecant": config.bool('adasecant', False),
-      "adam": config.bool('adam', False),
-      "max_norm" : config.float('max_norm', 0.0),
-      "adadelta_decay": config.float('adadelta_decay', 0.90),
-      "adadelta_offset": config.float('adadelta_offset', 1e-6),
-      "multiple_models": config.int('update_multiple_models', 0),
-      "multiple_models_average_step": config.int('update_multiple_models_average_step', 0),
-      "momentum": config.float("momentum", 0),
-      "nesterov_momentum": config.float("nesterov_momentum", 0),
-      "momentum2": config.float("momentum2", 0) }
+    kwargs = {}
+    for k, v in cls._get_kwarg_defaults().items():
+      if type(v) == bool: g = config.bool
+      elif type(v) == float: g = config.float
+      elif type(v) == int: g = config.int
+      else: assert False, "invalid default type: %s = (%s) %s" % (k, type(v), v)
+      kwargs[k] = g(k, v)
     return cls(**kwargs)
 
   @classmethod
   def initRule(cls, rule, **kwargs):
-    kwargs.setdefault('momentum', 0)
-    kwargs.setdefault('nesterov_momentum', 0)
-    kwargs.setdefault('momentum2', 0)
-    kwargs.setdefault('gradient_clip', -1)
-    kwargs.setdefault('adadelta_decay', 0.90)
-    kwargs.setdefault('adadelta_offset', 1e-6)
-    kwargs.setdefault('adagrad', False)
-    kwargs.setdefault('adadelta', False)
-    kwargs.setdefault('adasecant', False)
-    kwargs.setdefault('adam', False)
-    kwargs.setdefault('max_norm', 0.0)
     if rule != "default":
       kwargs[rule] = True
     return cls(**kwargs)
 
-  def __init__(self, momentum, nesterov_momentum, momentum2, gradient_clip, adagrad, adadelta, adadelta_decay, adadelta_offset, max_norm, adasecant, adam, multiple_models=0, multiple_models_average_step=0):
-    """
-    :type momentum: float
-    :type nesterov_momentum: float
-    :type momentum2: float
-    :type gradient_clip: float
-    :type adagrad: bool
-    :type adadelta: bool
-    """
+  @classmethod
+  def _get_kwarg_defaults(cls):
+    import inspect
+    arg_spec = inspect.getargspec(cls.__init__)
+    N_defs = len(arg_spec.defaults)
+    N_args = len(arg_spec.args)
+    defaults = {arg_spec.args[N_args - N_defs + i]: d for i, d in enumerate(arg_spec.defaults)}
+    return defaults
+
+  # Note that the default value type is important for initFromConfig to determine
+  # whether to call config.bool/config.int/etc.
+  def __init__(self,
+               momentum=0.0, nesterov_momentum=0.0, momentum2=0.0,
+               gradient_clip=-1.0,
+               adagrad=False,
+               adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6,
+               max_norm=0.0,
+               adasecant=False,
+               adam=False,
+               adamax=False,
+               rmsprop=0.0,
+               update_multiple_models=0, update_multiple_models_average_step=0,
+               update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
+               update_multiple_models_param_is_cur_model=False):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
@@ -66,13 +62,18 @@ class Updater:
     self.adadelta = adadelta
     self.adasecant = adasecant
     self.adam = adam
+    self.adamax = adamax
+    self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
-    self.multiple_models = multiple_models
-    self.multiple_models_average_step = multiple_models_average_step
+    self.update_multiple_models = update_multiple_models
+    self.update_multiple_models_averaging = update_multiple_models_averaging
+    self.update_multiple_models_average_step = update_multiple_models_average_step
+    self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
+    self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.params = {}
     self.pid = -1
-    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam)
+    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam and self.adamax)
     if self.adadelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
@@ -88,6 +89,10 @@ class Updater:
       print >> log.v4, "using reverted momentum %f" % self.momentum2
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
+    if self.rmsprop:
+      print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
+    if self.adamax:
+      print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
 
   def initVars(self, network, net_param_deltas):
     """
@@ -515,6 +520,18 @@ class Updater:
         #updates.append((param, param - step))
         upd[param] += -step
 
+      elif self.adamax:
+        value = param.get_value(borrow=True)
+        epsilon=1e-8
+        m_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
+        v_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
+        m_t = beta1*m_prev + (1-beta1)*deltas
+        v_t = T.maximum(beta2*v_prev, abs(deltas) + epsilon)
+        step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
+        updates.append((m_prev, m_t))
+        updates.append((v_prev, v_t))
+        upd[param] += -step
+
       elif self.adagrad:
         epsilon = 1e-6
         accu_new = self.accu[param] + deltas ** 2
@@ -535,6 +552,14 @@ class Updater:
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd[param] += self.learning_rate_var * dx_new
+      elif self.rmsprop:
+        #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
+        accumulator = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
+                                       dtype=theano.config.floatX), broadcastable=param.broadcastable)
+        epsilon=1e-6
+        accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
+        updates.append((accumulator, accumulator_new))
+        upd[param] += - ((self.learning_rate_var * deltas)/T.sqrt(accumulator_new + epsilon))
       else:
         upd[param] += - self.learning_rate_var * deltas
       if self.momentum > 0:
@@ -545,7 +570,7 @@ class Updater:
         velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
                                        dtype=theano.config.floatX), "velocity_%s" % param.name)
         tmp = self.nesterov_momentum * velocity + upd[param]
-        updates.append((self.velocity, tmp))
+        updates.append((velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
       if self.momentum2 > 0:
         velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
@@ -554,25 +579,36 @@ class Updater:
         updates.append((velocity, upd[param]))
 
     # Simulate multi GPU training. This might help for regularization.
-    if self.multiple_models:
-      if not self.multiple_models_average_step:
-        self.multiple_models_average_step = self.multiple_models
-      cur_model = self.counter % self.multiple_models
+    if self.update_multiple_models:
+      if not self.update_multiple_models_average_step:
+        self.update_multiple_models_average_step = self.update_multiple_models
+      cur_model = self.counter % self.update_multiple_models
+      average_step_i = self.update_multiple_models_average_step_i % self.update_multiple_models_average_step
 
       for param in grads.keys():
         models = [param]
-        for i in range(self.multiple_models - 1):
+        for i in range(self.update_multiple_models - 1):
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []
-        for i, model_param in enumerate(models):
-          is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
-          models_new += [model_param + upd[param] * is_cur_model]
+        if self.update_multiple_models_param_is_cur_model:
+          # Current model is always the first one.
+          models_new += [models[0] + upd[param]]
+          models_new += models[1:]
+        else:
+          for i, model_param in enumerate(models):
+            is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
+            models_new += [model_param + upd[param] * is_cur_model]
 
-        is_cur_average_step = T.eq(self.counter % self.multiple_models_average_step, 0)
-        average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.multiple_models)
-        for i in range(len(models)):
-          models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+        if self.update_multiple_models_averaging:
+          is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, average_step_i)
+          average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
+          for i in range(len(models)):
+            models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+
+        if self.update_multiple_models_param_is_cur_model:
+          # Rotate, so that the next model becomes the first one.
+          models_new = models_new[1:] + models_new[:-1]
 
         updates.extend(zip(models, models_new))
 

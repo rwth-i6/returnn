@@ -288,8 +288,10 @@ class MultiBatchBeamOp(theano.Op):
     if self.wrap_mode == "wrap_around":
       D_pad_left = D_pad_right = T.DisconnectedType()()
     elif self.wrap_mode == "pad":
-      D_pad_left = T.zeros(pad_left.shape, dtype="float32")
-      D_pad_right = T.zeros(pad_right.shape, dtype="float32")
+      D_pad_left = D_pad_right = T.DisconnectedType()()
+      # XXX...
+      # D_pad_left = T.zeros(pad_left.shape, dtype="float32")
+      # D_pad_right = T.zeros(pad_right.shape, dtype="float32")
     else:
       assert False, self.wrap_mode
 
@@ -304,8 +306,8 @@ class MultiBatchBeamOp(theano.Op):
     # Only the gradient of the first input (array) will be connected.
     # All others are disconnected (because round() or floor() is used on them.).
     pattern = [[True], [False], [False], [False], [False], [False]]
-    if self.wrap_mode == "pad":
-      pattern[-2:] = [[True], [True]]
+    # if self.wrap_mode == "pad":  # XXX... we assume constant for now
+    #   pattern[-2:] = [[True], [True]]
     assert len(pattern) == len(node.inputs)
     return pattern
 
@@ -448,7 +450,11 @@ def add_merge_MultiBatchBeamGradAddOp(node):
   else:
     old_grad_op_input0 = grad_op_v.owner.inputs[0]
     sum_inputs = [old_grad_op_input0] + sum_inputs
-  new_grad_op_input0 = T.add(*sum_inputs)
+  assert len(sum_inputs) > 0
+  if len(sum_inputs) == 1:
+    new_grad_op_input0 = sum_inputs[0]
+  else:
+    new_grad_op_input0 = T.add(*sum_inputs)
   new_grad_op_inputs = [new_grad_op_input0] + grad_op_v.owner.inputs[1:]
   new_v = grad_op(*new_grad_op_inputs)
   return [new_v]
@@ -470,9 +476,10 @@ def inplace_MultiBatchBeamGradAddOp(node):
 
 optdb.register('inplace_MultiBatchBeamGradAddOp',
                gof.TopoOptimizer(inplace_MultiBatchBeamGradAddOp
-                                 , failure_callback=gof.TopoOptimizer.warn_inplace
+                                 #, failure_callback=gof.TopoOptimizer.warn_inplace
                                  ),
-               50, 'fast_run', 'inplace')
+               76,  # after ScanInplaceOptimizer
+               'fast_run', 'inplace')
 
 
 class GpuMultiBatchBeamOp(theano.sandbox.cuda.GpuOp):

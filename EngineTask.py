@@ -684,22 +684,18 @@ class HDFForwardTaskThread(TaskThread):
       features = numpy.concatenate(results, axis=1)[0]
       if not "inputs" in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[2]), dtype='f', maxshape=(None, features.shape[2]))
-      # Currently we support just a single seq -> i.e. a single dev with a single batch.
+      # Currently we support just a single dev with a single batch.
       assert len(batchess) == 1
       assert len(batchess[0]) == 1
       batch = batchess[0][0]
-      #assert batch.get_num_seqs() == 1
-      #features = features.reshape(features.shape[0] / batch.get_num_seqs(), batch.get_num_seqs(), features.shape[2])
       tt = 0
       feats = []
       for seq_idx in range(batch.start_seq,batch.end_seq):
-        #print "<<<<<<<<<",features.shape
         seqfeats = features[:,seq_idx - batch.start_seq,:]
-        #print ">>>>>>>>>",seqfeats.shape
         seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
         if seqfeats.shape[0] == 0:
           seqfeats = features[:,seq_idx - batch.start_seq,:]
-        print >> log.v5, "extracting", seqfeats.shape[0], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
+        print >> log.v5, "extracting", seqfeats.shape[1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         self.cache.attrs['inputPattSize'] = seqfeats.shape[1]
         tt += seqfeats.shape[0]

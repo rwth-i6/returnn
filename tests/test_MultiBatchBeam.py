@@ -2,6 +2,7 @@
 import sys
 import numpy
 import theano
+import theano.scan_module.scan_op
 from nose.tools import assert_equal, assert_is, assert_is_instance
 import MultiBatchBeam
 from MultiBatchBeam import *
@@ -263,6 +264,64 @@ def test_inplace_grad_add_simple_on_zero():
   assert_is_instance(out0.owner.op, MultiBatchBeamGradAddOp)
   print "\nfinal op in fgraph:", out0.owner.op
   assert_is(out0.owner.op.inplace, True)
+
+def test_simple_inplace_scan():
+  #theano.config.scan.allow_output_prealloc = False
+  def remove_opt(name):
+    d = theano.compile.optdb.__db__[name]
+    assert len(d) == 1
+    obj = list(d)[0]
+    for k, v in theano.compile.optdb.__db__.items():
+      if obj in v:
+        v.remove(obj)
+    del theano.compile.optdb.__db__[name]
+    theano.compile.optdb._names.remove(name)
+    del theano.compile.optdb.__position__[name]
+  #remove_opt("scan_eqopt1")
+  #remove_opt("scan_eqopt2")
+  #remove_opt("scanOp_make_inplace")
+
+  # inplace_elemwise_optimizer = T.opt.inplace_elemwise_optimizer_op(T.Elemwise)
+  # theano.compile.optdb.register('inplace_elemwise_opt_2', inplace_elemwise_optimizer, 80,
+  #                               'fast_run', 'inplace')
+
+  def step(t, last):
+    return [last + 1.0]
+  # For the demo to work inplace, it must be a vector, not a scalar (Theano internals).
+  o, updates = theano.scan(step, sequences=[T.arange(10)], outputs_info=[numpy.array([0.0])])
+  assert len(updates) == 0
+
+  o_last = T.tensor_copy(o[-1])
+  f = theano.function(inputs=[], outputs=[o_last], mode="FAST_RUN")
+
+  print "result:", f()
+  print "f:"
+  theano.printing.debugprint(f)
+
+  o_last_opt = f.maker.fgraph.outputs[0]
+  print "o_last_opt:", o_last_opt.owner
+  scan_v = o_last_opt.owner.inputs[0]
+  assert isinstance(scan_v.owner.op, theano.scan_module.scan_op.Scan)
+  print "scan:", scan_v
+  print "scan destroy_map:", scan_v.owner.op.destroy_map
+  print "scan inner func:", scan_v.owner.op.fn
+
+  node = scan_v.owner.op.fn.maker
+
+  print "inner fgraph inputs:", node.fgraph.inputs
+  protected_inputs = [
+      f.protected for f in node.fgraph._features if
+      isinstance(f, theano.compile.function_module.Supervisor)]
+  protected_inputs = sum(protected_inputs, [])  # flatten the list
+  print "inner protected inputs:", protected_inputs, node.fgraph.outputs
+
+  raise Exception("stop")
+
+  #theano.printing.debugprint(o_last_opt.owner)
+  assert not isinstance(o_last_opt.owner.op, T.Subtensor)
+  assert isinstance(o_last_opt.owner.op, theano.scan_module.scan_op.Scan)
+
+  raise Exception("stop")
 
 
 def test_inplace_grad_add():

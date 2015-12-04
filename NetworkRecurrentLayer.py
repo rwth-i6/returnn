@@ -272,6 +272,7 @@ class RecurrentUnitLayer(Layer):
                droplm = 1.0, # language model drop during training
                dropconnect = 0.0, # recurrency dropout
                depth = 1,
+               bias_random_init_forget_shift=0.0,
                **kwargs):
     unit_given = unit
     if unit == 'lstm':  # auto selection
@@ -301,6 +302,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('force_lm', force_lm)
     self.set_attr('droplm', droplm)
     self.set_attr('dropconnect', dropconnect)
+    if bias_random_init_forget_shift:
+      self.set_attr("bias_random_init_forget_shift", bias_random_init_forget_shift)
     self.set_attr('attention', attention.encode("utf8") if attention else None)
     self.set_attr('attention_beam', attention_beam)
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
@@ -335,22 +338,25 @@ class RecurrentUnitLayer(Layer):
         n_re *= self.depth
       self.Wp = []
       if psize:
-        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1)) ]
+        self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, name="Wp_0_%s"%self.name, depth=1)) ]
         for i in xrange(1, pdepth):
-          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1)))
-        W_re = self.create_random_uniform_weights(psize, unit.n_re, psize + unit.n_re, name="W_re_%s" % self.name)
+          self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, name="Wp_%d_%s"%(i, self.name), depth=1)))
+        W_re = self.create_random_uniform_weights(psize, unit.n_re, name="W_re_%s" % self.name)
       else:
-        W_re = self.create_random_uniform_weights(n_re, unit.n_re, n_re + unit.n_re, name="W_re_%s" % self.name)
+        W_re = self.create_random_uniform_weights(n_re, unit.n_re, name="W_re_%s" % self.name)
       self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
-      value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
+      bias_init_value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
     else:
-      value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
-      value[unit.n_units:2*unit.n_units] = 0
+      bias_init_value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
+    if bias_random_init_forget_shift:
+      assert self.depth == 1
+      assert unit.n_units * 4 == unit.n_in  # (input gate, forget gate, output gate, net input)
+      bias_init_value[unit.n_units:2 * unit.n_units] += bias_random_init_forget_shift
     #self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
     #self.params["b_%s"%self.name] = self.b
-    self.b.set_value(value)
+    self.b.set_value(bias_init_value)
     self.W_in = []
     for s in self.sources:
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
@@ -381,6 +387,7 @@ class RecurrentUnitLayer(Layer):
       assert False
       z = z.dimshuffle(0,1,'x',2).repeat(self.depth, axis=2)
     num_batches = self.index.shape[1]
+    self.num_batches = num_batches
     if direction == 0:
       assert False # this is broken
       z = T.set_subtensor(z[:,:,depth:,:], z[::-1,:,:depth,:])
@@ -762,6 +769,8 @@ class RecurrentChunkLayer(Layer):
     sequences = sequences.reshape((chunk_size,num_batches,sequences.shape[2]))
     index = index.reshape((chunk_size,num_batches))
 
+    self.num_batches = num_batches
+
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
@@ -780,7 +789,7 @@ class RecurrentChunkLayer(Layer):
         srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
         self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
-        self.lmmask = T.zeros_like(index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
+        self.lmmask = T.zeros_like(sequences, dtype='float32')
 
     if not attention:
       attention = "none"

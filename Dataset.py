@@ -224,6 +224,7 @@ class Dataset(object):
     Call this when you reset the seq list.
     """
     self.epoch = epoch
+    self.rnd_batch_variance = Random(epoch or 1)
     return False
 
   def initialize(self):
@@ -419,7 +420,7 @@ class Dataset(object):
 
     assert batch_variance <= 1.0
     if batch_variance > 0.0:
-      r = (1.0 - random() * batch_variance)
+      r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
       max_seqs = max(int(r * ms), 1)
       batch_size = max(int(r * bs), 1)
 
@@ -436,7 +437,7 @@ class Dataset(object):
           yield batch
           batch = Batch()
           if batch_variance > 0.0:
-            r = (1.0 - random() * batch_variance)
+            r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
             max_seqs = max(int(r * ms), 1)
             batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
