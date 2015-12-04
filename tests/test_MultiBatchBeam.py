@@ -266,6 +266,9 @@ def test_inplace_grad_add_simple_on_zero():
 
 
 def test_inplace_grad_add():
+  theano.config.scan.prefer_inplace = True
+  theano.config.scan.greedy_non_seqs = True
+
   n_time = 10
   n_batch = 5
   n_dim = 2
@@ -284,8 +287,12 @@ def test_inplace_grad_add():
   pad_right = T.as_tensor_variable(-1, name="pad_right")  # XXX: Constant for now...
   beam_width = theano.shared(beam_width, name="beam_width")
 
+  w = theano.shared(numpy.identity(n_dim, dtype="float32"))
+  base = T.concatenate([T.nnet.sigmoid(T.dot(array, w))], axis=0)
+  base.name = "base"
+
   def step(start_idxs, last_beam):
-    beam = MultiBatchBeamOp(wrap_mode)(array, start_idxs, batch_lens, beam_width, pad_left, pad_right)
+    beam = MultiBatchBeamOp(wrap_mode)(base, start_idxs, batch_lens, beam_width, pad_left, pad_right)
     return [beam]
 
   beam_zero = T.zeros((beam_width, n_batch, n_dim))
@@ -294,8 +301,8 @@ def test_inplace_grad_add():
   #print "graph for beams:"
   #theano.printing.debugprint(beams)
 
-  D_array, = T.grad(None, wrt=[array], known_grads={beams: D_beams})
-  f = theano.function(inputs=[], outputs=[D_array], mode="FAST_RUN")
+  D_w, = T.grad(None, wrt=[w], known_grads={beams: D_beams})
+  f = theano.function(inputs=[], outputs=[D_w], mode="FAST_RUN")
 
   print "\ngraph for first output (unoptimized):"
   theano.printing.debugprint(f.outputs[0])
