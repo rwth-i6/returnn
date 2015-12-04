@@ -91,9 +91,13 @@ class Engine:
 
     # Only use this when we don't train.
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
-    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch_mode != 'auto'):
-      # Ignore the epoch. To keep it consistent with the case below.
-      epoch_model = (None, load_model_epoch_filename)
+    # In all other cases, we use the model specified by 'load'.
+    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
+      epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      if config.value('task', 'train') == 'train' and start_epoch is not None:
+        # Ignore the epoch. To keep it consistent with the case below.
+        epoch = None
+      epoch_model = (epoch, load_model_epoch_filename)
 
     # In case of training, always first consider existing models.
     # This is because we reran CRNN training, we usually don't want to train from scratch
