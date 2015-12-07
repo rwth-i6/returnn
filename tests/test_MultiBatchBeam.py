@@ -315,13 +315,13 @@ def test_simple_inplace_scan():
   protected_inputs = sum(protected_inputs, [])  # flatten the list
   print "inner protected inputs:", protected_inputs, node.fgraph.outputs
 
-  raise Exception("stop")
+  #raise Exception("stop")
 
-  #theano.printing.debugprint(o_last_opt.owner)
-  assert not isinstance(o_last_opt.owner.op, T.Subtensor)
-  assert isinstance(o_last_opt.owner.op, theano.scan_module.scan_op.Scan)
+  theano.printing.debugprint(o_last_opt.owner)
+  #assert isinstance(o_last_opt.owner.op, T.Subtensor)
+  #assert isinstance(o_last_opt.owner.op, theano.scan_module.scan_op.Scan)
 
-  raise Exception("stop")
+  #raise Exception("stop")
 
 
 def test_inplace_grad_add():
@@ -369,8 +369,9 @@ def test_inplace_grad_add():
   print "\ngraph for function (optimized):"
   theano.printing.debugprint(f.maker.fgraph)
 
+  loop_apply = f.maker.fgraph.outputs[0].owner.inputs[0].owner
+  print "loop_apply", loop_apply
 
-  loop_apply = f.outputs[0].variable.owner.inputs[0].owner
   #assert_is_instance(loop_apply.op, theano.scan_module.scan_op.Scan)
 
   #if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
@@ -378,4 +379,4 @@ def test_inplace_grad_add():
   #  print "It seems as if we don't use the GPU although we requested it."
 
   # TODO...
-  raise Exception("stop")
+  #raise Exception("stop")
