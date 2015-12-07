@@ -476,7 +476,7 @@ def inplace_MultiBatchBeamGradAddOp(node):
 
 optdb.register('inplace_MultiBatchBeamGradAddOp',
                gof.TopoOptimizer(inplace_MultiBatchBeamGradAddOp
-                                 #, failure_callback=gof.TopoOptimizer.warn_inplace
+                                 , failure_callback=gof.TopoOptimizer.warn_inplace
                                  ),
                76,  # after ScanInplaceOptimizer
                'fast_run', 'inplace')
