@@ -401,8 +401,9 @@ class MultiBatchBeamGradAddOp(theano.Op):
     batch_lens_bc = batch_lens.reshape(1, n_batches)  # dimshuffle('x', 0)  (beam,batch)
     assert idxs.shape == D_beam.shape[:2]
 
+    idxs = idxs.astype("int32")
     if self.wrap_mode == "wrap_around":
-      idxs = idxs % batch_lens_bc
+      idxs = idxs % batch_lens_bc.astype("int32")
     elif self.wrap_mode == "pad":
       idxs = numpy.where(idxs >= batch_lens_bc, -1, idxs)
       cond_bc = (idxs < 0).reshape(*(D_beam.shape[:2] + (1,) * (D_beam.ndim - 2)))
