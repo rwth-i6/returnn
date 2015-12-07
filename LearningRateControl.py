@@ -171,10 +171,16 @@ class LearningRateControl(object):
 
   def save(self):
     if not self.filename: return
-    f = open(self.filename, "w")
+    # First write to a temp-file, to be sure that the write happens without errors.
+    # Otherwise, it could happen that we delete the old existing file, then
+    # some error happens (e.g. disk quota), and we loose the newbob data.
+    # Loosing that data is very bad because it basically means that we have to redo all the training.
+    tmp_filename = self.filename + ".new_tmp"
+    f = open(tmp_filename, "w")
     f.write(betterRepr(self.epochData))
     f.write("\n")
     f.close()
+    os.rename(tmp_filename, self.filename)
 
   def load(self):
     s = open(self.filename).read()
