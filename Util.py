@@ -70,6 +70,30 @@ def describe_crnn_version():
   except Exception as e:
     return "unknown(git exception: %r)" % e
 
+def describe_theano_version():
+  import theano
+  try:
+    tdir = os.path.dirname(theano.__file__)
+  except Exception as e:
+    tdir = "<unknown(exception: %r)>" % e
+  try:
+    version = theano.__version__
+    if len(version) > 20:
+      version = version[:20] + "..."
+  except Exception as e:
+    version = "<unknown(exception: %r)>" % e
+  try:
+    if tdir.startswith("<"):
+      git_info = "<unknown-dir>"
+    elif os.path.exists(tdir + "/../.git"):
+      git_info = "git:" + git_describeHeadVersion(gitdir=tdir)
+    elif "/site-packages/" in tdir:
+      git_info = "<site-package>"
+    else:
+      git_info = "<not-under-git>"
+  except Exception as e:
+    git_info = "<unknown(git exception: %r)>" % e
+  return "%s (%s in %s)" % (version, git_info, tdir)
 
 def eval_shell_env(token):
   if token.startswith("$"):
