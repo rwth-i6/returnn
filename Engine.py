@@ -91,9 +91,13 @@ class Engine:
 
     # Only use this when we don't train.
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
-    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch_mode != 'auto'):
-      # Ignore the epoch. To keep it consistent with the case below.
-      epoch_model = (None, load_model_epoch_filename)
+    # In all other cases, we use the model specified by 'load'.
+    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
+      epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      if config.value('task', 'train') == 'train' and start_epoch is not None:
+        # Ignore the epoch. To keep it consistent with the case below.
+        epoch = None
+      epoch_model = (epoch, load_model_epoch_filename)
 
     # In case of training, always first consider existing models.
     # This is because we reran CRNN training, we usually don't want to train from scratch
@@ -268,13 +272,15 @@ class Engine:
     print >> log.v2, "Network layer topology:"
     print >> log.v2, "  input #:", network.n_in
     for layer_name, layer in sorted(network.hidden.items()):
-      print >> log.v2, "  %s %s #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+      print >> log.v2, "  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
     if not network.hidden:
       print >> log.v2, "  (no hidden layers)"
-    print >> log.v2, "  output #:", network.n_out
+    for layer_name, layer in sorted(network.output.items()):
+      print >> log.v2, "  output %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+    if not network.output:
+      print >> log.v2, "  (no output layers)"
     print >> log.v2, "net params #:", network.num_params()
     print >> log.v2, "net trainable params:", network.train_params_vars
-    print >> log.v5, "net output:", network.output
 
   def check_last_epoch(self):
     if self.start_epoch == 1:

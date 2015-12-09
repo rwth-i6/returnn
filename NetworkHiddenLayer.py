@@ -110,6 +110,75 @@ class CopyLayer(_NoOpLayer):
     self.make_output(act_f(self.z))
 
 
+class FrameConcatZeroLayer(_NoOpLayer):
+  """
+  Concats zero at the start (left=True) or end in the time-dimension.
+  I.e. you can e.g. delay the input by N frames.
+  See also FrameConcatZeroLayer (frame_cutoff).
+  """
+  layer_class = "frame_concat_zero"
+
+  def __init__(self, num_frames, left=True, **kwargs):
+    super(FrameConcatZeroLayer, self).__init__(**kwargs)
+    self.set_attr("num_frames", num_frames)
+    self.set_attr("left", left)
+    assert len(self.sources) == 1
+    s = self.sources[0]
+    for attr in ["n_out", "sparse"]:
+      self.set_attr(attr, s.attrs[attr])
+    inp = s.output
+    # We get (time,batch,dim) input shape.
+    time_shape = [inp.shape[i] for i in range(1, inp.ndim)]
+    zeros_shape = [num_frames] + time_shape
+    zeros = T.zeros(zeros_shape, dtype=inp.dtype)
+    if left:
+      self.output = T.concatenate([zeros, inp], axis=0)
+      self.index = T.concatenate([T.repeat(s.index[:1], num_frames, axis=0), s.index], axis=0)
+    else:
+      self.output = T.concatenate([inp, zeros], axis=0)
+      self.index = T.concatenate([s.index, T.repeat(s.index[-1:], num_frames, axis=0)], axis=0)
+
+
+class FrameCutoffLayer(_NoOpLayer):
+  """
+  Cutoffs frames at the start (left=True) or end in the time-dimension.
+  You should use this when you used FrameConcatZeroLayer(frame_concat_zero).
+  """
+  layer_class = "frame_cutoff"
+
+  def __init__(self, num_frames, left=True, **kwargs):
+    super(FrameCutoffLayer, self).__init__(**kwargs)
+    self.set_attr("num_frames", num_frames)
+    self.set_attr("left", left)
+    assert len(self.sources) == 1
+    s = self.sources[0]
+    for attr in ["n_out", "sparse"]:
+      self.set_attr(attr, s.attrs[attr])
+    if left:
+      self.output = s.output[num_frames:]
+      self.index = s.index[num_frames:]
+    else:
+      self.output = s.output[:-num_frames]
+      self.index = s.index[:-num_frames]
+
+
+class ReverseLayer(_NoOpLayer):
+  """
+  Reverses the time-dimension.
+  """
+  layer_class = "reverse"
+
+  def __init__(self, **kwargs):
+    super(ReverseLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    s = self.sources[0]
+    for attr in ["n_out", "sparse"]:
+      self.set_attr(attr, s.attrs[attr])
+    # We get (time,batch,dim) input shape.
+    self.index = s.index[::-1]
+    self.output = s.output[::-1]
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 

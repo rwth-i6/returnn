@@ -315,16 +315,19 @@ def test_simple_inplace_scan():
   protected_inputs = sum(protected_inputs, [])  # flatten the list
   print "inner protected inputs:", protected_inputs, node.fgraph.outputs
 
-  raise Exception("stop")
+  #raise Exception("stop")
 
-  #theano.printing.debugprint(o_last_opt.owner)
-  assert not isinstance(o_last_opt.owner.op, T.Subtensor)
-  assert isinstance(o_last_opt.owner.op, theano.scan_module.scan_op.Scan)
+  theano.printing.debugprint(o_last_opt.owner)
+  #assert isinstance(o_last_opt.owner.op, T.Subtensor)
+  #assert isinstance(o_last_opt.owner.op, theano.scan_module.scan_op.Scan)
 
-  raise Exception("stop")
+  #raise Exception("stop")
 
 
 def test_inplace_grad_add():
+  theano.config.scan.prefer_inplace = True
+  theano.config.scan.greedy_non_seqs = True
+
   n_time = 10
   n_batch = 5
   n_dim = 2
@@ -343,8 +346,12 @@ def test_inplace_grad_add():
   pad_right = T.as_tensor_variable(-1, name="pad_right")  # XXX: Constant for now...
   beam_width = theano.shared(beam_width, name="beam_width")
 
+  w = theano.shared(numpy.identity(n_dim, dtype="float32"))
+  base = T.concatenate([T.nnet.sigmoid(T.dot(array, w))], axis=0)
+  base.name = "base"
+
   def step(start_idxs, last_beam):
-    beam = MultiBatchBeamOp(wrap_mode)(array, start_idxs, batch_lens, beam_width, pad_left, pad_right)
+    beam = MultiBatchBeamOp(wrap_mode)(base, start_idxs, batch_lens, beam_width, pad_left, pad_right)
     return [beam]
 
   beam_zero = T.zeros((beam_width, n_batch, n_dim))
@@ -353,11 +360,8 @@ def test_inplace_grad_add():
   #print "graph for beams:"
   #theano.printing.debugprint(beams)
 
-  D_array, = T.grad(None, wrt=[array], known_grads={beams: D_beams})
-  # We need a copy so that the variable will not be protected, because
-  # all outputs are by default protected.
-  D_array = T.tensor_copy(D_array)
-  f = theano.function(inputs=[], outputs=[D_array], mode="FAST_RUN")
+  D_w, = T.grad(None, wrt=[w], known_grads={beams: D_beams})
+  f = theano.function(inputs=[], outputs=[D_w], mode="FAST_RUN")
 
   print "\ngraph for first output (unoptimized):"
   theano.printing.debugprint(f.outputs[0])
@@ -365,8 +369,9 @@ def test_inplace_grad_add():
   print "\ngraph for function (optimized):"
   theano.printing.debugprint(f.maker.fgraph)
 
+  loop_apply = f.maker.fgraph.outputs[0].owner.inputs[0].owner
+  print "loop_apply", loop_apply
 
-  loop_apply = f.outputs[0].variable.owner.inputs[0].owner
   #assert_is_instance(loop_apply.op, theano.scan_module.scan_op.Scan)
 
   #if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
@@ -374,4 +379,4 @@ def test_inplace_grad_add():
   #  print "It seems as if we don't use the GPU although we requested it."
 
   # TODO...
-  raise Exception("stop")
+  #raise Exception("stop")

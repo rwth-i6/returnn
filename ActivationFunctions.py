@@ -37,6 +37,7 @@ ActivationFunctions = {
   'tanh': T.tanh,
   'elu': elu,
   'relu': relu,
+  'elu': elu,
   'identity': identity,
   'one': constant_one,
   'zero': constant_zero,
