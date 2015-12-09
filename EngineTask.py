@@ -665,7 +665,7 @@ class HDFForwardTaskThread(TaskThread):
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
       cache.attrs['numLabels'] = data.num_outputs[target]
-      hdf5_strings(cache, 'targetlabels', data.labels[target])
+      hdf5_strings(cache, 'labels', data.labels[target])
       self.targets = { k: cache.create_dataset(k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
       self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')

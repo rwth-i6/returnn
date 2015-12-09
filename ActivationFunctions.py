@@ -35,6 +35,7 @@ ActivationFunctions = {
   'logistic': T.nnet.sigmoid,
   'sigmoid': T.nnet.sigmoid,  # alias
   'tanh': T.tanh,
+  'elu': elu,
   'relu': relu,
   'identity': identity,
   'one': constant_one,

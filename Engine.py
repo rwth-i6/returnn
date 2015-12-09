@@ -198,7 +198,7 @@ class Engine:
     assert model_epoch_filename or self.start_epoch
 
     if model_epoch_filename:
-      print >> log.v1, "loading weights from", model_epoch_filename
+      print >> log.v2, "loading weights from", model_epoch_filename
       last_model_hdf = h5py.File(model_epoch_filename, "r")
     else:
       last_model_hdf = None
