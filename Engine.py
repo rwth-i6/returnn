@@ -470,7 +470,10 @@ class Engine:
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
       if not dataset_name in self.dataset_batches:
-        self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent, batch_size=self.batch_size, max_seqs=self.max_seqs, max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
+        self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
+                                                                      batch_size=self.batch_size,
+                                                                      max_seqs=self.max_seqs,
+                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
       else:
         self.dataset_batches[dataset_name].reset()
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
