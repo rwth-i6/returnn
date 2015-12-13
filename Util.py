@@ -140,11 +140,16 @@ def hdf5_shape(filename, dimension):
   fin.close()
   return res
 
-
 def hdf5_strings(handle, name, data):
-  S=max([len(d) for d in data])
-  dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
-  dset[...] = data
+  try:
+    S=max([len(d) for d in data])
+    dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
+    dset[...] = data
+  except:
+    dt = h5py.special_dtype(vlen=unicode)
+    del handle[name]
+    dset = handle.create_dataset(name, (len(data),), dtype=dt)
+    dset[...] = data
 
 
 def terminal_size(): # this will probably work on linux only

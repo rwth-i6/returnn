@@ -93,6 +93,8 @@ class Updater:
       print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
     if self.adamax:
       print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
+    if self.adam:
+      print >> log.v4, "using adam"
 
   def initVars(self, network, net_param_deltas):
     """
