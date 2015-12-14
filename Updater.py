@@ -48,6 +48,8 @@ class Updater:
                adasecant=False,
                adam=False,
                adamax=False,
+               mean_normalized_sgd=False,
+               mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
@@ -63,6 +65,8 @@ class Updater:
     self.adasecant = adasecant
     self.adam = adam
     self.adamax = adamax
+    self.mean_normalized_sgd = mean_normalized_sgd
+    self.mean_normalized_sgd_average_interpolation = mean_normalized_sgd_average_interpolation
     self.rmsprop = rmsprop
     self.adadelta_decay = adadelta_decay
     self.adadelta_offset = adadelta_offset
@@ -73,7 +77,6 @@ class Updater:
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.params = {}
     self.pid = -1
-    assert not (self.adagrad and self.adadelta and self.adasecant and self.adam and self.adamax)
     if self.adadelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
@@ -107,8 +110,10 @@ class Updater:
     self.pid = os.getpid()
     self.network = network
     if net_param_deltas is not None:
+      self.update_on_device = True
       self.net_train_param_deltas = net_param_deltas
     else:
+      self.update_on_device = False
       self.net_train_param_deltas = {p : theano.shared(numpy.zeros(p.get_value(borrow=True,
                                                                               return_internal_type=True).shape,
                                                                   dtype=theano.config.floatX))
@@ -162,6 +167,7 @@ class Updater:
 
   def setNetParamDeltas(self, net_param_deltas):
     assert self.pid == os.getpid()
+    assert self.update_on_device == False
     for p in net_param_deltas:
       self.net_train_param_deltas[p].set_value(net_param_deltas[p], borrow=True)
 
@@ -577,6 +583,35 @@ class Updater:
                                        dtype=theano.config.floatX), "velocity_%s" % param.name)
         upd[param] += velocity * self.momentum2
         updates.append((velocity, upd[param]))
+
+    if self.mean_normalized_sgd:
+      # https://www-i6.informatik.rwth-aachen.de/publications/download/903/WieslerSimonRichardAlexerSchl%7Bu%7DterRalfNeyHermann--Mean-normalizedstochasticgradientforlarge-scaledeeplearning--2014.pdf
+      assert self.update_on_device, "not implemented otherwise. we need the activation running average"
+      for layer_name, layer in self.network.hidden.items() + self.network.output.items():
+        if not hasattr(layer, "W_in"): continue
+        assert len(layer.sources) == len(layer.W_in)
+        all_in_train = layer.b in self.network.train_params_vars
+        sparse_input = False
+        for s, W in zip(layer.sources, layer.W_in):
+          if W not in self.network.train_params_vars: all_in_train = False
+          if s.attrs['sparse']: sparse_input = True
+        if not all_in_train:
+          print >>log.v4, "Mean-normalized SGD: layer", layer_name, "not trained"
+          continue
+        if sparse_input:
+          print >>log.v4, "Mean-normalized SGD: layer", layer_name, "has sparse input, not supported yet"
+          continue
+        print >>log.v4, "Mean-normalized SGD: used for W_in of layer", layer_name
+        avg_f = numpy.float32(self.mean_normalized_sgd_average_interpolation)
+        delta_b = T.switch(T.or_(T.isinf(grads[layer.b]), T.isnan(grads[layer.b])), 0, grads[layer.b])
+        for s, W_in in zip(layer.sources, layer.W_in):
+          avg_v = self.var(s.output, zero=True, name="avg_%s_%s" % (s.name, layer.name))
+          n_frames = s.output.shape[0] * s.output.shape[1]
+          cur_avg = T.sum(s.output, axis=(0, 1)) / T.cast(n_frames, "float32")
+          avg = avg_f * avg_v + (numpy.float32(1.0) - avg_f) * cur_avg
+          updates.append((avg_v, avg))
+          upd[W_in] += - self.learning_rate_var * (- T.outer(avg, delta_b))
+          upd[layer.b] += - T.dot(upd[W_in].T, avg)
 
     # Simulate multi GPU training. This might help for regularization.
     if self.update_multiple_models:
