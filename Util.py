@@ -150,7 +150,6 @@ def hdf5_strings(handle, name, data):
     del handle[name]
     dset = handle.create_dataset(name, (len(data),), dtype=dt)
     dset[...] = data
-  print data
 
 
 def terminal_size(): # this will probably work on linux only
