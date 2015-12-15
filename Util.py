@@ -145,7 +145,7 @@ def hdf5_strings(handle, name, data):
     S=max([len(d) for d in data])
     dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
     dset[...] = data
-  except:
+  except Exception:
     dt = h5py.special_dtype(vlen=unicode)
     del handle[name]
     dset = handle.create_dataset(name, (len(data),), dtype=dt)
