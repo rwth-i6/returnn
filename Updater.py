@@ -53,7 +53,9 @@ class Updater:
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
-               update_multiple_models_param_is_cur_model=False):
+               update_multiple_models_param_is_cur_model=False,
+               enforce_triangular_matrix_zero=False
+               ):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = momentum
     self.nesterov_momentum = nesterov_momentum
@@ -75,6 +77,7 @@ class Updater:
     self.update_multiple_models_average_step = update_multiple_models_average_step
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
+    self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.params = {}
     self.pid = -1
     if self.adadelta:
@@ -660,6 +663,13 @@ class Updater:
     updates.append((self.i, i_t))
     if self.adasecant:
       updates.append((step, step + 1))
+
+    if self.enforce_triangular_matrix_zero:
+      for i, (p, upd) in enumerate(list(updates)):
+        if p not in self.net_train_param_deltas: continue
+        if p.ndim != 2: continue
+        upd = upd * T.tri(p.shape[0], p.shape[1], dtype="float32")
+        updates[i] = (p, upd)
     #for u in updates:
     #  print ">>>>", u
     return updates
