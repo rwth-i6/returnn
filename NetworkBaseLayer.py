@@ -284,7 +284,10 @@ class SourceLayer(Container):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, target=None, sparse = False, carry=False, sparse_filtering=False, cost_scale=1.0, **kwargs):
+  def __init__(self, sources, n_out, index, y_in=None, target=None, sparse=False, cost_scale=1.0,
+               L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, carry=False,
+               sparse_filtering=False,
+               **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
