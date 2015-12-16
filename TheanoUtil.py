@@ -23,3 +23,11 @@ def class_idx_seq_to_1_of_k(seq, num_classes, dtype="float32"):
   eye = T.eye(num_classes, dtype=dtype)
   m = eye[T.cast(seq, 'int32')].reshape(shape)
   return m
+
+def tiled_eye(n1, n2, dtype="float32"):
+  r1 = T.maximum((n1 - 1) / n2 + 1, 1)
+  r2 = T.maximum((n2 - 1) / n1 + 1, 1)
+  small_eye = T.eye(T.minimum(n1, n2), dtype=dtype)
+  tiled_big = T.tile(small_eye, (r1, r2))
+  tiled_part = tiled_big[:n1,:n2]
+  return tiled_part
