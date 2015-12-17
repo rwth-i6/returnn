@@ -665,11 +665,17 @@ class Updater:
       updates.append((step, step + 1))
 
     if self.enforce_triangular_matrix_zero:
+      assert self.update_on_device, "not implemented otherwise. we need to know if a param belongs to an output layer"
+      ps = []
       for i, (p, upd) in enumerate(list(updates)):
         if p not in self.net_train_param_deltas: continue
         if p.ndim != 2: continue
+        if p.layer in self.network.output.values(): continue
+        ps += [p]
         upd = upd * T.tri(p.shape[0], p.shape[1], dtype="float32")
         updates[i] = (p, upd)
+      print >>log.v4, "enforce_triangular_matrix_zero for:", ps
+
     #for u in updates:
     #  print ">>>>", u
     return updates
