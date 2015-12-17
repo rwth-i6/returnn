@@ -197,7 +197,7 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name="", broadcastable=None, reset=False, dtype="float32", zero=False):
+  def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
     if zero:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value(borrow=True, return_internal_type=True)
@@ -211,8 +211,7 @@ class Updater:
     if name: kwargs["name"] = name
     if broadcastable: kwargs["broadcastable"] = broadcastable
     param = theano.shared(**kwargs)
-    if reset:
-      self.params[param] = value
+    self.params[param] = value
     return param
 
   def reset(self):
