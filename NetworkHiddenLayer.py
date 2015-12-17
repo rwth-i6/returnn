@@ -117,7 +117,7 @@ class WindowLayer(_NoOpLayer):
     super(WindowLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
-    self.set_attr('n_out', source.attrs['n_out'])
+    self.set_attr('n_out', source.attrs['n_out'] * window)
     self.set_attr('window', window)
     self.make_output(windowed_batch(source.output, window=window))
 
