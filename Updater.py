@@ -198,6 +198,7 @@ class Updater:
     return constrained_output
 
   def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
+    if broadcastable is None: broadcastable = value.broadcastable
     if zero:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value(borrow=True, return_internal_type=True)
@@ -207,9 +208,8 @@ class Updater:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value()
       value = numpy.asarray(value).astype(dtype)
-    kwargs = {"value": value}
+    kwargs = {"value": value, "broadcastable": broadcastable}
     if name: kwargs["name"] = name
-    if broadcastable: kwargs["broadcastable"] = broadcastable
     param = theano.shared(**kwargs)
     self.params[param] = value
     return param
@@ -546,12 +546,9 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.adam:
-        value = param.get_value(borrow=True)
         epsilon=1e-8
-        m_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
-                               broadcastable=param.broadcastable)
-        v_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
-                               broadcastable=param.broadcastable)
+        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
         m_t = beta1*m_prev + (1-beta1)*deltas
         v_t = beta2*v_prev + (1-beta2)*deltas**2
@@ -563,10 +560,9 @@ class Updater:
         upd[param] += -step
 
       elif self.adamax:
-        value = param.get_value(borrow=True)
         epsilon=1e-8
-        m_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
-        v_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
+        m_prev = self.var(param, zero=True, name="adamax_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adamax_v_%s" % param.name)
         m_t = beta1*m_prev + (1-beta1)*deltas
         v_t = T.maximum(beta2*v_prev, abs(deltas) + epsilon)
         step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
@@ -596,8 +592,7 @@ class Updater:
         upd[param] += self.learning_rate_var * dx_new
       elif self.rmsprop:
         #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
-        accumulator = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), broadcastable=param.broadcastable)
+        accumulator = self.var(param, zero=True, name="accumulator_%s" % param.name)
         epsilon=1e-6
         accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
@@ -609,14 +604,12 @@ class Updater:
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:
         #The following code inspired by https://github.com/fidlej/optim/raw/master/dok/nesterov_simple.pdf
-        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        velocity = self.var(param, zero=True, name="nesterov_velocity_%s" % param.name)
         tmp = self.nesterov_momentum * velocity + upd[param]
         updates.append((velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
       if self.momentum2 > 0:
-        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        velocity = self.var(param, zero=True, name="momentum2_velocity_%s" % param.name)
         upd[param] += velocity * self.momentum2
         updates.append((velocity, upd[param]))
 
