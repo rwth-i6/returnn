@@ -48,6 +48,7 @@ class Updater:
                max_norm=0.0,
                adasecant=False,
                adam=False,
+               adam_fit_learning_rate=True,
                adamax=False,
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
@@ -69,6 +70,7 @@ class Updater:
     self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
     self.adam = adam
+    self.adam_fit_learning_rate = adam_fit_learning_rate
     self.adamax = adamax
     self.mean_normalized_sgd = mean_normalized_sgd
     self.mean_normalized_sgd_average_interpolation = numpy.float32(mean_normalized_sgd_average_interpolation)
@@ -268,7 +270,6 @@ class Updater:
     i_t = self.i + 1.
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
-    a_t = self.learning_rate_var * T.cast(T.sqrt(1-beta2**i_t)/(1-beta1**i_t), dtype="float32")
     for param in grads.keys():
       deltas = grads[param]
       if self.max_norm > 0:
@@ -552,6 +553,9 @@ class Updater:
 
         m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
         v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        a_t = self.learning_rate_var
+        if self.adam_fit_learning_rate:
+          a_t *= T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
         step = a_t * m_t / (T.sqrt(v_t) + epsilon)
 
         updates.append((m_prev, m_t))
