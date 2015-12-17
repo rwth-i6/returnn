@@ -6,7 +6,7 @@ from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined
-from TheanoUtil import class_idx_seq_to_1_of_k
+from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
 
 
 class HiddenLayer(Layer):
@@ -108,6 +108,18 @@ class CopyLayer(_NoOpLayer):
     else:
       raise Exception("CopyLayer needs at least one source")
     self.make_output(act_f(self.z))
+
+
+class WindowLayer(_NoOpLayer):
+  layer_class = "window"
+
+  def __init__(self, window, **kwargs):
+    super(WindowLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    source = self.sources[0]
+    self.set_attr('n_out', source.attrs['n_out'])
+    self.set_attr('window', window)
+    self.make_output(windowed_batch(source.output, window=window))
 
 
 class FrameConcatZeroLayer(_NoOpLayer):
