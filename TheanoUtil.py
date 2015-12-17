@@ -1,4 +1,6 @@
 
+import theano
+import theano.sandbox.cuda
 import theano.tensor as T
 
 
@@ -31,3 +33,8 @@ def tiled_eye(n1, n2, dtype="float32"):
   tiled_big = T.tile(small_eye, (r1, r2))
   tiled_part = tiled_big[:n1,:n2]
   return tiled_part
+
+def opt_contiguous_on_gpu(x):
+  if theano.sandbox.cuda.cuda_enabled:
+    return theano.sandbox.cuda.basic_ops.gpu_contiguous(x)
+  return x

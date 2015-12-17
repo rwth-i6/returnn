@@ -7,6 +7,7 @@ from math import sqrt
 from theano.compat.python2x import OrderedDict
 import theano.tensor as T
 import theano.compile
+from TheanoUtil import opt_contiguous_on_gpu
 
 
 class Updater:
@@ -251,7 +252,8 @@ class Updater:
         for s, W_in in zip(layer.sources, layer.W_in):
           avg_v = self.var(numpy.zeros((s.attrs["n_out"],), dtype="float32"),
                            name="avg_%s_%s" % (s.name, layer.name))
-          cur_avg = T.mean(s.output, axis=(0, 1))
+          # Without the opt_contiguous_on_gpu, I get a crash (together with LSTMP)...
+          cur_avg = T.mean(opt_contiguous_on_gpu(s.output), axis=(0, 1))
           avg = avg_f * avg_v + (numpy.float32(1.0) - avg_f) * cur_avg
           updates.append((avg_v, avg))
           grads[W_in] -= T.outer(avg, delta_b)
