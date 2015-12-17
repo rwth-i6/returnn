@@ -129,45 +129,24 @@ class Updater:
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
-    self.i = theano.shared(numpy.float32(network.update_step), name="updater_i")
+    self.i = self.var(numpy.float32(network.update_step), name="updater_i")
 
     if self.momentum > 0:
-      self.deltas = {p: theano.shared(
-                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), borrow=True,
-                     name="deltas_%s" % p)
+      self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
                      for p in network.train_params_vars}
 
     if self.adagrad:
-      self.accu = {}
-      for p in self.network.train_params_vars:
-        shape = p.get_value(borrow=True, return_internal_type=True).shape
-        #scale = numpy.sqrt(12. / numpy.sum(shape))
-        #values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
-        #values = p.get_value()
-        values = numpy.zeros(shape, dtype=theano.config.floatX)
-        self.accu[p] = theano.shared(value=values)
+      self.accu = {p: self.var(p, zero=True, name="adagrad_accu_%s" % p.name)
+                   for p in network.train_params_vars}
 
-      #self.accu = {p: theano.shared(
-      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-      #                                 dtype=theano.config.floatX), borrow=True, name="accu_%s " % p)
-      #            for p in self.network.train_params_vars}
-      #self.sqrsum = {p: theano.shared(
-      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-      #                                 dtype=theano.config.floatX), borrow=True,
-      #               name="sqrsum_%s " % p)
-      #               for p in self.network.train_params_vars}
     if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
-      self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                     dtype=theano.config.floatX))
+      self.eg2 = {p: self.var(p, zero=True, name="adadelta_eg2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[g^2]
-      self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                      dtype=theano.config.floatX))
+      self.edx2 = {p: self.var(p, zero=True, name="adadelta_edx2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[\delta x^2]
-      self.dx = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                    dtype=theano.config.floatX))
-                  for p in self.network.train_params_vars} #\delta x
+      self.dx = {p: self.var(p, zero=True, name="adadelta_dx_%s" % p.name)
+                 for p in self.network.train_params_vars} #\delta x
 
   @property
   def isInitialized(self):
@@ -200,7 +179,8 @@ class Updater:
     return constrained_output
 
   def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
-    if broadcastable is None: broadcastable = value.broadcastable
+    if broadcastable is None and isinstance(value, theano.compile.SharedVariable):
+      broadcastable = value.broadcastable
     if zero:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value(borrow=True, return_internal_type=True)
@@ -210,8 +190,9 @@ class Updater:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value()
       value = numpy.asarray(value).astype(dtype)
-    kwargs = {"value": value, "broadcastable": broadcastable}
+    kwargs = {"value": value}
     if name: kwargs["name"] = name
+    if broadcastable: kwargs["broadcastable"] = broadcastable
     param = theano.shared(**kwargs)
     self.params[param] = value
     return param
