@@ -249,7 +249,10 @@ class GenericCodeLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     code = code.encode("utf8")
     self.set_attr('code', code)
-    output = eval(code, {"self": self, "s": self.sources, "T": T, "theano": theano, "numpy": numpy, "f32": numpy.float32})
+    import TheanoUtil
+    output = eval(code, {"self": self, "s": self.sources,
+                         "T": T, "theano": theano, "numpy": numpy, "TU": TheanoUtil,
+                         "f32": numpy.float32})
     self.make_output(output)
 
 
