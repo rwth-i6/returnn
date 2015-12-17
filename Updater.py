@@ -251,8 +251,7 @@ class Updater:
         for s, W_in in zip(layer.sources, layer.W_in):
           avg_v = self.var(numpy.zeros((s.attrs["n_out"],), dtype="float32"),
                            name="avg_%s_%s" % (s.name, layer.name))
-          n_frames = s.output.shape[0] * s.output.shape[1]
-          cur_avg = T.sum(s.output, axis=(0, 1)) / T.cast(n_frames, "float32")
+          cur_avg = T.mean(s.output, axis=(0, 1))
           avg = avg_f * avg_v + (numpy.float32(1.0) - avg_f) * cur_avg
           updates.append((avg_v, avg))
           grads[W_in] -= T.outer(avg, delta_b)
