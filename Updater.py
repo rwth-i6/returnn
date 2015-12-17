@@ -58,21 +58,21 @@ class Updater:
                enforce_triangular_matrix_zero=False
                ):
     self.rng = numpy.random.RandomState(0101)
-    self.momentum = momentum
-    self.nesterov_momentum = nesterov_momentum
-    self.momentum2 = momentum2
-    self.gradient_clip = gradient_clip
+    self.momentum = numpy.float32(momentum)
+    self.nesterov_momentum = numpy.float32(nesterov_momentum)
+    self.momentum2 = numpy.float32(momentum2)
+    self.gradient_clip = numpy.float32(gradient_clip)
     self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
+    self.adadelta_decay = numpy.float32(adadelta_decay)
+    self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
     self.adam = adam
     self.adamax = adamax
     self.mean_normalized_sgd = mean_normalized_sgd
-    self.mean_normalized_sgd_average_interpolation = mean_normalized_sgd_average_interpolation
+    self.mean_normalized_sgd_average_interpolation = numpy.float32(mean_normalized_sgd_average_interpolation)
     self.rmsprop = rmsprop
-    self.adadelta_decay = adadelta_decay
-    self.adadelta_offset = adadelta_offset
     self.update_multiple_models = update_multiple_models
     self.update_multiple_models_averaging = update_multiple_models_averaging
     self.update_multiple_models_average_step = update_multiple_models_average_step
@@ -266,9 +266,9 @@ class Updater:
     self.counter = self.var(0, name="counter", dtype="int64")
     updates.append((self.counter, self.counter + 1))
     i_t = self.i + 1.
-    beta1=0.9
-    beta2=0.999
-    a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
+    beta1=numpy.float32(0.9)
+    beta2=numpy.float32(0.999)
+    a_t = self.learning_rate_var * T.cast(T.sqrt(1-beta2**i_t)/(1-beta1**i_t), dtype="float32")
     for param in grads.keys():
       deltas = grads[param]
       if self.max_norm > 0:
@@ -546,13 +546,13 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.adam:
-        epsilon=1e-8
+        epsilon = numpy.float32(1e-8)
         m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
-        m_t = beta1*m_prev + (1-beta1)*deltas
-        v_t = beta2*v_prev + (1-beta2)*deltas**2
-        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        step = a_t * m_t / (T.sqrt(v_t) + epsilon)
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
@@ -560,45 +560,49 @@ class Updater:
         upd[param] += -step
 
       elif self.adamax:
-        epsilon=1e-8
+        epsilon = numpy.float32(1e-8)
         m_prev = self.var(param, zero=True, name="adamax_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adamax_v_%s" % param.name)
-        m_t = beta1*m_prev + (1-beta1)*deltas
-        v_t = T.maximum(beta2*v_prev, abs(deltas) + epsilon)
-        step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = T.maximum(beta2 * v_prev, abs(deltas) + epsilon)
+        step = (self.learning_rate_var / (numpy.float32(1) - beta1 ** i_t)) * (m_t / v_t)
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
         upd[param] += -step
 
       elif self.adagrad:
-        epsilon = 1e-6
+        epsilon = numpy.float32(1e-6)
         accu_new = self.accu[param] + deltas ** 2
         updates.append((self.accu[param], accu_new))
         upd[param] += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
         #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
+
       elif self.adadelta:
         # http://arxiv.org/pdf/1212.5701v1.pdf
         decay = self.adadelta_decay
         offset = self.adadelta_offset
         g = deltas
         g2 = g ** 2
-        eg2_new = decay * self.eg2[param] + (1 - decay) * g2
+        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * g2
         dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
-        edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
+        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * dx_new ** 2
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd[param] += self.learning_rate_var * dx_new
+
       elif self.rmsprop:
         #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
         accumulator = self.var(param, zero=True, name="accumulator_%s" % param.name)
-        epsilon=1e-6
-        accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
+        epsilon = numpy.float32(1e-6)
+        accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
-        upd[param] += - ((self.learning_rate_var * deltas)/T.sqrt(accumulator_new + epsilon))
-      else:
+        upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new + epsilon))
+
+      else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
+
       if self.momentum > 0:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
