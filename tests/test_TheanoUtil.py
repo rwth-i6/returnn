@@ -82,6 +82,12 @@ def test_downsample_min_int():
   numpy.testing.assert_allclose(d, numpy.array([0]))
 
 
+def test_downsample_min_int_ndim2():
+  source = numpy.array([[0, 3], [1, 4]])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="min").eval()
+  numpy.testing.assert_allclose(d, numpy.array([[0, 3]]))
+
+
 def test_upsample():
   source = numpy.array([0.0, 1.0])
   u = upsample(T.as_tensor_variable(source), axis=0, factor=2).eval()
@@ -92,3 +98,15 @@ def test_upsample_target_len():
   source = numpy.array([0.0, 1.0])
   u = upsample(T.as_tensor_variable(source), axis=0, factor=2, target_axis_len=5).eval()
   numpy.testing.assert_allclose(u, numpy.array([0.0, 0.0, 1.0, 1.0, 1.0]))
+
+
+def test_upsample_target_len_even():
+  source = numpy.array([0.0, 1.0])
+  u = upsample(T.as_tensor_variable(source), axis=0, factor=2, target_axis_len=4).eval()
+  numpy.testing.assert_allclose(u, numpy.array([0.0, 0.0, 1.0, 1.0]))
+
+
+def test_upsample_target_len_ndim3():
+  source = numpy.array([[[0.0]], [[1.0]]])
+  u = upsample(T.as_tensor_variable(source), axis=0, factor=2, target_axis_len=5).eval()
+  numpy.testing.assert_allclose(u, numpy.array([[[0.0]], [[0.0]], [[1.0]], [[1.0]], [[1.0]]]))
