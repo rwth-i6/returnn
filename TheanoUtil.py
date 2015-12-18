@@ -26,6 +26,7 @@ def class_idx_seq_to_1_of_k(seq, num_classes, dtype="float32"):
   m = eye[T.cast(seq, 'int32')].reshape(shape)
   return m
 
+
 def tiled_eye(n1, n2, dtype="float32"):
   r1 = T.maximum((n1 - 1) / n2 + 1, 1)
   r2 = T.maximum((n2 - 1) / n1 + 1, 1)
@@ -34,10 +35,12 @@ def tiled_eye(n1, n2, dtype="float32"):
   tiled_part = tiled_big[:n1,:n2]
   return tiled_part
 
+
 def opt_contiguous_on_gpu(x):
   if theano.sandbox.cuda.cuda_enabled:
     return theano.sandbox.cuda.basic_ops.gpu_contiguous(x)
   return x
+
 
 def windowed_batch(source, window):
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
@@ -65,4 +68,43 @@ def windowed_batch(source, window):
   final_sub = final_dimshuffle[:n_time]  # (n_time,batch,window,dim)
   final_concat_dim = final_sub.reshape((n_time, n_batch, window * n_dim))
   return final_concat_dim
+
+
+def slice_for_axis(axis, s):
+  return (slice(None),) * (axis - 1) + (s,)
+
+
+def downsample(source, axis, factor, method="average"):
+  assert factor == int(factor), "factor is expected to be an int"
+  factor = int(factor)
+  # make shape[axis] a multiple of factor
+  source = source[slice_for_axis(axis=axis, s=slice(0, (source.shape[axis] / factor) * factor))]
+  # Add a temporary dimension as the factor.
+  added_dim_shape = [source.shape[i] for i in range(source.ndim)]
+  added_dim_shape = added_dim_shape[:axis] + [factor, source.shape[axis] / factor] + added_dim_shape[axis + 1:]
+  source = T.reshape(source, added_dim_shape)
+  if method == "average":
+    return T.mean(source, axis=axis)
+  elif method == "max":
+    return T.max(source, axis=axis)
+  elif method == "min":
+    return T.min(source, axis=axis)
+  else:
+    assert False, "unknown downsample method %r" % method
+
+
+def upsample(source, axis, factor, method="nearest-neighbor", target_axis_len=None):
+  if method == "nearest-neighbor":
+    assert factor == int(factor), "factor is expected to be an int. not implemented otherwise yet."
+    factor = int(factor)
+    target = T.repeat(source, factor, axis=axis)
+    if target_axis_len is not None:
+      # We expect that we need to add a few frames. Just use the last frame.
+      last = source[slice_for_axis(axis=axis, s=slice(-1, None))]
+      num_missing = target_axis_len - target.shape[axis]
+      target = T.concatenate([target, T.repeat(last, num_missing, axis=axis)], axis=axis)
+    return target
+  else:
+    assert False, "unknown upsample method %r" % method
+
 

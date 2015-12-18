@@ -58,7 +58,7 @@ class Container(object):
       dset = grp.create_dataset(p, value.shape, dtype='f')
       dset[...] = value
     for p, v in self.attrs.items():
-      if isinstance(v, dict):
+      if isinstance(v, (dict, list, tuple)):
         v = json.dumps(v, sort_keys=True)
       try:
         grp.attrs[p] = v

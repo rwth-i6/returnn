@@ -51,3 +51,44 @@ def test_windowed_batch_big():
   real = windowed_batch(source, window=window).eval()
   numpy.testing.assert_almost_equal(naive, real)
 
+
+def test_downsample_average():
+  source = numpy.array([0.0, 1.0])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="average").eval()
+  numpy.testing.assert_allclose(d, numpy.array([0.5]))
+
+
+def test_downsample_max():
+  source = numpy.array([0.0, 1.0])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="max").eval()
+  numpy.testing.assert_allclose(d, numpy.array([1.0]))
+
+
+def test_downsample_min():
+  source = numpy.array([0.0, 1.0])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="min").eval()
+  numpy.testing.assert_allclose(d, numpy.array([0.0]))
+
+
+def test_downsample_max_ndim3():
+  source = numpy.array([[[0.0, 1.0]]])
+  d = downsample(T.as_tensor_variable(source), axis=2, factor=2, method="max").eval()
+  numpy.testing.assert_allclose(d, numpy.array([[[1.0]]]))
+
+
+def test_downsample_min_int():
+  source = numpy.array([0, 1])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="min").eval()
+  numpy.testing.assert_allclose(d, numpy.array([0]))
+
+
+def test_upsample():
+  source = numpy.array([0.0, 1.0])
+  u = upsample(T.as_tensor_variable(source), axis=0, factor=2).eval()
+  numpy.testing.assert_allclose(u, numpy.array([0.0, 0.0, 1.0, 1.0]))
+
+
+def test_upsample_target_len():
+  source = numpy.array([0.0, 1.0])
+  u = upsample(T.as_tensor_variable(source), axis=0, factor=2, target_axis_len=5).eval()
+  numpy.testing.assert_allclose(u, numpy.array([0.0, 0.0, 1.0, 1.0, 1.0]))
