@@ -435,7 +435,6 @@ class AttentionDotLM(AttentionDot):
 
   def step(self, y_p):
     z_re, updates = super(AttentionDotLM, self).step(y_p)
-
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
