@@ -1,12 +1,14 @@
 
 import theano
 import numpy
+import json
 from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined
-from TheanoUtil import class_idx_seq_to_1_of_k
+import TheanoUtil
+from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
 
 
 class HiddenLayer(Layer):
@@ -73,6 +75,61 @@ class _NoOpLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
 
+def concat_sources(sources, masks=None, mass=None, unsparse=False, expect_source=True):
+  """
+  :type sources: list[Layer]
+  :type masks: None | list[theano.Variable]
+  :type mass: None | theano.Variable
+  :param bool unsparse: whether to make sparse sources into 1-of-k
+  :param bool expect_source: whether to throw an exception if there is no source
+  :returns (concatenated sources, out dim)
+  :rtype: (theano.Variable, int)
+  """
+  if masks is None: masks = [None] * len(sources)
+  else: assert mass
+  assert len(sources) == len(masks)
+  zs = []
+  n_out = 0
+  have_sparse = False
+  have_non_sparse = False
+  for s, m in zip(sources, masks):
+    if s.attrs['sparse']:
+      if s.output.ndim == 3: out = s.output.reshape((s.output.shape[0], s.output.shape[1]))
+      elif s.output.ndim == 2: out = s.output
+      else: assert False, s.output.ndim
+      if unsparse:
+        n_out += s.attrs['n_out']
+        have_non_sparse = True
+        out_1_of_k = class_idx_seq_to_1_of_k(out, num_classes=s.attrs['n_out'])
+        zs += [out_1_of_k]
+      else:
+        zs += [out.reshape((out.shape[0], out.shape[1], 1))]
+        assert not have_non_sparse, "mixing sparse and non-sparse sources"
+        if not have_sparse:
+          have_sparse = True
+          n_out = s.attrs['n_out']
+        else:
+          assert n_out == s.attrs['n_out'], "expect same num labels but got %i != %i" % (n_out, s.attrs['n_out'])
+    else:  # non-sparse source
+      n_out += s.attrs['n_out']
+      have_non_sparse = True
+      assert not have_sparse, "mixing sparse and non-sparse sources"
+      if m is None:
+        zs += [s.output]
+      else:
+        zs += [mass * m * s.output]
+  if len(zs) > 1:
+    # We get (time,batch,dim) input shape.
+    # Concat over dimension, axis=2.
+    return T.concatenate(zs, axis=2), n_out
+  elif len(zs) == 1:
+    return zs[0], n_out
+  else:
+    if expect_source:
+      raise Exception("We expected at least one source but did not get any.")
+    return None, 0
+
+
 class CopyLayer(_NoOpLayer):
   """
   It's mostly the Identity function. But it will make sparse to non-sparse.
@@ -81,33 +138,102 @@ class CopyLayer(_NoOpLayer):
 
   def __init__(self, activation=None, **kwargs):
     super(CopyLayer, self).__init__(**kwargs)
-    self.set_attr('n_out', sum([s.attrs['n_out'] for s in self.sources]))
     if activation:
       self.set_attr('activation', activation.encode("utf8"))
     act_f = strtoact_single_joined(activation)
 
-    assert len(self.sources) == len(self.masks)
-    zs = []
-    for s, m in zip(self.sources, self.masks):
-      if s.attrs['sparse']:
-        if s.output.ndim == 3: out = s.output.reshape((s.output.shape[0], s.output.shape[1]))
-        elif s.output.ndim == 2: out = s.output
-        else: assert False, s.output.ndim
-        out_1_of_k = class_idx_seq_to_1_of_k(out, num_classes=s.attrs['n_out'])
-        zs += [out_1_of_k]
-      elif m is None:
-        zs += [s.output]
-      else:
-        zs += [self.mass * m * s.output]
-    if len(zs) > 1:
-      # We get (time,batch,dim) input shape.
-      # Concat over dimension, axis=2.
-      self.z = T.concatenate(zs, axis=2)
-    elif len(zs) == 1:
-      self.z = zs[0]
-    else:
-      raise Exception("CopyLayer needs at least one source")
+    self.z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.set_attr('n_out', n_out)
     self.make_output(act_f(self.z))
+
+
+class WindowLayer(_NoOpLayer):
+  layer_class = "window"
+
+  def __init__(self, window, **kwargs):
+    super(WindowLayer, self).__init__(**kwargs)
+    source, n_out = concat_sources(self.sources, unsparse=False)
+    self.set_attr('n_out', n_out * window)
+    self.set_attr('window', window)
+    self.make_output(windowed_batch(source, window=window))
+
+
+class DownsampleLayer(_NoOpLayer):
+  """
+  E.g. method == "average", axis == 0, factor == 2 -> each 2 time-frames are averaged.
+  See TheanoUtil.downsample. You can also use method == "max".
+  """
+  layer_class = "downsample"
+
+  def __init__(self, factor, axis, method="average", **kwargs):
+    super(DownsampleLayer, self).__init__(**kwargs)
+    self.set_attr("method", method)
+    if isinstance(axis, (str, unicode)):
+      axis = json.loads(axis)
+    if isinstance(axis, set): axis = tuple(axis)
+    assert isinstance(axis, int) or isinstance(axis, (tuple, list)), "int or list[int] expected for axis"
+    if isinstance(axis, int): axis = [axis]
+    axis = list(sorted(axis))
+    self.set_attr("axis", axis)
+    if isinstance(factor, (str, unicode)):
+      factor = json.loads(factor)
+    assert isinstance(factor, (int, float)) or isinstance(axis, (tuple, list)), "int|float or list[int|float] expected for factor"
+    if isinstance(factor, (int, float)): factor = [factor] * len(axis)
+    assert len(factor) == len(axis)
+    self.set_attr("factor", factor)
+    z, z_dim = concat_sources(self.sources, unsparse=False)
+    n_out = z_dim
+    for f, a in zip(factor, axis):
+      z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      if a == 0:
+        self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
+      elif a == 2:
+        n_out = int(n_out / f)
+    self.set_attr('n_out', n_out)
+    self.make_output(z)
+
+
+class UpsampleLayer(_NoOpLayer):
+  layer_class = "upsample"
+
+  def __init__(self, factor, axis, time_like_last_source=False, method="nearest-neighbor", **kwargs):
+    super(UpsampleLayer, self).__init__(**kwargs)
+    self.set_attr("method", method)
+    self.set_attr("time_like_last_source", time_like_last_source)
+    if isinstance(axis, (str, unicode)):
+      axis = json.loads(axis)
+    if isinstance(axis, set): axis = tuple(axis)
+    assert isinstance(axis, int) or isinstance(axis, (tuple, list)), "int or list[int] expected for axis"
+    if isinstance(axis, int): axis = [axis]
+    axis = list(sorted(axis))
+    self.set_attr("axis", axis)
+    if isinstance(factor, (str, unicode)):
+      factor = json.loads(factor)
+    assert isinstance(factor, (int, float)) or isinstance(axis, (tuple, list)), "int|float or list[int|float] expected for factor"
+    if isinstance(factor, (int, float)): factor = [factor] * len(axis)
+    assert len(factor) == len(axis)
+    self.set_attr("factor", factor)
+    sources = self.sources
+    assert len(sources) > 0
+    if time_like_last_source:
+      assert len(sources) >= 2
+      source_for_time = sources[-1]
+      sources = sources[:-1]
+    else:
+      source_for_time = None
+    z, z_dim = concat_sources(sources, unsparse=False)
+    n_out = z_dim
+    for f, a in zip(factor, axis):
+      target_axis_len = None
+      if a == 0:
+        assert source_for_time, "not implemented yet otherwise. but this makes most sense anyway."
+        self.index = source_for_time.index
+        target_axis_len = self.index.shape[0]
+      elif a == 2:
+        n_out = int(n_out * f)
+      z = TheanoUtil.upsample(z, axis=a, factor=f, method=method, target_axis_len=target_axis_len)
+    self.set_attr('n_out', n_out)
+    self.make_output(z)
 
 
 class FrameConcatZeroLayer(_NoOpLayer):
@@ -249,7 +375,10 @@ class GenericCodeLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     code = code.encode("utf8")
     self.set_attr('code', code)
-    output = eval(code, {"self": self, "s": self.sources, "T": T, "theano": theano, "numpy": numpy, "f32": numpy.float32})
+    import TheanoUtil
+    output = eval(code, {"self": self, "s": self.sources,
+                         "T": T, "theano": theano, "numpy": numpy, "TU": TheanoUtil,
+                         "f32": numpy.float32})
     self.make_output(output)
 
 

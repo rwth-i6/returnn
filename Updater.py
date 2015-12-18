@@ -7,6 +7,7 @@ from math import sqrt
 from theano.compat.python2x import OrderedDict
 import theano.tensor as T
 import theano.compile
+from TheanoUtil import opt_contiguous_on_gpu
 
 
 class Updater:
@@ -47,34 +48,39 @@ class Updater:
                max_norm=0.0,
                adasecant=False,
                adam=False,
+               adam_fit_learning_rate=True,
                adamax=False,
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
-               update_multiple_models_param_is_cur_model=False):
+               update_multiple_models_param_is_cur_model=False,
+               enforce_triangular_matrix_zero=False
+               ):
     self.rng = numpy.random.RandomState(0101)
-    self.momentum = momentum
-    self.nesterov_momentum = nesterov_momentum
-    self.momentum2 = momentum2
-    self.gradient_clip = gradient_clip
+    self.momentum = numpy.float32(momentum)
+    self.nesterov_momentum = numpy.float32(nesterov_momentum)
+    self.momentum2 = numpy.float32(momentum2)
+    self.gradient_clip = numpy.float32(gradient_clip)
     self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
+    self.adadelta_decay = numpy.float32(adadelta_decay)
+    self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
     self.adam = adam
+    self.adam_fit_learning_rate = adam_fit_learning_rate
     self.adamax = adamax
     self.mean_normalized_sgd = mean_normalized_sgd
-    self.mean_normalized_sgd_average_interpolation = mean_normalized_sgd_average_interpolation
+    self.mean_normalized_sgd_average_interpolation = numpy.float32(mean_normalized_sgd_average_interpolation)
     self.rmsprop = rmsprop
-    self.adadelta_decay = adadelta_decay
-    self.adadelta_offset = adadelta_offset
     self.update_multiple_models = update_multiple_models
     self.update_multiple_models_averaging = update_multiple_models_averaging
     self.update_multiple_models_average_step = update_multiple_models_average_step
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
+    self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.params = {}
     self.pid = -1
     if self.adadelta:
@@ -123,45 +129,24 @@ class Updater:
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
-    self.i = theano.shared(numpy.float32(network.update_step), name="updater_i")
+    self.i = self.var(numpy.float32(network.update_step), name="updater_i")
 
     if self.momentum > 0:
-      self.deltas = {p: theano.shared(
-                     value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), borrow=True,
-                     name="deltas_%s" % p)
+      self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
                      for p in network.train_params_vars}
 
     if self.adagrad:
-      self.accu = {}
-      for p in self.network.train_params_vars:
-        shape = p.get_value(borrow=True, return_internal_type=True).shape
-        #scale = numpy.sqrt(12. / numpy.sum(shape))
-        #values = numpy.asarray(self.rng.normal(loc=0.0, scale=scale, size=shape), dtype=theano.config.floatX)
-        #values = p.get_value()
-        values = numpy.zeros(shape, dtype=theano.config.floatX)
-        self.accu[p] = theano.shared(value=values)
+      self.accu = {p: self.var(p, zero=True, name="adagrad_accu_%s" % p.name)
+                   for p in network.train_params_vars}
 
-      #self.accu = {p: theano.shared(
-      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-      #                                 dtype=theano.config.floatX), borrow=True, name="accu_%s " % p)
-      #            for p in self.network.train_params_vars}
-      #self.sqrsum = {p: theano.shared(
-      #               value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-      #                                 dtype=theano.config.floatX), borrow=True,
-      #               name="sqrsum_%s " % p)
-      #               for p in self.network.train_params_vars}
     if self.adadelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
-      self.eg2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                     dtype=theano.config.floatX))
+      self.eg2 = {p: self.var(p, zero=True, name="adadelta_eg2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[g^2]
-      self.edx2 = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                      dtype=theano.config.floatX))
+      self.edx2 = {p: self.var(p, zero=True, name="adadelta_edx2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[\delta x^2]
-      self.dx = {p: theano.shared(value=numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape,
-                                                    dtype=theano.config.floatX))
-                  for p in self.network.train_params_vars} #\delta x
+      self.dx = {p: self.var(p, zero=True, name="adadelta_dx_%s" % p.name)
+                 for p in self.network.train_params_vars} #\delta x
 
   @property
   def isInitialized(self):
@@ -193,7 +178,9 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name="", broadcastable=None, reset=False, dtype="float32", zero=False):
+  def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
+    if broadcastable is None and isinstance(value, theano.compile.SharedVariable):
+      broadcastable = value.broadcastable
     if zero:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value(borrow=True, return_internal_type=True)
@@ -207,8 +194,7 @@ class Updater:
     if name: kwargs["name"] = name
     if broadcastable: kwargs["broadcastable"] = broadcastable
     param = theano.shared(**kwargs)
-    if reset:
-      self.params[param] = value
+    self.params[param] = value
     return param
 
   def reset(self):
@@ -248,8 +234,8 @@ class Updater:
         for s, W_in in zip(layer.sources, layer.W_in):
           avg_v = self.var(numpy.zeros((s.attrs["n_out"],), dtype="float32"),
                            name="avg_%s_%s" % (s.name, layer.name))
-          n_frames = s.output.shape[0] * s.output.shape[1]
-          cur_avg = T.sum(s.output, axis=(0, 1)) / T.cast(n_frames, "float32")
+          # Without the opt_contiguous_on_gpu, I get a crash (together with LSTMP)...
+          cur_avg = T.mean(opt_contiguous_on_gpu(s.output), axis=(0, 1))
           avg = avg_f * avg_v + (numpy.float32(1.0) - avg_f) * cur_avg
           updates.append((avg_v, avg))
           grads[W_in] -= T.outer(avg, delta_b)
@@ -263,9 +249,8 @@ class Updater:
     self.counter = self.var(0, name="counter", dtype="int64")
     updates.append((self.counter, self.counter + 1))
     i_t = self.i + 1.
-    beta1=0.9
-    beta2=0.999
-    a_t = self.learning_rate_var * T.sqrt(1-beta2**i_t)/(1-beta1**i_t)
+    beta1=numpy.float32(0.9)
+    beta2=numpy.float32(0.999)
     for param in grads.keys():
       deltas = grads[param]
       if self.max_norm > 0:
@@ -543,16 +528,16 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.adam:
-        value = param.get_value(borrow=True)
-        epsilon=1e-8
-        m_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
-                               broadcastable=param.broadcastable)
-        v_prev = theano.shared(numpy.zeros(value.shape, dtype=value.dtype),
-                               broadcastable=param.broadcastable)
+        epsilon = numpy.float32(1e-8)
+        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
-        m_t = beta1*m_prev + (1-beta1)*deltas
-        v_t = beta2*v_prev + (1-beta2)*deltas**2
-        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        a_t = self.learning_rate_var
+        if self.adam_fit_learning_rate:
+          a_t *= T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
+        step = a_t * m_t / (T.sqrt(v_t) + epsilon)
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
@@ -560,60 +545,60 @@ class Updater:
         upd[param] += -step
 
       elif self.adamax:
-        value = param.get_value(borrow=True)
-        epsilon=1e-8
-        m_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
-        v_prev = self.var(numpy.zeros(value.shape, dtype=value.dtype), broadcastable=param.broadcastable)
-        m_t = beta1*m_prev + (1-beta1)*deltas
-        v_t = T.maximum(beta2*v_prev, abs(deltas) + epsilon)
-        step = (self.learning_rate_var/(1 - beta1 ** i_t)) * (m_t / v_t)
+        epsilon = numpy.float32(1e-8)
+        m_prev = self.var(param, zero=True, name="adamax_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adamax_v_%s" % param.name)
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = T.maximum(beta2 * v_prev, abs(deltas) + epsilon)
+        step = (self.learning_rate_var / (numpy.float32(1) - beta1 ** i_t)) * (m_t / v_t)
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
         upd[param] += -step
 
       elif self.adagrad:
-        epsilon = 1e-6
+        epsilon = numpy.float32(1e-6)
         accu_new = self.accu[param] + deltas ** 2
         updates.append((self.accu[param], accu_new))
         upd[param] += -self.learning_rate_var * deltas / T.sqrt(accu_new + epsilon)
         #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
+
       elif self.adadelta:
         # http://arxiv.org/pdf/1212.5701v1.pdf
         decay = self.adadelta_decay
         offset = self.adadelta_offset
         g = deltas
         g2 = g ** 2
-        eg2_new = decay * self.eg2[param] + (1 - decay) * g2
+        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * g2
         dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
-        edx2_new = decay * self.edx2[param] + (1 - decay) * dx_new ** 2
+        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * dx_new ** 2
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
         upd[param] += self.learning_rate_var * dx_new
+
       elif self.rmsprop:
         #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
-        accumulator = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), broadcastable=param.broadcastable)
-        epsilon=1e-6
-        accumulator_new = self.rmsprop * accumulator + (1 - self.rmsprop) * deltas ** 2
+        accumulator = self.var(param, zero=True, name="accumulator_%s" % param.name)
+        epsilon = numpy.float32(1e-6)
+        accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
-        upd[param] += - ((self.learning_rate_var * deltas)/T.sqrt(accumulator_new + epsilon))
-      else:
+        upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new + epsilon))
+
+      else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
+
       if self.momentum > 0:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:
         #The following code inspired by https://github.com/fidlej/optim/raw/master/dok/nesterov_simple.pdf
-        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        velocity = self.var(param, zero=True, name="nesterov_velocity_%s" % param.name)
         tmp = self.nesterov_momentum * velocity + upd[param]
         updates.append((velocity, tmp))
         upd[param] += tmp*self.nesterov_momentum
       if self.momentum2 > 0:
-        velocity = self.var(numpy.zeros(param.get_value(borrow=True, return_internal_type=True).shape,
-                                       dtype=theano.config.floatX), "velocity_%s" % param.name)
+        velocity = self.var(param, zero=True, name="momentum2_velocity_%s" % param.name)
         upd[param] += velocity * self.momentum2
         updates.append((velocity, upd[param]))
 
@@ -660,6 +645,19 @@ class Updater:
     updates.append((self.i, i_t))
     if self.adasecant:
       updates.append((step, step + 1))
+
+    if self.enforce_triangular_matrix_zero:
+      assert self.update_on_device, "not implemented otherwise. we need to know if a param belongs to an output layer"
+      ps = []
+      for i, (p, upd) in enumerate(list(updates)):
+        if p not in self.net_train_param_deltas: continue
+        if p.ndim != 2: continue
+        if p.layer in self.network.output.values(): continue
+        ps += [p]
+        upd = upd * T.tri(p.shape[0], p.shape[1], dtype="float32")
+        updates[i] = (p, upd)
+      print >>log.v4, "enforce_triangular_matrix_zero for:", ps
+
     #for u in updates:
     #  print ">>>>", u
     return updates
