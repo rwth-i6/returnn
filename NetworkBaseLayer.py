@@ -4,7 +4,7 @@ import numpy
 from theano import tensor as T
 import theano
 from Log import log
-from TheanoUtil import time_batch_make_flat
+from TheanoUtil import time_batch_make_flat, tiled_eye
 import json
 
 
@@ -58,7 +58,7 @@ class Container(object):
       dset = grp.create_dataset(p, value.shape, dtype='f')
       dset[...] = value
     for p, v in self.attrs.items():
-      if isinstance(v, dict):
+      if isinstance(v, (dict, list, tuple)):
         v = json.dumps(v, sort_keys=True)
       try:
         grp.attrs[p] = v
@@ -284,7 +284,11 @@ class SourceLayer(Container):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in = None, L1=0.0, L2=0.0, varreg=0.0, mask="unity", dropout=0.0, batch_norm=False, target=None, sparse = False, carry=False, sparse_filtering=False, cost_scale=1.0, **kwargs):
+  def __init__(self, sources, n_out, index, y_in=None, target=None, sparse=False, cost_scale=1.0,
+               L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
+               mask="unity", dropout=0.0, batch_norm=False, carry=False,
+               sparse_filtering=False,
+               **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -306,6 +310,8 @@ class Layer(Container):
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
+    if L2_eye:
+      self.set_attr('L2_eye', L2_eye)
     self.set_attr('varreg', varreg)
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
@@ -360,6 +366,13 @@ class Layer(Container):
         self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
       if 'L2' in self.attrs and self.attrs['L2'] > 0:
         self.constraints += T.constant(self.attrs['L2'], name="L2", dtype='floatX') * (param**2).sum()
+      if self.attrs.get('L2_eye', 0) > 0:
+        L2_eye = T.constant(self.attrs['L2_eye'], name="L2_eye", dtype='floatX')
+        if param.ndim == 2:
+          eye = tiled_eye(param.shape[0], param.shape[1], dtype=param.dtype)
+          self.constraints += L2_eye * ((param - eye)**2).sum()
+        else:  # standard L2
+          self.constraints += L2_eye * (param**2).sum()
       if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
         self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
     return param

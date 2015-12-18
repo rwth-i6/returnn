@@ -413,11 +413,16 @@ class AttentionRBF(AttentionBase):
     self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
     self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
 
   def step(self, y_p):
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(f_z) #* self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+    if self.layer.attrs['attention_linear_support'] > 0.0:
+      segp = T.cast(self.t[0] * float(self.B.shape[0]) / float(self.index.shape[0]), 'int32')
+      w_t[segp] += self.layer.attrs['attention_linear_support']
+    updates[self.t] = self.t + T.ones_like(self.t)
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
 
 
@@ -441,7 +446,6 @@ class AttentionDotLM(AttentionDot):
     #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
     z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
-    updates[self.t] = self.t + T.ones_like(self.t)
     return z_re, updates
 
 
@@ -455,7 +459,6 @@ class AttentionRBFLM(AttentionRBF):
     self.W_lm_in = self.add_param(self.layer.W_lm_in, name = "W_lm_in")
     self.W_lm_out = self.add_param(self.layer.W_lm_out, name = "W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
-    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
 
   def step(self, y_p):
     z_re, updates = super(AttentionRBFLM, self).step(y_p)
