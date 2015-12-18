@@ -7,7 +7,7 @@ from CTC import CTCOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
-from TheanoUtil import time_batch_make_flat
+from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 
 
 #from Accumulator import AccumulatorOpInstance
@@ -24,7 +24,9 @@ from TheanoUtil import time_batch_make_flat
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, copy_input=None, grad_clip_z=None, **kwargs):
+  def __init__(self, loss, y, copy_input=None,
+               grad_clip_z=None, grad_discard_out_of_bound_z=None,
+               **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
@@ -36,6 +38,8 @@ class OutputLayer(Layer):
       self.set_attr("copy_input", copy_input.name)
     if grad_clip_z is not None:
       self.set_attr("grad_clip_z", grad_clip_z)
+    if grad_discard_out_of_bound_z is not None:
+      self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -62,6 +66,9 @@ class OutputLayer(Layer):
     if grad_clip_z is not None:
       grad_clip_z = numpy.float32(grad_clip_z)
       self.z = theano.gradient.grad_clip(self.z, -grad_clip_z, grad_clip_z)
+    if grad_discard_out_of_bound_z is not None:
+      grad_discard_out_of_bound_z = numpy.float32(grad_discard_out_of_bound_z)
+      self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
 
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)

@@ -2,6 +2,7 @@
 import theano
 import theano.sandbox.cuda
 import theano.tensor as T
+from theano.compile import ViewOp
 
 
 def time_batch_make_flat(val):
@@ -114,3 +115,28 @@ def upsample(source, axis, factor, method="nearest-neighbor", target_axis_len=No
     assert False, "unknown upsample method %r" % method
 
 
+class GradDiscardOutOfBound(ViewOp):
+  # See also theano.gradient.GradClip for a similar Op.
+  __props__ = ()
+  def __init__(self, lower_bound, upper_bound):
+    super(GradDiscardOutOfBound, self).__init__()
+    # We do not put those member in __eq__ or __hash__
+    # as they do not influence the perform of this op.
+    self.lower_bound = lower_bound
+    self.upper_bound = upper_bound
+    assert(self.lower_bound <= self.upper_bound)
+
+  def grad(self, args, g_outs):
+    return [T.switch(T.or_(T.lt(g_out, self.lower_bound), T.gt(g_out, self.upper_bound)),
+                     T.cast(0, dtype=g_out.dtype),
+                     g_out)
+            for g_out in g_outs]
+
+def grad_discard_out_of_bound(x, lower_bound, upper_bound):
+  return GradDiscardOutOfBound(lower_bound, upper_bound)(x)
+
+@T.opt.register_canonicalize
+@theano.gof.local_optimizer([GradDiscardOutOfBound])
+def _local_grad_discard(node):
+  if isinstance(node.op, GradDiscardOutOfBound):
+    return node.inputs
