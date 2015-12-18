@@ -101,8 +101,14 @@ def upsample(source, axis, factor, method="nearest-neighbor", target_axis_len=No
     if target_axis_len is not None:
       # We expect that we need to add a few frames. Just use the last frame.
       last = source[slice_for_axis(axis=axis, s=slice(-1, None))]
-      num_missing = target_axis_len - target.shape[axis]
+      num_missing = T.cast(target_axis_len, dtype="int32") - target.shape[axis]
+      # There is some strange bug in Theano. If num_missing is 0, in some circumstances,
+      # it crashes with Floating point exception.
+      # Thus, do this workaround.
+      num_missing = T.maximum(num_missing, 1)
       target = T.concatenate([target, T.repeat(last, num_missing, axis=axis)], axis=axis)
+      # Because of the workaround, we need this.
+      target = target[slice_for_axis(axis=axis, s=slice(0, target_axis_len))]
     return target
   else:
     assert False, "unknown upsample method %r" % method
