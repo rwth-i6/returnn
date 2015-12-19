@@ -58,6 +58,12 @@ def test_downsample_average():
   numpy.testing.assert_allclose(d, numpy.array([0.5]))
 
 
+def test_downsample_average_longer():
+  source = numpy.array([0.0, 1.0, 2.0, 3.0, 4.0])
+  d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="average").eval()
+  numpy.testing.assert_allclose(d, numpy.array([0.5, 2.5]))
+
+
 def test_downsample_max():
   source = numpy.array([0.0, 1.0])
   d = downsample(T.as_tensor_variable(source), axis=0, factor=2, method="max").eval()
