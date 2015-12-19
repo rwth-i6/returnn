@@ -82,14 +82,14 @@ def downsample(source, axis, factor, method="average"):
   source = source[slice_for_axis(axis=axis, s=slice(0, (source.shape[axis] / factor) * factor))]
   # Add a temporary dimension as the factor.
   added_dim_shape = [source.shape[i] for i in range(source.ndim)]
-  added_dim_shape = added_dim_shape[:axis] + [factor, source.shape[axis] / factor] + added_dim_shape[axis + 1:]
+  added_dim_shape = added_dim_shape[:axis] + [source.shape[axis] / factor, factor] + added_dim_shape[axis + 1:]
   source = T.reshape(source, added_dim_shape)
   if method == "average":
-    return T.mean(source, axis=axis)
+    return T.mean(source, axis=axis + 1)
   elif method == "max":
-    return T.max(source, axis=axis)
+    return T.max(source, axis=axis + 1)
   elif method == "min":
-    return T.min(source, axis=axis)
+    return T.min(source, axis=axis + 1)
   else:
     assert False, "unknown downsample method %r" % method
 
