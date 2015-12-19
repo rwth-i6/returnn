@@ -97,7 +97,7 @@ class RecurrentTransformBase(object):
 
   def add_input(self, v, name=None):
     if name: v.name = name
-    assert v.name
+    assert v.name, "missing name for input"
     self.input_vars[v.name] = v
     self.add_var(v)
     return v
@@ -407,23 +407,40 @@ class AttentionRBF(AttentionBase):
   attention over rbf kernel of base outputs and time dependent activation
   """
   name = "attention_rbf"
+
   def create_vars(self):
     super(AttentionRBF, self).create_vars()
     self.B = self.B - T.mean(self.B, axis=0, keepdims=True)
     self.add_input(self.B, 'B')
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
-    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    self.linear_support = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_linear_support']), name="linear_support"))
+    #self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
+    self.support_step = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'), name="support_step")
+    #self.support_step = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), name="support_step")
+    #self.support_step = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(self.layer.index.shape[0], 'float32'), name="support_step")
 
   def step(self, y_p):
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(f_z) #* self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
-    if self.layer.attrs['attention_linear_support'] > 0.0:
-      segp = T.cast(self.t[0] * float(self.B.shape[0]) / float(self.index.shape[0]), 'int32')
-      w_t[segp] += self.layer.attrs['attention_linear_support']
-    updates[self.t] = self.t + T.ones_like(self.t)
-    return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {}
+    if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
+      #import theano.printing
+      #self.support_step = theano.printing.Print('support_step')(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'))
+      center = T.cast(self.t * self.support_step, theano.config.floatX)
+      sigma = self.support_step
+      pi = T.cast(numpy.sqrt(2 * numpy.pi), theano.config.floatX)
+      distance = -((T.cast(T.arange(self.B.shape[0]).dimshuffle(0,'x').repeat(self.B.shape[1],axis=1), 'float32') - center) ** 2) / T.cast(2 * sigma ** 2, theano.config.floatX)
+
+      w_s = T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2) + T.constant(1e-30,dtype='float32')
+      w_s = w_s / T.sum(w_s, axis=0, keepdims=True)
+
+      w_t = w_t + self.linear_support * w_s
+      w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
+      #segp = T.cast(self.t * self.support_step, 'int32')
+      #w_t = T.set_subtensor(w_t[segp], w_t[segp] * self.linear_support)
+      #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
+    return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), {self.t : self.t + T.ones_like(self.t)}
 
 
 class AttentionDotLM(AttentionDot):
@@ -441,11 +458,9 @@ class AttentionDotLM(AttentionDot):
   def step(self, y_p):
     z_re, updates = super(AttentionDotLM, self).step(y_p)
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-
     h_e = T.exp(T.dot(y_p, self.W_lm_in))
     #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
     z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-
     return z_re, updates
 
 
@@ -469,7 +484,7 @@ class AttentionRBFLM(AttentionRBF):
     #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
     z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
-    updates[self.t] = self.t + T.ones_like(self.t)
+    #updates[self.t] = self.t + T.ones_like(self.t)
     return z_re, updates
 
 

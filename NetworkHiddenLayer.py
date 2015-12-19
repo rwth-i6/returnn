@@ -801,42 +801,32 @@ class ConvLayer(_NoOpLayer):
   def __init__(self, dimension_row, dimension_col, n_features, filter_row, filter_col, stack_size=1,
                pool_size=(2, 2), border_mode='valid', ignore_border=True, **kwargs):
     """
-
     :param dimension_row: integer
         the number of row(s) from the input
-
     :param dimension_col: integer
         the number of column(s) from the input
-
     :param n_features: integer
         the number of feature map(s) / filter(S) that will be used for the filter shape
-
     :param filter_row: integer
         the number of row(s) from the filter shape
-
     :param filter_col: integer
         the number of column(s) from the filter shape
-
     :param stack_size: integer
         the number of color channel (default is Gray scale) for the first input layer and
         the number of feature mapss/filters from the previous layer for the convolution layer
         (default value is 1)
-
     :param pool_size: tuple of length 2
         Factor by which to downscale (vertical, horizontal)
         (default value is (2, 2))
-
     :param border_mode: string
         'valid'-- only apply filter to complete patches of the image. Generates
                   output of shape: (image_shape - filter_shape + 1)
         'full' -- zero-pads image to multiple of filter shape to generate output
                   of shape: (image_shape + filter_shape - 1)
         (default value is 'valid')
-
     :param ignore_border: boolean
         True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
         False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
-
     """
 
     # number of output dimension validation based on the border_mode
@@ -902,7 +892,7 @@ class ConvLayer(_NoOpLayer):
     self.pooled_out.name = 'conv_layer_pooled_out'
 
     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
-    output = elu(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
+    output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
     output.name = 'conv_layer_output_plus_bias'
 
     # our CRNN only accept 3D tensor (time, batch, dim)
@@ -937,8 +927,7 @@ class ConvLayer(_NoOpLayer):
       borrow=True,
       name="b_conv"
     )
-
-
+############################################# END HERE ######################################################
 ###########################################TRYING BORDER_MODE = 'SAME'#######################################
 class NewConvLayer(_NoOpLayer):
   layer_class = "new_conv_layer"
