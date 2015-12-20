@@ -417,37 +417,23 @@ class AttentionRBF(AttentionBase):
     self.linear_support = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_linear_support']), name="linear_support"))
     self.index = self.add_input(T.cast(self.layer.base[0].index[::self.layer.attrs['direction'] or 1].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
     self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
-    #self.support_step = self.add_input(T.ones((self.B.shape[1],), dtype="float32"), name="support_step")
-    #self.support_step = self.add_var(T.cast(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'float32'), name="support_step")
-    #self.support_step = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), name="support_step")
-    #self.support_step = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), name="support_step")
-    #frac = T.cast(self.layer.base[0].index.shape[0], 'float32') / T.cast(self.layer.index.shape[0], 'float32')
-    #self.support_step = self.add_input(frac, name="support_step")
     self.i = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'i')
     self.j = self.add_input(T.cast(self.layer.index, 'float32'), 'j')
 
   def step(self, y_p):
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
-    f_e = T.exp(f_z) * self.index + T.constant(1e-32,dtype='float32')
+    f_e = (T.exp(f_z) + T.constant(1e-32,dtype='float32')) * self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     updates = {}
     if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
-      import theano.printing
-      #self.support_step = theano.printing.Print('support_step')(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'))
       center = T.cast(self.t, theano.config.floatX)
-      #center = theano.printing.Print('center')(center)
       sigma = self.linear_support #0.0001 #self.support_step * 2.0
       pi = T.cast(numpy.sqrt(2 * numpy.pi), theano.config.floatX)
       distance = -((T.cast(T.arange(self.B.shape[0]).dimshuffle(0,'x').repeat(self.B.shape[1],axis=1), 'float32') - center) ** 2) / T.cast(2 * sigma ** 2, theano.config.floatX)
-
       w_s = self.index * (T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2) + T.constant(1e-32, dtype='float32'))
       w_s = w_s / T.sum(w_s, axis=0, keepdims=True)
-
-      w_t = w_t * w_s
+      w_t = w_t + w_s
       w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
-      #segp = T.cast(self.t * self.support_step, 'int32')
-      #w_t = T.set_subtensor(w_t[segp], w_t[segp] * self.linear_support)
-      #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
     sij = T.sum(self.i, axis=0) / T.sum(self.j, axis=0)
     updates[self.t] = self.t + sij
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), updates
