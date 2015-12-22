@@ -315,7 +315,6 @@ class AttentionBase(RecurrentTransformBase):
 
     n_in = sum([e.attrs['n_out'] for e in base])
     src = [e.output for e in base]
-    l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
     #self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
@@ -329,8 +328,10 @@ class AttentionBase(RecurrentTransformBase):
     #  self.add_param(self.W_att_proj)
     #  self.xc = T.dot(self.xc, self.W_att_proj)
     #  n_in = unit.n_units
+    l = sqrt(2.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
     values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(layer.attrs['n_out'], n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
+    l = sqrt(6.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
     values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(n_in, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
 
@@ -416,26 +417,40 @@ class AttentionRBF(AttentionBase):
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
     self.linear_support = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_linear_support']), name="linear_support"))
     self.index = self.add_input(T.cast(self.layer.base[0].index[::self.layer.attrs['direction'] or 1].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
-    self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
-    self.i = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'i')
-    self.j = self.add_input(T.cast(self.layer.index, 'float32'), 'j')
+    if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
+      self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
+      self.i = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'i')
+      self.j = self.add_input(T.cast(self.layer.index, 'float32'), 'j')
+      #self.W_att_re = self.add_param(theano.shared(value=numpy.ones_like(self.W_att_re.get_value()), borrow=True, name = "W_att_re"))
+      values = numpy.zeros((self.W_att_re.get_value().shape[1],),dtype='float32')
+    else:
+      values = numpy.zeros((self.W_att_re.get_value().shape[1],),dtype='float32')
+    self.W_att_b = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_b"))
 
   def step(self, y_p):
-    f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re)).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
+    f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = (T.exp(f_z) + T.constant(1e-32,dtype='float32')) * self.index
     w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
     updates = {}
     if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
       center = T.cast(self.t, theano.config.floatX)
-      sigma = self.linear_support #0.0001 #self.support_step * 2.0
+      sigma = self.linear_support #* T.cast(self.B.shape[0],'float32')#0.0001 #self.support_step * 2.0
       pi = T.cast(numpy.sqrt(2 * numpy.pi), theano.config.floatX)
       distance = -((T.cast(T.arange(self.B.shape[0]).dimshuffle(0,'x').repeat(self.B.shape[1],axis=1), 'float32') - center) ** 2) / T.cast(2 * sigma ** 2, theano.config.floatX)
-      w_s = self.index * (T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2) + T.constant(1e-32, dtype='float32'))
-      w_s = w_s / T.sum(w_s, axis=0, keepdims=True)
-      w_t = w_t + w_s
-      w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
-    sij = T.sum(self.i, axis=0) / T.sum(self.j, axis=0)
-    updates[self.t] = self.t + sij
+      w_s = 1. - T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2)
+      #w_s = w_s / T.sum(w_s, axis=0, keepdims=True)
+      #w_s = T.extra_ops.to_one_hot(T.argmax(w_s[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
+      #proto = (self.B - T.sum(self.B * w_s, axis=0, keepdims=True)) ** 2 / (2 * self.sigma ** 2)
+
+      f_z = -T.sum(w_s * (self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) ** 2) / T.cast(2 * self.sigma ** 2, theano.config.floatX), axis=2, keepdims=True) / (pi * self.sigma + T.constant(1e-32,dtype='float32'))
+      f_e = (T.exp(f_z) + T.constant(1e-32,dtype='float32')) * self.index
+      w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+      #w_t = w_t + w_s
+      #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
+      sij = T.sum(self.i, axis=0) / T.sum(self.j, axis=0)
+      updates[self.t] = self.t + sij
+    #w_t = T.extra_ops.to_one_hot(T.argmax(w_t[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
+    #return T.dot(self.B[T.argmax(w_t[:,:,0],axis=0)], self.W_att_in), updates
     return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), updates
 
 
