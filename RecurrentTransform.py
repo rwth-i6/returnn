@@ -437,14 +437,14 @@ class AttentionRBF(AttentionBase):
       sigma = self.linear_support #* T.cast(self.B.shape[0],'float32')#0.0001 #self.support_step * 2.0
       pi = T.cast(numpy.sqrt(2 * numpy.pi), theano.config.floatX)
       distance = -((T.cast(T.arange(self.B.shape[0]).dimshuffle(0,'x').repeat(self.B.shape[1],axis=1), 'float32') - center) ** 2) / T.cast(2 * sigma ** 2, theano.config.floatX)
-      w_s = 1. - T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2)
-      #w_s = w_s / T.sum(w_s, axis=0, keepdims=True)
+      w_s = (T.cast(T.exp(distance) / (pi * sigma), 'float32').dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2)) * self.index
+      #w_s = w_s / (T.sum(w_s, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       #w_s = T.extra_ops.to_one_hot(T.argmax(w_s[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
       #proto = (self.B - T.sum(self.B * w_s, axis=0, keepdims=True)) ** 2 / (2 * self.sigma ** 2)
 
-      f_z = -T.sum(w_s * (self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) ** 2) / T.cast(2 * self.sigma ** 2, theano.config.floatX), axis=2, keepdims=True) / (pi * self.sigma + T.constant(1e-32,dtype='float32'))
-      f_e = (T.exp(f_z) + T.constant(1e-32,dtype='float32')) * self.index
-      w_t = f_e / T.sum(f_e, axis=0, keepdims=True)
+      f_z = -T.sqrt(T.sum((self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0) ** 2) / T.cast(2 * self.sigma ** 2, theano.config.floatX), axis=2, keepdims=True)) / (pi * self.sigma)
+      f_e = T.exp(f_z) * self.index
+      w_t = w_s + w_t #f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       #w_t = w_t + w_s
       #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
       sij = T.sum(self.i, axis=0) / T.sum(self.j, axis=0)
