@@ -446,7 +446,7 @@ class AttentionRBF(AttentionBase):
       f_e = T.exp(f_z) * self.index
       w_t = w_s + w_t #f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       #w_t = w_t + w_s
-      #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
+      w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
       sij = T.sum(self.i, axis=0) / T.sum(self.j, axis=0)
       updates[self.t] = self.t + sij
     #w_t = T.extra_ops.to_one_hot(T.argmax(w_t[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)

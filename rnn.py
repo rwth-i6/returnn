@@ -130,6 +130,7 @@ def getDevicesInitArgs(config):
     devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key].pop('num_batches', 1), "update_specs" : specs[key].pop('update_specs', {}) } for key in specs ]
   else:
     device_tags = {}
+    ngpux = 0
     ncpus, ngpus = get_num_devices()
     if "all" in device_info:
       device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
@@ -148,7 +149,9 @@ def getDevicesInitArgs(config):
         utype = info[0:3]
         uid = info[3:]
         if uid == '*': uid = "[0-9]*"
-        if uid == 'X': device_tags[info] = [num_batches, True]
+        if uid == 'X':
+          ngpux += 1
+          device_tags[info] = [num_batches, True]
         else:
           if utype == 'cpu':
             np = ncpus
@@ -170,6 +173,8 @@ def getDevicesInitArgs(config):
         device_tags[newtag] = device_tags[tags[0]]
         tags[0] = newtag
       devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
+      if len(devices) == 1 and ngpux > 1:
+        devices = devices * ngpux
       import TaskSystem
       if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
         assert not TheanoFlags.get("device", "").startswith("gpu"), \
