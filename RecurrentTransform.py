@@ -417,7 +417,7 @@ class AttentionRBF(AttentionBase):
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
     self.linear_support = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_linear_support']), name="linear_support"))
     self.index = self.add_input(T.cast(self.layer.base[0].index[::self.layer.attrs['direction'] or 1].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
-    self.w = self.add_state_var(T.zeros(self.B.shape[:2], dtype="float32"), name="w")
+    self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
     if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
       self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
       self.i = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'i')
