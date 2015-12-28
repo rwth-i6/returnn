@@ -631,6 +631,8 @@ class RecurrentUnitLayer(Layer):
         self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
       else:
         self.act = outputs[:unit.n_act]
+        if len(outputs) > unit.n_act:
+          self.aux = outputs[unit.n_act:]
     #T.set_subtensor(self.act[0][(self.index > 0).nonzero()], T.zeros_like(self.act[0][(self.index > 0).nonzero()]))
     #T.set_subtensor(self.act[1][(self.index > 0).nonzero()], T.zeros_like(self.act[1][(self.index > 0).nonzero()]))
     #jindex = self.index.dimshuffle(0,1,'x').repeat(unit.n_out,axis=2)
