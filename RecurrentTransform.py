@@ -417,13 +417,13 @@ class AttentionRBF(AttentionBase):
     self.sigma = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_sigma']), name="sigma"))
     self.linear_support = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_linear_support']), name="linear_support"))
     self.index = self.add_input(T.cast(self.layer.base[0].index[::self.layer.attrs['direction'] or 1].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
-    self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
+    #self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
     if 'attention_linear_support' in self.layer.attrs and self.layer.attrs['attention_linear_support'] > 0.0:
       self.t = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="t")
       self.i = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'i')
       self.j = self.add_input(T.cast(self.layer.index, 'float32'), 'j')
     values = numpy.zeros((self.W_att_re.get_value().shape[1],),dtype='float32')
-    self.W_att_b = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_b"))
+    self.W_att_b = self.add_param(theano.shared(value=values, borrow=True, name="W_att_b"))
 
   def step(self, y_p):
     f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
@@ -451,13 +451,14 @@ class AttentionRBF(AttentionBase):
       #w_t = w_t / T.sum(w_t, axis=0, keepdims=True)
       sij = T.cast(T.sum(self.i, axis=0),'float32') / T.cast(T.sum(self.j, axis=0),'float32')
       updates[self.t] = self.t + sij
-    delta = w_t[:,:,0] - self.w
+    #delta = w_t[:,:,0] - self.w
     #import theano.printing
     #delta = theano.printing.Print("delta")(delta)
-    updates[self.w] = self.w + delta
+    #updates[self.w] = self.w + delta
     #w_t = T.extra_ops.to_one_hot(T.argmax(w_t[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
     #return T.dot(self.B[T.argmax(w_t[:,:,0],axis=0)], self.W_att_in), updates
-    return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
+    #return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
+    return T.dot(T.sum(self.B * w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
 
