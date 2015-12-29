@@ -286,7 +286,7 @@ class RecurrentUnitLayer(Layer):
                attention = "none", # soft attention (none, input, time) # deprecated
                recurrent_transform = "none",
                recurrent_transform_attribs = "{}",
-               attention_linear_support = 0.0,
+               attention_template = None,
                attention_sigma = 1.0,
                attention_beam = 3, # soft attention context window
                base = None,
@@ -332,7 +332,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('recurrent_transform', recurrent_transform.encode("utf8"))
     if isinstance(recurrent_transform_attribs, str):
       recurrent_transform_attribs = json.loads(recurrent_transform_attribs)
-    self.set_attr('attention_linear_support', attention_linear_support)
+    if attention_template:
+      self.set_attr('attention_template', attention_template)
     self.set_attr('recurrent_transform_attribs', recurrent_transform_attribs)
     self.set_attr('attention_sigma', attention_sigma)
     if lm: # TODO hack
