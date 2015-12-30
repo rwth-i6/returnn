@@ -860,7 +860,10 @@ class RecurrentChunkLayer(Layer):
       yalloc = T.alloc(numpy.cast['int32'](0), (self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size)) * self.index.shape[1])
       y = T.set_subtensor(yalloc[:self.index.shape[0] * self.index.shape[1]],self.y_in[self.attrs['target']].flatten())
       y_t = self.W_lm_out[y].reshape((chunk_size,num_batches,unit.n_in))[:-1] # (T-1)BD
-      sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1), y_t], axis=0) * self.lmmask
+      if direction == 1:
+        sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1), y_t], axis=0) * self.lmmask
+      else:
+        sequences += T.concatenate([y_t, self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1)], axis=0) * self.lmmask
 
     if self.recurrent_transform:
       outputs_info += self.recurrent_transform.get_sorted_state_vars_initial()

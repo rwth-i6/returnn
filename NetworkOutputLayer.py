@@ -214,6 +214,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
     output = 0
     for s in self.sources:
       output += T.dot(s.output,s.W_lm_in)
+      #output += T.concatenate([T.dot(s.output[:-1],s.W_lm_in), T.eye(self.attrs['n_out'], 1).flatten().dimshuffle('x','x',0).repeat(self.index.shape[1], axis=1)], axis=0)
     self.params = {}
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     self.p_y_given_x = T.nnet.softmax(self.y_m)

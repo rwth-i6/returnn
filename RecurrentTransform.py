@@ -478,7 +478,7 @@ class AttentionTemplate(AttentionBase):
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
     self.W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs"))
     values = numpy.zeros((self.W_att_re.get_value().shape[1],),dtype='float32')
-    self.index = self.add_input(T.cast(self.layer.base[0].index[::self.layer.attrs['direction'] or 1].dimshuffle(0,1,'x').repeat(n_tmp,axis=2), 'float32'), 'index')
+    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(n_tmp,axis=2), 'float32'), 'index')
     self.b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs"))
     self.B = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
     self.add_input(self.B, 'B')
@@ -515,6 +515,8 @@ class AttentionTemplateLM(AttentionTemplate):
   def create_vars(self):
     super(AttentionTemplateLM, self).create_vars()
     self.W_lm_in = self.add_param(self.layer.W_lm_in, name = "W_lm_in")
+    #values = numpy.zeros((self.W_lm_in.get_value().shape[1],),dtype='float32')
+    #self.b_lm_in = self.add_param(theano.shared(value=values, borrow=True, name="b_lm_in"))
     self.W_lm_out = self.add_param(self.layer.W_lm_out, name = "W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask,"lmmask")
     self.c = self.add_state_var(T.zeros((self.B.shape[1],), dtype="float32"), name="c")
@@ -524,9 +526,9 @@ class AttentionTemplateLM(AttentionTemplate):
 
     #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
 
-    h_e = T.exp(T.dot(y_p, self.W_lm_in))
-    #z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-    z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.c[0],'int32')])
+    h_e = T.exp(T.dot(y_p, self.W_lm_in)) # + self.b_lm_in)
+    z_re += T.dot(h_e / (T.sum(h_e,axis=1,keepdims=True)), self.W_lm_out) * (T.ones_like(z_re) - self.lmmask[T.cast(self.c[0],'int32')])
+    #z_re += self.W_lm_out[T.argmax(h_e / (T.sum(h_e,axis=1,keepdims=True)), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.c[0],'int32')])
 
     updates[self.c] = self.c + T.ones_like(self.c)
     return z_re, updates
