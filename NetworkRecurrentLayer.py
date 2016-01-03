@@ -430,7 +430,7 @@ class RecurrentUnitLayer(Layer):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name)
       self.add_param(self.W_lm_out)
-      if self.attrs['droplm'] == 0.0:
+      if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
         recurrent_transform = recurrent_transform[:-3]
       elif self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
@@ -499,13 +499,18 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      if self.attrs['lm'] and self.attrs['droplm'] < 1.0:
+      if False and self.attrs['lm'] and self.attrs['droplm'] < 1.0:
         y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
         n_cls = self.y_in[self.attrs['target']].n_out
-        y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
         #real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
         #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
-        sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask
+        if direction == 1:
+          y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
+          #sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1), y_t], axis=0) * self.lmmask
+        else:
+          y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[1:] # (T-1)BD
+          #sequences += T.concatenate([y_t, self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1)], axis=0) * self.lmmask
+        #sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask
         #sequences += self.W_lm_out[self.y_in[self.attrs['target']]].reshape((index.shape[0],index.shape[1],unit.n_in)) #T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask
         #sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
         #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
@@ -802,11 +807,11 @@ class RecurrentChunkLayer(Layer):
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
-      l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
+      l = sqrt(2.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out + self.y_in[self.attrs['target']].n_in)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
       self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name)
       self.add_param(self.W_lm_in)
-      l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
+      #l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name)
       self.add_param(self.W_lm_out)

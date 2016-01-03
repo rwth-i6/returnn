@@ -210,14 +210,25 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
     super(DecoderOutputLayer, self).__init__(**kwargs)
     self.set_attr('loss', 'decode')
 
+  def cost(self):
+    res = 0.0
+    for s in self.y_s:
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=s.reshape((s.shape[0]*s.shape[1],s.shape[2]))[self.i], y_idx=self.y_data_flat[self.i])
+      res += T.sum(nll) #T.sum(T.log(s.reshape((s.shape[0]*s.shape[1],s.shape[2]))[self.i,self.y_data_flat[self.i]]))
+    return res / float(len(self.y_s)), None
+
   def initialize(self):
-    output = 0
+    output = 1
+    self.y_s = []
+    #i = T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2),'float32')
     for s in self.sources:
-      output += T.dot(s.output,s.W_lm_in)
+      self.y_s.append(T.dot(s.output,s.W_lm_in))
+      output += self.y_s[-1]
       #output += T.concatenate([T.dot(s.output[:-1],s.W_lm_in), T.eye(self.attrs['n_out'], 1).flatten().dimshuffle('x','x',0).repeat(self.index.shape[1], axis=1)], axis=0)
     self.params = {}
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    self.p_y_given_x = T.nnet.softmax(self.y_m)
+    #h = T.exp(self.y_m)
+    self.p_y_given_x = self.y_m #h / h.sum(axis=1,keepdims=True) #T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
 
