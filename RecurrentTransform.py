@@ -513,8 +513,16 @@ class AttentionTemplate(AttentionBase):
 
   def step(self, y_p):
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)
+    dist = 'l2'
+    if 'attention_distance' in self.layer.attrs:
+      dist = self.layer.attrs['attention_distance']
     #f_z = T.sum((self.B - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
-    f_z = T.sum((self.C - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+    if dist == 'l2':
+      f_z = T.sum((self.C - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+    elif dist == 'dot':
+      f_z = T.sum(self.C * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
+    else:
+      assert False, "invalid distance: %s" % dist
     #f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(-f_z) * self.index
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
