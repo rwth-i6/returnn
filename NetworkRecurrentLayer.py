@@ -287,6 +287,7 @@ class RecurrentUnitLayer(Layer):
                recurrent_transform = "none",
                recurrent_transform_attribs = "{}",
                attention_template = None,
+               attention_distance = 'l2',
                attention_sigma = 1.0,
                attention_beam = 3, # soft attention context window
                base = None,
@@ -335,6 +336,7 @@ class RecurrentUnitLayer(Layer):
     if attention_template:
       self.set_attr('attention_template', attention_template)
     self.set_attr('recurrent_transform_attribs', recurrent_transform_attribs)
+    self.set_attr('attention_distance', attention_distance)
     self.set_attr('attention_sigma', attention_sigma)
     if lm: # TODO hack
       recurrent_transform += "_lm"
