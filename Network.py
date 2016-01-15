@@ -485,6 +485,8 @@ class LayerNetwork(object):
       targets = self.y[target]
     else:
       targets = None
+    if self.loss == "ctc":
+      self.n_out[target][0] += 1
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":

@@ -319,8 +319,8 @@ class Device(object):
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
-        train_givens = self.make_ctc_givens(self.trainnet)
-        test_givens = self.make_ctc_givens(self.testnet)
+        train_givens = self.make_givens(self.trainnet)
+        test_givens = self.make_givens(self.testnet)
       elif self.trainnet.loss == 'ce_ctc':
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_ce_ctc_givens(self.testnet)
@@ -691,9 +691,6 @@ class Device(object):
           j[k] = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
-        if self.trainnet.loss in ('ctc','ce_ctc'):
-          c = input_queue.recv()
-          self.cp.set_value(c)
         if SprintCommunicator.instance is not None:
           SprintCommunicator.instance.segments = self.tags
         # self.x == self.y["data"], will be set also here.
@@ -858,7 +855,7 @@ class Device(object):
     assert all([s > 0 for s in shapes["data"]])
     # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
     import theano
-    self.targets = {k: numpy.zeros(shapes[k], dtype=theano.config.floatX) for k in self.used_data_keys}
+    self.targets = {k: numpy.full(shapes[k], -1, dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # TODO
