@@ -68,6 +68,7 @@ def get_device_attributes():
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
+                 "Geforce GTX TITAN X" : (3072, 1000, 12 * 1024 * 1024 * 1024),
                  "GeForce GT 540M" : (2688, 837, 2 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
@@ -147,6 +148,9 @@ class Device(object):
           raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number(); """ :type: int """
         self.device_name = cuda.active_device_name(); """ :type: str """
+	#For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
+	if self.device_name == "Graphics Device":
+	  self.device_name = "Geforce GTX TITAN X"
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
@@ -641,6 +645,9 @@ class Device(object):
         raise Exception("Theano CUDA support seems broken: %s" % exc)
       device_id = theano_cuda_ndarray.active_device_number()
       device_name = theano_cuda_ndarray.active_device_name()
+      #For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
+      if device_name == "Graphics Device":
+        device_name = "Geforce GTX TITAN X"
       device = "gpu%i" % device_id
     else:
       try:
