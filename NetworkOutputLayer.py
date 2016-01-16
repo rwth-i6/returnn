@@ -8,7 +8,6 @@ from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
 from NetworkRecurrentLayer import RecurrentLayer
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
-from theano.tensor.extra_ops import cpu_contiguous
 
 
 #from Accumulator import AccumulatorOpInstance
@@ -274,6 +273,7 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad + T.grad(ce, self.z)}
       return err, known_grads
     elif self.loss == 'ctc':
+      from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
@@ -297,6 +297,7 @@ class SequenceOutputLayer(OutputLayer):
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
+      from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0)))
     else:
       return super(SequenceOutputLayer, self).errors()
