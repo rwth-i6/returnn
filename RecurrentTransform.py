@@ -521,9 +521,12 @@ class AttentionTemplate(AttentionBase):
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
       beam = T.cast(self.beam, 'int32')
-      focus = T.cast(T.round(self.loc), 'int32')
-      focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam) #+ self.loc
+      focus = T.cast(T.floor(self.loc), 'int32')
+      #import theano.printing
+      #focus = theano.printing.Print("focus")(focus)
+      focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0] - 1, focus + beam) #+ self.loc
       focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
+      focus_j = T.switch(T.le(focus_i,focus_j), focus_i - 1, focus_j)
       focus_end = T.max(focus_i)
       focus_start = T.min(focus_j)
       base = self.C[focus_start:focus_end]
@@ -537,7 +540,7 @@ class AttentionTemplate(AttentionBase):
     if dist == 'l2':
       f_z = T.sum((base - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     elif dist == 'l1':
-      f_z = T.abs((base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+      f_z = T.sum(T.abs(base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     elif dist == 'dot':
       f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
     else:
@@ -546,7 +549,6 @@ class AttentionTemplate(AttentionBase):
     f_e = T.exp(-f_z) * index
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
     #delta = w_t[:,:,0] - self.w
-    #import theano.printing
     #delta = theano.printing.Print("delta")(delta)
     #updates[self.w] = self.w + delta
     #w_t = T.extra_ops.to_one_hot(T.argmax(w_t[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
@@ -555,7 +557,10 @@ class AttentionTemplate(AttentionBase):
     #return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     if self.layer.attrs['attention_beam'] != 0:
       #updates[self.loc] = T.cast(focus_start,'float32') + self.frac #T.argmax(self.w_t,axis=0)[:,0],'float32') + self.frac
-      updates[self.loc] = T.cast(focus_start,'float32') + T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32')
+      #updates[self.loc] = T.cast(focus,'float32') + T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32')
+      #w_step = T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32') - 0.5 * T.cast(focus_end - focus_start, 'float32')
+      updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
+      #updates[self.loc] = T.cast(focus,'float32') + T.switch(T.lt(w_step,0), w_step, T.zeros_like(w_step)) + self.frac
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
