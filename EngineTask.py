@@ -151,7 +151,8 @@ class TaskThread(threading.Thread):
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
-        self.results[key] *= self.epoch_norm_factor_for_result(key)
+        if key != "ctc_priors":
+          self.results[key] *= self.epoch_norm_factor_for_result(key)
       # Total score/error.
       self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
       self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])

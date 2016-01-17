@@ -226,7 +226,10 @@ class LayerNetwork(object):
       if cl == 'softmax' or cl == 'decoder':
         if not 'target' in params:
           params['target'] = target
-        params['index'] = network.j[target] #output_index
+        if 'loss' in obj and obj['loss'] == 'ctc':
+          params['index'] = network.i
+        else:
+          params['index'] = network.j[target] #output_index
         return network.make_classifier(**params)
       else:
         layer_class = get_layer_class(cl)

@@ -51,6 +51,7 @@ def initConfig(configFilename, commandLineOptions):
   parser.add_option("-c", "--chunking", dest = "chunking", help = "[INTEGER/TUPLE] Maximal number of frames per sequence (optional: shift of chunking window).")
   parser.add_option("-d", "--description", dest = "description", help = "[STRING] Description of experiment.")
   parser.add_option("-e", "--epoch", dest = "epoch", help = "[INTEGER] Starting epoch.")
+  parser.add_option("-E", "--eval", dest = "eval", help = "[STRING] eval file path")
   parser.add_option("-f", "--gate_factors", dest = "gate_factors", help = "[none/local/global] Enables pooled (local) or separate (global) coefficients on gates.")
   parser.add_option("-g", "--lreg", dest = "lreg", help = "[FLOAT] L1 or L2 regularization.")
   parser.add_option("-i", "--save_interval", dest = "save_interval", help = "[INTEGER] Number of epochs until a new model will be saved.")
