@@ -509,24 +509,37 @@ class AttentionTemplate(AttentionBase):
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
     #values = numpy.zeros((self.W_att_in.get_value().shape[1],),dtype='float32')
     #self.b_att_in = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_in"))
-
+    if self.layer.attrs['attention_beam'] != 0:
+      self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
+      self.loc = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'loc')
 
   def step(self, y_p):
+    updates = {}
+    base = self.C
+    context = self.B
+    if self.layer.attrs['attention_beam'] != 0:
+      beam = T.cast(self.beam, 'int32')
+      focus = T.cast(self.loc, 'int32')
+      focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam) #+ self.loc
+      focus_j = T.switch(T.lt(focus - 1,0), 0, focus - 1)
+      focus_end = T.max(focus_i)
+      focus_start = T.min(focus_j)
+      base = self.C[focus_start:focus_end]
+      context = self.B[focus_start:focus_end]
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
     #f_z = T.sum((self.B - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     if dist == 'l2':
-      f_z = T.sum((self.C - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+      f_z = T.sum((base - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     elif dist == 'dot':
-      f_z = T.sum(self.C * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
+      f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
     else:
       assert False, "invalid distance: %s" % dist
     #f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(-f_z) * self.index
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
-    updates = {}
     #delta = w_t[:,:,0] - self.w
     #import theano.printing
     #delta = theano.printing.Print("delta")(delta)
@@ -535,7 +548,9 @@ class AttentionTemplate(AttentionBase):
     #return T.dot(self.B[T.argmax(w_t[:,:,0],axis=0)], self.W_att_in), updates
     #return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
-    return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
+    if self.layer.attrs['attention_beam'] != 0:
+      updates[self.loc] = T.cast(T.argmax(self.w_t[:,:,0],axis=0) + 1,'float32')
+    return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
 
@@ -645,7 +660,7 @@ class AttentionBeam(AttentionBase):
     super(AttentionBeam, self).create_vars()
     self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
     #self.focus = self.add_state_var(theano.shared(value=numpy.zeros((self.layer.index.shape[1],), dtype="float32"), name="focus"))  # (batch,)
-    self.loc = self.add_state_var(theano.gradient.disconnected_grad(T.alloc(numpy.cast['float32'](0), self.layer.index.shape[1])), 'loc')
+    self.loc = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'loc')
     #self.focus = self.add_state_var(T.alloc(numpy.cast['float32'](0), self.layer.index.shape[1]), "focus")
     #self.index_range = self.add_var(T.arange(self.layer.index.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.layer.index.shape[1],axis=1), "index_range")
 
