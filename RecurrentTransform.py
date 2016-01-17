@@ -512,6 +512,7 @@ class AttentionTemplate(AttentionBase):
     if self.layer.attrs['attention_beam'] != 0:
       self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
       self.loc = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'loc')
+      self.frac = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'frac')
 
   def step(self, y_p):
     updates = {}
@@ -520,9 +521,9 @@ class AttentionTemplate(AttentionBase):
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
       beam = T.cast(self.beam, 'int32')
-      focus = T.cast(self.loc, 'int32')
+      focus = T.cast(T.round(self.loc), 'int32')
       focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam) #+ self.loc
-      focus_j = T.switch(T.lt(focus - 1,0), 0, focus - 1)
+      focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
       focus_end = T.max(focus_i)
       focus_start = T.min(focus_j)
       base = self.C[focus_start:focus_end]
@@ -553,7 +554,8 @@ class AttentionTemplate(AttentionBase):
     #return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     if self.layer.attrs['attention_beam'] != 0:
-      updates[self.loc] = T.cast(focus_start + T.argmax(self.w_t,axis=0)[:,0] + 1,'float32')
+      #updates[self.loc] = T.cast(focus_start,'float32') + self.frac #T.argmax(self.w_t,axis=0)[:,0],'float32') + self.frac
+      updates[self.loc] = T.cast(focus_start,'float32') + T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32')
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
