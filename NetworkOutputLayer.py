@@ -24,7 +24,7 @@ from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, copy_input=None,
+  def __init__(self, loss, y, copy_input=None, time_limit=0,
                grad_clip_z=None, grad_discard_out_of_bound_z=None,
                **kwargs):
     """
@@ -69,7 +69,13 @@ class OutputLayer(Layer):
     if grad_discard_out_of_bound_z is not None:
       grad_discard_out_of_bound_z = numpy.float32(grad_discard_out_of_bound_z)
       self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
-
+    self.norm = 1.0
+    if time_limit > 0:
+      end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
+      nom = T.cast(T.sum(self.index),'float32')
+      self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
+      self.norm = nom  / T.cast(T.sum(self.index),'float32')
+      self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
     #outputs_info = None #[ T.alloc(numpy.cast[theano.config.floatX](0), index.shape[1], self.attrs['n_out']) ]
@@ -112,9 +118,9 @@ class OutputLayer(Layer):
     """
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+        return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
       else:
-        return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
+        return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
     elif self.y_data_flat.dtype.startswith('float'):
       return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
@@ -169,7 +175,7 @@ class FramewiseOutputLayer(OutputLayer):
         #nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
-      return T.sum(nll), known_grads
+      return self.norm * T.sum(nll), known_grads
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m) #(TB)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD

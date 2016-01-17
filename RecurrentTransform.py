@@ -641,34 +641,26 @@ class AttentionBeam(AttentionBase):
   """
   name = "attention_beam"
 
-  def create_vars_for_custom(self):
-    super(AttentionBeam, self).create_vars_for_custom()
-    self.beam = self.add_var(self.tt.fscalar('beam'))
-    self.focus = self.add_state_var(theano.shared(value=numpy.zeros((50,), dtype="float32"), name="focus"))
-    #self.focus = self.add_state_var(self.tt.fvector('focus'))
-    self.index_range = self.add_var(self.tt.fmatrix('index_range'))
-    self.loc = self.add_var(self.tt.fvector('loc')) # T.alloc(numpy.cast['int32'](0), 1)
-
   def create_vars(self):
     super(AttentionBeam, self).create_vars()
     self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
-    self.focus = self.add_state_var(theano.shared(value=numpy.zeros((50,), dtype="float32"), name="focus"))  # (batch,)
-    self.loc = T.alloc(numpy.cast['int32'](0), self.layer.index.shape[1])
+    #self.focus = self.add_state_var(theano.shared(value=numpy.zeros((self.layer.index.shape[1],), dtype="float32"), name="focus"))  # (batch,)
+    self.loc = self.add_state_var(theano.gradient.disconnected_grad(T.alloc(numpy.cast['float32'](0), self.layer.index.shape[1])), 'loc')
     #self.focus = self.add_state_var(T.alloc(numpy.cast['float32'](0), self.layer.index.shape[1]), "focus")
-    self.index_range = self.add_var(T.arange(self.layer.index.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.layer.index.shape[1],axis=1), "index_range")
+    #self.index_range = self.add_var(T.arange(self.layer.index.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.layer.index.shape[1],axis=1), "index_range")
 
   def step(self, y_p):
-    import theano.printing
-    focus = T.cast(self.focus, 'int32')
+    #import theano.printing
+    #focus = T.cast(self.focus, 'int32')
     beam = T.cast(self.beam, 'int32')
     #self.loc = theano.printing.Print("loc")(self.loc)
-    self.loc += 1
+    #self.loc += 1
     focus = T.cast(self.loc, 'int32')
-    focus = theano.printing.Print("focus")(focus)
+    #focus = theano.printing.Print("focus")(focus)
     focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0], focus + beam) #+ self.loc
     focus_j = T.switch(T.lt(focus - 1,0), 0, focus - 1)
-    focus_i = theano.printing.Print("focus_start")(focus_i)
-    focus_j = theano.printing.Print("focus_end")(focus_j)
+    #focus_i = theano.printing.Print("focus_start")(focus_i)
+    #focus_j = theano.printing.Print("focus_end")(focus_j)
     focus_end = T.max(focus_i) #theano.printing.Print("focus_end", T.max(focus_i))
     focus_start = T.min(focus_j)
     att_x = self.B[focus_start:focus_end]
@@ -680,7 +672,7 @@ class AttentionBeam(AttentionBase):
     #focus = T.cast(T.argmax(w_t,axis=0).dimshuffle(0) + focus_start, 'float32') #T.sum(w_t[:,:,0]*self.index_range[focus_start:focus_end],axis=0)
     #focus = T.cast(T.argmax(w_t,axis=0).dimshuffle(0) + focus_start, 'float32') #T.sum(w_t[:,:,0]*self.index_range[focus_start:focus_end],axis=0)
     #focus = T.sum(w_t.dimshuffle(0,1)*T.arange(w_t.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1),axis=0) #+ T.cast(focus_start,'float32') # #T.cast(T.sum(T.arange(attention_beam, dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1) * w_t, axis=0), 'int32')
-    self.loc += 3.0 * T.sum(w_t.dimshuffle(0,1)*T.arange(w_t.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1),axis=0) / T.cast(w_t.shape[0],'float32')
+    #self.loc += 3.0 * T.sum(w_t.dimshuffle(0,1)*T.arange(w_t.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_t.shape[1],axis=1),axis=0) / T.cast(w_t.shape[0],'float32')
     #focus = self.focus + 1
     #focus = self.focus + 1
     #self.focus += 1
@@ -689,7 +681,7 @@ class AttentionBeam(AttentionBase):
 
     #self.beam = T.cast(T.max([0.5 * T.exp(-T.sum(T.log(w_t)*w_t,axis=0)).flatten(),T.ones_like(beam)],axis=0),'int32') #T.cast(2.0 * T.max(-T.log(w_t),axis=0).flatten() * (focus_end - focus_start),'int32')
 
-    return T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in), {} # self.focus : focus }
+    return T.dot(T.sum(att_x * w_t, axis=0, keepdims=False), self.W_att_in), { self.loc : T.cast(T.argmax(w_t[:,:,0],axis=0), 'float32') } # self.focus : focus }
 
 
 class AttentionTimeGauss(RecurrentTransformBase):
