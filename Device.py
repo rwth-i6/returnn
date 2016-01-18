@@ -397,10 +397,10 @@ class Device(object):
         if extract == "classification":
           source.append(T.argmax(self.testnet.output['output'].y_m, axis=1).reshape(self.testnet.output['output'].index.shape).dimshuffle(0,1,'x'))
         elif extract == "log-posteriors":
-	  p_y_given_x = self.testnet.output['output'].p_y_given_x
-	  if p_y_given_x.ndim == 3:
-	    p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0] * p_y_given_x.shape[1], p_y_given_x.shape[2]))
-	  index = self.testnet.output['output'].index
+          p_y_given_x = self.testnet.output['output'].p_y_given_x
+          if p_y_given_x.ndim == 3:
+            p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0] * p_y_given_x.shape[1], p_y_given_x.shape[2]))
+          index = self.testnet.output['output'].index
           source.append(T.log(p_y_given_x).reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1])) * T.cast(index.dimshuffle(0,1,'x').repeat(p_y_given_x.shape[1],axis=2),'float32'))
         elif extract == "posteriors":
           source.append(self.testnet.output['output'].p_y_given_x)
