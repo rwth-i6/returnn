@@ -1088,3 +1088,160 @@ class NewConvLayer(_NoOpLayer):
       name="b_conv"
     )
 ############################################# END HERE ######################################################
+
+
+
+
+
+################################################# NEW AUTOMATIC CONVOLUTIONAL LAYER #######################################################
+class NewConv(_NoOpLayer):
+  layer_class = "conv"
+
+  """
+    This is class for Convolution Neural Networks
+    Get the reference from deeplearning.net/tutorial/lenet.html
+  """
+
+  def __init__(self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid', ignore_border=True, **kwargs):
+
+    """
+
+    :param n_features: integer
+        the number of feature map(s) / filter(S) that will be used for the filter shape
+
+    :param filter: integer
+        the number of row(s) or columns(s) from the filter shape
+        this filter is the square, therefore we only need one parameter that represents row and column
+
+    :param d_row: integer
+        the number of row(s) from the input
+        this has to be filled only for the first convolutional neural network layer
+        the remaining layer will used the number of row from the previous layer
+
+    :param pool_size: tuple of length 2
+        Factor by which to downscale (vertical, horizontal)
+        (default value is (2, 2))
+
+    :param border_mode: string
+        'valid'-- only apply filter to complete patches of the image. Generates
+                  output of shape: (image_shape - filter_shape + 1)
+        'full' -- zero-pads image to multiple of filter shape to generate output
+                  of shape: (image_shape + filter_shape - 1)
+        (default value is 'valid')
+
+    :param ignore_border: boolean
+        True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
+        False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
+
+    """
+
+    super(NewConv, self).__init__(**kwargs)
+
+    # check how many source
+    if len(self.sources) > 1:
+      print 'Sorry, we did not provide multiple input for CNN layer!'
+      exit(1)
+
+    # check previous layer is CNN or not
+    if self.sources[0].layer_class == 'conv':
+      d_row = self.sources[0].attrs['d_row']
+      stack_size = self.sources[0].attrs['n_features']
+    else:
+      stack_size = 1
+
+    # set column dimension of the input
+    d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
+
+    # number of output dimension validation based on the border_mode
+    if border_mode == 'valid':
+      d_row_new = (d_row - filter + 1)/pool_size[0]
+      d_col_new = (d_col - filter + 1)/pool_size[1]
+    elif border_mode == 'full':
+      d_row_new = (d_row + filter - 1)/pool_size[0]
+      d_col_new = (d_col + filter - 1)/pool_size[1]
+    else:
+      assert False, 'invalid border_mode %r' % border_mode
+    n_out = (d_row_new * d_col_new) * n_features
+
+    # set all attributes of this class
+    self.set_attr('n_features', n_features)
+    self.set_attr('filter', filter)
+    self.set_attr('pool_size', pool_size)
+    self.set_attr('border_mode', border_mode)
+    self.set_attr('ignore_border', ignore_border)
+    self.set_attr('d_row', d_row_new)   # number of output row
+    self.set_attr('n_out', n_out)   # number of output dimension
+
+    # our CRNN input is 3D tensor that consists of (time, batch, dim)
+    # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
+    # therefore, we should convert our input into 4D tensor
+    input = T.concatenate([s.output for s in self.sources], axis=-1)  # (time, batch, input-dim = row * col * stack_size)
+    input.name = 'conv_layer_input_concat'
+    time = input.shape[0]
+    batch = input.shape[1]
+    input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
+    self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
+    self.input.name = 'conv_layer_input_final'
+
+    # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
+    self.filter_shape = (n_features, stack_size, filter, filter)
+
+    # weight parameter
+    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size))
+    # bias parameter
+    self.b = self.add_param(self._create_bias(n_features=n_features))
+
+    # convolution function
+    self.conv_out = conv.conv2d(
+      input=self.input,
+      filters=self.W,
+      filter_shape=self.filter_shape,
+      border_mode=border_mode
+    )
+    self.conv_out.name = 'conv_layer_conv_out'
+
+    # max pooling function
+    self.pooled_out = downsample.max_pool_2d(
+      input=self.conv_out,
+      ds=pool_size,
+      ignore_border=ignore_border
+    )
+    self.pooled_out.name = 'conv_layer_pooled_out'
+
+    # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+    output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
+    output.name = 'conv_layer_output_plus_bias'
+
+    # our CRNN only accept 3D tensor (time, batch, dim)
+    # so, we have to convert the output back to 3D tensor
+    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+    self.make_output(self.output)
+
+
+  # function for calculating the weight parameter of this class
+  def _create_weights(self, filter_shape, pool_size):
+    rng = numpy.random.RandomState(23455)
+    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+
+    W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+    return theano.shared(
+      numpy.asarray(
+        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+        dtype=theano.config.floatX
+      ),
+      borrow=True,
+      name="W_conv"
+    )
+
+  # function for calculating the bias parameter of this class
+  def _create_bias(self, n_features):
+    return theano.shared(
+      numpy.zeros(
+        (n_features,),
+        dtype=theano.config.floatX
+      ),
+      borrow=True,
+      name="b_conv"
+    )

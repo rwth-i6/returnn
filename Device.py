@@ -69,7 +69,7 @@ def get_device_attributes():
                  "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
                  "Geforce GTX TITAN X" : (3072, 1000, 12 * 1024 * 1024 * 1024),
-                 "GeForce GT 540M" : (2688, 837, 2 * 1024),
+                 "GeForce GT 540M" : (2688, 837, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
   #return int(cmd("grep NVIDIA /var/log/Xorg.0.log | grep Memory | head -n "+str(device + 1)+" | tail -n 1 | cut -d ' ' -f 7")[0]) * 1024
