@@ -288,7 +288,7 @@ class RecurrentUnitLayer(Layer):
                recurrent_transform_attribs = "{}",
                attention_template = None,
                attention_distance = 'l2',
-               attention_step = "focus",
+               attention_step = "warped",
                attention_beam = 0, # soft attention context window
                base = None,
                lm = False, # language model

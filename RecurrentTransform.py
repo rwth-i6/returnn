@@ -552,7 +552,6 @@ class AttentionTemplate(AttentionBase):
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
     #import theano.printing
     #self.w_t = theano.printing.Print("w_t")(self.w_t)
-
     #delta = w_t[:,:,0] - self.w
     #delta = theano.printing.Print("delta")(delta)
     #updates[self.w] = self.w + delta
@@ -569,7 +568,7 @@ class AttentionTemplate(AttentionBase):
         updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
       elif self.layer.attrs['attention_step'] == 'linear':
         updates[self.loc] = self.loc + self.frac
-      elif self.layer.attrs['attention_step'] == 'soft-linear':
+      elif self.layer.attrs['attention_step'] == 'warped':
         updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - T.cast(index.shape[0] / 2, 'float32')
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
