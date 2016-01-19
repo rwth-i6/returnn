@@ -334,7 +334,7 @@ class AttentionBase(RecurrentTransformBase):
 
     self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
     #self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
-    self.B = T.concatenate(src, axis=2) + self.xb  # == B
+    self.B = T.concatenate(src, axis=2) # + self.xb  # == B
     #self.B = self.B[::layer.attrs['direction'] or 1]
     self.B.name = "B"
     self.add_input(self.B)
@@ -488,20 +488,22 @@ class AttentionTemplate(AttentionBase):
     super(AttentionTemplate, self).create_vars()
     assert 'attention_template' in self.layer.attrs
     n_tmp = self.layer.attrs['attention_template']
-    l = sqrt(2.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
-    self.W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs"))
-    values = numpy.zeros((self.W_att_re.get_value().shape[1],),dtype='float32')
-    #self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(n_tmp,axis=2), 'float32'), 'index')
-    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
-    self.b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs"))
-    #self.B = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
-    #self.add_input(self.B, 'B')
-    self.C = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
-    self.add_input(self.C, 'C')
+    values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
     self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
+    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    if self.layer.attrs['attention_template'] > 0:
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
+      self.W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs"))
+      #self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(n_tmp,axis=2), 'float32'), 'index')
+      values = numpy.zeros((n_tmp,),dtype='float32')
+      self.b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs"))
+      #self.B = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
+      #self.add_input(self.B, 'B')
+      self.C = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
+      self.add_input(self.C, 'C')
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     #self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
@@ -516,7 +518,7 @@ class AttentionTemplate(AttentionBase):
 
   def step(self, y_p):
     updates = {}
-    base = self.C
+    base = self.C if self.layer.attrs['attention_template'] > 0 else self.B
     context = self.B
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
@@ -524,30 +526,33 @@ class AttentionTemplate(AttentionBase):
       focus = T.cast(T.floor(self.loc), 'int32')
       #import theano.printing
       #focus = theano.printing.Print("focus")(focus)
-      focus_i = T.switch(T.ge(focus + beam,self.B.shape[0]), self.B.shape[0] - 1, focus + beam) #+ self.loc
-      focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
-      focus_j = T.switch(T.le(focus_i,focus_j), focus_i - 1, focus_j)
+      focus_i = T.switch(T.ge(focus + beam + 1, self.B.shape[0]), self.B.shape[0] - 1, focus + beam + 1) #+ self.loc
+      #focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
+      focus_j = T.switch(T.lt(focus, 0), 0, focus)
       focus_end = T.max(focus_i)
-      focus_start = T.min(focus_j)
-      base = self.C[focus_start:focus_end]
-      context = self.B[focus_start:focus_end]
-      index  = self.index[focus_start:focus_end]
+      focus_start = T.switch(T.ge(T.min(focus_j),focus_end), focus_end - 1, T.min(focus_j))
+      base = base[focus_start:focus_end]
+      context = context[focus_start:focus_end]
+      index = index[focus_start:focus_end]
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
     #f_z = T.sum((self.B - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     if dist == 'l2':
-      f_z = T.sum((base - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+      f_z = T.sqrt(T.sum((base - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)) # / self.sigma
     elif dist == 'l1':
-      f_z = T.sum(T.abs(base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
-    elif dist == 'dot':
+      f_z = T.sum(abs(base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
+    elif dist == 'dot': # use with template size <= 32
       f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
     else:
       assert False, "invalid distance: %s" % dist
     #f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
     f_e = T.exp(-f_z) * index
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #import theano.printing
+    #self.w_t = theano.printing.Print("w_t")(self.w_t)
+
     #delta = w_t[:,:,0] - self.w
     #delta = theano.printing.Print("delta")(delta)
     #updates[self.w] = self.w + delta
@@ -556,11 +561,16 @@ class AttentionTemplate(AttentionBase):
     #return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     if self.layer.attrs['attention_beam'] != 0:
-      #updates[self.loc] = T.cast(focus_start,'float32') + self.frac #T.argmax(self.w_t,axis=0)[:,0],'float32') + self.frac
-      #updates[self.loc] = T.cast(focus,'float32') + T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32')
       #w_step = T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32') - 0.5 * T.cast(focus_end - focus_start, 'float32')
-      updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
-      #updates[self.loc] = T.cast(focus,'float32') + T.switch(T.lt(w_step,0), w_step, T.zeros_like(w_step)) + self.frac
+      #frac = T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32')
+      #updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
+
+      if self.layer.attrs['attention_step'] == 'focus':
+        updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
+      elif self.layer.attrs['attention_step'] == 'linear':
+        updates[self.loc] = self.loc + self.frac
+      elif self.layer.attrs['attention_step'] == 'soft-linear':
+        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - T.cast(index.shape[0] / 2, 'float32')
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
