@@ -290,6 +290,8 @@ class RecurrentUnitLayer(Layer):
                attention_distance = 'l2',
                attention_step = "warped",
                attention_beam = 0, # soft attention context window
+               attention_norm = "sigmoid",
+               attention_sharpening = 1.0, 
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -338,6 +340,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('recurrent_transform_attribs', recurrent_transform_attribs)
     self.set_attr('attention_distance', attention_distance)
     self.set_attr('attention_step', attention_step)
+    self.set_attr('attention_norm', attention_norm)
+    self.set_attr('attention_sharpening', attention_sharpening)
     if lm: # TODO hack
       recurrent_transform += "_lm"
     if encoder:

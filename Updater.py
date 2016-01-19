@@ -257,6 +257,7 @@ class Updater:
       deltas = grads[param]
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
+        
       if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
         gamma = 0.55
