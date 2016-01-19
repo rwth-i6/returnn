@@ -547,8 +547,14 @@ class AttentionTemplate(AttentionBase):
       f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
     else:
       assert False, "invalid distance: %s" % dist
+    f_z = f_z * self.layer.attrs['attention_sharpening']
     #f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
-    f_e = T.exp(-f_z) * index
+    if self.layer.attrs['attention_norm'] == 'exp':
+      f_e = T.exp(-f_z) * index
+    elif self.layer.attrs['attention_norm'] == 'sigmoid':
+      f_e = T.nnet.sigmoid(-f_z) * index
+    else:
+      assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
     #import theano.printing
     #self.w_t = theano.printing.Print("w_t")(self.w_t)
@@ -563,13 +569,14 @@ class AttentionTemplate(AttentionBase):
       #w_step = T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32') - 0.5 * T.cast(focus_end - focus_start, 'float32')
       #frac = T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32')
       #updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
-
       if self.layer.attrs['attention_step'] == 'focus':
         updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
       elif self.layer.attrs['attention_step'] == 'linear':
         updates[self.loc] = self.loc + self.frac
       elif self.layer.attrs['attention_step'] == 'warped':
-        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - T.cast(index.shape[0] / 2, 'float32')
+        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - 0.5 * T.cast(focus_end - focus_start, 'float32')
+      else:
+        assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 

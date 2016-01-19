@@ -56,7 +56,8 @@ class Updater:
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
-               enforce_triangular_matrix_zero=False
+               enforce_triangular_matrix_zero=False,
+               gradient_noise=0.0
                ):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = numpy.float32(momentum)
@@ -81,6 +82,7 @@ class Updater:
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
+    self.gradient_noise = gradient_noise
     self.params = {}
     self.pid = -1
     if self.adadelta:
@@ -255,6 +257,12 @@ class Updater:
       deltas = grads[param]
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
+        
+      if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
+        nu = self.gradient_noise # try 0.01 0.3 1.0
+        gamma = 0.55
+        sigma = nu / (1 + i_t)**gamma
+        delta += self.rng.normal(size=(1,), avg=0.0, std=sigma)
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
