@@ -122,17 +122,16 @@ class TaskThread(threading.Thread):
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
         if key not in self.results:
-          self.results[key] = value
+          self.results[key] = value # / float(num_frames[target])
         else:
-          self.results[key] += value
+          self.results[key] += value # / float(num_frames[target])
 
       # Prepare eval info stats for this (multiple-)batch run.
       eval_info = {}
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
         if key == "ctc_priors": continue
-        #eval_info[key] = value / float(num_frames["data"])
-        eval_info[key] = value / float(num_frames["classes"])
+        eval_info[key] = value
 
       #if numpy.isinf(score) or numpy.isnan(score):
       #  for i, res in enumerate(results):
@@ -146,14 +145,14 @@ class TaskThread(threading.Thread):
       pass
     def epoch_norm_factor_for_result(self, key):
       # Default: Normalize by number of frames.
-      return 1.0 / self.num_frames["classes"]
+      target = self.network.output[key.split(':')[-1]].attrs['target']
+      return 1.0 / float(self.num_frames[target])
     def finalize(self):
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
         if key != "ctc_priors":
           self.results[key] *= self.epoch_norm_factor_for_result(key)
-      # Total score/error.
       self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
       self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
