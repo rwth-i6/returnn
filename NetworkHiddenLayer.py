@@ -608,6 +608,21 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     self.make_output(container.reshape((container.shape[0], container.shape[1] / chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
 
 
+class TruncationLayer(Layer):
+  layer_class = "trunc"
+
+  def __init__(self, n_trunc, **kwargs):
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
+    super(TruncationLayer, self).__init__(**kwargs)
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+    self.set_attr('n_trunc', n_trunc)
+    n_trunc = T.switch(T.gt(n_trunc, self.index.shape[0]), self.index.shape[0], n_trunc)
+    z = T.concatenate([s.output for s in self.sources], axis=2)
+    self.index = self.index[:n_trunc]
+    self.make_output(z[:n_trunc])
+    #self.make_output(z)
+
+
 class CorruptionLayer(ForwardLayer): # x = x + noise
   layer_class = "corruption"
   rng = T.shared_randomstreams.RandomStreams(hash(layer_class) % 4294967295)

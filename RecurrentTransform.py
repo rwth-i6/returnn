@@ -526,7 +526,7 @@ class AttentionTemplate(AttentionBase):
       focus = T.cast(T.floor(self.loc), 'int32')
       #import theano.printing
       #focus = theano.printing.Print("focus")(focus)
-      focus_i = T.switch(T.ge(focus + beam + 1, self.B.shape[0]), self.B.shape[0] - 1, focus + beam + 1) #+ self.loc
+      focus_i = T.switch(T.ge(focus + beam + 1, T.sum(self.index)), T.sum(self.index) - 1, focus + beam + 1) #+ self.loc
       #focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
       focus_j = T.switch(T.lt(focus, 0), 0, focus)
       focus_end = T.max(focus_i)
