@@ -257,12 +257,12 @@ class Updater:
       deltas = grads[param]
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
-        
+
       if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
         gamma = 0.55
         sigma = nu / (1 + i_t)**gamma
-        delta += self.rng.normal(size=(1,), avg=0.0, std=sigma)
+        deltas += self.rng.normal(size=(1,), avg=0.0, std=sigma)
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
@@ -275,44 +275,29 @@ class Updater:
       #  upd[p] += self.momentum * self.deltas[param]
       if self.adasecant:
         # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
+        self.use_adam = True
         self.use_adagrad = False
-        self.use_adadelta = False #True #True
+        self.use_adadelta = False
         self.skip_nan_inf = False
         self.start_var_reduction = 0
-        self.use_corrected_grad = True  #True
+        self.use_corrected_grad = True
         self.decay = 0.95
-        ### default
         self.delta_clip = 50.0
         self.outlier_detection = True
         self.gamma_clip = 1.8
-        ### aggressive
-        #self.delta_clip = None
-        #self.outlier_detection = False
-        #self.gamma_clip = None
-        ### conservative
-        #self.delta_clip = 50.0 #None
-        #self.outlier_detection = True #False
-        #self.gamma_clip = 1.8 #None #1.8
-
-        #if self.skip_nan_inf:
-          #If norm of the gradients of a parameter is inf or nan don't update that parameter
-          #That might be useful for RNNs.
-          #grads[param] = T.switch(T.or_(T.isinf(grads[param]), T.isnan(grads[param])), 0, grads[param])
-
-        #grads[param] = T.unbroadcast(grads[param], -1)
-
-        #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
-
-        #grads[param].name = "grad_%s" % param.name
         mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
         slow_constant = 2.1
-        #mean_corrected_grad = self.var(param.get_value() * 0 + eps, name="mean_corrected_grad_%s" % param.name)
         if self.use_adagrad:
-          # sum_square_grad := \sum_i g_i^2
           sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name, broadcastable=param.broadcastable)
         if self.use_adadelta:
           eg2 = self.var(param.get_value(borrow=True) * 0., name= "eg2_%s" % param.name, broadcastable=param.broadcastable)
           edx2 = self.var(param.get_value(borrow=True) * 0., name= "edx2_%s" % param.name, broadcastable=param.broadcastable)
+        if self.use_adam:
+          m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+          v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
+
+        #updates.append((param, param - step))
+        upd[param] += -step
           #dx = self.var(param.get_value(borrow=True) * 0., name= "dx_%s" % param.name)
         taus_x_t = self.var((numpy.ones_like(param.get_value()) + eps) * slow_constant,
                            name="taus_x_t_" + param.name, broadcastable=param.broadcastable)
@@ -392,7 +377,7 @@ class Updater:
         gamma.name = "gamma_" + param.name
 
         if self.gamma_clip:
-            gamma = T.minimum(gamma, self.gamma_clip)
+          gamma = T.minimum(gamma, self.gamma_clip)
 
         momentum_step = gamma * mg
         corrected_grad_cand = (norm_grad + momentum_step) / (1 + gamma)
@@ -420,6 +405,7 @@ class Updater:
           eg2_new = decay * eg2 + (1 - decay) * g2
           rms_g_t = T.sqrt(eg2_new + offset) / T.sqrt(edx2 + offset) #- 1.0 / dx_new
           #rms_g_t = T.maximum(rms_g_t, 1.0)
+
 
         # Use the gradients from the previous update
         # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
@@ -461,17 +447,25 @@ class Updater:
             #logger.info("Clipping will be applied on the adaptive step size.")
             delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
             if self.use_adagrad or self.use_adadelta:
-                delta_x_t = delta_x_t * corrected_grad / rms_g_t
+              delta_x_t = delta_x_t * corrected_grad / rms_g_t
+            elif self.use_adam:
+              m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+              v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+              delta_x_t = delta_x_t * corrected_grad * T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
             else:
-                #logger.info("Clipped adagrad is disabled.")
-                delta_x_t = delta_x_t * corrected_grad
+              #logger.info("Clipped adagrad is disabled.")
+              delta_x_t = delta_x_t * corrected_grad
         else:
             #logger.info("Clipping will not be applied on the adaptive step size.")
             if self.use_adagrad or self.use_adadelta:
-                delta_x_t = delta_x_t * corrected_grad / rms_g_t
+              delta_x_t = delta_x_t * corrected_grad / rms_g_t
+            elif self.use_adam:
+              m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+              v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+              delta_x_t = delta_x_t * corrected_grad * T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
             else:
-                #logger.info("Clipped adagrad will not be used.")
-                delta_x_t = delta_x_t * corrected_grad
+              #logger.info("Clipped adagrad will not be used.")
+              delta_x_t = delta_x_t * corrected_grad
 
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
 
@@ -531,6 +525,9 @@ class Updater:
           updates.append((eg2, eg2_new))
           updates.append((edx2, edx2_new))
           #updates.append((dx, dx_new))
+        if self.use_adam:
+          updates.append((m_prev, m_t))
+          updates.append((v_prev, v_t))
 
         if self.use_corrected_grad:
           updates.append((old_grad, corrected_grad))

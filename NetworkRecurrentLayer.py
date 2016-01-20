@@ -291,7 +291,7 @@ class RecurrentUnitLayer(Layer):
                attention_step = "warped",
                attention_beam = 0, # soft attention context window
                attention_norm = "sigmoid",
-               attention_sharpening = 1.0, 
+               attention_sharpening = 1.0,
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -489,10 +489,21 @@ class RecurrentUnitLayer(Layer):
       sources = self.sources
       n_dec = self.out_dec
       if encoder:
+        outputs_info = [ [] for adx in xrange(unit.n_act) ]
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=-1) for i in xrange(unit.n_act) ]
+        #for e in encoder:
+        #  sidx = T.max((index > 0).nonzero(),axis=0)
+        #  #sidx = ((index > 0).nonzero())[-1]
+        #  for adx in xrange(unit.n_act):
+        #    outputs_info[adx].append(e.act[adx][sidx][-1])
+        #for adx in xrange(unit.n_act):
+        #  if len(outputs_info[adx]) > 1:
+        #    outputs_info[adx] = T.concatenate(outputs_info[adx], axis=1)
+        #  else:
+        #    outputs_info[adx] = outputs_info[adx][0]
+        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         #outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)] + [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(1,unit.n_act) ]
         if self.depth == 1:
           sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if attention == 'input' else 0)
