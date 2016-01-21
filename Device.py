@@ -612,9 +612,7 @@ class Device(object):
       print >> log.v4, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJsonNetwork()
-      #rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, self.update_specs, asyncTask)
-      #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except ProcConnectionDied as e:
       print >> log.v2, "Device %s proc, pid %i: Parent seem to have died: %s" % (device, os.getpid(), e)
       sys.exit(1)
