@@ -131,7 +131,8 @@ class TaskThread(threading.Thread):
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
         if key == "ctc_priors": continue
-        eval_info[key] = value
+        target = self._get_target_for_key(key)
+        eval_info[key] = value / float(num_frames[target])
 
       #if numpy.isinf(score) or numpy.isnan(score):
       #  for i, res in enumerate(results):
@@ -143,8 +144,7 @@ class TaskThread(threading.Thread):
       pass
     def reduce(self, num_frames):
       pass
-    def epoch_norm_factor_for_result(self, key):
-      # Default: Normalize by number of frames.
+    def _get_target_for_key(self, key):
       try:
         target = self.network.output[key.split(':')[-1]].attrs['target']
       except Exception:
@@ -152,6 +152,10 @@ class TaskThread(threading.Thread):
           target = self.network.hidden[key.split(':')[-1]].attrs['target']
         except Exception:
           target = 'classes'
+      return target
+    def epoch_norm_factor_for_result(self, key):
+      # Default: Normalize by number of frames.
+      target = self._get_target_for_key(key)
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
       assert self.num_frames["data"] > 0
