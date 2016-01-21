@@ -278,7 +278,7 @@ class Updater:
       #  upd[p] += self.momentum * self.deltas[param]
       if self.adasecant:
         # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
-        self.use_adam = True
+        self.use_adam = False
         self.use_adagrad = False
         self.use_adadelta = False
         self.skip_nan_inf = False
@@ -506,9 +506,6 @@ class Updater:
         msdx = cond * deltas**2 + (1 - cond) * mean_square_dx
         mdx = cond * deltas + (1 - cond) * mean_dx
 
-        """
-        Compute the new updated values.
-        """
         # E[g_i^2]_t
         new_mean_squared_grad = mean_square_grad * self.decay + T.sqr(deltas) * (1 - self.decay)
         new_mean_squared_grad.name = "msg_" + param.name
@@ -535,15 +532,10 @@ class Updater:
         cur_curvature = deltas - old_plain_grad
         new_curvature_ave = mean_curvature * (1 - 1 / taus_x_t) + cur_curvature / taus_x_t
         new_curvature_ave.name = "ncurve_ave_" + param.name
-
         #Average average curvature
-        nc_ave = new_curvature_ave
         new_curvature_sqr_ave = mean_curvature_sqr * (1 - 1 / taus_x_t) + T.sqr(cur_curvature) / taus_x_t
         new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
-
         #Unbiased average squared curvature
-        nc_sq_ave = new_curvature_sqr_ave
-
         m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * corrected_grad
         v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * corrected_grad ** 2
         a_t = T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
@@ -557,9 +549,7 @@ class Updater:
         delta_x_t = delta_x_t * a_t * m_t / (T.sqrt(v_t) + epsilon)
         delta_x_t.name = "delta_x_t_" + param.name
 
-        # This part seems to be necessary for only RNNs
-        # For feedforward networks this does not seem to be important.
-        if self.delta_clip:
+        if self.delta_clip < 1.0 and self.delta_clip > 0.0:
           delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
 
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
@@ -569,19 +559,14 @@ class Updater:
         new_mean_dx = mean_dx * (1 - 1 / taus_x_t) + delta_x_t / taus_x_t
 
         #Perform the outlier detection:
-        #This outlier detection is slightly different:
-        self.upper_bound_tau = 1e8
-        self.lower_bound_tau = 1.5
         new_taus_t = T.switch(T.or_(abs(deltas - new_mean_grad) > (2 * T.sqrt(new_mean_squared_grad  - new_mean_grad**2)),
-                                    abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave**2))),
+                                    abs(cur_curvature - new_curvature_ave) > (2 * T.sqrt(new_curvature_sqr_ave - new_curvature_ave**2))),
                                     self.var(2.2), new_taus_t)
 
         #Apply the bound constraints on tau:
-        new_taus_t = T.maximum(self.lower_bound_tau, new_taus_t)
-        new_taus_t = T.minimum(self.upper_bound_tau, new_taus_t)
-
+        new_taus_t = T.maximum(1.5, new_taus_t)
+        new_taus_t = T.minimum(1e8, new_taus_t)
         new_cov_num_t = cov_num_t * (1 - 1 / taus_x_t) + (delta_x_t * cur_curvature) * (1 / taus_x_t)
-        upd[param] = delta_x_t
 
         # Apply updates
         updates.append((mean_square_grad, new_mean_squared_grad))
@@ -598,6 +583,7 @@ class Updater:
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
         updates.append((old_grad, corrected_grad))
+        upd[param] = delta_x_t
 
       elif self.adam:
         #epsilon = numpy.float32(1e-8)
