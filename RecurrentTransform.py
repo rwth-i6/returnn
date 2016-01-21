@@ -503,7 +503,12 @@ class AttentionTemplate(AttentionBase):
       #self.B = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
       #self.add_input(self.B, 'B')
       self.C = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
+      if 'attention_distance' in self.layer.attrs and self.layer.attrs['attention_distance'] == 'cos':
+        self.C = self.C / T.sum(self.C**2,axis=2,keepdims=True)
       self.add_input(self.C, 'C')
+    elif 'attention_distance' in self.layer.attrs and self.layer.attrs['attention_distance'] == 'cos':
+      self.B = self.B / T.sum(self.B**2,axis=2,keepdims=True)
+      self.add_input(self.B, 'B')
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     #self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
@@ -543,6 +548,8 @@ class AttentionTemplate(AttentionBase):
       f_z = T.sum(abs(base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
     elif dist == 'dot': # use with template size <= 32
       f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
+    elif dist == 'cos': # use with template size <= 32
+      f_z = T.sum(base * h_p / T.sum(h_p**2,axis=2,keepdims=True), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
     else:
       assert False, "invalid distance: %s" % dist
     f_z = f_z * self.layer.attrs['attention_sharpening']
