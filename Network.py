@@ -441,8 +441,15 @@ class LayerNetwork(object):
     :rtype NetworkHiddenLayer.HiddenLayer
     """
     assert layer.name
-    self.hidden[layer.name] = layer
+    if layer.name == "output":
+      is_output_layer = True
+      self.output[layer.name] = layer
+    else:
+      is_output_layer = False
+      self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
+    if is_output_layer:
+      self.declare_train_params()
     return layer
 
   def add_cost_and_constraints(self, layer):
