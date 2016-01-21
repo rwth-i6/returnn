@@ -148,9 +148,9 @@ class Device(object):
           raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number(); """ :type: int """
         self.device_name = cuda.active_device_name(); """ :type: str """
-	#For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
-	if self.device_name == "Graphics Device":
-	  self.device_name = "Geforce GTX TITAN X"
+      #For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
+      if self.device_name == "Graphics Device":
+        self.device_name = "Geforce GTX TITAN X"
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
