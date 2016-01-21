@@ -522,17 +522,13 @@ class AttentionTemplate(AttentionBase):
     context = self.B
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
-      beam = T.cast(self.beam, 'int32')
-      focus = T.cast(T.floor(self.loc), 'int32')
       #import theano.printing
       #focus = theano.printing.Print("focus")(focus)
-      focus_i = T.switch(T.ge(focus + beam + 1, T.sum(self.index)), T.sum(self.index) - 1, focus + beam + 1) #+ self.loc
-      #focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
-      focus_j = T.switch(T.lt(focus, 0), 0, focus)
-      focus_end = T.max(focus_i)
-      focus_start = T.minimum(T.min(focus_j), focus_end - 1)
-      focus_start = 0
-      #focus_end = 1
+      focus_i = T.switch(T.ge(self.loc + self.beam + 1, T.sum(self.index)), T.sum(self.index) - 1, self.loc + self.beam + 1) #+ self.loc
+      focus_j = T.switch(T.lt(self.loc - self.beam,0), 0, self.loc - self.beam)
+      #focus_j = T.maximum(focus, T.zeros_like(focus))
+      focus_end = T.cast(T.max(focus_i), 'int32')
+      focus_start = T.cast(T.minimum(T.min(focus_j), focus_end - 1), 'int32')
       base = base[focus_start:focus_end]
       context = context[focus_start:focus_end]
       index = index[focus_start:focus_end]
