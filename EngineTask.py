@@ -147,10 +147,10 @@ class TaskThread(threading.Thread):
       # Default: Normalize by number of frames.
       try:
         target = self.network.output[key.split(':')[-1]].attrs['target']
-      except:
+      except Exception:
         try:
           target = self.network.hidden[key.split(':')[-1]].attrs['target']
-        except:
+        except Exception:
           target = 'classes'
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
