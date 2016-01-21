@@ -145,7 +145,13 @@ class TaskThread(threading.Thread):
       pass
     def epoch_norm_factor_for_result(self, key):
       # Default: Normalize by number of frames.
-      target = self.network.output[key.split(':')[-1]].attrs['target']
+      try:
+        target = self.network.output[key.split(':')[-1]].attrs['target']
+      except:
+        try:
+          target = self.network.hidden[key.split(':')[-1]].attrs['target']
+        except:
+          target = 'classes'
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
       assert self.num_frames["data"] > 0

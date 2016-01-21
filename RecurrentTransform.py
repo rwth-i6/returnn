@@ -530,7 +530,9 @@ class AttentionTemplate(AttentionBase):
       #focus_j = T.switch(T.lt(focus - beam,0), 0, focus - beam)
       focus_j = T.switch(T.lt(focus, 0), 0, focus)
       focus_end = T.max(focus_i)
-      focus_start = T.switch(T.ge(T.min(focus_j),focus_end), focus_end - 1, T.min(focus_j))
+      focus_start = T.minimum(T.min(focus_j), focus_end - 1)
+      focus_start = 0
+      #focus_end = 1
       base = base[focus_start:focus_end]
       context = context[focus_start:focus_end]
       index = index[focus_start:focus_end]

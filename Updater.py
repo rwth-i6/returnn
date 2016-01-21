@@ -281,10 +281,10 @@ class Updater:
         self.skip_nan_inf = False
         self.start_var_reduction = 0
         self.use_corrected_grad = True
-        self.decay = 0.95
+        self.decay = 0.75
         self.delta_clip = 50.0
         self.outlier_detection = True
-        self.gamma_clip = 1.8
+        self.gamma_clip = 2.5 #1.8
         mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
         slow_constant = 2.1
         if self.use_adagrad:
@@ -323,7 +323,7 @@ class Updater:
         # mean_square_dx := E[(\Delta x)^2]_{t-1}
         mean_square_dx = self.var(value = param.get_value() * 0., name="msd_" + param.name, broadcastable=param.broadcastable)
         if self.use_corrected_grad:
-            old_grad = self.var(value = param.get_value() * 0. + eps, name="old_grad_" + param.name, broadcastable=param.broadcastable)
+          old_grad = self.var(value = param.get_value() * 0. + eps, name="old_grad_" + param.name, broadcastable=param.broadcastable)
 
         #The uncorrected gradient of previous of the previous update:
         old_plain_grad = self.var(param.get_value() * 0 + eps, broadcastable=param.broadcastable, name="old_plain_grad_" + param.name)
@@ -430,8 +430,8 @@ class Updater:
         #Unbiased average squared curvature
         nc_sq_ave = new_curvature_sqr_ave
 
-        epsilon = self.learning_rate_var #lr_scalers.get(param, 1.) * self.learning_rate_var
-        scaled_lr = 1.0 #self.var(1) #lr_scalers.get(param, 1.) * theano.shared(1.0, dtype = theano.config.floatX)
+        epsilon = 1.0 #lr_scalers.get(param, 1.) * self.learning_rate_var
+        scaled_lr = self.learning_rate_var #self.var(1) #lr_scalers.get(param, 1.) * theano.shared(1.0, dtype = theano.config.floatX)
         rms_dx_tm1 = T.sqrt(msdx + epsilon)
 
         rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
@@ -444,28 +444,17 @@ class Updater:
         # This part seems to be necessary for only RNNs
         # For feedforward networks this does not seem to be important.
         if self.delta_clip:
-            #logger.info("Clipping will be applied on the adaptive step size.")
-            delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
-            if self.use_adagrad or self.use_adadelta:
-              delta_x_t = delta_x_t * corrected_grad / rms_g_t
-            elif self.use_adam:
-              m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-              v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
-              delta_x_t = delta_x_t * corrected_grad * T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
-            else:
-              #logger.info("Clipped adagrad is disabled.")
-              delta_x_t = delta_x_t * corrected_grad
+          delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
+        if self.use_adagrad or self.use_adadelta:
+          delta_x_t = delta_x_t * corrected_grad / rms_g_t
+        elif self.use_adam:
+          m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+          v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+          a_t = T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
+          delta_x_t = delta_x_t * corrected_grad * a_t
         else:
-            #logger.info("Clipping will not be applied on the adaptive step size.")
-            if self.use_adagrad or self.use_adadelta:
-              delta_x_t = delta_x_t * corrected_grad / rms_g_t
-            elif self.use_adam:
-              m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-              v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
-              delta_x_t = delta_x_t * corrected_grad * T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
-            else:
-              #logger.info("Clipped adagrad will not be used.")
-              delta_x_t = delta_x_t * corrected_grad
+          #logger.info("Clipped adagrad is disabled.")
+          delta_x_t = delta_x_t * corrected_grad
 
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
 
@@ -533,7 +522,9 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.adam:
-        epsilon = numpy.float32(1e-8)
+        #epsilon = numpy.float32(1e-8)
+        #epsilon = numpy.float32(1.0)
+        self.adam_offset = numpy.float32(1e-16)
         m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
@@ -542,7 +533,7 @@ class Updater:
         a_t = self.learning_rate_var
         if self.adam_fit_learning_rate:
           a_t *= T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
-        step = a_t * m_t / (T.sqrt(v_t) + epsilon)
+        step = a_t * m_t / (T.sqrt(v_t) + self.adam_offset)
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
