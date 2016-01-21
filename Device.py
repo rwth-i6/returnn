@@ -96,6 +96,9 @@ def get_device_attributes():
 # When we are the child process, we have one single Device instance.
 asyncChildGlobalDevice = None
 
+# Any Device instance.
+deviceInstance = None
+
 
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
@@ -106,6 +109,8 @@ class Device(object):
     :param int num_batches: num batches to train on this device
     :param dict update_specs
     """
+    global deviceInstance
+    deviceInstance = self
     try:
       import pynvml
     except ImportError:
@@ -700,8 +705,6 @@ class Device(object):
           j[k] = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
-        if SprintCommunicator.instance is not None:
-          SprintCommunicator.instance.segments = self.tags
         # self.x == self.y["data"], will be set also here.
         for k in target_keys:
           self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
@@ -867,7 +870,7 @@ class Device(object):
     self.targets = {k: numpy.full(shapes[k], -1, dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
-    self.tags = [None] * shapes["data"][1]  # TODO
+    self.tags = [None] * shapes["data"][1]  # seq-name for each batch slice
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
@@ -877,8 +880,6 @@ class Device(object):
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       for k in self.used_data_keys:
         self.j[k].set_value(self.output_index[k], borrow = True)
-      if SprintCommunicator.instance is not None:
-        SprintCommunicator.instance.segments = self.tags
       if self.trainnet.loss in ('ctc','ce_ctc'):
         self.cp.set_value(self.ctc_targets)
       self.update_total_time += time.time() - update_start_time
@@ -1137,3 +1138,7 @@ class Device(object):
     return self.make_input_givens(network) + [(network.c, self.c)]
   def make_ce_ctc_givens(self, network):
     return self.make_givens(network) + [(network.c, self.c)]
+
+
+def get_current_tags():
+  return deviceInstance.tags
