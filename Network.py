@@ -423,7 +423,7 @@ class LayerNetwork(object):
           ndim = 3
         network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
         network.y[target].n_out = network.n_out[target][0]
-      if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
+      if layer_name == 'output' or 'target' in model[layer_name].attrs:
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network.j[target])
     return network
