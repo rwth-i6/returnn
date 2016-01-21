@@ -423,7 +423,7 @@ class LayerNetwork(object):
           ndim = 3
         network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
         network.y[target].n_out = network.n_out[target][0]
-      if layer_name == model.attrs['output'] or 'target' in model[layer_name].attrs:
+      if layer_name == 'output' or 'target' in model[layer_name].attrs:
         network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network.j[target])
     return network
@@ -441,8 +441,15 @@ class LayerNetwork(object):
     :rtype NetworkHiddenLayer.HiddenLayer
     """
     assert layer.name
-    self.hidden[layer.name] = layer
+    if layer.name == "output":
+      is_output_layer = True
+      self.output[layer.name] = layer
+    else:
+      is_output_layer = False
+      self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
+    if is_output_layer:
+      self.declare_train_params()
     return layer
 
   def add_cost_and_constraints(self, layer):
