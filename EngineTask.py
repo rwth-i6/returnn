@@ -256,7 +256,7 @@ class TaskThread(threading.Thread):
               self.processing = False
             else:
               time.sleep(0.01)
-        except:
+        except BaseException:
           self.crashed = True
           sys.excepthook(*sys.exc_info())
         finally:

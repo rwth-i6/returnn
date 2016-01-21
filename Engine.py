@@ -583,14 +583,14 @@ class Engine:
           params[k] = numpy.asarray(params[k], dtype='float32')
           if k != 'data':
             output_dim[k] = network.n_out[k] # = [network.n_in,2] if k == 'data' else network.n_out[k]
-        except:
+        except Exception:
           ret['error'] = 'unable to convert %s to an array' % k
           break
       if not 'error' in ret:
         try:
           data = StaticDataset(data=[params], output_dim=output_dim)
           data.init_seq_order()
-        except:
+        except Exception:
           ret['error'] = "invalid data: %s" % params
         else:
           batches = data.generate_batches(recurrent_net=network.recurrent,
@@ -624,7 +624,7 @@ class Engine:
             try:
               content = params.keys()[0].decode('utf-8') # this is weird
               params = json.loads(content)
-            except:
+            except Exception:
               ret['error'] = 'unable to decode object'
             else:
               ret.update(_classify(params))
@@ -671,7 +671,7 @@ class Engine:
     print >> log.v3, "httpd listening on port", 3333
     try:
       from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
-    except:
+    except Exception:
       httpd.serve_forever()
     else:
       from thread import start_new_thread
