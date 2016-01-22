@@ -527,10 +527,8 @@ class AttentionTemplate(AttentionBase):
     context = self.B
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
-      focus = T.maximum(self.loc, T.zeros_like(self.loc))
-      lookahead = T.cast(focus + self.beam, 'int32')
-      focus_end = T.cast(T.max(T.switch(T.gt(lookahead, T.sum(self.index)), T.sum(self.index), lookahead)), 'int32') #+ self.loc
-      focus_start = T.maximum(focus_end - 2 * T.cast(self.beam, 'int32'), 0)
+      focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, T.sum(self.index) - self.beam), 'int32')
+      focus_end = focus_start + T.cast(self.beam, 'int32')
       #import theano.printing
       #focus_start = theano.printing.Print("focus_start")(focus_start)
       #focus_end = theano.printing.Print("focus_end")(focus_end)
@@ -576,7 +574,7 @@ class AttentionTemplate(AttentionBase):
       #frac = T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32')
       #updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
       if self.layer.attrs['attention_step'] == 'focus':
-        updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
+        updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(self.w_t.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
       elif self.layer.attrs['attention_step'] == 'linear':
         updates[self.loc] = self.loc + self.frac
       elif self.layer.attrs['attention_step'] == 'warped':
