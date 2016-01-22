@@ -338,9 +338,9 @@ class RecurrentUnitLayer(Layer):
     if attention_template is not None:
       self.set_attr('attention_template', attention_template)
     self.set_attr('recurrent_transform_attribs', recurrent_transform_attribs)
-    self.set_attr('attention_distance', attention_distance)
-    self.set_attr('attention_step', attention_step)
-    self.set_attr('attention_norm', attention_norm)
+    self.set_attr('attention_distance', attention_distance.encode("utf8"))
+    self.set_attr('attention_step', attention_step.encode("utf8"))
+    self.set_attr('attention_norm', attention_norm.encode("utf8"))
     self.set_attr('attention_sharpening', attention_sharpening)
     if lm: # TODO hack
       recurrent_transform += "_lm"
