@@ -527,16 +527,13 @@ class AttentionTemplate(AttentionBase):
     context = self.B
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
-      focus_i = T.switch(T.ge(T.floor(self.loc + self.beam + 1), T.sum(self.index)), T.sum(self.index) - 1, T.floor(self.loc + self.beam + 1)) #+ self.loc
-      focus_j = T.switch(T.lt(self.loc - self.beam,0), T.zeros_like(self.loc), self.loc - self.beam)
-      #focus_j = T.maximum(focus, T.zeros_like(focus))
-      focus_end = T.cast(T.max(focus_i), 'int32')
-      focus_start = T.cast(T.minimum(T.min(focus_j), focus_end - 1), 'int32')
-
+      focus = T.maximum(self.loc, T.zeros_like(self.loc))
+      lookahead = T.cast(focus + self.beam, 'int32')
+      focus_end = T.cast(T.max(T.switch(T.gt(lookahead, T.sum(self.index)), T.sum(self.index), lookahead)), 'int32') #+ self.loc
+      focus_start = T.maximum(focus_end - 2 * T.cast(self.beam, 'int32'), 0)
       #import theano.printing
       #focus_start = theano.printing.Print("focus_start")(focus_start)
       #focus_end = theano.printing.Print("focus_end")(focus_end)
-
       base = base[focus_start:focus_end]
       context = context[focus_start:focus_end]
       index = index[focus_start:focus_end]
@@ -583,7 +580,7 @@ class AttentionTemplate(AttentionBase):
       elif self.layer.attrs['attention_step'] == 'linear':
         updates[self.loc] = self.loc + self.frac
       elif self.layer.attrs['attention_step'] == 'warped':
-        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - 0.5 * T.cast(focus_end - focus_start, 'float32')
+        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(self.w_t.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - 0.5 * T.cast(self.w_t.shape[0], 'float32')
       else:
         assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
