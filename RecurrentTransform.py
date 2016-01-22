@@ -527,8 +527,8 @@ class AttentionTemplate(AttentionBase):
     context = self.B
     index = self.index
     if self.layer.attrs['attention_beam'] != 0:
-      focus_i = T.switch(T.ge(self.loc + self.beam + 1, T.sum(self.index)), T.sum(self.index) - 1, self.loc + self.beam + 1) #+ self.loc
-      focus_j = T.switch(T.lt(self.loc - self.beam,0), 0, self.loc - self.beam)
+      focus_i = T.switch(T.ge(T.floor(self.loc + self.beam + 1), T.sum(self.index)), T.sum(self.index) - 1, T.floor(self.loc + self.beam + 1)) #+ self.loc
+      focus_j = T.switch(T.lt(self.loc - self.beam,0), T.zeros_like(self.loc), self.loc - self.beam)
       #focus_j = T.maximum(focus, T.zeros_like(focus))
       focus_end = T.cast(T.max(focus_i), 'int32')
       focus_start = T.cast(T.minimum(T.min(focus_j), focus_end - 1), 'int32')
