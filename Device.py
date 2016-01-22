@@ -1140,5 +1140,8 @@ class Device(object):
     return self.make_givens(network) + [(network.c, self.c)]
 
 
-def get_current_tags():
+def get_current_seq_tags():
   return deviceInstance.tags
+
+def get_current_seq_index(target):
+  return deviceInstance.output_index[target]
