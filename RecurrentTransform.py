@@ -611,7 +611,8 @@ class AttentionLinear(AttentionBase):
 
   def step(self, y_p):
     self.w_t = T.extra_ops.to_one_hot(T.cast(self.loc, 'int32'), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
-    return T.dot(self.B[T.cast(T.max(self.loc),'int32')], self.W_att_in), { self.loc : self.loc + 1 } # self.frac }
+    return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), { self.loc : self.loc + self.frac }
+    #return T.dot(self.B[T.cast(T.max(self.loc),'int32')], self.W_att_in), { self.loc : self.loc + 1 } # self.frac }
 
 
 class AttentionTemplateLM(AttentionBase):
