@@ -7,7 +7,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, LstmOutputLayer, DecoderOutputLayer
+from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
 from Util import collect_class_init_kwargs
 from Log import log
 
@@ -475,8 +475,6 @@ class LayerNetwork(object):
     self.loss = kwargs["loss"]
     if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'):
       layer_class = SequenceOutputLayer
-    elif self.loss == 'cedec':
-      layer_class = LstmOutputLayer
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer
     else:

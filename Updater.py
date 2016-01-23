@@ -468,9 +468,8 @@ class Updater:
 
       elif self.adamvr:
         self.decay = 0.75
-        self.delta_clip = 50.0
-        self.outlier_detection = False
-        self.gamma_clip = 2.5 #1.8
+        self.delta_clip = 1.0
+        self.gamma_clip = 1.8
 
         m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
