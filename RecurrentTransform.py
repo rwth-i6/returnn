@@ -561,7 +561,7 @@ class AttentionTemplate(AttentionBase):
     if self.layer.attrs['attention_norm'] == 'exp':
       f_e = T.exp(-f_z) * index
     elif self.layer.attrs['attention_norm'] == 'sigmoid':
-      f_e = T.nnet.sigmoid(-f_z) * index
+      f_e = T.nnet.sigmoid(f_z) * index
     else:
       assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
     #f_e *= self.w[focus_start:focus_end].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
@@ -569,7 +569,7 @@ class AttentionTemplate(AttentionBase):
       nbest = T.minimum(self.layer.attrs['attention_nbest'], f_e.shape[0])
       #prune_idx = T.argsort(f_e, axis=0)[:-nbest]
       #f_e = T.set_subtensor(f_e[prune_idx], 0.0) # this freezes pycuda
-      prune_score = T.sort(f_e, axis=0)[-nbest]
+      prune_score = (T.sort(f_e, axis=0)[nbest-1]).dimshuffle('x',0,1).repeat(f_e.shape[0],axis=0)
       f_e = T.switch(T.lt(f_e,prune_score), 0.0, f_e)
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
     #self.w_t = T.cast(T.argmax(self.w_t, axis=0, keepdims=True),'float32')
