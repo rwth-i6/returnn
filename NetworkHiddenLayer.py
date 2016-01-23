@@ -1142,6 +1142,7 @@ class NewConv(_NoOpLayer):
                   output of shape: (image_shape - filter_shape + 1)
         'full' -- zero-pads image to multiple of filter shape to generate output
                   of shape: (image_shape + filter_shape - 1)
+        'same' -- the size of image will remain the same with the previous layer
         (default value is 'valid')
 
     :param ignore_border: boolean
@@ -1174,6 +1175,9 @@ class NewConv(_NoOpLayer):
     elif border_mode == 'full':
       d_row_new = (d_row + filter - 1)/pool_size[0]
       d_col_new = (d_col + filter - 1)/pool_size[1]
+    elif border_mode == 'same':
+      d_row_new = d_row/pool_size[0]
+      d_col_new = d_col/pool_size[1]
     else:
       assert False, 'invalid border_mode %r' % border_mode
     n_out = (d_row_new * d_col_new) * n_features
@@ -1206,13 +1210,27 @@ class NewConv(_NoOpLayer):
     # bias parameter
     self.b = self.add_param(self._create_bias(n_features=n_features))
 
-    # convolution function
-    self.conv_out = conv.conv2d(
-      input=self.input,
-      filters=self.W,
-      filter_shape=self.filter_shape,
-      border_mode=border_mode
-    )
+    # when convolutional layer 1x1, it gave the same size even full or valid border mode
+    if filter == 1:
+      border_mode = 'valid'
+
+    # convolutional function
+    # when border mode = same, remove width and height from beginning and last based on the filter size
+    if border_mode == 'same':
+      new_filter_size = (self.W.shape[2]-1)/2
+      self.conv_out = conv.conv2d(
+        input=self.input,
+        filters=self.W,
+        filter_shape=self.filter_shape,
+        border_mode='full'
+      )[:,:,new_filter_size:-new_filter_size,new_filter_size:-new_filter_size]
+    else:
+      self.conv_out = conv.conv2d(
+        input=self.input,
+        filters=self.W,
+        filter_shape=self.filter_shape,
+        border_mode=border_mode
+      )
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function

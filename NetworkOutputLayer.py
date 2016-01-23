@@ -262,12 +262,12 @@ class SequenceOutputLayer(OutputLayer):
     y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
-      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
+      err, grad = SprintErrorSigOp(self.target)(self.p_y_given_x, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'sprint_smoothed':
       assert self.log_prior is not None
-      err, grad = SprintErrorSigOp()(self.p_y_given_x, T.sum(self.index, axis=0))
+      err, grad = SprintErrorSigOp(self.target)(self.p_y_given_x, T.sum(self.index, axis=0))
       err *= (1.0 - self.ce_smoothing)
       err = err.sum()
       grad *= (1.0 - self.ce_smoothing)

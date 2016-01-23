@@ -101,19 +101,6 @@ def initConfigJsonNetwork():
     config.network_topology_json = open(json_file).read().encode('utf8')
 
 
-def maybeInitSprintCommunicator(device_proc):
-  # initialize SprintCommunicator (if required)
-  multiproc = config.bool('multiprocessing', True)
-  if config.has('sh_mem_key') and ((not device_proc and not multiproc) or (device_proc and multiproc)):
-    SprintCommunicator.instance = SprintCommunicator(config.int('sh_mem_key',-1))
-
-
-def maybeFinalizeSprintCommunicator(device_proc):
-  multiproc = config.bool('multiprocessing', True)
-  if SprintCommunicator.instance is not None and ((not device_proc and not multiproc) or (device_proc and multiproc)):
-    SprintCommunicator.instance.finalize()
-
-
 def getDevicesInitArgs(config):
   """
   :type config: Config
@@ -338,7 +325,6 @@ def init(configFilename, commandLineOptions):
   if config.bool('ipython', False):
     initIPythonKernel()
   initConfigJsonNetwork()
-  maybeInitSprintCommunicator(device_proc=False)
   devices = initDevices()
   if needData():
     initData()

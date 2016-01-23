@@ -96,6 +96,9 @@ def get_device_attributes():
 # When we are the child process, we have one single Device instance.
 asyncChildGlobalDevice = None
 
+# Any Device instance.
+deviceInstance = None
+
 
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
@@ -106,6 +109,8 @@ class Device(object):
     :param int num_batches: num batches to train on this device
     :param dict update_specs
     """
+    global deviceInstance
+    deviceInstance = self
     try:
       import pynvml
     except ImportError:
@@ -148,9 +153,9 @@ class Device(object):
           raise Exception("Theano CUDA support seems broken: %s" % exc)
         self.id = cuda.active_device_number(); """ :type: int """
         self.device_name = cuda.active_device_name(); """ :type: str """
-	#For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
-	if self.device_name == "Graphics Device":
-	  self.device_name = "Geforce GTX TITAN X"
+      #For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
+      if self.device_name == "Graphics Device":
+        self.device_name = "Geforce GTX TITAN X"
       else:
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
@@ -612,9 +617,7 @@ class Device(object):
       print >> log.v4, "Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None))
       rnn.initFaulthandler()
       rnn.initConfigJsonNetwork()
-      #rnn.maybeInitSprintCommunicator(device_proc=True)
       self.process_inner(device, config, self.update_specs, asyncTask)
-      #rnn.maybeFinalizeSprintCommunicator(device_proc=True)
     except ProcConnectionDied as e:
       print >> log.v2, "Device %s proc, pid %i: Parent seem to have died: %s" % (device, os.getpid(), e)
       sys.exit(1)
@@ -702,8 +705,6 @@ class Device(object):
           j[k] = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
-        if SprintCommunicator.instance is not None:
-          SprintCommunicator.instance.segments = self.tags
         # self.x == self.y["data"], will be set also here.
         for k in target_keys:
           self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
@@ -869,7 +870,7 @@ class Device(object):
     self.targets = {k: numpy.full(shapes[k], -1, dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
-    self.tags = [None] * shapes["data"][1]  # TODO
+    self.tags = [None] * shapes["data"][1]  # seq-name for each batch slice
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
@@ -879,8 +880,6 @@ class Device(object):
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       for k in self.used_data_keys:
         self.j[k].set_value(self.output_index[k], borrow = True)
-      if SprintCommunicator.instance is not None:
-        SprintCommunicator.instance.segments = self.tags
       if self.trainnet.loss in ('ctc','ce_ctc'):
         self.cp.set_value(self.ctc_targets)
       self.update_total_time += time.time() - update_start_time
@@ -1139,3 +1138,10 @@ class Device(object):
     return self.make_input_givens(network) + [(network.c, self.c)]
   def make_ce_ctc_givens(self, network):
     return self.make_givens(network) + [(network.c, self.c)]
+
+
+def get_current_seq_tags():
+  return deviceInstance.tags
+
+def get_current_seq_index(target):
+  return deviceInstance.output_index[target]
