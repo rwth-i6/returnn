@@ -339,7 +339,6 @@ def finalize():
   if engine:
     for device in engine.devices:
       device.terminate()
-  maybeFinalizeSprintCommunicator(device_proc=False)
 
 
 def needData():
