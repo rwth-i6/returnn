@@ -74,7 +74,7 @@ class OutputLayer(Layer):
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
       self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
-      self.norm = nom  / T.cast(T.sum(self.index),'float32')
+      self.norm = nom / T.cast(T.sum(self.index),'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
