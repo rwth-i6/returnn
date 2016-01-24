@@ -257,6 +257,7 @@ class Container(object):
 
 class SourceLayer(Container):
   layer_class = "source"
+  recurrent = False
 
   def __init__(self, n_out, x_out=None, delay=0, sparse=False, name="", network=None,
                data_key=None,  # if we don't want to use "data" but something else. via y_in
@@ -279,6 +280,12 @@ class SourceLayer(Container):
     self.set_attr('sparse', sparse)
     self.set_attr('delay', delay)
     self.index = index
+
+  def make_constraints(self):
+    return 0
+
+  def cost(self):
+    return None, None
 
 
 class Layer(Container):
