@@ -569,8 +569,8 @@ class AttentionTemplate(AttentionBase):
       nbest = T.minimum(self.layer.attrs['attention_nbest'], f_e.shape[0])
       #prune_idx = T.argsort(f_e, axis=0)[:-nbest]
       #f_e = T.set_subtensor(f_e[prune_idx], 0.0) # this freezes pycuda
-      prune_score = (T.sort(f_e, axis=0)[nbest-1]).dimshuffle('x',0,1).repeat(f_e.shape[0],axis=0)
-      f_e = T.switch(T.lt(f_e,prune_score), 0.0, f_e)
+      prune_score = (T.sort(f_e, axis=0)[-nbest]).dimshuffle('x',0,1).repeat(f_e.shape[0],axis=0)
+      f_e = T.switch(T.lt(f_e,prune_score), T.zeros_like(f_e), f_e)
     self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
     #self.w_t = T.cast(T.argmax(self.w_t, axis=0, keepdims=True),'float32')
     #import theano.printing
