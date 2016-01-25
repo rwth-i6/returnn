@@ -1154,9 +1154,7 @@ class NewConv(_NoOpLayer):
     super(NewConv, self).__init__(**kwargs)
 
     # check how many source
-    if len(self.sources) > 1:
-      print 'Sorry, we did not provide multiple input for CNN layer!'
-      exit(1)
+    assert len(self.sources) == 1, 'Sorry, we did not provide multiple input for CNN layer!'
 
     # check previous layer is CNN or not
     if self.sources[0].layer_class == 'conv':
