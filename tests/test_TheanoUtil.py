@@ -116,3 +116,9 @@ def test_upsample_target_len_ndim3():
   source = numpy.array([[[0.0]], [[1.0]]])
   u = upsample(T.as_tensor_variable(source), axis=0, factor=2, target_axis_len=5).eval()
   numpy.testing.assert_allclose(u, numpy.array([[[0.0]], [[0.0]], [[1.0]], [[1.0]], [[1.0]]]))
+
+
+def test_chunked_time_reverse():
+  source = T.as_tensor_variable(numpy.array([0, 1, 2, 3, 4, 5, 6]))
+  r = chunked_time_reverse(source, 3).eval()
+  numpy.testing.assert_allclose(r, numpy.array([2, 1, 0, 5, 4, 3, 0]))
