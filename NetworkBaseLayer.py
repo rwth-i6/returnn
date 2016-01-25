@@ -262,11 +262,14 @@ class SourceLayer(Container):
   def __init__(self, n_out, x_out=None, delay=0, sparse=False, name="", network=None,
                data_key=None,  # if we don't want to use "data" but something else. via y_in
                # These will be given if we initialize via JSON.
-               sources=None, dropout=0, train_flag=None, mask=None, index=None, y_in=None):
+               sources=None, dropout=0, train_flag=None, mask=None, index=None, y_in=None, dtype=None):
     super(SourceLayer, self).__init__(layer_class=self.layer_class, name=name)
     if data_key is not None:
       assert x_out is None
-      x_out = y_in[data_key]
+      assert network
+      assert dtype
+      network.use_target(target=data_key, dtype=dtype)
+      x_out = network.y[data_key]
     if x_out is None:
       assert network is not None
       x_out = network.x
