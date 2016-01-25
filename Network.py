@@ -19,7 +19,7 @@ class LayerNetwork(object):
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
     n_out = n_out.copy()
-    if "data" not in self.n_out:
+    if "data" not in n_out:
       data_dim = 3
       n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
     else:
