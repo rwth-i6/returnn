@@ -102,17 +102,44 @@ def upsample(source, axis, factor, method="nearest-neighbor", target_axis_len=No
     if target_axis_len is not None:
       # We expect that we need to add a few frames. Just use the last frame.
       last = source[slice_for_axis(axis=axis, s=slice(-1, None))]
-      num_missing = T.cast(target_axis_len, dtype="int32") - target.shape[axis]
-      # There is some strange bug in Theano. If num_missing is 0, in some circumstances,
-      # it crashes with Floating point exception.
-      # Thus, do this workaround.
-      num_missing = T.maximum(num_missing, 1)
-      target = T.concatenate([target, T.repeat(last, num_missing, axis=axis)], axis=axis)
-      # Because of the workaround, we need this.
-      target = target[slice_for_axis(axis=axis, s=slice(0, target_axis_len))]
+      target = pad(target, axis=axis, target_axis_len=target_axis_len, pad_value=last)
     return target
   else:
     assert False, "unknown upsample method %r" % method
+
+
+def pad(source, axis, target_axis_len, pad_value=None):
+  if pad_value is None:
+    pad_value = T.zeros([source.shape[i] if i != axis else 1 for i in range(source.ndim)], dtype=source.dtype)
+  num_missing = T.cast(target_axis_len, dtype="int32") - source.shape[axis]
+  # There is some strange bug in Theano. If num_missing is 0, in some circumstances,
+  # it crashes with Floating point exception.
+  # Thus, do this workaround.
+  num_missing = T.maximum(num_missing, 1)
+  target = T.concatenate([source, T.repeat(pad_value, num_missing, axis=axis)], axis=axis)
+  # Because of the workaround, we need this.
+  target = target[slice_for_axis(axis=axis, s=slice(0, target_axis_len))]
+  return target
+
+
+def chunked_time_reverse(source, chunk_size):
+  """
+  :param source: >=1d array (time,...)
+  :param chunk_size: int
+  :return: like source
+  Will not reverse the whole time-dim, but only every time-chunk.
+  E.g. source=[0 1 2 3 4 5 6], chunk_size=3, returns [2 1 0 5 4 3 0].
+  (Padded with 0, recovers original size.)
+  """
+  chunk_size = T.cast(chunk_size, dtype="int32")
+  num_chunks = (source.shape[0] + chunk_size - 1) / chunk_size
+  needed_time = num_chunks * chunk_size
+  remaining_dims = [source.shape[i + 1] for i in range(source.ndim - 1)]
+  padded_source = pad(source, axis=0, target_axis_len=needed_time)
+  reshaped = padded_source.reshape([num_chunks, chunk_size] + remaining_dims)
+  reshaped_rev = reshaped[:, ::-1]
+  rev_correct_ndim = reshaped_rev.reshape([needed_time] + remaining_dims)
+  return rev_correct_ndim[:source.shape[0]]
 
 
 class GradDiscardOutOfBound(ViewOp):

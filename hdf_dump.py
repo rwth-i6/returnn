@@ -110,7 +110,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
       labels = dataset.labels[data_key]
       assert len(labels) == dataset.num_outputs[data_key][0]
     else:
-      labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.num_outputs[data_key][0])]
+      labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
     print >> log.v5, "Labels for %s:" % data_key, labels[:3], "..."
     max_label_len = max(map(len, labels))
     hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels),), dtype="S%i" % (max_label_len + 1))

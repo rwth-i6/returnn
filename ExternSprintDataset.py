@@ -226,7 +226,7 @@ class ExternSprintDataset(SprintDataset):
     if epoch is None:
       epoch = 1
     with self.lock:
-      if epoch == self.crnnEpoch:
+      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0:
         return
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._exit_child()

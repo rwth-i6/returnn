@@ -18,21 +18,21 @@ class LayerNetwork(object):
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     """
-    if "data" in n_out:
-      assert 1 <= n_out["data"][1] <= 2
-      data_dim = n_out["data"][1] + 1
-    else:
+    n_out = n_out.copy()
+    if "data" not in n_out:
       data_dim = 3
+      n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
+    else:
+      assert 1 <= n_out["data"][1] <= 2  # maybe obsolete check...
+      data_dim = n_out["data"][1] + 1  # one more because of batch-dim
     self.x = T.TensorType('float32', ((False,) * data_dim))('x')
-    self.y = {"data": self.x} #T.ivector('y'); """ :type: theano.Variable """
+    self.y = {"data": self.x}
     self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    self.j = {"data": self.i} #T.bmatrix('j'); """ :type: theano.Variable """
+    self.j = {"data": self.i}
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out.copy()
-    if "data" not in self.n_out:
-      self.n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
@@ -161,15 +161,8 @@ class LayerNetwork(object):
       index = output_index
       if 'target' in obj:
         target = obj['target']
-      dtype = 'int32' if not 'dtype' in obj else obj['dtype']
-      if target != "null" and target not in network.y:
-        assert target in network.n_out
-        if network.n_out[target][1] == 1:
-          ndim = 2
-        else:
-          ndim = 3
-        network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-        network.y[target].n_out = network.n_out[target][0]
+      dtype = obj.get("dtype", "int32")
+      network.use_target(target, dtype=dtype)
       if not 'from' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i)]
         index = network.i
@@ -211,7 +204,6 @@ class LayerNetwork(object):
       if 'encoder' in obj:
         index = output_index
       if 'target' in obj:
-        network.j.setdefault(target, T.bmatrix('j_%s' % target))
         index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
@@ -247,8 +239,7 @@ class LayerNetwork(object):
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        if not trg in network.j:
-          network.j.setdefault(trg, T.bmatrix('j_%s' % trg))
+        network.use_target(trg, dtype=json_content.get("dtype", "int32"))
         traverse(json_content, layer_name, trg, network.j[trg])
     return network
 
@@ -280,14 +271,7 @@ class LayerNetwork(object):
       target = model['n_out'].attrs['target']
     dtype = 'int32' if not 'dtype' in model['n_out'].attrs else model['n_out'].attrs['dtype']
     if target != "null" and target not in network.y:
-      assert target in network.n_out
-      if network.n_out[target][1] == 1:
-        ndim = 2
-      else:
-        ndim = 3
-      network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-      network.y[target].n_out = network.n_out[target][0]
-
+      network.use_target(target, dtype=dtype)
     network.y['data'].n_out = network.n_out['data'][0]
     def traverse(model, layer_name, output_index):
       index = output_index
@@ -347,15 +331,8 @@ class LayerNetwork(object):
       if 'target' in model[layer_name].attrs:
         target = model[layer_name].attrs['target']
         if target != "null" and target not in network.y:
-          assert target in network.n_out
-          if network.n_out[target][1] == 1:
-            ndim = 2
-          else:
-            ndim = 3
-          network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-          network.y[target].n_out = network.n_out[target][0]
-        network.j.setdefault(target, T.bmatrix('j_%s' % target))
-        index = network.j[model[layer_name].attrs['target']]
+          network.use_target(target, dtype=dtype)
+          index = network.j[target]
       cl = model[layer_name].attrs['class']
       if cl == 'softmax':
         params = { 'dropout' : 0.0,
@@ -416,17 +393,19 @@ class LayerNetwork(object):
       if 'target' in model[layer_name].attrs:
         target = model[layer_name].attrs['target']
       if target != "null" and target not in network.y:
-        assert target in network.n_out
-        if network.n_out[target][1] == 1:
-          ndim = 2
-        else:
-          ndim = 3
-        network.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-        network.y[target].n_out = network.n_out[target][0]
+        network.use_target(target, dtype=dtype)
       if layer_name == 'output' or 'target' in model[layer_name].attrs:
-        network.j.setdefault(target, T.bmatrix('j_%s' % target))
         traverse(model, layer_name, network.j[target])
     return network
+
+  def use_target(self, target, dtype):
+    if target in self.y: return
+    if target == "null": return
+    assert target in self.n_out
+    ndim = self.n_out[target][1] + 1  # one more because of batch-dim
+    self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
+    self.y[target].n_out = self.n_out[target][0]
+    self.j.setdefault(target, T.bmatrix('j_%s' % target))
 
   def get_layer(self, layer_name):
     if layer_name in self.hidden:
@@ -482,13 +461,7 @@ class LayerNetwork(object):
 
     dtype = kwargs.pop('dtype', 'int32')
     if target != "null" and target not in self.y:
-      assert target in self.n_out
-      if self.n_out[target][1] == 1:
-        ndim = 2
-      else:
-        ndim = 3
-      self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
-      self.y[target].n_out = self.n_out[target][0]
+      self.use_target(target, dtype=dtype)
     if target != "null":
       targets = self.y[target]
     else:
