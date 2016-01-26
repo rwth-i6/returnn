@@ -596,7 +596,7 @@ class AttentionTemplate(AttentionBase):
       else:
         assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     else:
-      updates[self.w] = self.w_t
+      updates[self.w] = self.w_t[:,:,0]
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
