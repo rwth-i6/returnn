@@ -568,9 +568,12 @@ class AttentionTemplate(AttentionBase):
       if self.layer.attrs['attention_beam'] >= 0:
         updates[self.loc] = self.loc + self.frac
       updates[self.w] = self.w
+      base = self.B
+      if self.layer.attrs['attention_beam'] >= 0:
+        base = base[focus_start:focus_end]
       def attent(xt, yp, W_in, W_re):
         return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
-      inp, _ = theano.scan(attent, sequences = self.B, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
+      inp, _ = theano.scan(attent, sequences = base, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
       return T.dot(inp[-1], self.W_att_in), updates
     else:
       assert False, "invalid distance: %s" % dist
