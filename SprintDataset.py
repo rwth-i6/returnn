@@ -40,6 +40,7 @@ class SprintDataset(Dataset):
     self.crnnEpoch = None  # in CRNN train thread, Engine.train(). set via init_seq_order
     self.predefined_seq_list_order = None  # via init_seq_order
     self.sprintFinalized = False
+    self._resetCache()
     assert self.shuffle_frames_of_nseqs == 0  # Currently broken. But just use Sprint itself to do this.
 
   def useMultipleEpochs(self):
