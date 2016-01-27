@@ -1153,20 +1153,31 @@ class NewConv(_NoOpLayer):
 
     super(NewConv, self).__init__(**kwargs)
 
+    isConvLayer = False
     # check how many source
     if len(self.sources) != 1:
       # check whether all inputs are conv layers
-      assert all(s.layer_class == 'conv' for s in self.sources), 'Sorry, we only concatenate convolutional layers'
+      #assert all(s.layer_class == 'conv' for s in self.sources), 'Sorry, we only concatenate convolutional layers'
 
-      # check whether the spatial dimension of all inputs are the same
-      assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
+      if all(s.layer_class == 'conv' for s in self.sources):
+        # check whether the spatial dimension of all inputs are the same
+        assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
+        isConvLayer = True
+      else:
+        # check whether the units of all inputs are the same
+        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
+        isConvLayer = False
 
-    # check whether the input is conv layer
-    if all(s.layer_class == 'conv' for s in self.sources):
+    # check what kinds of the input layer
+    if all(s.layer_class == 'conv' for s in self.sources):  # CNN layer
       d_row = self.sources[0].attrs['d_row']
       d_col = (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features'])/d_row
       stack_size = sum([s.attrs['n_features'] for s in self.sources])
-    else:
+    elif all(s.layer_class == 'rec' for s in self.sources): # LSTM layer
+      stack_size = 1
+      dimension = sum([s.attrs['n_out'] for s in self.sources])
+      d_col = dimension/d_row
+    else: # another layer
       stack_size = 1
       d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
 
@@ -1197,10 +1208,13 @@ class NewConv(_NoOpLayer):
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
     # therefore, we should convert our input into 4D tensor
     if len(self.sources) != 1:
-      tempInput = T.concatenate([s.tempOutput for s in self.sources], axis=3) # (time, batch, input-dim = row * col, stack_size)
-      input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+      if isConvLayer:
+        tempInput = T.concatenate([s.tempOutput for s in self.sources], axis=3) # (time, batch, input-dim = row * col, stack_size)
+        input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+      else:
+        input = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * col * stack_size)
     else:
-      input = self.sources[0].output # (time, batch, input-dim = row * col * stack_size)
+      input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
 
     input.name = 'conv_layer_input_concat'
     time = input.shape[0]
