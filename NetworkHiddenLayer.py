@@ -236,7 +236,7 @@ class UpsampleLayer(_NoOpLayer):
     self.make_output(z)
 
 
-class FrameConcatZeroLayer(_NoOpLayer):
+class FrameConcatZeroLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
   """
   Concats zero at the start (left=True) or end in the time-dimension.
   I.e. you can e.g. delay the input by N frames.
@@ -265,7 +265,7 @@ class FrameConcatZeroLayer(_NoOpLayer):
       self.index = T.concatenate([s.index, T.repeat(s.index[-1:], num_frames, axis=0)], axis=0)
 
 
-class FrameCutoffLayer(_NoOpLayer):
+class FrameCutoffLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
   """
   Cutoffs frames at the start (left=True) or end in the time-dimension.
   You should use this when you used FrameConcatZeroLayer(frame_concat_zero).
@@ -301,7 +301,7 @@ class ReverseLayer(_NoOpLayer):
     for attr in ["n_out", "sparse"]:
       self.set_attr(attr, s.attrs[attr])
     # We get (time,batch,dim) input shape.
-    self.index = s.index[::-1]
+    self.index = s.index[::-1] # TODO: lstmc assumes index to start with 1s
     self.output = s.output[::-1]
 
 
@@ -1154,17 +1154,21 @@ class NewConv(_NoOpLayer):
     super(NewConv, self).__init__(**kwargs)
 
     # check how many source
-    assert len(self.sources) == 1, 'Sorry, we did not provide multiple input for CNN layer!'
+    if len(self.sources) != 1:
+      # check whether all inputs are conv layers
+      assert all(s.layer_class == 'conv' for s in self.sources), 'Sorry, we only concatenate convolutional layers'
 
-    # check previous layer is CNN or not
-    if self.sources[0].layer_class == 'conv':
+      # check whether the spatial dimension of all inputs are the same
+      assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
+
+    # check whether the input is conv layer
+    if all(s.layer_class == 'conv' for s in self.sources):
       d_row = self.sources[0].attrs['d_row']
-      stack_size = self.sources[0].attrs['n_features']
+      d_col = (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features'])/d_row
+      stack_size = sum([s.attrs['n_features'] for s in self.sources])
     else:
       stack_size = 1
-
-    # set column dimension of the input
-    d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
+      d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
 
     # number of output dimension validation based on the border_mode
     if border_mode == 'valid':
@@ -1192,7 +1196,12 @@ class NewConv(_NoOpLayer):
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
     # therefore, we should convert our input into 4D tensor
-    input = T.concatenate([s.output for s in self.sources], axis=-1)  # (time, batch, input-dim = row * col * stack_size)
+    if len(self.sources) != 1:
+      tempInput = T.concatenate([s.tempOutput for s in self.sources], axis=3) # (time, batch, input-dim = row * col, stack_size)
+      input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+    else:
+      input = self.sources[0].output # (time, batch, input-dim = row * col * stack_size)
+
     input.name = 'conv_layer_input_concat'
     time = input.shape[0]
     batch = input.shape[1]
@@ -1219,14 +1228,12 @@ class NewConv(_NoOpLayer):
       self.conv_out = conv.conv2d(
         input=self.input,
         filters=self.W,
-        filter_shape=self.filter_shape,
         border_mode='full'
       )[:,:,new_filter_size:-new_filter_size,new_filter_size:-new_filter_size]
     else:
       self.conv_out = conv.conv2d(
         input=self.input,
         filters=self.W,
-        filter_shape=self.filter_shape,
         border_mode=border_mode
       )
     self.conv_out.name = 'conv_layer_conv_out'
@@ -1247,6 +1254,7 @@ class NewConv(_NoOpLayer):
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
     self.make_output(self.output)
 
 

@@ -5,6 +5,7 @@ import theano.tensor as T
 import theano.sandbox.cuda as cuda
 import numpy
 from MultiBatchBeam import multi_batch_beam
+from ActivationFunctions import elu
 
 
 class RecurrentTransformBase(object):
@@ -494,6 +495,7 @@ class AttentionTemplate(AttentionBase):
     values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
     self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
     self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    self.bounds = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), 'bounds')
     if self.layer.attrs['attention_template'] > 0:
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
       self.W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs"))
@@ -539,17 +541,22 @@ class AttentionTemplate(AttentionBase):
     index = self.index
     if self.layer.attrs['attention_beam'] >= 0:
       if self.layer.attrs['attention_beam'] == 0:
-        focus_start = T.cast(T.clip(T.min(self.loc), 0, T.sum(self.index) - 1), 'int32')
+        focus_start = T.cast(T.clip(T.min(self.loc), 0, self.bounds - 1), 'int32')
         focus_end = focus_start + 1
       else:
-        focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, T.sum(self.index) - 2 * self.beam - 1), 'int32')
+        focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, self.bounds - 2 * self.beam - 1), 'int32')
         focus_end = focus_start + 2 * T.cast(self.beam, 'int32') + 1
       #import theano.printing
       #focus_start = theano.printing.Print("focus_start")(focus_start)
       #focus_end = theano.printing.Print("focus_end")(focus_end)
-      base = base[focus_start:focus_end]
-      context = context[focus_start:focus_end]
-      index = index[focus_start:focus_end]
+      if not self.layer.attrs['attention_mbeam']:
+        base = base[focus_start:focus_end]
+        context = context[focus_start:focus_end]
+        index = index[focus_start:focus_end]
+      else:
+        base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+        context = multi_batch_beam(context, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+        index = multi_batch_beam(index, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
@@ -570,10 +577,13 @@ class AttentionTemplate(AttentionBase):
       updates[self.w] = self.w
       base = self.B
       if self.layer.attrs['attention_beam'] >= 0:
-        base = base[focus_start:focus_end]
+        if self.layer.attrs['attention_mbeam']:
+          base = base[focus_start:focus_end]
+        else:
+          base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
       def attent(xt, yp, W_in, W_re):
-        return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
-      #from OpLSTM import LSTMOpInstance
+        return elu(T.dot(xt, W_in) + T.dot(yp, W_re))
+        #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
       inp, _ = theano.scan(attent, sequences = base, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
       #result = LSTMOpInstance(base, self.A_re, h_p[0], index[:,:,0])
       #result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
