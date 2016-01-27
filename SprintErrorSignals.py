@@ -114,10 +114,10 @@ class SprintSubprocessInstance:
   def _build_sprint_args(self):
     args = [
       self.sprintExecPath,
-      # TODO...
+      "--*.action=python-control",
       "--*.pymod-path=%s" % self._my_python_mod_path,
-      "--*.pymod-name=SprintExternInterface",
-      "--*.pymod-config=action:SprintErrorSigOp,c2p_fd:%i,p2c_fd:%i" % (
+      "--*.pymod-name=SprintControl",
+      "--*.pymod-config=c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())]
     args += self.sprintConfig
     return args

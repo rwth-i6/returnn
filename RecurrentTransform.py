@@ -509,11 +509,21 @@ class AttentionTemplate(AttentionBase):
     elif 'attention_distance' in self.layer.attrs and self.layer.attrs['attention_distance'] == 'cos':
       self.B = self.B / T.sqrt(T.sum(self.B**2,axis=2,keepdims=True))
       self.add_input(self.B, 'B')
+    if 'attention_distance' in self.layer.attrs and self.layer.attrs['attention_distance'] == 'rnn':
+      l = sqrt(6.) / sqrt(2 * self.n_in + n_tmp)
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
+      self.A_in = self.add_param(theano.shared(value=values, borrow=True, name = "A_in"))
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
+      self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re"))
+      n_in = n_tmp
+    else:
+      n_in = self.n_in
+      #self.init = self.add_state_var(T.zeros((self.B.shape[1],self.B.shape[2]), dtype='float32'), name='init')
     self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     #values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     #self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
     #values = numpy.zeros((self.W_att_in.get_value().shape[1],),dtype='float32')
     #self.b_att_in = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_in"))
@@ -554,6 +564,17 @@ class AttentionTemplate(AttentionBase):
     elif dist == 'cos': # use with template size > 32
       h_p = h_p / T.sqrt(T.sum(h_p**2,axis=2,keepdims=True))
       f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
+    elif dist == 'rnn':
+      if self.layer.attrs['attention_beam'] >= 0:
+        updates[self.loc] = self.loc + self.frac
+      updates[self.w] = self.w
+      base = self.B
+      if self.layer.attrs['attention_beam'] >= 0:
+        base = base[focus_start:focus_end]
+      def attent(xt, yp, W_in, W_re):
+        return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
+      inp, _ = theano.scan(attent, sequences = base, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
+      return T.dot(inp[-1], self.W_att_in), updates
     else:
       assert False, "invalid distance: %s" % dist
     f_z = f_z * self.layer.attrs['attention_sharpening']
@@ -596,7 +617,7 @@ class AttentionTemplate(AttentionBase):
       else:
         assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     else:
-      updates[self.w] = self.w_t
+      updates[self.w] = self.w_t[:,:,0]
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
