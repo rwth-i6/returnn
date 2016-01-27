@@ -573,8 +573,14 @@ class AttentionTemplate(AttentionBase):
         base = base[focus_start:focus_end]
       def attent(xt, yp, W_in, W_re):
         return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
+      #from OpLSTM import LSTMOpInstance
       inp, _ = theano.scan(attent, sequences = base, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
+      #result = LSTMOpInstance(base, self.A_re, h_p[0], index[:,:,0])
+      #result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
+      #return [ result[0], result[2].dimshuffle('x',0,1) ]
+      #result = LSTMOp2Instance(*([A_re, outputs_info[1], b, index + [h_p[0]] + [A_in]))
       return T.dot(inp[-1], self.W_att_in), updates
+      #return T.dot(result[0][-1], self.W_att_in), updates
     else:
       assert False, "invalid distance: %s" % dist
     f_z = f_z * self.layer.attrs['attention_sharpening']
