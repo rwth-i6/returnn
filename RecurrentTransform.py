@@ -577,7 +577,10 @@ class AttentionTemplate(AttentionBase):
       updates[self.w] = self.w
       base = self.B
       if self.layer.attrs['attention_beam'] >= 0:
-        base = base[focus_start:focus_end]
+        if self.layer.attrs['attention_mbeam']:
+          base = base[focus_start:focus_end]
+        else:
+          base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
       def attent(xt, yp, W_in, W_re):
         return elu(T.dot(xt, W_in) + T.dot(yp, W_re))
         #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
