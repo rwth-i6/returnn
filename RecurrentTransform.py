@@ -544,7 +544,7 @@ class AttentionTemplate(AttentionBase):
         focus_start = T.cast(T.clip(T.min(self.loc), 0, self.bounds - 1), 'int32')
         focus_end = focus_start + 1
       else:
-        focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, self.bounds - 2 * self.beam - 1), 'int32')
+        focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, T.max(self.bounds) - 2 * self.beam - 1), 'int32')
         focus_end = focus_start + 2 * T.cast(self.beam, 'int32') + 1
       #import theano.printing
       #focus_start = theano.printing.Print("focus_start")(focus_start)
