@@ -680,14 +680,14 @@ class Updater:
           models_new += models[1:]
         else:
           for i, model_param in enumerate(models):
-            is_cur_model = T.switch(T.eq(cur_model, i), numpy.float32(1), numpy.float32(0))
-            models_new += [model_param + upd[param] * is_cur_model]
+            is_not_cur_model = T.neq(cur_model, i)
+            models_new += [T.switch(is_not_cur_model, model_param, model_param + upd[param])]
 
         if self.update_multiple_models_averaging:
-          is_cur_average_step = T.eq(self.counter % self.update_multiple_models_average_step, average_step_i)
+          is_not_cur_average_step = T.neq(self.counter % self.update_multiple_models_average_step, average_step_i)
           average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
           for i in range(len(models)):
-            models_new[i] = T.switch(is_cur_average_step, average_new_model, models_new[i])
+            models_new[i] = T.switch(is_not_cur_average_step, models_new[i], average_new_model)
 
         if self.update_multiple_models_param_is_cur_model:
           # Rotate, so that the next model becomes the first one.
