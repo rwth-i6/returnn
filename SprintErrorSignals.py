@@ -112,13 +112,21 @@ class SprintSubprocessInstance:
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
+    config_str = "c2p_fd:%i,p2c_fd:%i" % (
+        self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
+    my_mod_name = "SprintControl"
     args = [
       self.sprintExecPath,
-      "--*.action=python-control",
+      # Sprint PythonControl or PythonTrainer
       "--*.pymod-path=%s" % self._my_python_mod_path,
-      "--*.pymod-name=SprintControl",
-      "--*.pymod-config=c2p_fd:%i,p2c_fd:%i" % (
-        self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())]
+      "--*.pymod-name=%s" % my_mod_name,
+      "--*.pymod-config=%s" % config_str,
+      # Sprint PythonSegmentOrder
+      "--*.python-segment-order=true",
+      "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
+      "--*.python-segment-order-pymod-name=%s" % my_mod_name,
+      "--*.python-segment-order-config=%s" % config_str
+    ]
     args += self.sprintConfig
     return args
 
