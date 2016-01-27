@@ -549,12 +549,14 @@ class AttentionTemplate(AttentionBase):
       #import theano.printing
       #focus_start = theano.printing.Print("focus_start")(focus_start)
       #focus_end = theano.printing.Print("focus_end")(focus_end)
-      base = base[focus_start:focus_end]
-      context = context[focus_start:focus_end]
-      index = index[focus_start:focus_end]
-      #base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
-      #context = multi_batch_beam(context, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
-      #index = multi_batch_beam(index, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+      if not self.layer.attrs['attention_mbeam']:
+        base = base[focus_start:focus_end]
+        context = context[focus_start:focus_end]
+        index = index[focus_start:focus_end]
+      else:
+        base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+        context = multi_batch_beam(context, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+        index = multi_batch_beam(index, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
