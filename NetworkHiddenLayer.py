@@ -236,7 +236,7 @@ class UpsampleLayer(_NoOpLayer):
     self.make_output(z)
 
 
-class FrameConcatZeroLayer(_NoOpLayer):
+class FrameConcatZeroLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
   """
   Concats zero at the start (left=True) or end in the time-dimension.
   I.e. you can e.g. delay the input by N frames.
@@ -265,7 +265,7 @@ class FrameConcatZeroLayer(_NoOpLayer):
       self.index = T.concatenate([s.index, T.repeat(s.index[-1:], num_frames, axis=0)], axis=0)
 
 
-class FrameCutoffLayer(_NoOpLayer):
+class FrameCutoffLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
   """
   Cutoffs frames at the start (left=True) or end in the time-dimension.
   You should use this when you used FrameConcatZeroLayer(frame_concat_zero).
@@ -301,7 +301,7 @@ class ReverseLayer(_NoOpLayer):
     for attr in ["n_out", "sparse"]:
       self.set_attr(attr, s.attrs[attr])
     # We get (time,batch,dim) input shape.
-    self.index = s.index[::-1]
+    self.index = s.index[::-1] # TODO: lstmc assumes index to start with 1s
     self.output = s.output[::-1]
 
 
