@@ -638,6 +638,72 @@ class AttentionTemplate(AttentionBase):
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
 
 
+class AttentionTreeBase(AttentionBase):
+  """
+  attention over hierarchy of bases in different time resolutions
+  """
+  name = "attention_treebase"
+
+  def create_vars(self):
+
+    layer = self.layer
+    base = layer.base
+    assert base, "attention networks are only defined for decoder networks"
+    unit = layer.unit
+    n_tmp = self.layer.attrs['attention_template']
+
+    self.n_in = base[0].attrs['n_out'] # resolution is assumed to decrease with index
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
+    self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
+    values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
+    self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
+    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    self.bounds = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), 'bounds')
+    self.n_in = n_in
+
+    for i,e in enumerate(layer.base):
+      self.add_input(e.output, 'B_%d' % i)
+      if self.layer.attrs['attention_template'] > 0:
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
+        W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
+        values = numpy.zeros((n_tmp,),dtype='float32')
+        b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
+        self.add_input(T.tanh(T.dot(base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
+      else:
+        n_in = self.n_in
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
+
+  def step(self, y_p):
+    updates = {}
+    index = self.index
+    h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1)
+    context = self.custom_vars['B_0']
+    alpha = T.ones_like(context)
+    dist = 'dot'
+    if 'attention_distance' in self.layer.attrs:
+      dist = self.layer.attrs['attention_distance']
+    for i in xrange(len(self.layer.base)):
+      base = self.custom_vars[('C_%d' % i) if self.layer.attrs['attention_template'] > 0 else ('B_%d' % i)]
+      if dist == 'l2':
+        f_z = T.sqrt(T.sum((base - h_p) ** 2, axis=2)) #.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2))
+      elif dist == 'dot':
+        f_z = T.mean(base * h_p, axis=2) #.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2)
+      else:
+        assert False, "invalid distance: %s" % dist
+      f_z = f_z * self.layer.attrs['attention_sharpening']
+      f_e = T.exp(-f_z) * index
+      w_i = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
+      if i > 0:
+        # x = numpy.array([[1,4],[2,6]])
+        # x.T.flatten().repeat(2,axis=0).reshape(x.shape[0],2*x.shape[1]).T
+        w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(w_i.shape[0],(2**i)*w_i.shape[1]).T
+      alpha *= w_i.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
+
+
 class AttentionLinear(AttentionBase):
   """
   simple feed of corresponding linear representative

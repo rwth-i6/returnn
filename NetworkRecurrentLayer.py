@@ -294,6 +294,7 @@ class RecurrentUnitLayer(Layer):
                attention_sharpening = 1.0,
                attention_mbeam = False,
                attention_nbest = 0,
+               attention_treebase = False,
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -346,6 +347,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_sharpening', attention_sharpening)
     self.set_attr('attention_nbest', attention_nbest)
     self.set_attr('attention_mbeam', attention_mbeam)
+    self.set_attr('attention_treebase', attention_treebase)
     if lm: # TODO hack
       recurrent_transform += "_lm"
     if encoder:
