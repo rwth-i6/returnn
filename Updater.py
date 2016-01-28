@@ -6,6 +6,7 @@ from Log import log
 from math import sqrt
 from theano.compat.python2x import OrderedDict
 import theano.tensor as T
+import theano.ifelse
 import theano.compile
 from TheanoUtil import opt_contiguous_on_gpu
 
@@ -681,13 +682,13 @@ class Updater:
         else:
           for i, model_param in enumerate(models):
             is_not_cur_model = T.neq(cur_model, i)
-            models_new += [T.switch(is_not_cur_model, model_param, model_param + upd[param])]
+            models_new += [theano.ifelse.ifelse(is_not_cur_model, model_param, model_param + upd[param])]
 
         if self.update_multiple_models_averaging:
           is_not_cur_average_step = T.neq(self.counter % self.update_multiple_models_average_step, average_step_i)
           average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
           for i in range(len(models)):
-            models_new[i] = T.switch(is_not_cur_average_step, models_new[i], average_new_model)
+            models_new[i] = theano.ifelse.ifelse(is_not_cur_average_step, models_new[i], average_new_model)
 
         if self.update_multiple_models_param_is_cur_model:
           # Rotate, so that the next model becomes the first one.
