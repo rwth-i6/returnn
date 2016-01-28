@@ -653,23 +653,24 @@ class AttentionTreeBase(AttentionBase):
     n_tmp = self.layer.attrs['attention_template']
 
     self.n_in = base[0].attrs['n_out'] # resolution is assumed to decrease with index
+    n_in = self.n_in
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
     values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
     self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
-    self.index = self.add_input(T.cast(self.layer.base[0].index.dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), 'float32'), 'index')
+    self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'index')
     self.bounds = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32'), 'bounds')
-    self.n_in = n_in
 
     for i,e in enumerate(layer.base):
-      self.add_input(e.output, 'B_%d' % i)
+      self.B_0 = self.add_input(e.output, 'B_%d' % i)
       if self.layer.attrs['attention_template'] > 0:
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
         W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
         values = numpy.zeros((n_tmp,),dtype='float32')
         b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
-        self.add_input(T.tanh(T.dot(base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
+
+        self.C_0 = self.add_input(T.tanh(T.dot(base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
       else:
         n_in = self.n_in
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
@@ -679,7 +680,7 @@ class AttentionTreeBase(AttentionBase):
   def step(self, y_p):
     updates = {}
     index = self.index
-    h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1)
+    h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(index.shape[0],axis=0)
     context = self.custom_vars['B_0']
     alpha = T.ones_like(context)
     dist = 'dot'
