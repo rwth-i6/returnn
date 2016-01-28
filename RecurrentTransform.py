@@ -726,8 +726,8 @@ class AttentionTreeBase(AttentionBase):
         w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c) / T.constant(factor, 'float32')
         #w_i = theano.printing.Print("after", attrs=['shape'])(w_i)
         #w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(((2**i)*w_i.shape[0],w_i.shape[1])).T
-      alpha += w_i.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
-    return T.dot(T.sum(context * alpha / T.constant(len(self.layer.base), 'float32'), axis=0, keepdims=False), self.W_att_in), updates
+      alpha *= w_i.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    return T.dot(T.sum(context * alpha / alpha.sum(axis=0,keepdims=True), axis=0, keepdims=False), self.W_att_in), updates
 
 
 class AttentionLinear(AttentionBase):
