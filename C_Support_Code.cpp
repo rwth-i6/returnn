@@ -249,15 +249,18 @@ public:
         int numDims = PyArray_NDIM(a_);
         if(numDims == 1)
         {
-            printf("%s: %i \n", name, (int) PyArray_DIM(a_,0));
+            printf("size %s: %i \n", name, (int) PyArray_DIM(a_,0));
+            printf("stride %s: %i \n", name, (int) PyArray_STRIDE(a_,0));
         }
         else if(numDims == 2)
         {
-            printf("%s: %i, %i \n", name, (int) PyArray_DIM(a_,0), (int) PyArray_DIM(a_,1));
+            printf("size %s: %i, %i \n", name, (int) PyArray_DIM(a_,0), (int) PyArray_DIM(a_,1));
+            printf("stride %s: %i, %i \n", name, (int) PyArray_STRIDE(a_,0), (int) PyArray_STRIDE(a_,1));
         }
         else if(numDims == 3)
         {
-            printf("%s: %i, %i, %i \n", name, (int) PyArray_DIM(a_,0), (int) PyArray_DIM(a_,1), (int) PyArray_DIM(a_,2));
+            printf("size %s: %i, %i, %i \n", name, (int) PyArray_DIM(a_,0), (int) PyArray_DIM(a_,1), (int) PyArray_DIM(a_,2));
+            printf("stride %s: %i, %i, %i \n", name, (int) PyArray_STRIDE(a_,0), (int) PyArray_STRIDE(a_,1), (int) PyArray_STRIDE(a_,2));
         }
     }
 

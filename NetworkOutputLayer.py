@@ -254,6 +254,12 @@ class SequenceOutputLayer(OutputLayer):
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
+  def index_for_ctc(self):
+    for source in self.sources:
+      if hasattr(source, "output_sizes"):
+        return T.cast(source.output_sizes[:, 1], "int32")
+    return T.sum(self.index, axis=0)
+
   def cost(self):
     """
     :param y: shape (time*batch,) -> label
@@ -280,7 +286,7 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
-      err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0))
+      err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'ce_ctc':
@@ -304,6 +310,6 @@ class SequenceOutputLayer(OutputLayer):
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
       from theano.tensor.extra_ops import cpu_contiguous
-      return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0)))
+      return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     else:
       return super(SequenceOutputLayer, self).errors()

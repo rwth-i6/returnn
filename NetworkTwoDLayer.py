@@ -15,15 +15,14 @@ class TwoDLSTMLayer(_NoOpLayer):
 
   def __init__(self, n_out, **kwargs):
     super(TwoDLSTMLayer, self).__init__(**kwargs)
-    #assert len(self.sources) == 1
-    source = self.sources[0]
+    assert len(self.sources) == 2
+    n_in = self.sources[0].attrs['n_out']
+    X = self.sources[0].output
     sizes = T.cast(self.sources[1].output, "float32")
-    import theano.printing
-    sizes = theano.printing.Print("sizes")(sizes)
-    X = source.output
-    X = theano.printing.Print("x")(X)
-
-    n_in = source.attrs['n_out']
+    sizes = sizes.reshape((sizes.size / 2, 2))
+    #import theano.printing
+    #sizes = theano.printing.Print("sizes")(sizes)
+    self.output_sizes = sizes
 
     b1 = self.create_and_add_bias(n_out, "1")
     b2 = self.create_and_add_bias(n_out, "2")
@@ -35,9 +34,8 @@ class TwoDLSTMLayer(_NoOpLayer):
     W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
     W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
-    #X = source.output
     #for testing
-    X = X.reshape((2, 5, X.shape[1], X.shape[2]))
+    X = X.reshape((T.cast(sizes[0, 0], "int32"), T.cast(sizes[0, 1], "int32"), X.shape[1], X.shape[2]))
     #we need a 4d tensor with layout (height, width, batch, feature)
     assert X.ndim == 4, X.ndim
     #TODO: later we need to get this from the below layer
@@ -51,7 +49,8 @@ class TwoDLSTMLayer(_NoOpLayer):
     Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
     #for testing
-    Y = Y.reshape((10, Y.shape[2], Y.shape[3]))
+    #collapse by summing over y direction
+    Y = Y.sum(axis=0)
 
     self.output = Y
     #self.make_output(self.output)
