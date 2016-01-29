@@ -100,14 +100,13 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 
 
 printed_cudnn_warning = False
-have_cudnn = theano.sandbox.cuda.dnn.dnn_available()
 
 
 def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
   global printed_cudnn_warning
+  have_cudnn = theano.sandbox.cuda.dnn.dnn_available()
   if not have_cudnn and not printed_cudnn_warning:
-    #TODO check why it's not available, somehow related to multiproc I guess
-    #print >> log.v1, "warning, cudnn not available, using theano conv implementation"
+    print >> log.v1, "warning, cudnn not available, using theano conv implementation"
     printed_cudnn_warning = True
 
   if have_cudnn:
@@ -174,6 +173,7 @@ class ConvPoolLayer2(TwoDBaseLayer):
     Y = strtoact(activation)(Z)
     self.output = Y
     self.output_sizes = self.output_size_from_input_size(sizes)
+    self.set_attr('n_out', n_features)
 
   def create_conv_weights(self, n_features, n_in, filter_height, filter_width, name_suffix = ""):
     filter_shape = (n_features, n_in, filter_height, filter_width)

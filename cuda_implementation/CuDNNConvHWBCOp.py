@@ -5,6 +5,7 @@ from theano import gof
 from theano.gof.opt import OpSub
 from theano.compile import optdb
 
+
 class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("border_mode", "inplace")
 
@@ -174,6 +175,7 @@ if not hasattr(optdb, 'CuDNNConvHWBCOpGradValidInplaceOpt_registered'):
 #  optdb.CuDNNConvHWBCOpGradFullInplaceOpt_registered = True
 
 #------------------------------------------------------
+
 
 class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   __props__ = ("border_mode",)

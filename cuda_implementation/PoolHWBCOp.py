@@ -10,6 +10,7 @@ class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("pool_shape", "inplace", "BCHW_grad_output")
 
   def __init__(self, pool_shape, inplace, BCHW_grad_output):
+    pool_shape = tuple(pool_shape)
     super(PoolHWBCOpGrad, self).__init__()
     assert len(pool_shape) == 2, len(pool_shape)
     assert pool_shape[0] > 0, pool_shape[0]
@@ -359,6 +360,7 @@ class PoolHWBCOp(theano.sandbox.cuda.GpuOp):
   __props__ = ("pool_shape",)
 
   def __init__(self, pool_shape):
+    pool_shape = tuple(pool_shape)
     super(PoolHWBCOp, self).__init__()
     assert len(pool_shape) == 2, len(pool_shape)
     assert pool_shape[0] > 0, pool_shape[0]
