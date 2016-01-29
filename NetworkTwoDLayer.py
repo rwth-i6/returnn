@@ -1,10 +1,17 @@
 from NetworkHiddenLayer import _NoOpLayer
-from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
+from Log import log
 from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
+from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance
+from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
+from cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
+from cuda_implementation.PoolHWBCOp import PoolHWBCOp
 import theano
 import theano.tensor as T
+from theano.tensor.nnet import conv
+from theano.tensor.signal import downsample
 import numpy
 from math import sqrt
+from ActivationFunctions import strtoact
 
 
 class OneDToTwoDLayer(_NoOpLayer):
@@ -28,11 +35,22 @@ class OneDToTwoDLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
 
 
+class TwoDBaseLayer(_NoOpLayer):
+  def __init__(self, **kwargs):
+    super(TwoDBaseLayer, self).__init__(**kwargs)
+
+  def create_xavier_weights(self, shape, name):
+    p = shape[0] + numpy.prod(shape[1:])
+    W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
+                      dtype=theano.config.floatX)
+    return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
+
+
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
 
 
-class TwoDLSTMLayer(_NoOpLayer):
+class TwoDLSTMLayer(TwoDBaseLayer):
   layer_class = "mdlstm"
   recurrent = True
 
@@ -42,6 +60,7 @@ class TwoDLSTMLayer(_NoOpLayer):
     source = self.sources[0]
     n_in = source.attrs['n_out']
     X = source.output
+    assert X.ndim == 4
     sizes = source.output_sizes
     self.output_sizes = sizes
 
@@ -71,12 +90,6 @@ class TwoDLSTMLayer(_NoOpLayer):
     V = self.add_param(V)
     return W, U, V
 
-  def create_xavier_weights(self, shape, name):
-    p = shape[0] + numpy.prod(shape[1:])
-    W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
-                           dtype=theano.config.floatX)
-    return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
-
   def create_and_add_bias(self, n_cells, name_suffix):
     b_val = numpy.zeros((5 * n_cells,), dtype=theano.config.floatX)
     b_val[1 * n_cells:2 * n_cells] = forget_gate_initial_bias
@@ -85,3 +98,101 @@ class TwoDLSTMLayer(_NoOpLayer):
     b = self.add_param(b)
     return b
 
+
+printed_cudnn_warning = False
+have_cudnn = theano.sandbox.cuda.dnn.dnn_available()
+
+
+def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
+  global printed_cudnn_warning
+  if not have_cudnn and not printed_cudnn_warning:
+    #TODO check why it's not available, somehow related to multiproc I guess
+    #print >> log.v1, "warning, cudnn not available, using theano conv implementation"
+    printed_cudnn_warning = True
+
+  if have_cudnn:
+    conv_op = CuDNNConvHWBCOpValidInstance
+    pool_op = PoolHWBCOp(poolsize)
+    conv_out = conv_op(X, W, b)
+    crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
+    Y = pool_op(crop_out)
+    return Y
+  else:
+    #note: this solution uses alot of dimshuffles and so also alot of memory
+    #I only have this so that I can still run on my laptop for testing
+    #it's not really useful for productive use and also not much tested
+    filter_shape = (n_maps, n_in, filter_height, filter_width)
+    X_shuffled = X.dimshuffle(2, 3, 0, 1)
+    conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W, filter_shape=filter_shape,
+                           image_shape=(None, n_in, None, None))
+    crop_out = CropToBatchImageSizeInstance(conv_out.dimshuffle(2, 3, 0, 1), sizes).dimshuffle(2, 3, 0, 1)
+    if poolsize == (1, 1):
+      Y = crop_out
+    else:
+      #pooling cannot handle width > 512 (only with cuDNN), so we swap the axes and swap them back afterwards
+      crop_out = crop_out.dimshuffle(0, 1, 3, 2)
+      pooled_out = downsample.max_pool_2d(
+        input=crop_out,
+        #max_pool_2d wants the sizes in the other order
+        ds=poolsize[::-1],
+        ignore_border=True
+      )
+      #unshuffle it
+      Y = pooled_out.dimshuffle(0, 1, 3, 2)
+    Y = Y.dimshuffle(2, 3, 0, 1)
+    Y += b
+    return Y
+
+
+class ConvPoolLayer2(TwoDBaseLayer):
+  layer_class = "conv2"
+  recurrent = False
+
+  def __init__(self, n_features, filter, pool_size, activation="tanh", **kwargs):
+    super(ConvPoolLayer2, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    source = self.sources[0]
+    n_in = source.attrs['n_out']
+    X = source.output
+    assert X.ndim == 4
+    sizes = source.output_sizes
+
+    self.set_attr('n_features', n_features)
+    self.set_attr('filter', filter)
+    self.set_attr('pool_size', pool_size)
+    self.set_attr('activation', activation)
+
+    #TODO: maybe this ordering is not consistent with Dewis implementation
+    self.filter_height = filter[0]
+    self.filter_width = filter[1]
+    self.pool_size = pool_size
+
+    W = self.create_conv_weights(n_features, n_in, self.filter_height, self.filter_width)
+    b = self.create_and_add_bias(n_features)
+
+    Z = conv_crop_pool_op(X, sizes, W, b, n_in, n_features, self.filter_height, self.filter_width, pool_size)
+    Y = strtoact(activation)(Z)
+    self.output = Y
+    self.output_sizes = self.output_size_from_input_size(sizes)
+
+  def create_conv_weights(self, n_features, n_in, filter_height, filter_width, name_suffix = ""):
+    filter_shape = (n_features, n_in, filter_height, filter_width)
+    W = self.create_xavier_weights(filter_shape, "W" + name_suffix)
+    W = self.add_param(W)
+    return W
+
+  def create_and_add_bias(self, n_out, name_suffix=""):
+    b_val = numpy.zeros((n_out,), dtype=theano.config.floatX)
+    b = theano.shared(b_val, borrow=True, name="b" + name_suffix + "_" + self.name)
+    b = self.add_param(b)
+    return b
+
+  def output_size_from_input_size(self, sizes):
+    heights = sizes[:, 0]
+    widths = sizes[:, 1]
+    heights = heights - self.filter_height + 1
+    widths = widths - self.filter_width + 1
+    p1, p2 = self.pool_size
+    heights //= p1
+    widths //= p2
+    return T.concatenate((heights[:, None], widths[:, None]), axis=1)
