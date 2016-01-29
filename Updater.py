@@ -49,6 +49,7 @@ class Updater:
                max_norm=0.0,
                adasecant=False,
                adam=False,
+               adamdelta=False,
                adam_fit_learning_rate=True,
                adamax=False,
                adamvr=False, # adam with adasecant variance reduction
@@ -74,6 +75,7 @@ class Updater:
     self.adasecant = adasecant
     self.adamvr = adamvr
     self.adam = adam
+    self.adamdelta = adamdelta
     self.adam_fit_learning_rate = adam_fit_learning_rate
     self.adamax = adamax
     self.mean_normalized_sgd = mean_normalized_sgd
@@ -88,7 +90,7 @@ class Updater:
     self.gradient_noise = gradient_noise
     self.params = {}
     self.pid = -1
-    if self.adadelta:
+    if self.adadelta or self.adamdelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
       self.momentum2 = 0.0
@@ -144,7 +146,7 @@ class Updater:
       self.accu = {p: self.var(p, zero=True, name="adagrad_accu_%s" % p.name)
                    for p in network.train_params_vars}
 
-    if self.adadelta:
+    if self.adadelta or self.adamdelta:
       # http://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: self.var(p, zero=True, name="adadelta_eg2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[g^2]
@@ -623,8 +625,29 @@ class Updater:
         #updates.append((self.sqrsum[param], self.sqrsum[param] + deltas ** 2))
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
 
+      elif self.adamdelta: # adam moment normalization + adadelta learning rate scaling
+        decay = self.adadelta_decay
+        offset = self.adadelta_offset
+        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * deltas ** 2
+        self.adam_offset = numpy.float32(1e-16)
+        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
+
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        a_t = self.learning_rate_var * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
+
+        step = a_t * m_t / (T.sqrt(v_t) + self.adam_offset)
+
+        updates.append((m_prev, m_t))
+        updates.append((v_prev, v_t))
+        upd[param] += -step
+        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * step ** 2
+        updates.append((self.eg2[param], eg2_new))
+        updates.append((self.edx2[param], edx2_new))
+        updates.append((self.dx[param], -step))
+
       elif self.adadelta:
-        # http://arxiv.org/pdf/1212.5701v1.pdf
         decay = self.adadelta_decay
         offset = self.adadelta_offset
         g = deltas
