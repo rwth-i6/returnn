@@ -6,8 +6,31 @@ import theano.tensor as T
 import numpy
 from math import sqrt
 
+
+class OneDToTwoDLayer(_NoOpLayer):
+  layer_class = "1Dto2D"
+  recurrent = False
+
+  def __init__(self, **kwargs):
+    super(OneDToTwoDLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
+    n_in = self.sources[0].attrs['n_out']
+    n_out = n_in
+    sizes = T.cast(self.sources[1].output, "float32")
+    assert sizes.ndim == 2
+    sizes = sizes.reshape((2, sizes.size / 2)).dimshuffle(1, 0)
+    self.output_sizes = sizes
+    X = self.sources[0].output
+    assert X.ndim == 3
+    assert X.dtype == "float32"
+    Y = OneDToTwoDOp()(X, sizes)
+    self.output = Y
+    self.set_attr('n_out', n_out)
+
+
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
+
 
 class TwoDLSTMLayer(_NoOpLayer):
   layer_class = "mdlstm"
@@ -15,11 +38,11 @@ class TwoDLSTMLayer(_NoOpLayer):
 
   def __init__(self, n_out, **kwargs):
     super(TwoDLSTMLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 2
-    n_in = self.sources[0].attrs['n_out']
-    X = self.sources[0].output
-    sizes = T.cast(self.sources[1].output, "float32")
-    sizes = sizes.reshape((2, sizes.size / 2)).dimshuffle(1, 0)
+    assert len(self.sources) == 1
+    source = self.sources[0]
+    n_in = source.attrs['n_out']
+    X = source.output
+    sizes = source.output_sizes
     self.output_sizes = sizes
 
     b1 = self.create_and_add_bias(n_out, "1")
@@ -31,11 +54,6 @@ class TwoDLSTMLayer(_NoOpLayer):
     W2, V_h2, V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
     W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
     W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
-
-    #we need a 4d tensor with layout (height, width, batch, feature)
-    if X.ndim == 3:
-      X = OneDToTwoDOp()(X, sizes)
-    assert X.ndim == 4
 
     Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
                                                         V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
@@ -66,3 +84,4 @@ class TwoDLSTMLayer(_NoOpLayer):
     b = theano.shared(b_val, borrow=True, name="b" + name_suffix + "_" + self.name)
     b = self.add_param(b)
     return b
+
