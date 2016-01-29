@@ -104,7 +104,8 @@ printed_cudnn_warning = False
 
 def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
   global printed_cudnn_warning
-  have_cudnn = theano.sandbox.cuda.dnn.dnn_available()
+  import theano.sandbox.cuda as theano_cuda
+  have_cudnn = theano_cuda.cuda_enabled and theano.sandbox.cuda.dnn.dnn_available()
   if not have_cudnn and not printed_cudnn_warning:
     print >> log.v1, "warning, cudnn not available, using theano conv implementation"
     printed_cudnn_warning = True
