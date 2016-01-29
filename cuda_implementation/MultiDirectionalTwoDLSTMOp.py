@@ -11,15 +11,6 @@ import theano.tensor as T
 from Util import get_c_support_code_common, get_c_support_code_mdlstm
 
 
-cnt = 0
-
-def my_print_fn(op, x):
-  global cnt
-  cnt += 1
-  if 40 in x.shape and cnt >= 100:
-    print x.shape
-    print x[10, 10, 0, 16:24]
-    bla = 0
 
 
 class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
@@ -47,7 +38,6 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
                  "V_v1", "V_v2", "V_v3", "V_v4", "b1", "b2", "b3", "b4",
                  "DY1", "DY2", "DY3", "DY4", "Y1", "Y2", "Y3", "Y4",
                  "H1", "H2", "H3", "H4"]
-    H1 = theano.printing.Print(global_fn=my_print_fn)(T.as_tensor_variable(H1))
     lcl = locals()
     for var_name in var_names:
       lcl[var_name] = gpu_contiguous(as_cuda_ndarray_variable(lcl[var_name]))
