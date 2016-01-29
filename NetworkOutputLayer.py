@@ -49,17 +49,21 @@ class OutputLayer(Layer):
       assert len(self.sources) == len(self.masks) == len(self.W_in)
       assert len(self.sources) > 0
       for source, m, W in zip(self.sources, self.masks, self.W_in):
+        source_output = source.output
+        #4D input from TwoD Layers -> collapse height dimension
+        if source_output.ndim == 4:
+          source_output = source_output.sum(axis=0)
         if source.attrs['sparse']:
           if source.output.ndim == 3:
-            input = source.output[:,:,0]  # old sparse format
+            input = source_output[:,:,0]  # old sparse format
           else:
-            assert source.output.ndim == 2
+            assert source_output.ndim == 2
             input = source.output
           self.z += W[T.cast(input, 'int32')]
         elif m is None:
-          self.z += self.dot(source.output, W)
+          self.z += self.dot(source_output, W)
         else:
-          self.z += self.dot(self.mass * m * source.output, W)
+          self.z += self.dot(self.mass * m * source_output, W)
     else:
       self.z = copy_input.output
     assert self.z.ndim == 3

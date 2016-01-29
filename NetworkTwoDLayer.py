@@ -1,5 +1,6 @@
 from NetworkHiddenLayer import _NoOpLayer
 from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
+from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
 import theano
 import theano.tensor as T
 import numpy
@@ -7,7 +8,6 @@ from math import sqrt
 
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
-
 
 class TwoDLSTMLayer(_NoOpLayer):
   layer_class = "mdlstm"
@@ -19,9 +19,7 @@ class TwoDLSTMLayer(_NoOpLayer):
     n_in = self.sources[0].attrs['n_out']
     X = self.sources[0].output
     sizes = T.cast(self.sources[1].output, "float32")
-    sizes = sizes.reshape((sizes.size / 2, 2))
-    #import theano.printing
-    #sizes = theano.printing.Print("sizes")(sizes)
+    sizes = sizes.reshape((2, sizes.size / 2)).dimshuffle(1, 0)
     self.output_sizes = sizes
 
     b1 = self.create_and_add_bias(n_out, "1")
@@ -34,27 +32,16 @@ class TwoDLSTMLayer(_NoOpLayer):
     W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
     W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
-    #for testing
-    X = X.reshape((T.cast(sizes[0, 0], "int32"), T.cast(sizes[0, 1], "int32"), X.shape[1], X.shape[2]))
     #we need a 4d tensor with layout (height, width, batch, feature)
-    assert X.ndim == 4, X.ndim
-    #TODO: later we need to get this from the below layer
-    #sizes = T.zeros((X.shape[2], 2), dtype="float32")
-    #sizes = T.set_subtensor(sizes[:, 0], 2)
-    #sizes = T.set_subtensor(sizes[:, 1], 5)
-    #T.alloc(numpy.array([2, 5], dtype="float32"), (2, 5, 2))
+    if X.ndim == 3:
+      X = OneDToTwoDOp()(X, sizes)
+    assert X.ndim == 4
 
     Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
                                                         V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
     Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
-    #for testing
-    #collapse by summing over y direction
-    Y = Y.sum(axis=0)
-
     self.output = Y
-    #self.make_output(self.output)
-
     self.set_attr('n_out', n_out)
 
   def create_and_add_2d_lstm_weights(self, n, m, name_suffix):
