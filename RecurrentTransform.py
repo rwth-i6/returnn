@@ -701,7 +701,8 @@ class AttentionTreeBase(AttentionBase):
     index = self.index
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re)
     context = self.custom_vars['B_0']
-    alpha = T.ones_like(context)
+    #alpha = T.ones_like(context[:,:,0])
+    alpha = T.zeros_like(context[:,:,0])
     dist = 'dot'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
@@ -714,8 +715,8 @@ class AttentionTreeBase(AttentionBase):
       else:
         assert False, "invalid distance: %s" % dist
       f_z = f_z * self.layer.attrs['attention_sharpening']
-      f_e = T.exp(-f_z) #* index
-      w_i = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
+      #f_e = T.exp(-f_z) #* index
+      w_i = f_z # T.exp(-f_z) #f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       if i > 0:
         factor = self.layer.base[i].attrs['factor'][0]
         # x = numpy.array([[1, 4],[2, 6], [3, 9])
@@ -723,11 +724,14 @@ class AttentionTreeBase(AttentionBase):
         # array([[1, 4], [1, 4], [2, 6], [2, 6], [3, 9], [3, 9]])
         #w_i = theano.printing.Print("before", attrs=['shape'])(w_i)
         w_c = T.tile(w_i, (1,factor)).reshape((factor*w_i.shape[0],w_i.shape[1]))
-        w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c) #/ T.constant(factor, 'float32')
+        w_i = T.set_subtensor(T.ones_like(context[:,:,0])[:w_c.shape[0]], w_c) #/ T.constant(factor, 'float32')
         #w_i = theano.printing.Print("after", attrs=['shape'])(w_i)
         #w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(((2**i)*w_i.shape[0],w_i.shape[1])).T
-      alpha *= w_i.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
-    return T.dot(T.sum(context * alpha / alpha.sum(axis=0,keepdims=True), axis=0, keepdims=False), self.W_att_in), updates
+      #alpha *= w_i
+      alpha -= w_i
+    alpha = T.exp(alpha)
+    alpha = (alpha / alpha.sum(axis=0,keepdims=True)).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
 
 
 class AttentionLinear(AttentionBase):
