@@ -628,21 +628,22 @@ class Updater:
       elif self.adamdelta: # adam moment normalization + adadelta learning rate scaling
         decay = self.adadelta_decay
         offset = self.adadelta_offset
-        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * deltas ** 2
+        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * (deltas ** 2)
         self.adam_offset = numpy.float32(1e-16)
         m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
-        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        dsq = deltas ** 2
+        m_t = decay * m_prev + (numpy.float32(1) - decay) * deltas
+        v_t = decay * v_prev + (numpy.float32(1) - decay) * dsq
         a_t = self.learning_rate_var * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
 
-        step = a_t * m_t / (T.sqrt(v_t) + self.adam_offset)
+        step = a_t * m_t / (T.sqrt(v_t + 1.))
 
         updates.append((m_prev, m_t))
         updates.append((v_prev, v_t))
         upd[param] += -step
-        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * step ** 2
+        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * ((deltas*a_t) ** 2)
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], -step))

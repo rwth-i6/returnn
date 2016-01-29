@@ -725,6 +725,7 @@ class AttentionTreeBase(AttentionBase):
         #w_i = theano.printing.Print("before", attrs=['shape'])(w_i)
         w_c = T.tile(w_i, (1,factor)).reshape((factor*w_i.shape[0],w_i.shape[1]))
         w_i = T.set_subtensor(T.ones_like(context[:,:,0])[:w_c.shape[0]], w_c) #/ T.constant(factor, 'float32')
+        #w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c)
         #w_i = theano.printing.Print("after", attrs=['shape'])(w_i)
         #w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(((2**i)*w_i.shape[0],w_i.shape[1])).T
       #alpha *= w_i
