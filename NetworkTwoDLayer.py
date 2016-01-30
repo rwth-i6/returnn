@@ -62,7 +62,7 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     assert X.dtype == "float32"
 
     height = X.shape[2]
-    width = X.shape[0]
+    width = T.sum(self.index, axis=0)
     batch = X.shape[1]
     sizes = T.zeros((batch, 2), dtype="float32")
     sizes = T.set_subtensor(sizes[:, 0], height)
