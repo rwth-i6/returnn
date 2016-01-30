@@ -1,4 +1,4 @@
-from NetworkHiddenLayer import _NoOpLayer
+from NetworkHiddenLayer import Layer
 from Log import log
 from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
 from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance
@@ -14,12 +14,27 @@ from math import sqrt
 from ActivationFunctions import strtoact
 
 
-class OneDToTwoDLayer(_NoOpLayer):
+class TwoDBaseLayer(Layer):
+  def __init__(self, n_out, **kwargs):
+    kwargs['n_out'] = n_out
+    super(TwoDBaseLayer, self).__init__(**kwargs)
+    #like in _NoOpLayer
+    self.params = {}  # Reset all params.
+    self.set_attr('from', ",".join([s.name for s in self.sources]))
+
+  def create_xavier_weights(self, shape, name):
+    p = shape[0] + numpy.prod(shape[1:])
+    W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
+                      dtype=theano.config.floatX)
+    return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
+
+
+class OneDToTwoDLayer(TwoDBaseLayer):
   layer_class = "1Dto2D"
   recurrent = False
 
   def __init__(self, **kwargs):
-    super(OneDToTwoDLayer, self).__init__(**kwargs)
+    super(OneDToTwoDLayer, self).__init__(1, **kwargs)
     assert len(self.sources) == 2
     n_in = self.sources[0].attrs['n_out']
     n_out = n_in
@@ -35,17 +50,6 @@ class OneDToTwoDLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
 
 
-class TwoDBaseLayer(_NoOpLayer):
-  def __init__(self, **kwargs):
-    super(TwoDBaseLayer, self).__init__(**kwargs)
-
-  def create_xavier_weights(self, shape, name):
-    p = shape[0] + numpy.prod(shape[1:])
-    W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
-                      dtype=theano.config.floatX)
-    return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
-
-
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
 
@@ -55,7 +59,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
   recurrent = True
 
   def __init__(self, n_out, **kwargs):
-    super(TwoDLSTMLayer, self).__init__(**kwargs)
+    super(TwoDLSTMLayer, self).__init__(n_out, **kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
     n_in = source.attrs['n_out']
@@ -63,6 +67,12 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     assert X.ndim == 4
     sizes = source.output_sizes
     self.output_sizes = sizes
+
+    #dropout
+    assert len(self.masks) == 1
+    mask = self.masks[0]
+    if mask is not None:
+      X = self.mass * mask * X
 
     b1 = self.create_and_add_bias(n_out, "1")
     b2 = self.create_and_add_bias(n_out, "2")
@@ -149,6 +159,7 @@ class ConvPoolLayer2(TwoDBaseLayer):
   recurrent = False
 
   def __init__(self, n_features, filter, pool_size, activation="tanh", **kwargs):
+    kwargs['n_out'] = n_features
     super(ConvPoolLayer2, self).__init__(**kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
