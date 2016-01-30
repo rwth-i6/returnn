@@ -189,8 +189,50 @@ class DownsampleLayer(_NoOpLayer):
         self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
       elif a == 2:
         n_out = int(n_out / f)
+    output = z
+    if method == 'concat':
+      n_out *= numpy.prod(factor)
+    elif method == 'lstm':
+      num_batches = z.shape[2]
+      #z = theano.printing.Print("a", attrs=['shape'])(z)
+      z = z.dimshuffle(1,0,2,3).reshape((z.shape[1],z.shape[0]*z.shape[2],z.shape[3]))
+      #z = theano.printing.Print("b", attrs=['shape'])(z)
+      from math import sqrt
+      from ActivationFunctions import elu
+      l = sqrt(6.) / sqrt(6 * n_out)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
+      self.A_in = self.add_param(theano.shared(value=values, borrow=True, name = "A_in_" + self.name))
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
+      self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re_" + self.name))
+      def lstmk(z_t, y_p, c_p):
+        z_t += T.dot(y_p, self.A_re)
+        partition = z_t.shape[1] / 4
+        ingate = T.nnet.sigmoid(z_t[:,:partition])
+        forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+        outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+        input = T.tanh(z_t[:,3*partition:4*partition])
+        c_t = forgetgate * c_p + ingate * input
+        y_t = outgate * T.tanh(c_t)
+        return (y_t, c_t)
+      def attent(xt, yp, W_re):
+        return elu(xt + T.dot(yp, W_re))
+        #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
+      z, _ = theano.scan(attent, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0])], non_sequences=[self.A_re])
+      #result, _ = theano.scan(lstmk, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0]),T.zeros_like(z[0])])
+      #z = result[0]
+      #from OpLSTM import LSTMOpInstance
+      #inp = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], z.shape[1], z.shape[2] * 4) + T.dot(z,self.A_in)
+      #sta = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[1], z.shape[2])
+      #idx = T.alloc(numpy.cast[theano.config.floatX](1), z.shape[0], z.shape[1])
+      #result = LSTMOpInstance(inp, self.A_re, sta, idx)
+      #result = LSTMOpInstance(T.dot(z,self.A_in), self.A_re, T.zeros_like(z[0]), T.ones_like(z[:,:,0]))
+      output = T.tanh(z[-1]).reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
+      #output = result[0][0].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
+    elif method == 'batch':
+      self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=factor[0], method="batch")
+      #z = theano.printing.Print("d", attrs=['shape'])(z)
     self.set_attr('n_out', n_out)
-    self.make_output(z)
+    self.make_output(output)
 
 
 class UpsampleLayer(_NoOpLayer):
@@ -589,23 +631,33 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
 class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
   layer_class = "chunking"
 
-  def __init__(self, chunk_size=1, **kwargs):
+  def __init__(self, chunk_size=1, method = 'concat', **kwargs):
     assert chunk_size >= 1
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) * chunk_size
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
     z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
-    calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), z.shape[1], z.shape[2])
-    container = T.set_subtensor(
-      calloc[:self.index.shape[0]],
-      z).dimshuffle(1,0,2) # BT'D
-    ialloc = T.alloc(numpy.cast['int32'](1), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), self.index.shape[1])
-    self.index = T.set_subtensor(
-      ialloc[:self.index.shape[0]],
-      self.index)[::chunk_size] # BT'D
+    residual = z.shape[0] % chunk_size
+    padding = T.neq(residual,0) * (chunk_size - residual)
 
-    #self.index = self.index.repeat(self.index.shape[0] % chunk_size, axis = 0)
-    self.make_output(container.reshape((container.shape[0], container.shape[1] / chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
+    #calloc = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0] + padding, z.shape[1], z.shape[2])
+    #container = T.set_subtensor(
+    #  calloc[:z.shape[0]],
+    #  z).dimshuffle('x',0,1,2).reshape((chunk_size,calloc.shape[0] / chunk_size,calloc.shape[1],calloc.shape[2])) # CTBD
+    z = T.concatenate([z,T.zeros((padding,z.shape[1],z.shape[2]), 'float32')], axis=0).dimshuffle('x',0,1,2).reshape((chunk_size,(z.shape[0] + padding) / chunk_size,z.shape[1],z.shape[2]))
+    #ialloc = T.alloc(numpy.cast['int32'](1), z.shape[1], self.index.shape[1])
+    self.index = T.set_subtensor(T.ones((z.shape[1]*z.shape[0],z.shape[2]),'int8')[:self.index.shape[0]],self.index)[::chunk_size]
+
+    if method == 'concat':
+      output = z.dimshuffle(1,2,3,0).reshape((z.shape[1], z.shape[2], z.shape[3] * chunk_size))
+    elif method == 'average':
+      output = z.mean(axis=0)
+    elif method == 'lstm':
+      xin = container.dimshuffle(1,0,2,3).reshape((container.shape[1],container.shape[2] * chunk_size,container.shape[3]))
+      xout = xin
+      output = output.reshape
+
+    self.make_output(output)
 
 
 class TruncationLayer(Layer):

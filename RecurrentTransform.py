@@ -721,6 +721,7 @@ class AttentionTreeBase(AttentionBase):
       w_i = T.exp(-f_z)
       if i > 0:
         factor = self.layer.base[i].attrs['factor'][0]
+        #factor = self.layer.base[i].sources[0].attrs['factor'][0]
         # x = numpy.array([[1, 4],[2, 6], [3, 9])
         # numpy.tile(x,(1,2)).reshape((2*x.shape[0],x.shape[1]))
         # array([[1, 4], [1, 4], [2, 6], [2, 6], [3, 9], [3, 9]])
