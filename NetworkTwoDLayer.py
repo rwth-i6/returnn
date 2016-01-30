@@ -50,6 +50,31 @@ class OneDToTwoDLayer(TwoDBaseLayer):
     self.set_attr('n_out', n_out)
 
 
+class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
+  layer_class = "1Dto2D_fixed_size"
+  recurrent = False
+
+  def __init__(self, **kwargs):
+    super(OneDToTwoDFixedSizeLayer, self).__init__(1, **kwargs)
+    assert len(self.sources) == 1
+    X = self.sources[0].output
+    assert X.ndim == 3
+    assert X.dtype == "float32"
+
+    height = X.shape[2]
+    width = X.shape[0]
+    batch = X.shape[1]
+    sizes = T.zeros((batch, 2), dtype="float32")
+    sizes = T.set_subtensor(sizes[:, 0], height)
+    sizes = T.set_subtensor(sizes[:, 1], width)
+    Y = X.dimshuffle(2, 0, 1, 'x')
+
+    self.output = Y
+    self.output_sizes = sizes
+    n_out = 1
+    self.set_attr('n_out', n_out)
+
+
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
 
@@ -58,7 +83,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
   layer_class = "mdlstm"
   recurrent = True
 
-  def __init__(self, n_out, **kwargs):
+  def __init__(self, n_out, collapse_output=False, **kwargs):
     super(TwoDLSTMLayer, self).__init__(n_out, **kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
@@ -88,8 +113,11 @@ class TwoDLSTMLayer(TwoDBaseLayer):
                                                         V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
     Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
-    self.output = Y
     self.set_attr('n_out', n_out)
+    self.set_attr('collapse_output', collapse_output)
+    if collapse_output:
+      Y = Y.sum(axis=0)
+    self.output = Y
 
   def create_and_add_2d_lstm_weights(self, n, m, name_suffix):
     W, U, V = self.create_xavier_weights((n, 5 * m), "W" + name_suffix), \
