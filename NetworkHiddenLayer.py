@@ -215,7 +215,7 @@ class DownsampleLayer(_NoOpLayer):
         y_t = outgate * T.tanh(c_t)
         return (y_t, c_t)
       def attent(xt, yp, W_re):
-        return elu(xt + T.dot(yp, W_re))
+        return T.tanh(xt + elu(T.dot(yp, W_re)))
         #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
       z, _ = theano.scan(attent, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0])], non_sequences=[self.A_re])
       #result, _ = theano.scan(lstmk, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0]),T.zeros_like(z[0])])
@@ -226,7 +226,7 @@ class DownsampleLayer(_NoOpLayer):
       #idx = T.alloc(numpy.cast[theano.config.floatX](1), z.shape[0], z.shape[1])
       #result = LSTMOpInstance(inp, self.A_re, sta, idx)
       #result = LSTMOpInstance(T.dot(z,self.A_in), self.A_re, T.zeros_like(z[0]), T.ones_like(z[:,:,0]))
-      output = T.tanh(z[-1]).reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
+      output = z[-1].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
       #output = result[0][0].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
     elif method == 'batch':
       self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=factor[0], method="batch")
