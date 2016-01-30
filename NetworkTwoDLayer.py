@@ -52,7 +52,7 @@ class OneDToTwoDLayer(TwoDBaseLayer):
 
 class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
   layer_class = "1Dto2D_fixed_size"
-  recurrent = False
+  recurrent = True
 
   def __init__(self, **kwargs):
     super(OneDToTwoDFixedSizeLayer, self).__init__(1, **kwargs)
@@ -62,13 +62,13 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     assert X.dtype == "float32"
 
     height = X.shape[2]
-    width = T.sum(self.index, axis=0)
+    width = T.maximum(T.sum(self.index, axis=0), T.ones_like(self.index[0]))
     batch = X.shape[1]
     sizes = T.zeros((batch, 2), dtype="float32")
     sizes = T.set_subtensor(sizes[:, 0], height)
     sizes = T.set_subtensor(sizes[:, 1], width)
-    Y = X.dimshuffle(2, 0, 1, 'x')
-
+    Y = T.unbroadcast(X.dimshuffle(2, 0, 1, 'x'), 3)
+    srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
     self.output = Y
     self.output_sizes = sizes
     n_out = 1

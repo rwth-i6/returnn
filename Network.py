@@ -401,6 +401,8 @@ class LayerNetwork(object):
   def use_target(self, target, dtype):
     if target in self.y: return
     if target == "null": return
+    if target == 'sizes' and not 'sizes' in self.n_out: #TODO(voigtlaender): fix data please
+      self.n_out['sizes'] = [2,1]
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim
     self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
