@@ -68,7 +68,6 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     sizes = T.set_subtensor(sizes[:, 0], height)
     sizes = T.set_subtensor(sizes[:, 1], width)
     Y = T.unbroadcast(X.dimshuffle(2, 0, 1, 'x'), 3)
-    srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
     self.output = Y
     self.output_sizes = sizes
     n_out = 1
@@ -109,14 +108,18 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
     W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
-    Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
-                                                        V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
-    Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
+    if str(theano.config.device).startswith('cpu'):
+      Y = T.zeros((X.shape[0],X.shape[1],X.shape[2], n_out), 'float32')
+    else:
+      Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
+                                                          V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
+      Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)
     if collapse_output:
       Y = Y.sum(axis=0)
+      self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     self.output = Y
 
   def create_and_add_2d_lstm_weights(self, n, m, name_suffix):
