@@ -19,7 +19,7 @@ class ExternSprintDataset(SprintDataset):
   See SprintExternInterface.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, *args, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, sprintSeedNumEpochs=1, *args, **kwargs):
     """
     :type sprintTrainerExecPath: str
     :type sprintConfigStr: str
@@ -28,6 +28,7 @@ class ExternSprintDataset(SprintDataset):
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
+    self.sprintSeedNumEpochs = sprintSeedNumEpochs
     self._num_seqs = None
     self.child_pid = None
     self.parent_pid = os.getpid()
@@ -118,7 +119,7 @@ class ExternSprintDataset(SprintDataset):
   def _build_sprint_args(self):
     args = [
       self.sprintTrainerExecPath,
-      "--*.seed=%i" % (self.crnnEpoch or 1),
+      "--*.seed=%i" % ((self.crnnEpoch or 1) // self.sprintSeedNumEpochs),
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
       "--*.python-segment-order-pymod-name=SprintExternInterface",
