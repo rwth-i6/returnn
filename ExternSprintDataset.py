@@ -228,6 +228,10 @@ class ExternSprintDataset(SprintDataset):
     with self.lock:
       if epoch == self.crnnEpoch and self.expected_load_seq_start == 0:
         return
+      if epoch != self.crnnEpoch:
+        if self._num_seqs is not None:
+          self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
+          self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._exit_child()
     self._start_child(epoch)
