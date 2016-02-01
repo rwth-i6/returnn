@@ -27,7 +27,7 @@ class ExternSprintDataset(SprintDataset):
     super(ExternSprintDataset, self).__init__(*args, **kwargs)
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
-    self.sprintConfig = eval_shell_str(sprintConfigStr)
+    self.sprintConfig = sprintConfigStr
     self._num_seqs = None
     self.child_pid = None
     self.parent_pid = os.getpid()
@@ -137,7 +137,7 @@ class ExternSprintDataset(SprintDataset):
           f.write("\n")
         f.close()
       args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
-    args += self.sprintConfig
+    args += eval_shell_str(self.sprintConfig)
     return args
 
   def _read_next_raw(self):
