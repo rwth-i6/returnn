@@ -19,7 +19,7 @@ class ExternSprintDataset(SprintDataset):
   See SprintExternInterface.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, sprintSeedNumEpochs=1, *args, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, *args, **kwargs):
     """
     :type sprintTrainerExecPath: str
     :type sprintConfigStr: str
@@ -28,7 +28,7 @@ class ExternSprintDataset(SprintDataset):
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
-    self.sprintSeedNumEpochs = sprintSeedNumEpochs
+    self.partitionEpoch = partitionEpoch
     self._num_seqs = None
     self.child_pid = None
     self.parent_pid = os.getpid()
@@ -117,9 +117,15 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
+    epoch = self.crnnEpoch or 1
     args = [
       self.sprintTrainerExecPath,
-      "--*.seed=%i" % ((self.crnnEpoch or 1) // self.sprintSeedNumEpochs),
+      "--*.seed=%i" % (epoch // self.partitionEpoch)]
+    if self.partitionEpoch > 1:
+      args += [
+        "--*.corpus.partition=%i" % self.partitionEpoch,
+        "--*.corpus.select-partition=%i" % (epoch % self.partitionEpoch)]
+    args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
       "--*.python-segment-order-pymod-name=SprintExternInterface",
