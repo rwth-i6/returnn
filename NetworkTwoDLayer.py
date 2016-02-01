@@ -108,12 +108,9 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
     W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
-    if str(theano.config.device).startswith('cpu'):
-      Y = T.zeros((X.shape[0],X.shape[1],X.shape[2], n_out), 'float32')
-    else:
-      Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
-                                                          V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
-      Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
+    Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
+                                                        V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
+    Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)

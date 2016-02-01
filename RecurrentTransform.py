@@ -679,7 +679,7 @@ class AttentionTreeBase(AttentionBase):
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
     values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
     self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
-    self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'index')
+    #self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'index')
 
     for i,e in enumerate(layer.base):
       self.add_input(e.output, 'B_%d' % i)
@@ -698,7 +698,6 @@ class AttentionTreeBase(AttentionBase):
 
   def step(self, y_p):
     updates = {}
-    index = self.index
     h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re)
     context = self.custom_vars['B_0']
     alpha = T.ones_like(context[:,:,0])

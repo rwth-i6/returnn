@@ -665,11 +665,14 @@ class HDFForwardTaskThread(TaskThread):
       self.merge = merge
       self.cache = cache
       target = network.output['output'].attrs['target']
-      cache.attrs['numSeqs'] = data.num_seqs
-      cache.attrs['numTimesteps'] = 0
-      cache.attrs['inputPattSize'] = data.num_inputs
-      cache.attrs['numDims'] = 1
-      cache.attrs['numLabels'] = data.num_outputs[target]
+      try:
+        cache.attrs['numTimesteps'] = 0
+        cache.attrs['inputPattSize'] = data.num_inputs
+        cache.attrs['numDims'] = 1
+        cache.attrs['numLabels'] = data.num_outputs[target]
+        cache.attrs['numSeqs'] = data.num_seqs
+      except: # Not all datasets support this
+        pass
       hdf5_strings(cache, 'labels', data.labels[target])
       self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
       self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
