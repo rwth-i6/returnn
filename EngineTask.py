@@ -671,12 +671,15 @@ class HDFForwardTaskThread(TaskThread):
         cache.attrs['numDims'] = 1
         cache.attrs['numLabels'] = data.num_outputs[target]
         cache.attrs['numSeqs'] = data.num_seqs
+        hdf5_strings(cache, 'labels', data.labels[target])
+        self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
+        self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
+        self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
       except: # Not all datasets support this
-        pass
-      hdf5_strings(cache, 'labels', data.labels[target])
-      self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
-      self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
-      self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
+        cache.attrs['numSeqs'] = 1
+        self.targets = { k: cache.create_dataset("targets/data/" + k, (1,), dtype='i') for k in data.targets }
+        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
+        #self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i', maxshape=(None, None))
       self.times = []
 
     def initialize(self):
@@ -706,7 +709,9 @@ class HDFForwardTaskThread(TaskThread):
         print >> log.v5, "extracting", seqfeats.shape[-1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         tt += seqfeats.shape[0]
-        self.seq_dims[seq_idx] = [seqfeats.shape[1]]
+        #self.seq_dims[seq_idx] = [seqfeats.shape[1]]
+        if self.seq_lengths.shape[0] <= seq_idx:
+          self.seq_lengths.resize(seq_idx,axis=0)
         self.seq_lengths[seq_idx] = seqfeats.shape[0]
         #self.inputs[self.toffset:self.toffset + seqfeats.shape[0]] = numpy.asarray(seqfeats)
         feats.append(seqfeats)
