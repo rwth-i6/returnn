@@ -407,6 +407,10 @@ class Device(object):
             p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0] * p_y_given_x.shape[1], p_y_given_x.shape[2]))
           index = self.testnet.output['output'].index
           source.append(T.log(p_y_given_x).reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1])) * T.cast(index.dimshuffle(0,1,'x').repeat(p_y_given_x.shape[1],axis=2),'float32'))
+        elif extract == "log-posteriors-hacked":
+          #just ignore the index, is only safe with max_seqs 1
+          #but makes the index handling with mdlstm work for now
+          source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
           source.append(self.testnet.output['output'].p_y_given_x)
         elif extract == "ctc-sil":
