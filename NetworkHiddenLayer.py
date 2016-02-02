@@ -1205,33 +1205,32 @@ class NewConv(_NoOpLayer):
 
     super(NewConv, self).__init__(**kwargs)
 
-    isConvLayer = False
-    # check how many source
-    if len(self.sources) != 1:
-      # check whether all inputs are conv layers
-      #assert all(s.layer_class == 'conv' for s in self.sources), 'Sorry, we only concatenate convolutional layers'
+    n_sources = len(self.sources)   # calculate how many input
+    is_conv_layer = all(s.layer_class == 'conv' for s in self.sources)  # check whether all inputs are conv layers
 
-      if all(s.layer_class == 'conv' for s in self.sources):
-        # check whether the spatial dimension of all inputs are the same
+    # check whether the input is conv layer
+    if is_conv_layer:
+      d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
+      stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
+      dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
+
+      # check whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the spatial dimension of all inputs
         assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
-        isConvLayer = True
-      else:
-        # check whether the units of all inputs are the same
-        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
-        isConvLayer = False
+        stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
+    else:   # input is not conv layer
+      stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
+      dimension = self.sources[0].attrs['n_out']  # set the dimension of input
 
-    # check what kinds of the input layer
-    if all(s.layer_class == 'conv' for s in self.sources):  # CNN layer
-      d_row = self.sources[0].attrs['d_row']
-      d_col = (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features'])/d_row
-      stack_size = sum([s.attrs['n_features'] for s in self.sources])
-    elif all(s.layer_class == 'rec' for s in self.sources): # LSTM layer
-      stack_size = 1
-      dimension = sum([s.attrs['n_out'] for s in self.sources])
-      d_col = dimension/d_row
-    else: # another layer
-      stack_size = 1
-      d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
+      # whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the number of layer unit
+        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
+        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from input
+
+    # calculating the number of input columns
+    d_col = dimension/d_row
 
     # number of output dimension validation based on the border_mode
     if border_mode == 'valid':
@@ -1259,10 +1258,10 @@ class NewConv(_NoOpLayer):
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
     # therefore, we should convert our input into 4D tensor
-    if len(self.sources) != 1:
-      if isConvLayer:
-        tempInput = T.concatenate([s.tempOutput for s in self.sources], axis=3) # (time, batch, input-dim = row * col, stack_size)
-        input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+    if n_sources != 1:
+      if is_conv_layer:
+        input = T.concatenate([s.tempOutput for s in self.sources], axis=3)   # (time, batch, input-dim = row * col, stack_size)
+        #input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
       else:
         input = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * col * stack_size)
     else:
