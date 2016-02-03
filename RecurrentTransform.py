@@ -249,7 +249,7 @@ class LME(RecurrentTransformBase):
     self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
     self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
-    l = sqrt(2.) / sqrt(self.layer.attrs['n_out'] + self.unit.n_re)
+    l = sqrt(2.) / sqrt(self.layer.attrs['n_out'] + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] * 4, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_lm_p = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_p"))
 
