@@ -249,8 +249,8 @@ class LME(RecurrentTransformBase):
     self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
     self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
-    l = sqrt(2.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
-    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(layer.attrs['n_out'] * 4, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    l = sqrt(2.) / sqrt(self.layer.attrs['n_out'] + self.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] * 4, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_lm_p = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_p"))
 
     y = self.layer.y_in[self.layer.attrs['target']].flatten()
@@ -298,10 +298,9 @@ class LMN(RecurrentTransformBase):
     #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
     if self.layer.attrs['droplm'] < 1.0:
       mask = self.lmmask[T.cast(self.t[0],'int32')]
-      z_re = self.W_lm_out[T.argmax(T.dot(p_re, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      z_re = self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
     else:
-      z_re = self.W_lm_out[T.argmax(T.dot(p_re, self.W_lm_in), axis=1)]
-      #z_re = T.dot(p_re, self.W_lm_out)
+      z_re = self.W_lm_out[T.argmax(p_re, axis=1)]
     return z_re, { self.t : self.t + 1 }
 
 
