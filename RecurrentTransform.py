@@ -178,7 +178,7 @@ class DummyTransform(RecurrentTransformBase):
 
 
 class LM(RecurrentTransformBase):
-  name = "none_lm"
+  name = "lm_lm"
 
   def create_vars(self):
     self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
@@ -186,15 +186,13 @@ class LM(RecurrentTransformBase):
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
     self.t = self.add_state_var(T.zeros((self.layer.num_batches,), dtype="float32"), name="t")
 
-    y = self.layer.y_in[self.layer.attrs['target']].flatten() #.reshape(self.index.shape)
-    #real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
-    #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
     if self.layer.attrs['direction'] == 1:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
       self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
     else:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t[::-1]], axis=0)
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
     self.add_input(self.cls, 'cls')
 
   def step(self, y_p):

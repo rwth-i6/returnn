@@ -262,7 +262,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return T.cast(source.output_sizes[:, 1], "int32")
-    return T.sum(self.index, axis=0)
+    return T.cast(T.sum(self.index, axis=0), 'int32')
 
   def cost(self):
     """
