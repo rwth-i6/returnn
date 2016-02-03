@@ -677,7 +677,6 @@ class HDFForwardTaskThread(TaskThread):
         self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
       except: # Not all datasets support this
         cache.attrs['numSeqs'] = 1
-        self.targets = { k: cache.create_dataset("targets/data/" + k, (1,), dtype='i') for k in data.targets }
         self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
         #self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i', maxshape=(None, None))
       self.times = []
@@ -711,12 +710,16 @@ class HDFForwardTaskThread(TaskThread):
         tt += seqfeats.shape[0]
         #self.seq_dims[seq_idx] = [seqfeats.shape[1]]
         if self.seq_lengths.shape[0] <= seq_idx:
-          self.seq_lengths.resize(seq_idx,axis=0)
+          self.seq_lengths.resize(seq_idx+1,axis=0)
         self.seq_lengths[seq_idx] = seqfeats.shape[0]
         #self.inputs[self.toffset:self.toffset + seqfeats.shape[0]] = numpy.asarray(seqfeats)
         feats.append(seqfeats)
         self.tags.append(self.data.get_tag(seq_idx))
-        self.times.extend(self.data.get_times(seq_idx))
+        try:
+          times = self.data.get_times(seq_idx)
+          self.times.extend(times)
+        except:
+          pass
         if self.inputs.shape[1] < seqfeats.shape[1]:
           self.inputs.resize(seqfeats.shape[1], axis=1)
       if self.inputs.shape[0] < self.toffset + tt:

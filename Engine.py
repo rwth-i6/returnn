@@ -550,7 +550,7 @@ class Engine:
     """
     cache = h5py.File(output_file, "w")
     batches = data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=data.get_num_timesteps(),
+                                    batch_size=0, #data.get_num_timesteps(),
                                     max_seqs=self.max_seqs)
     merge = {}
     forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
