@@ -212,6 +212,140 @@ class LM(RecurrentTransformBase):
     return z_re, { self.t : self.t + 1 }
 
 
+class LMH(RecurrentTransformBase):
+  name = "hardloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    #p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      #z_re = T.dot(p_re, self.W_lm_out) * (1 - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
+      #z_re = T.dot(p_re, self.W_lm_out)
+    return z_re, { self.t : self.t + 1 }
+
+
+class LME(RecurrentTransformBase):
+  name = "embedding_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+    l = sqrt(2.) / sqrt(layer.attrs['n_out'] + n_in + unit.n_re)
+    values = numpy.asarray(layer.rng.uniform(low=-l, high=l, size=(layer.attrs['n_out'] * 4, layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    self.W_lm_p = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_p"))
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = T.tanh(T.dot(self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask, self.W_lm_p))
+    else:
+      z_re = T.tanh(T.dot(self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)], self.W_lm_p))
+    return z_re, { self.t : self.t + 1 }
+
+
+class LMN(RecurrentTransformBase):
+  name = "normloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = self.W_lm_out[T.argmax(T.dot(p_re, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      z_re = self.W_lm_out[T.argmax(T.dot(p_re, self.W_lm_in), axis=1)]
+      #z_re = T.dot(p_re, self.W_lm_out)
+    return z_re, { self.t : self.t + 1 }
+
+
+class LMS(RecurrentTransformBase):
+  name = "softloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      #z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      z_re = T.dot(p_re, self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      #z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
+      z_re = T.dot(p_re, self.W_lm_out)
+    return z_re, { self.t : self.t + 1 }
+
+
 class NTM(RecurrentTransformBase):
   """
   Neural turing machine http://arxiv.org/pdf/1410.5401v2.pdf
