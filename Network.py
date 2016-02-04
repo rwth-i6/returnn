@@ -65,7 +65,7 @@ class LayerNetwork(object):
     self.sparse_input = None  # any of the from_...() functions will set this
     self.default_target = None  # any of the from_...() functions will set this
     self.train_flag = None  # any of the from_...() functions will set this
-    self.get_layer_param = lamnda **kwargs: None  # used by Container.add_param()
+    self.get_layer_param = None  # used by Container.add_param()
     self.calc_step_base = None
 
   @classmethod
