@@ -667,7 +667,7 @@ class Updater:
         epsilon = numpy.float32(1e-6)
         accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
-        upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new + epsilon))
+        upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new) + epsilon)
 
       else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
