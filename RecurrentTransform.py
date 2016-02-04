@@ -178,7 +178,7 @@ class DummyTransform(RecurrentTransformBase):
 
 
 class LM(RecurrentTransformBase):
-  name = "none_lm"
+  name = "lm_lm"
 
   def create_vars(self):
     self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
@@ -186,15 +186,13 @@ class LM(RecurrentTransformBase):
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
     self.t = self.add_state_var(T.zeros((self.layer.num_batches,), dtype="float32"), name="t")
 
-    y = self.layer.y_in[self.layer.attrs['target']].flatten() #.reshape(self.index.shape)
-    #real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
-    #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
     if self.layer.attrs['direction'] == 1:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
       self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
     else:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t[::-1]], axis=0)
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
     self.add_input(self.cls, 'cls')
 
   def step(self, y_p):
@@ -211,6 +209,139 @@ class LM(RecurrentTransformBase):
     else:
       z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
       #z_re = T.dot(p_re, self.W_lm_out)
+    return z_re, { self.t : self.t + 1 }
+
+
+class LMH(RecurrentTransformBase):
+  name = "hardloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    #p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      #z_re = T.dot(p_re, self.W_lm_out) * (1 - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
+      #z_re = T.dot(p_re, self.W_lm_out)
+    return z_re, { self.t : self.t + 1 }
+
+
+class LME(RecurrentTransformBase):
+  name = "embedding_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+    l = sqrt(2.) / sqrt(self.layer.attrs['n_out'] + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] * 4, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    self.W_lm_p = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_p"))
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = T.tanh(T.dot(self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask, self.W_lm_p))
+    else:
+      z_re = T.tanh(T.dot(self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)], self.W_lm_p))
+    return z_re, { self.t : self.t + 1 }
+
+
+class LMN(RecurrentTransformBase):
+  name = "normloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      z_re = self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      z_re = self.W_lm_out[T.argmax(p_re, axis=1)]
+    return z_re, { self.t : self.t + 1 }
+
+
+class LMS(RecurrentTransformBase):
+  name = "softloop_lm"
+
+  def create_vars(self):
+    self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+    self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+    self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+
+    y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    if self.layer.attrs['direction'] == 1:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+    else:
+      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+    self.add_input(self.cls, 'cls')
+
+  def step(self, y_p):
+    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    h_e = T.exp(T.dot(y_p, self.W_lm_in))
+    p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
+    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
+    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
+    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    if self.layer.attrs['droplm'] < 1.0:
+      mask = self.lmmask[T.cast(self.t[0],'int32')]
+      #z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      z_re = T.dot(p_re, self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+    else:
+      #z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
+      z_re = T.dot(p_re, self.W_lm_out)
     return z_re, { self.t : self.t + 1 }
 
 
@@ -636,6 +767,106 @@ class AttentionTemplate(AttentionBase):
       updates[self.w] = self.w_t[:,:,0]
     return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
     #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
+
+
+class AttentionTreeBase(AttentionBase):
+  """
+  attention over hierarchy of bases in different time resolutions
+  """
+  name = "attention_treebase"
+
+  def ugly_init(self, i):
+    B = self.custom_vars['B_%d' % i]
+    try:
+      C = self.custom_vars['C_%d' % i]
+    except:
+      C = None
+    if i == 0:
+      self.B_0 = B
+      self.C_0 = C
+    elif i == 1:
+      self.B_1 = B
+      self.C_1 = C
+    elif i == 2:
+      self.B_2 = B
+      self.C_2 = C
+    elif i == 3:
+      self.B_3 = B
+      self.C_3 = C
+    elif i == 4:
+      self.B_4 = B
+      self.C_4 = C
+
+  def create_vars(self):
+    layer = self.layer
+    base = layer.base
+    assert base, "attention networks are only defined for decoder networks"
+    n_tmp = self.layer.attrs['attention_template']
+
+    self.n_in = base[0].attrs['n_out'] # resolution is assumed to decrease with index
+    n_in = self.n_in
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
+    self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
+    values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
+    self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
+    #self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'index')
+
+    for i,e in enumerate(layer.base):
+      self.add_input(e.output, 'B_%d' % i)
+      if self.layer.attrs['attention_template'] > 0:
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
+        W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
+        values = numpy.zeros((n_tmp,),dtype='float32')
+        b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
+        self.add_input(T.tanh(T.dot(base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
+      else:
+        n_in = self.n_in
+      self.ugly_init(i) # TODO
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
+
+  def step(self, y_p):
+    updates = {}
+    h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re)
+    context = self.custom_vars['B_0']
+    alpha = T.ones_like(context[:,:,0])
+    #alpha = T.zeros_like(context[:,:,0])
+    dist = 'l2'
+    if 'attention_distance' in self.layer.attrs:
+      dist = self.layer.attrs['attention_distance']
+    for i in xrange(len(self.layer.base)):
+      base = self.custom_vars[('C_%d' % i) if self.layer.attrs['attention_template'] > 0 else ('B_%d' % i)]
+      if dist == 'l2':
+        #f_z = T.sqrt(T.sum((base - h_p.dimshuffle('x',0,1).repeat(base.shape[0],axis=0)) ** 2, axis=2)) #.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2))
+        f_z = T.mean((base - h_p.dimshuffle('x',0,1).repeat(base.shape[0],axis=0)) ** 2, axis=2) #.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2))
+      elif dist == 'dot':
+        f_z = T.mean(base * h_p.dimshuffle('x',0,1).repeat(base.shape[0],axis=0), axis=2) #.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2)
+      else:
+        assert False, "invalid distance: %s" % dist
+      f_z = f_z * self.layer.attrs['attention_sharpening']
+      #f_e = T.exp(-f_z) #* index
+      #w_i = f_z # T.exp(-f_z) #f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
+      w_i = T.exp(-f_z)
+      if i > 0:
+        factor = self.layer.base[i].attrs['factor'][0]
+        #factor = self.layer.base[i].sources[0].attrs['factor'][0]
+        # x = numpy.array([[1, 4],[2, 6], [3, 9])
+        # numpy.tile(x,(1,2)).reshape((2*x.shape[0],x.shape[1]))
+        # array([[1, 4], [1, 4], [2, 6], [2, 6], [3, 9], [3, 9]])
+        #w_i = theano.printing.Print("before", attrs=['shape'])(w_i)
+        w_c = T.tile(w_i, (1,factor)).reshape((factor*w_i.shape[0],w_i.shape[1]))
+        w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c) #/ T.constant(factor, 'float32')
+        #container = T.zeros_like(context[:,:,0]) + 4.
+        #w_i = T.set_subtensor(container[:w_c.shape[0]], w_c)
+        #w_i = theano.printing.Print("after", attrs=['shape'])(w_i)
+        #w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(((2**i)*w_i.shape[0],w_i.shape[1])).T
+      alpha *= w_i
+      #alpha -= w_i
+    #alpha = T.exp(alpha)
+    alpha = (alpha / alpha.sum(axis=0,keepdims=True)).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
 
 
 class AttentionLinear(AttentionBase):

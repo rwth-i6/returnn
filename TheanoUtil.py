@@ -90,6 +90,14 @@ def downsample(source, axis, factor, method="average"):
     return T.max(source, axis=axis + 1)
   elif method == "min":
     return T.min(source, axis=axis + 1)
+  elif method == "concat": # concatenates in last dimension
+    return T.reshape(source, added_dim_shape[:axis+1] + added_dim_shape[axis+2:-1] + [added_dim_shape[-1] * factor])
+  elif method == "lstm":
+    assert axis == 0
+    return source
+  elif method == "batch":
+    assert axis == 0
+    return source.dimshuffle(1,0,2,3).reshape((source.shape[1],source.shape[0]*source.shape[2],source.shape[3]))
   else:
     assert False, "unknown downsample method %r" % method
 

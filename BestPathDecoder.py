@@ -54,7 +54,7 @@ class BestPathDecodeOp(theano.Op):
     
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
-        return (1.61,)
+        return (1.62,)
         
     def c_support_code(self):
         src = ""

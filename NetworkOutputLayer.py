@@ -49,17 +49,21 @@ class OutputLayer(Layer):
       assert len(self.sources) == len(self.masks) == len(self.W_in)
       assert len(self.sources) > 0
       for source, m, W in zip(self.sources, self.masks, self.W_in):
+        source_output = source.output
+        #4D input from TwoD Layers -> collapse height dimension
+        if source_output.ndim == 4:
+          source_output = source_output.sum(axis=0)
         if source.attrs['sparse']:
           if source.output.ndim == 3:
-            input = source.output[:,:,0]  # old sparse format
+            input = source_output[:,:,0]  # old sparse format
           else:
-            assert source.output.ndim == 2
+            assert source_output.ndim == 2
             input = source.output
           self.z += W[T.cast(input, 'int32')]
         elif m is None:
-          self.z += self.dot(source.output, W)
+          self.z += self.dot(source_output, W)
         else:
-          self.z += self.dot(self.mass * m * source.output, W)
+          self.z += self.dot(self.mass * m * source_output, W)
     else:
       self.z = copy_input.output
     assert self.z.ndim == 3
@@ -254,6 +258,12 @@ class SequenceOutputLayer(OutputLayer):
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
 
+  def index_for_ctc(self):
+    for source in self.sources:
+      if hasattr(source, "output_sizes"):
+        return T.cast(source.output_sizes[:, 1], "int32")
+    return T.cast(T.sum(self.index, axis=0), 'int32')
+
   def cost(self):
     """
     :param y: shape (time*batch,) -> label
@@ -280,7 +290,7 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
-      err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0))
+      err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'ce_ctc':
@@ -304,6 +314,6 @@ class SequenceOutputLayer(OutputLayer):
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
       from theano.tensor.extra_ops import cpu_contiguous
-      return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), T.sum(self.index, axis=0)))
+      return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     else:
       return super(SequenceOutputLayer, self).errors()

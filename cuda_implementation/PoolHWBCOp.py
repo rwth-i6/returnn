@@ -6,10 +6,12 @@ from theano.compile import optdb
 from theano import gof
 from theano.gof import toolbox
 
+
 class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("pool_shape", "inplace", "BCHW_grad_output")
 
   def __init__(self, pool_shape, inplace, BCHW_grad_output):
+    pool_shape = tuple(pool_shape)
     super(PoolHWBCOpGrad, self).__init__()
     assert len(pool_shape) == 2, len(pool_shape)
     assert pool_shape[0] > 0, pool_shape[0]
@@ -315,6 +317,8 @@ class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
       }
       else
       {
+        //cout << "warning, RemoveConvGradDimshuffle optimization failed" << endl;
+        //TODO: this optimization seems not to be applied anymore...
         pool_kernel_bwd_inplace<<<DIM_GRID, DIM_BLOCK>>>(DX_data, DY_data, h, w, n, c, %(poolHeight)s, %(poolWidth)s);
         CHECK_KERNEL_ERROR();
       }
@@ -330,7 +334,8 @@ class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
     return input_shapes[:1]
 
   def c_code_cache_version(self):
-    return 2, 0
+    return 2, 2
+
 
 class RemoveConvGradDimshuffle(gof.Optimizer):
   def add_requirements(self, fgraph):
@@ -359,6 +364,7 @@ class PoolHWBCOp(theano.sandbox.cuda.GpuOp):
   __props__ = ("pool_shape",)
 
   def __init__(self, pool_shape):
+    pool_shape = tuple(pool_shape)
     super(PoolHWBCOp, self).__init__()
     assert len(pool_shape) == 2, len(pool_shape)
     assert pool_shape[0] > 0, pool_shape[0]
@@ -445,4 +451,3 @@ class PoolHWBCOp(theano.sandbox.cuda.GpuOp):
 
   def c_code_cache_version(self):
     return 2, 0
-

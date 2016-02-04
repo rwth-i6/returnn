@@ -189,8 +189,50 @@ class DownsampleLayer(_NoOpLayer):
         self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
       elif a == 2:
         n_out = int(n_out / f)
+    output = z
+    if method == 'concat':
+      n_out *= numpy.prod(factor)
+    elif method == 'lstm':
+      num_batches = z.shape[2]
+      #z = theano.printing.Print("a", attrs=['shape'])(z)
+      z = z.dimshuffle(1,0,2,3).reshape((z.shape[1],z.shape[0]*z.shape[2],z.shape[3]))
+      #z = theano.printing.Print("b", attrs=['shape'])(z)
+      from math import sqrt
+      from ActivationFunctions import elu
+      l = sqrt(6.) / sqrt(6 * n_out)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
+      self.A_in = self.add_param(theano.shared(value=values, borrow=True, name = "A_in_" + self.name))
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
+      self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re_" + self.name))
+      def lstmk(z_t, y_p, c_p):
+        z_t += T.dot(y_p, self.A_re)
+        partition = z_t.shape[1] / 4
+        ingate = T.nnet.sigmoid(z_t[:,:partition])
+        forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+        outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+        input = T.tanh(z_t[:,3*partition:4*partition])
+        c_t = forgetgate * c_p + ingate * input
+        y_t = outgate * T.tanh(c_t)
+        return (y_t, c_t)
+      def attent(xt, yp, W_re):
+        return T.tanh(xt + elu(T.dot(yp, W_re)))
+        #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
+      z, _ = theano.scan(attent, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0])], non_sequences=[self.A_re])
+      #result, _ = theano.scan(lstmk, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0]),T.zeros_like(z[0])])
+      #z = result[0]
+      #from OpLSTM import LSTMOpInstance
+      #inp = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], z.shape[1], z.shape[2] * 4) + T.dot(z,self.A_in)
+      #sta = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[1], z.shape[2])
+      #idx = T.alloc(numpy.cast[theano.config.floatX](1), z.shape[0], z.shape[1])
+      #result = LSTMOpInstance(inp, self.A_re, sta, idx)
+      #result = LSTMOpInstance(T.dot(z,self.A_in), self.A_re, T.zeros_like(z[0]), T.ones_like(z[:,:,0]))
+      output = z[-1].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
+      #output = result[0][0].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
+    elif method == 'batch':
+      self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=factor[0], method="batch")
+      #z = theano.printing.Print("d", attrs=['shape'])(z)
     self.set_attr('n_out', n_out)
-    self.make_output(z)
+    self.make_output(output)
 
 
 class UpsampleLayer(_NoOpLayer):
@@ -589,23 +631,33 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
 class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
   layer_class = "chunking"
 
-  def __init__(self, chunk_size=1, **kwargs):
+  def __init__(self, chunk_size=1, method = 'concat', **kwargs):
     assert chunk_size >= 1
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) * chunk_size
     super(ChunkingLayer, self).__init__(**kwargs)
     self.set_attr('chunk_size', chunk_size)
     z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
-    calloc = T.alloc(numpy.cast[theano.config.floatX](0), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), z.shape[1], z.shape[2])
-    container = T.set_subtensor(
-      calloc[:self.index.shape[0]],
-      z).dimshuffle(1,0,2) # BT'D
-    ialloc = T.alloc(numpy.cast['int32'](1), self.index.shape[0] + chunk_size - (self.index.shape[0] % chunk_size), self.index.shape[1])
-    self.index = T.set_subtensor(
-      ialloc[:self.index.shape[0]],
-      self.index)[::chunk_size] # BT'D
+    residual = z.shape[0] % chunk_size
+    padding = T.neq(residual,0) * (chunk_size - residual)
 
-    #self.index = self.index.repeat(self.index.shape[0] % chunk_size, axis = 0)
-    self.make_output(container.reshape((container.shape[0], container.shape[1] / chunk_size, container.shape[2] * chunk_size)).dimshuffle(1,0,2)) # T'BD
+    #calloc = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0] + padding, z.shape[1], z.shape[2])
+    #container = T.set_subtensor(
+    #  calloc[:z.shape[0]],
+    #  z).dimshuffle('x',0,1,2).reshape((chunk_size,calloc.shape[0] / chunk_size,calloc.shape[1],calloc.shape[2])) # CTBD
+    z = T.concatenate([z,T.zeros((padding,z.shape[1],z.shape[2]), 'float32')], axis=0).dimshuffle('x',0,1,2).reshape((chunk_size,(z.shape[0] + padding) / chunk_size,z.shape[1],z.shape[2]))
+    #ialloc = T.alloc(numpy.cast['int32'](1), z.shape[1], self.index.shape[1])
+    self.index = T.set_subtensor(T.ones((z.shape[1]*z.shape[0],z.shape[2]),'int8')[:self.index.shape[0]],self.index)[::chunk_size]
+
+    if method == 'concat':
+      output = z.dimshuffle(1,2,3,0).reshape((z.shape[1], z.shape[2], z.shape[3] * chunk_size))
+    elif method == 'average':
+      output = z.mean(axis=0)
+    elif method == 'lstm':
+      xin = container.dimshuffle(1,0,2,3).reshape((container.shape[1],container.shape[2] * chunk_size,container.shape[3]))
+      xout = xin
+      output = output.reshape
+
+    self.make_output(output)
 
 
 class TruncationLayer(Layer):
@@ -1153,33 +1205,32 @@ class NewConv(_NoOpLayer):
 
     super(NewConv, self).__init__(**kwargs)
 
-    isConvLayer = False
-    # check how many source
-    if len(self.sources) != 1:
-      # check whether all inputs are conv layers
-      #assert all(s.layer_class == 'conv' for s in self.sources), 'Sorry, we only concatenate convolutional layers'
+    n_sources = len(self.sources)   # calculate how many input
+    is_conv_layer = all(s.layer_class == 'conv' for s in self.sources)  # check whether all inputs are conv layers
 
-      if all(s.layer_class == 'conv' for s in self.sources):
-        # check whether the spatial dimension of all inputs are the same
+    # check whether the input is conv layer
+    if is_conv_layer:
+      d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
+      stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
+      dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
+
+      # check whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the spatial dimension of all inputs
         assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
-        isConvLayer = True
-      else:
-        # check whether the units of all inputs are the same
-        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
-        isConvLayer = False
+        stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
+    else:   # input is not conv layer
+      stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
+      dimension = self.sources[0].attrs['n_out']  # set the dimension of input
 
-    # check what kinds of the input layer
-    if all(s.layer_class == 'conv' for s in self.sources):  # CNN layer
-      d_row = self.sources[0].attrs['d_row']
-      d_col = (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features'])/d_row
-      stack_size = sum([s.attrs['n_features'] for s in self.sources])
-    elif all(s.layer_class == 'rec' for s in self.sources): # LSTM layer
-      stack_size = 1
-      dimension = sum([s.attrs['n_out'] for s in self.sources])
-      d_col = dimension/d_row
-    else: # another layer
-      stack_size = 1
-      d_col = (self.sources[0].attrs['n_out']/stack_size)/d_row
+      # whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the number of layer unit
+        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
+        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from input
+
+    # calculating the number of input columns
+    d_col = dimension/d_row
 
     # number of output dimension validation based on the border_mode
     if border_mode == 'valid':
@@ -1207,10 +1258,10 @@ class NewConv(_NoOpLayer):
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
     # therefore, we should convert our input into 4D tensor
-    if len(self.sources) != 1:
-      if isConvLayer:
-        tempInput = T.concatenate([s.tempOutput for s in self.sources], axis=3) # (time, batch, input-dim = row * col, stack_size)
-        input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+    if n_sources != 1:
+      if is_conv_layer:
+        input = T.concatenate([s.tempOutput for s in self.sources], axis=3)   # (time, batch, input-dim = row * col, stack_size)
+        #input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
       else:
         input = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * col * stack_size)
     else:

@@ -20,6 +20,7 @@ class CTCOp(theano.Op):
         assert y.ndim == 2  # matrix: nseqs x max_labelling_length
         seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
         assert seq_lengths.ndim == 1  # vector of seqs lengths
+        assert seq_lengths.dtype == "int32"
         
         return theano.Apply(self, [x, y, seq_lengths], [T.fvector(), T.ftensor3(), T.fmatrix()])
         # first output: CTC error per sequence
@@ -83,4 +84,4 @@ class CTCOp(theano.Op):
     
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
-        return (1.97,)
+        return (2.00,)
