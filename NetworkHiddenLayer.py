@@ -374,6 +374,7 @@ class CalcStepLayer(_NoOpLayer):
         base_network=self.network, share_params=True, base_as_calc_step=True)
       # We are going to ignore all constraints and loss from the subnetwork.
       prev_layer = self.subnetwork.get_layer(from_prev)
+      assert prev_layer, "%s not found in subnetwork" % from_prev
       if n_out is not None:
         assert n_out == prev_layer.attrs["n_out"]
       self.set_attr("n_out", prev_layer.attrs["n_out"])

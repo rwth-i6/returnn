@@ -167,14 +167,15 @@ class LayerNetwork(object):
     network.default_target = base_network.default_target
     network.train_flag = base_network.train_flag
     if base_as_calc_step:
-      network.calc_step_base = calc_step_base
+      network.calc_step_base = base_network
     if share_params:
       def shared_get_layer_param(layer_name, param_name, param):
         base_layer = base_network.get_layer(layer_name)
-        return base_layer.params[param_name]
+        assert base_layer, "%s not found in base_network" % layer_name
+        return base_layer.params.get(param_name, None)
       network.get_layer_param = shared_get_layer_param
     json_content = base_network.to_json_content()
-    cls.from_json(json_content, network=network, base_network=base_network)
+    cls.from_json(json_content, network=network)
     if share_params:
       trainable_params = network.get_all_params_vars()
       assert len(trainable_params) == 0
