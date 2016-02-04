@@ -296,6 +296,7 @@ class Layer(Container):
 
   def __init__(self, sources, n_out, index, y_in=None, target=None, sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
+               with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, carry=False,
                sparse_filtering=False,
                **kwargs):
@@ -335,7 +336,11 @@ class Layer(Container):
       self.set_attr('target', target)
     if cost_scale != 1:
       self.set_attr("cost_scale", cost_scale)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    if with_bias:
+      self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    else:
+      self.set_attr('with_bias', False)
+      self.b = numpy.float32(0)
     self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
     self.masks = [None] * len(self.sources)
     assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask

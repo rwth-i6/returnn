@@ -664,21 +664,23 @@ class HDFForwardTaskThread(TaskThread):
       self.tags = []
       self.merge = merge
       self.cache = cache
-      target = network.output['output'].attrs['target']
-      try:
-        cache.attrs['numTimesteps'] = 0
-        cache.attrs['inputPattSize'] = data.num_inputs
-        cache.attrs['numDims'] = 1
-        cache.attrs['numLabels'] = data.num_outputs[target]
-        cache.attrs['numSeqs'] = data.num_seqs
+      target = network.get_layer('output').attrs['target']
+      cache.attrs['numTimesteps'] = 0
+      cache.attrs['inputPattSize'] = data.num_inputs
+      cache.attrs['numDims'] = 1
+      cache.attrs['numLabels'] = data.num_outputs[target]
+      if target in data.labels:
         hdf5_strings(cache, 'labels', data.labels[target])
+      try:
+        num_seqs = data.num_seqs
+      except Exception:
+        cache.attrs['numSeqs'] = 1
+        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
+      else:
+        cache.attrs['numSeqs'] = data.num_seqs
         self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
         self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
         self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
-      except: # Not all datasets support this
-        cache.attrs['numSeqs'] = 1
-        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
-        #self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i', maxshape=(None, None))
       self.times = []
 
     def initialize(self):
@@ -718,7 +720,7 @@ class HDFForwardTaskThread(TaskThread):
         try:
           times = self.data.get_times(seq_idx)
           self.times.extend(times)
-        except:
+        except Exception:
           pass
         if self.inputs.shape[1] < seqfeats.shape[1]:
           self.inputs.resize(seqfeats.shape[1], axis=1)

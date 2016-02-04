@@ -347,6 +347,28 @@ class ReverseLayer(_NoOpLayer):
     self.output = s.output[::-1]
 
 
+class CalcStepLayer(_NoOpLayer):
+  layer_class = "calc_step"
+
+  def __init__(self, n_out, from_prev="", apply=False, **kwargs):
+    super(CalcStepLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("from_prev", from_prev.encode("utf8"))
+    self.set_attr("apply", apply)
+    if not apply:
+      assert len(self.sources) == 0
+      self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
+    else:
+      import Network
+      self.subnetwork = Network.LayerNetwork.from_json()
+      # TODO...
+      pass
+    assert len(self.sources) == 1
+    s = self.sources[0]
+    for attr in ["n_out", "sparse"]:
+      self.set_attr(attr, s.attrs[attr])
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 
