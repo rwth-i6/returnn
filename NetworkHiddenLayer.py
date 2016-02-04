@@ -350,23 +350,34 @@ class ReverseLayer(_NoOpLayer):
 class CalcStepLayer(_NoOpLayer):
   layer_class = "calc_step"
 
-  def __init__(self, n_out, from_prev="", apply=False, **kwargs):
+  def __init__(self, n_out=None, from_prev="", apply=False, **kwargs):
     super(CalcStepLayer, self).__init__(**kwargs)
-    self.set_attr("n_out", n_out)
+    if n_out is not None:
+      self.set_attr("n_out", n_out)
     self.set_attr("from_prev", from_prev.encode("utf8"))
     self.set_attr("apply", apply)
     if not apply:
-      assert len(self.sources) == 0
-      self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
+      assert n_out is not None
+      assert self.network
+      if self.network.calc_step_base:
+        prev_layer = self.network.calc_step_base.get_layer(from_prev)
+        assert n_out == prev_layer.attrs["n_out"]
+        self.output = prev_layer.output
+      else:
+        # First calc step. Just use zero.
+        self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
     else:
+      assert from_prev
+      assert self.network
       import Network
-      self.subnetwork = Network.LayerNetwork.from_json()
-      # TODO...
-      pass
-    assert len(self.sources) == 1
-    s = self.sources[0]
-    for attr in ["n_out", "sparse"]:
-      self.set_attr(attr, s.attrs[attr])
+      self.subnetwork = Network.LayerNetwork.from_base_network(
+        base_network=self.network, share_params=True, base_as_calc_step=True)
+      # We are going to ignore all constraints and loss from the subnetwork.
+      prev_layer = self.subnetwork.get_layer(from_prev)
+      if n_out is not None:
+        assert n_out == prev_layer.attrs["n_out"]
+      self.set_attr("n_out", prev_layer.attrs["n_out"])
+      self.output = prev_layer.output
 
 
 class ConstantLayer(_NoOpLayer):

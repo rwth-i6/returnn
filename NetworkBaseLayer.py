@@ -131,14 +131,18 @@ class Container(object):
 
   def add_param(self, param, name=""):
     """
-    :type param: T
+    :type param: theano.SharedVariable
     :type name: str
-    :rtype: T
+    :rtype: theano.SharedVariable
     """
     if not name:
       name = getattr(param, "name", None)
     if not name:
       name = "param_%d" % len(self.params)
+    if self.network:
+      substitute = self.network.get_layer_param(layer_name=self.name, param_name=name, param=param)
+      if substitute:
+        return substitute
     if self.substitute_param_expr:
       substitute = eval(self.substitute_param_expr, {"self": self, "name": name, "value": param})
       if substitute:
@@ -371,9 +375,9 @@ class Layer(Container):
 
   def add_param(self, param, name="", constraints=True):
     """
-    :type param: T
+    :type param: theano.SharedVariable
     :type name: str
-    :rtype: T
+    :rtype: theano.SharedVariable
     """
     param = super(Layer, self).add_param(param, name)
     if constraints:
