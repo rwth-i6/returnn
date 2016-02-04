@@ -400,23 +400,23 @@ class Device(object):
           param = extract.split(':')[1]
           extract = extract.split(':')[0]
         if extract == "classification":
-          source.append(T.argmax(self.testnet.output['output'].y_m, axis=1).reshape(self.testnet.output['output'].index.shape).dimshuffle(0,1,'x'))
+          source.append(T.argmax(self.testnet.get_layer('output').y_m, axis=1).reshape(self.testnet.get_layer('output').index.shape).dimshuffle(0,1,'x'))
         elif extract == "log-posteriors":
-          p_y_given_x = self.testnet.output['output'].p_y_given_x
+          p_y_given_x = self.testnet.get_layer('output').p_y_given_x
           if p_y_given_x.ndim == 3:
             p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0] * p_y_given_x.shape[1], p_y_given_x.shape[2]))
-          index = self.testnet.output['output'].index
+          index = self.testnet.get_layer('output').index
           source.append(T.log(p_y_given_x).reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1])) * T.cast(index.dimshuffle(0,1,'x').repeat(p_y_given_x.shape[1],axis=2),'float32'))
         elif extract == "posteriors":
-          source.append(self.testnet.output['output'].p_y_given_x)
+          source.append(self.testnet.get_layer('output').p_y_given_x)
         elif extract == "ctc-sil":
-          feat = self.testnet.output['output'].p_y_given_x
+          feat = self.testnet.get_layer('output').p_y_given_x
           feat = feat[:,:-1] #remove blank
           feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
           feat = T.log(feat)
           source.append(feat)
         elif extract == "ce-errsig":
-          feat = T.grad(self.testnet.costs, self.testnet.output['output'].z) #TODO
+          feat = T.grad(self.testnet.costs, self.testnet.get_layer('output').z) #TODO
           source.append(feat)
           givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
@@ -460,13 +460,13 @@ class Device(object):
 
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
-                                        outputs = [T.argmax(self.testnet.output['output'].p_y_given_x, axis = 1)],
+                                        outputs = [T.argmax(self.testnet.get_layer('output').p_y_given_x, axis = 1)],
                                         givens = self.make_input_givens(self.testnet),
                                         name = "classifier")
 
     elif self.network_task == 'analyze':
       self.analyzer = theano.function(inputs = [],
-                                      outputs = [self.testnet.output['output'].p_y_given_x],
+                                      outputs = [self.testnet.get_layer('output').p_y_given_x],
                                               #+ [self.testnet.jacobian],
                                               #+ [hidden.output for hidden in self.network.hidden]
                                               #+ [hidden.output for hidden in self.network.reverse_hidden],
