@@ -198,7 +198,15 @@ class ConstantLearningRate(LearningRateControl):
     :returns learning rate
     :rtype: float
     """
-    return self.initialLearningRate
+    while True:
+      lastEpoch = self.getLastEpoch(epoch)
+      if lastEpoch is None:
+        return self.initialLearningRate
+      learningRate = self.epochData[lastEpoch].learningRate
+      if learningRate is None:
+        epoch = lastEpoch
+        continue
+      return learningRate
 
 
 class NewbobRelative(LearningRateControl):
