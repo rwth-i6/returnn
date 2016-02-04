@@ -354,7 +354,8 @@ class CalcStepLayer(_NoOpLayer):
     super(CalcStepLayer, self).__init__(**kwargs)
     if n_out is not None:
       self.set_attr("n_out", n_out)
-    self.set_attr("from_prev", from_prev.encode("utf8"))
+    if from_prev:
+      self.set_attr("from_prev", from_prev.encode("utf8"))
     self.set_attr("apply", apply)
     if not apply:
       assert n_out is not None
@@ -367,7 +368,12 @@ class CalcStepLayer(_NoOpLayer):
         # First calc step. Just use zero.
         self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
     else:
-      assert from_prev
+      assert len(self.sources) == 1
+      assert not from_prev
+      # We will refer to the previous calc-step layer this way
+      # so that we ensure that we have already traversed it.
+      # This is important so that share_params correctly works.
+      from_prev = self.sources[0].name
       assert self.network
       import Network
       self.subnetwork = Network.LayerNetwork.from_base_network(
