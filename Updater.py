@@ -53,6 +53,7 @@ class Updater:
                adam_fit_learning_rate=True,
                adamax=False,
                adamvr=False, # adam with adasecant variance reduction
+               nadam=False, # Adam with nag part momentum
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -74,6 +75,7 @@ class Updater:
     self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
     self.adamvr = adamvr
+    self.nadam = nadam
     self.adam = adam
     self.adamdelta = adamdelta
     self.adam_fit_learning_rate = adam_fit_learning_rate
@@ -111,6 +113,8 @@ class Updater:
       print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
     if self.adam:
       print >> log.v4, "using adam"
+    if self.nadam:
+      print >> log.v4, "using adam with nag and momentum schedule"
 
   def initVars(self, network, net_param_deltas):
     """
@@ -468,6 +472,33 @@ class Updater:
 
         if self.use_corrected_grad:
           updates.append((old_grad, corrected_grad))
+
+      elif self.nadam: # inspired by some forum threads
+        m_cache = self.var([1], name="momemtum_cache")
+
+        mt = beta1 * ( 1 - 0.5 * 0.96**( i_t/ (1.0*250) ) ) # momentum scedule, inspired by Ilya Sutskever
+        mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) / (1.0*250) ) ) # we need it for simplified NAG
+
+        m_cache.append(m_cache)
+        bias_corr_list = m_cache + [mtnext]
+
+        _deltas = deltas / ( 1 - numpy.prod( numpy.asarray(m_cache) ) )
+        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
+
+        m = beta1 * m_prev + (1 - beta1) * deltas
+        _m = m / ( 1 - numpy.prod( numpy.asarray(bias_corr_list) ) ) # bias correction (with momentum schedule (we include the next t+1))
+
+        v = beta2 * v_prev + (1 - beta2) * (deltas**2)
+        _v = v / (1 - beta2 ** i_t)
+
+        __m = (1 - mt) * _deltas + mtnext * _m
+
+        step = -self.learning_rate_var * __m / ( numpy.sqrt(_v) + epsilon)
+
+        upd[param] += step
+        updates.append((m_prev, m))
+        updates.append((v_prev, v))
 
       elif self.adamvr:
         self.decay = 0.75
