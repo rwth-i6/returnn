@@ -664,7 +664,7 @@ class HDFForwardTaskThread(TaskThread):
       self.tags = []
       self.merge = merge
       self.cache = cache
-      target = network.output['output'].attrs['target']
+      target = network.get_layer('output').attrs['target']
       cache.attrs['numSeqs'] = data.num_seqs
       cache.attrs['numTimesteps'] = 0
       cache.attrs['inputPattSize'] = data.num_inputs
