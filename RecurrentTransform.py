@@ -664,6 +664,19 @@ class AttentionTemplate(AttentionBase):
       self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
       self.loc = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'loc')
       self.frac = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'frac')
+    if self.layer.attrs['attention_lm'] == "hard":
+      self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+      self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
+      self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
+      self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
+      y = self.layer.y_in[self.layer.attrs['target']].flatten()
+      if self.layer.attrs['direction'] == 1:
+        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+        self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+      else:
+        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+        self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+      self.add_input(self.cls, 'cls')
 
   def step(self, y_p):
     updates = {}
@@ -765,8 +778,17 @@ class AttentionTemplate(AttentionBase):
         assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     else:
       updates[self.w] = self.w_t[:,:,0]
-    return T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
-    #return T.dot(T.sum(self.B * self.w.dimshuffle(0,1,'x').repeat(w_t.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
+    result = T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in)
+    if self.layer.attrs['attention_lm'] == "hard":
+      h_e = T.exp(T.dot(y_p, self.W_lm_in))
+      p_re = h_e / (T.sum(h_e,axis=1,keepdims=True))
+      if self.layer.attrs['droplm'] < 1.0:
+        mask = self.lmmask[T.cast(self.t[0],'int32')]
+        result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      else:
+        result += self.W_lm_out[T.argmax(p_re, axis=1)]
+      updates[self.t] = self.t + 1
+    return result, updates
 
 
 class AttentionTreeBase(AttentionBase):
