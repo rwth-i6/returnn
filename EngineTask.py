@@ -713,7 +713,7 @@ class HDFForwardTaskThread(TaskThread):
         try:
           times = self.data.get_times(seq_idx)
           self.times.extend(times)
-        except:
+        except Exception:
           pass
         if self.inputs.shape[1] < seqfeats.shape[1]:
           self.inputs.resize(seqfeats.shape[1], axis=1)
