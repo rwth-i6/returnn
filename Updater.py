@@ -44,6 +44,7 @@ class Updater:
   def __init__(self,
                momentum=0.0, nesterov_momentum=0.0, momentum2=0.0,
                gradient_clip=-1.0,
+               update_clip=-1.0,
                adagrad=False,
                adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6,
                max_norm=0.0,
@@ -68,6 +69,7 @@ class Updater:
     self.nesterov_momentum = numpy.float32(nesterov_momentum)
     self.momentum2 = numpy.float32(momentum2)
     self.gradient_clip = numpy.float32(gradient_clip)
+    self.update_clip = numpy.float32(update_clip)
     self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
@@ -107,6 +109,8 @@ class Updater:
       print >> log.v4, "using reverted momentum %f" % self.momentum2
     if self.gradient_clip > 0:
       print >> log.v4, "using gradient clipping %f" % self.gradient_clip
+    if self.update_clip > 0:
+      print >> log.v4, "using update clipping %f" % self.update_clip
     if self.rmsprop:
       print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
     if self.adamax:
@@ -716,6 +720,11 @@ class Updater:
         velocity = self.var(param, zero=True, name="momentum2_velocity_%s" % param.name)
         upd[param] += velocity * self.momentum2
         updates.append((velocity, upd[param]))
+
+    if self.update_clip > 0:
+      for p, u in list(upd.items()):
+        if not u: continue
+        upd[p] = T.clip(u, -self.update_clip, self.update_clip)
 
     # Simulate multi GPU training. This might help for regularization.
     if self.update_multiple_models:
