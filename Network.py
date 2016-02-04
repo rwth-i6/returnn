@@ -170,6 +170,9 @@ class LayerNetwork(object):
       network.calc_step_base = base_network
     if share_params:
       def shared_get_layer_param(layer_name, param_name, param):
+        if base_network.get_layer_param:
+          substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+          if substitute: return substitute
         base_layer = base_network.get_layer(layer_name)
         assert base_layer, "%s not found in base_network" % layer_name
         return base_layer.params.get(param_name, None)
