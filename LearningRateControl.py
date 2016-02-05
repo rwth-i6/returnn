@@ -55,6 +55,8 @@ class LearningRateControl(object):
     if initialLearningRates:
       if isinstance(initialLearningRates, list):
         initialLearningRates = {i + 1: v for (i, v) in enumerate(initialLearningRates)}
+      if isinstance(initialLearningRates, str):
+        initialLearningRates = eval(initialLearningRates)
       assert isinstance(initialLearningRates, dict)
       for epoch, v in initialLearningRates.items():
         self.setLearningRateForEpoch(epoch, v)
