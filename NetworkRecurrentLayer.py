@@ -638,17 +638,17 @@ class RecurrentUnitLayer(Layer):
       #  print "hi"
       #  sequences = T.inc_subtensor(sequences[-1 if direction == -1 else 0], T.dot(outputs_info[0],W_re))
       #  outputs_info[0] = T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)
-      outputs = unit.scan(step,
-                          sources,
-                          sequences[s::self.attrs['sampling']],
-                          non_sequences,
-                          index_f,
-                          outputs_info,
-                          W_re,
-                          self.W_in,
-                          self.b,
-                          direction == -1,
-                          self.attrs['truncation'])
+      outputs = unit.scan(step=step,
+                          x=sources,
+                          z=sequences[s::self.attrs['sampling']],
+                          non_sequences=non_sequences,
+                          i=index_f,
+                          outputs_info=outputs_info,
+                          W_re=W_re,
+                          W_in=self.W_in,
+                          b=self.b,
+                          go_backwards=direction == -1,
+                          truncate_gradient=self.attrs['truncation'])
 
       if not isinstance(outputs, list):
         outputs = [outputs]
