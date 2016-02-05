@@ -478,15 +478,17 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.nadam: # inspired by some forum threads
-        m_cache = self.var([1], name="momemtum_cache")
+
+        m_cache = self.var(numpy.asarray([1]), name="momemtum_cache")
 
         mt = beta1 * ( 1 - 0.5 * 0.96**( i_t/ (1.0*250) ) ) # momentum scedule, inspired by Ilya Sutskever
         mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) / (1.0*250) ) ) # we need it for simplified NAG
 
-        m_cache.append(m_cache)
-        bias_corr_list = m_cache + [mtnext]
+        m_cache_new = numpy.hstack((m_cache, numpy.asarray([mt])))
+        bias_corr_list = numpy.hstack((m_cache_new, numpy.asarray([mtnext])))
 
         _deltas = deltas / ( 1 - numpy.prod( numpy.asarray(m_cache) ) )
+
         m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
@@ -501,6 +503,8 @@ class Updater:
         step = -self.learning_rate_var * __m / ( numpy.sqrt(_v) + epsilon)
 
         upd[param] += step
+
+        updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))
         updates.append((v_prev, v))
 
