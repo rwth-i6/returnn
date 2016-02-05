@@ -44,7 +44,6 @@ class LayerNetwork(object):
       self.y = base_network.y
       self.i = base_network.i
       self.j = base_network.j
-      self.use_target = base_network.use_target
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -66,6 +65,9 @@ class LayerNetwork(object):
     self.sparse_input = None  # any of the from_...() functions will set this
     self.default_target = None  # any of the from_...() functions will set this
     self.train_flag = None  # any of the from_...() functions will set this
+    self.get_layer_param = None  # used by Container.add_param()
+    self.calc_step_base = None
+    self.calc_steps = []
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -155,36 +157,60 @@ class LayerNetwork(object):
                          **cls.init_args_from_config(config))
 
   @classmethod
-  def from_base_network(cls, base_network, share_params=True):
+  def from_base_network(cls, base_network, share_params=True, base_as_calc_step=False):
     """
     :param LayerNetwork base_network: base network to derive from
     :rtype: LayerNetwork
     """
+    network = cls(n_in=None, n_out=None, base_network=base_network)
+    network.default_mask = base_network.default_mask
+    network.sparse_input = base_network.sparse_input
+    network.default_target = base_network.default_target
+    network.train_flag = base_network.train_flag
+    if base_as_calc_step:
+      network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
+    if share_params:
+      def shared_get_layer_param(layer_name, param_name, param):
+        if base_network.get_layer_param:
+          substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+          if substitute: return substitute
+        base_layer = base_network.get_layer(layer_name)
+        assert base_layer, "%s not found in base_network" % layer_name
+        return base_layer.params.get(param_name, None)
+      network.get_layer_param = shared_get_layer_param
     json_content = base_network.to_json_content()
-    # TODO ....
-    network = cls.from_json(
-      json_content, n_in=None, n_out=None, base_network=base_network,
-      mask=base_network.default_mask,
-      sparse_input=base_network.sparse_input,
-      target=base_network.default_target,
-      train_flag=base_network.train_flag)
-
+    cls.from_json(json_content, network=network)
+    if share_params:
+      trainable_params = network.get_all_params_vars()
+      assert len(trainable_params) == 0
     return network
 
+  def get_calc_step(self, i):
+    if i == 0: return self
+    if i <= len(self.calc_steps):
+      return self.calc_steps[i - 1]
+    print >> log.v4, "creating calc steps up to %i" % i
+    while i > len(self.calc_steps):
+      base_network = self
+      if self.calc_steps: base_network = self.calc_steps[-1]
+      subnetwork = self.from_base_network(
+        base_network=base_network, share_params=True, base_as_calc_step=True)
+      self.calc_steps += [subnetwork]
+    return self.calc_steps[i - 1]
+
   @classmethod
-  def from_json(cls, json_content, n_in=None, n_out=None, network=None, base_network=None,
+  def from_json(cls, json_content, n_in=None, n_out=None, network=None,
                 mask=None, sparse_input=False, target='classes', train_flag=False):
     """
     :type json_content: dict[str]
     :type n_in: int | None
     :type n_out: dict[str,(int,int)] | None
     :param LayerNetwork | None network: optional already existing instance
-    :param LayerNetwork | None base_network: optional base network to derive from. see __init__.
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     if network is None:
-      network = cls(n_in=n_in, n_out=n_out, base_network=base_network)
+      network = cls(n_in=n_in, n_out=n_out)
       network.json_content = json.dumps(json_content, sort_keys=True)
       network.recurrent = False
       network.default_mask = mask

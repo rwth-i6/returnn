@@ -350,23 +350,41 @@ class ReverseLayer(_NoOpLayer):
 class CalcStepLayer(_NoOpLayer):
   layer_class = "calc_step"
 
-  def __init__(self, n_out, from_prev="", apply=False, **kwargs):
+  def __init__(self, n_out=None, from_prev="", apply=False, step=None, **kwargs):
     super(CalcStepLayer, self).__init__(**kwargs)
-    self.set_attr("n_out", n_out)
-    self.set_attr("from_prev", from_prev.encode("utf8"))
+    if n_out is not None:
+      self.set_attr("n_out", n_out)
+    if from_prev:
+      self.set_attr("from_prev", from_prev.encode("utf8"))
     self.set_attr("apply", apply)
+    if step is not None:
+      self.set_attr("step", step)
     if not apply:
-      assert len(self.sources) == 0
-      self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
+      assert n_out is not None
+      assert self.network
+      if self.network.calc_step_base:
+        prev_layer = self.network.calc_step_base.get_layer(from_prev)
+        assert n_out == prev_layer.attrs["n_out"]
+        self.output = prev_layer.output
+      else:
+        # First calc step. Just use zero.
+        self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
     else:
-      import Network
-      self.subnetwork = Network.LayerNetwork.from_json()
-      # TODO...
-      pass
-    assert len(self.sources) == 1
-    s = self.sources[0]
-    for attr in ["n_out", "sparse"]:
-      self.set_attr(attr, s.attrs[attr])
+      assert step is not None
+      assert len(self.sources) == 1
+      assert not from_prev
+      # We will refer to the previous calc-step layer this way
+      # so that we ensure that we have already traversed it.
+      # This is important so that share_params correctly works.
+      from_prev = self.sources[0].name
+      assert self.network
+      subnetwork = self.network.get_calc_step(step)
+      prev_layer = subnetwork.get_layer(from_prev)
+      assert prev_layer, "%s not found in subnetwork" % from_prev
+      if n_out is not None:
+        assert n_out == prev_layer.attrs["n_out"]
+      self.set_attr("n_out", prev_layer.attrs["n_out"])
+      self.output = prev_layer.output
 
 
 class ConstantLayer(_NoOpLayer):

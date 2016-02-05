@@ -381,7 +381,7 @@ class RecurrentUnitLayer(Layer):
         W_re = self.create_random_uniform_weights(psize, unit.n_re, name="W_re_%s" % self.name)
       else:
         W_re = self.create_random_uniform_weights(n_re, unit.n_re, name="W_re_%s" % self.name)
-      self.add_param(W_re)
+      W_re = self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
       bias_init_value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
@@ -399,8 +399,8 @@ class RecurrentUnitLayer(Layer):
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
                                              s.attrs['n_out'] + unit.n_in + unit.n_re,
                                              name="W_in_%s_%s" % (s.name, self.name), depth = 1)
+      W = self.add_param(W)
       self.W_in.append(W)
-      self.add_param(W)
     # make input
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
@@ -436,12 +436,10 @@ class RecurrentUnitLayer(Layer):
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
 
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name)
-      self.add_param(self.W_lm_in)
+      self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name)
-      self.add_param(self.W_lm_out)
+      self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
         recurrent_transform = recurrent_transform[:-3]
@@ -473,11 +471,9 @@ class RecurrentUnitLayer(Layer):
       self.xc = T.concatenate(src, axis=2)
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-      self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-      self.add_param(self.W_att_xc)
+      self.W_att_xc = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_xc"))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-      self.add_param(self.W_att_in)
+      self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
       zz = T.exp(T.tanh(T.dot(self.xc, self.W_att_xc))) # TB1
       self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
     elif attention != "none":
