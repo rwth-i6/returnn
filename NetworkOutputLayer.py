@@ -147,11 +147,7 @@ class FramewiseOutputLayer(OutputLayer):
     nreps = T.switch(T.eq(self.output.shape[0], 1), self.index.shape[0], 1)
     output = self.output.repeat(nreps,axis=0)
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m) # - self.y_m.max(axis = 1, keepdims = True))
-    #if self.loss == 'ce':
-    #  y_mmax = self.y_m.max(axis = 1, keepdims = True)
-    #  y_mmin = self.y_m.min(axis = 1, keepdims = True)
-    #  self.p_y_given_x = T.nnet.softmax(self.y_m - (0.5 * (y_mmax - y_mmin) + y_mmin))
+    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
@@ -238,7 +234,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
     self.params = {}
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     h = T.exp(self.y_m)
-    self.p_y_given_x = h / h.sum(axis=1,keepdims=True) #T.nnet.softmax(self.y_m)
+    self.p_y_given_x = T.nnet.softmax(self.y_m) #h / h.sum(axis=1,keepdims=True) #T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
 
