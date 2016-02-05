@@ -112,7 +112,14 @@ class VANILLA(Unit):
 
 class LSTME(Unit):
   def __init__(self, n_units, depth, **kwargs):
-    super(LSTME, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
+    super(LSTME, self).__init__(
+      n_units=n_units,
+      depth=depth,
+      n_in=n_units * 4,  # input gate, forget gate, output gate, net input
+      n_out=n_units,
+      n_re=n_units * 4,
+      n_act=2  # output, cell state
+    )
 
   def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
