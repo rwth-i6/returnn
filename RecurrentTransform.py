@@ -178,38 +178,40 @@ class DummyTransform(RecurrentTransformBase):
 
 
 class LM(RecurrentTransformBase):
-  name = "lm_lm"
+  name = "lm"
 
   def create_vars(self):
     self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
     self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
-    self.t = self.add_state_var(T.zeros((self.layer.num_batches,), dtype="float32"), name="t")
-
+    self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
     y = self.layer.y_in[self.layer.attrs['target']].flatten()
+    eos = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
     if self.layer.attrs['direction'] == 1:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
-      self.cls = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1), y_t], axis=0)
+      self.cls = T.concatenate([eos, y_t], axis=0)
     else:
       y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-      self.cls = T.concatenate([y_t[::-1],self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.layer.index.shape[1],axis=1)], axis=0)
+      self.cls = T.concatenate([eos,y_t[::-1]], axis=0)
     self.add_input(self.cls, 'cls')
 
   def step(self, y_p):
-    #z_re += self.W_lm_out[T.argmax(T.dot(y_p,self.W_lm_in), axis=1)] * (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-    #h_e = T.exp(T.dot(y_p, self.W_lm_in))
-    #p_re = h_e / (T.sum(h_e,axis=1,keepdims=True)) #T.dot(, self.W_lm_out) #* (T.ones_like(z_re) - self.lmmask[T.cast(self.t[0],'int32')])
-    #p_re = T.switch(T.lt(p_re,1. / p_re.shape[1]), T.zeros_like(p_re), p_re)
-    #p_re = p_re / (T.sum(p_re,axis=1,keepdims=True) + T.constant(1e-32,dtype='float32'))
-    #p_re = T.extra_ops.to_one_hot(T.argmax(p_re,axis=1), p_re.shape[1], dtype='float32') * T.switch(T.lt(p_re,0.01), T.zeros_like(p_re), T.ones_like(p_re))
+    result = 0
+    updates = {}
+    p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in))
     if self.layer.attrs['droplm'] < 1.0:
       mask = self.lmmask[T.cast(self.t[0],'int32')]
-      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
-      #z_re = T.dot(p_re, self.W_lm_out) * (1 - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      if self.layer.attrs['attention_lm'] == "hard":
+        result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+      else:
+        result += T.dot(p_re,self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
     else:
-      z_re = self.W_lm_out[T.argmax(T.dot(y_p, self.W_lm_in), axis=1)]
-      #z_re = T.dot(p_re, self.W_lm_out)
-    return z_re, { self.t : self.t + 1 }
+      if self.layer.attrs['attention_lm'] == "hard":
+        result += self.W_lm_out[T.argmax(p_re, axis=1)]
+      else:
+        result += T.dot(p_re,self.W_lm_out)
+    updates[self.t] = self.t + 1
+    return result, updates
 
 
 class LMH(RecurrentTransformBase):
