@@ -186,6 +186,8 @@ class LayerNetwork(object):
     return network
 
   def get_calc_step(self, i):
+    if self.calc_step_base:
+      return self.calc_step_base.get_calc_step(i)  # go up to the main network
     if i == 0: return self
     if i <= len(self.calc_steps):
       return self.calc_steps[i - 1]
