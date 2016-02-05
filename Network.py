@@ -67,6 +67,7 @@ class LayerNetwork(object):
     self.train_flag = None  # any of the from_...() functions will set this
     self.get_layer_param = None  # used by Container.add_param()
     self.calc_step_base = None
+    self.calc_steps = []
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -167,7 +168,7 @@ class LayerNetwork(object):
     network.default_target = base_network.default_target
     network.train_flag = base_network.train_flag
     if base_as_calc_step:
-      network.calc_step_base = base_network
+      network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
     if share_params:
       def shared_get_layer_param(layer_name, param_name, param):
         if base_network.get_layer_param:
@@ -183,6 +184,19 @@ class LayerNetwork(object):
       trainable_params = network.get_all_params_vars()
       assert len(trainable_params) == 0
     return network
+
+  def get_calc_step(self, i):
+    if i == 0: return self
+    if i <= len(self.calc_steps):
+      return self.calc_steps[i - 1]
+    print >> log.v4, "creating calc steps up to %i" % i
+    while i > len(self.calc_steps):
+      base_network = self
+      if self.calc_steps: base_network = self.calc_steps[-1]
+      subnetwork = self.from_base_network(
+        base_network=base_network, share_params=True, base_as_calc_step=True)
+      self.calc_steps += [subnetwork]
+    return self.calc_steps[i - 1]
 
   @classmethod
   def from_json(cls, json_content, n_in=None, n_out=None, network=None,

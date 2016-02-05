@@ -350,13 +350,15 @@ class ReverseLayer(_NoOpLayer):
 class CalcStepLayer(_NoOpLayer):
   layer_class = "calc_step"
 
-  def __init__(self, n_out=None, from_prev="", apply=False, **kwargs):
+  def __init__(self, n_out=None, from_prev="", apply=False, step=None, **kwargs):
     super(CalcStepLayer, self).__init__(**kwargs)
     if n_out is not None:
       self.set_attr("n_out", n_out)
     if from_prev:
       self.set_attr("from_prev", from_prev.encode("utf8"))
     self.set_attr("apply", apply)
+    if step is not None:
+      self.set_attr("step", step)
     if not apply:
       assert n_out is not None
       assert self.network
@@ -368,6 +370,7 @@ class CalcStepLayer(_NoOpLayer):
         # First calc step. Just use zero.
         self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
     else:
+      assert step is not None
       assert len(self.sources) == 1
       assert not from_prev
       # We will refer to the previous calc-step layer this way
@@ -375,11 +378,8 @@ class CalcStepLayer(_NoOpLayer):
       # This is important so that share_params correctly works.
       from_prev = self.sources[0].name
       assert self.network
-      import Network
-      self.subnetwork = Network.LayerNetwork.from_base_network(
-        base_network=self.network, share_params=True, base_as_calc_step=True)
-      # We are going to ignore all constraints and loss from the subnetwork.
-      prev_layer = self.subnetwork.get_layer(from_prev)
+      subnetwork = self.network.get_calc_step(step)
+      prev_layer = subnetwork.get_layer(from_prev)
       assert prev_layer, "%s not found in subnetwork" % from_prev
       if n_out is not None:
         assert n_out == prev_layer.attrs["n_out"]
