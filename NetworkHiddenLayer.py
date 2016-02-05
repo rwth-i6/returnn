@@ -350,7 +350,7 @@ class ReverseLayer(_NoOpLayer):
 class CalcStepLayer(_NoOpLayer):
   layer_class = "calc_step"
 
-  def __init__(self, n_out=None, from_prev="", apply=False, step=None, **kwargs):
+  def __init__(self, n_out=None, from_prev="", apply=False, step=None, initial="zero", **kwargs):
     super(CalcStepLayer, self).__init__(**kwargs)
     if n_out is not None:
       self.set_attr("n_out", n_out)
@@ -359,6 +359,7 @@ class CalcStepLayer(_NoOpLayer):
     self.set_attr("apply", apply)
     if step is not None:
       self.set_attr("step", step)
+    self.set_attr("initial", initial.encode("utf8"))
     if not apply:
       assert n_out is not None
       assert self.network
@@ -368,7 +369,15 @@ class CalcStepLayer(_NoOpLayer):
         self.output = prev_layer.output
       else:
         # First calc step. Just use zero.
-        self.output = T.zeros((self.index.shape[0], self.index.shape[1], n_out), dtype="float32")
+        shape = [self.index.shape[0], self.index.shape[1], n_out]
+        if initial == "zero":
+          self.output = T.zeros(shape, dtype="float32")
+        elif initial == "param":
+          values = numpy.asarray(self.rng.normal(loc=0.0, scale=numpy.sqrt(12. / n_out), size=(n_out,)), dtype="float32")
+          initial_param = self.add_param(theano.shared(value=values, borrow=True, name="output_initial"))
+          self.output = initial_param.dimshuffle('x', 'x', 0)
+        else:
+          raise Exception("CalcStepLayer: initial %s invalid" % initial)
     else:
       assert step is not None
       assert len(self.sources) == 1

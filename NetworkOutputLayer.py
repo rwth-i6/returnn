@@ -89,11 +89,7 @@ class OutputLayer(Layer):
     #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    if self.y_data_flat.dtype.startswith('int'):
-      self.i = (self.index.flatten() > 0).nonzero()
-    elif self.y_data_flat.dtype.startswith('float'):
-      self.i = (self.index.flatten() > 0).nonzero()
-      #self.i = (self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2).flatten() > 0).nonzero()
+    self.i = (self.index.flatten() > 0).nonzero()
     self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
