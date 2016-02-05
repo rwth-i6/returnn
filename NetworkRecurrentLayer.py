@@ -112,7 +112,14 @@ class VANILLA(Unit):
 
 class LSTME(Unit):
   def __init__(self, n_units, depth, **kwargs):
-    super(LSTME, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
+    super(LSTME, self).__init__(
+      n_units=n_units,
+      depth=depth,
+      n_in=n_units * 4,  # input gate, forget gate, output gate, net input
+      n_out=n_units,
+      n_re=n_units * 4,
+      n_act=2  # output, cell state
+    )
 
   def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
     CI, GI, GF, GO, CO = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid, T.nnet.sigmoid, T.tanh]
@@ -295,6 +302,7 @@ class RecurrentUnitLayer(Layer):
                attention_mbeam = False,
                attention_nbest = 0,
                attention_treebase = False,
+               attention_lm = 'none',
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -348,8 +356,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_nbest', attention_nbest)
     self.set_attr('attention_mbeam', attention_mbeam)
     self.set_attr('attention_treebase', attention_treebase)
-    if lm: # TODO hack
-      recurrent_transform += "_lm"
+    self.set_attr('attention_lm', attention_lm)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -381,7 +388,7 @@ class RecurrentUnitLayer(Layer):
         W_re = self.create_random_uniform_weights(psize, unit.n_re, name="W_re_%s" % self.name)
       else:
         W_re = self.create_random_uniform_weights(n_re, unit.n_re, name="W_re_%s" % self.name)
-      self.add_param(W_re)
+      W_re = self.add_param(W_re)
     # initialize forward weights
     if self.depth > 1:
       bias_init_value = numpy.zeros((self.depth, unit.n_in), dtype = theano.config.floatX)
@@ -399,8 +406,8 @@ class RecurrentUnitLayer(Layer):
       W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
                                              s.attrs['n_out'] + unit.n_in + unit.n_re,
                                              name="W_in_%s_%s" % (s.name, self.name), depth = 1)
+      W = self.add_param(W)
       self.W_in.append(W)
-      self.add_param(W)
     # make input
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
@@ -436,12 +443,10 @@ class RecurrentUnitLayer(Layer):
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
 
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name)
-      self.add_param(self.W_lm_in)
+      self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name)
-      self.add_param(self.W_lm_out)
+      self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
         recurrent_transform = recurrent_transform[:-3]
@@ -473,11 +478,9 @@ class RecurrentUnitLayer(Layer):
       self.xc = T.concatenate(src, axis=2)
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-      self.W_att_xc = theano.shared(value=values, borrow=True, name = "W_att_xc")
-      self.add_param(self.W_att_xc)
+      self.W_att_xc = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_xc"))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.W_att_in = theano.shared(value=values, borrow=True, name = "W_att_in")
-      self.add_param(self.W_att_in)
+      self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
       zz = T.exp(T.tanh(T.dot(self.xc, self.W_att_xc))) # TB1
       self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
     elif attention != "none":
@@ -635,17 +638,17 @@ class RecurrentUnitLayer(Layer):
       #  print "hi"
       #  sequences = T.inc_subtensor(sequences[-1 if direction == -1 else 0], T.dot(outputs_info[0],W_re))
       #  outputs_info[0] = T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out)
-      outputs = unit.scan(step,
-                          sources,
-                          sequences[s::self.attrs['sampling']],
-                          non_sequences,
-                          index_f,
-                          outputs_info,
-                          W_re,
-                          self.W_in,
-                          self.b,
-                          direction == -1,
-                          self.attrs['truncation'])
+      outputs = unit.scan(step=step,
+                          x=sources,
+                          z=sequences[s::self.attrs['sampling']],
+                          non_sequences=non_sequences,
+                          i=index_f,
+                          outputs_info=outputs_info,
+                          W_re=W_re,
+                          W_in=self.W_in,
+                          b=self.b,
+                          go_backwards=direction == -1,
+                          truncate_gradient=self.attrs['truncation'])
 
       if not isinstance(outputs, list):
         outputs = [outputs]

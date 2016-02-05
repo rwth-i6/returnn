@@ -12,27 +12,42 @@ from Util import collect_class_init_kwargs
 from Log import log
 
 class LayerNetwork(object):
-  def __init__(self, n_in, n_out):
+  def __init__(self, n_in=None, n_out=None, base_network=None):
     """
     :param int n_in: input dim of the network
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
+    :param LayerNetwork base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
     """
-    n_out = n_out.copy()
+    if n_out is None:
+      assert base_network is not None
+      n_out = base_network.n_out
+    else:
+      assert n_out is not None
+      n_out = n_out.copy()
+    if n_in is None:
+      assert "data" in n_out
+      n_in = n_out["data"][0]
     if "data" not in n_out:
       data_dim = 3
       n_out["data"] = (n_in, data_dim - 1)  # small hack: support input-data as target
     else:
       assert 1 <= n_out["data"][1] <= 2  # maybe obsolete check...
       data_dim = n_out["data"][1] + 1  # one more because of batch-dim
-    self.x = T.TensorType('float32', ((False,) * data_dim))('x')
-    self.y = {"data": self.x}
-    self.i = T.bmatrix('i'); """ :type: theano.Variable """
-    self.j = {"data": self.i}
+    if base_network is None:
+      self.x = T.TensorType('float32', ((False,) * data_dim))('x')
+      self.y = {"data": self.x}
+      self.i = T.bmatrix('i'); """ :type: theano.Variable """
+      self.j = {"data": self.i}
+    else:
+      self.x = base_network.x
+      self.y = base_network.y
+      self.i = base_network.i
+      self.j = base_network.j
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
-    self.n_out = n_out.copy()
+    self.n_out = n_out
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.train_params_vars = []; """ :type: list[theano.compile.sharedvalue.SharedVariable] """
     self.description = None; """ :type: LayerNetworkDescription | None """
@@ -46,6 +61,13 @@ class LayerNetwork(object):
     self.update_step = 0
     self.errors = {}
     self.ctc_priors = None
+    self.default_mask = None  # any of the from_...() functions will set this
+    self.sparse_input = None  # any of the from_...() functions will set this
+    self.default_target = None  # any of the from_...() functions will set this
+    self.train_flag = None  # any of the from_...() functions will set this
+    self.get_layer_param = None  # used by Container.add_param()
+    self.calc_step_base = None
+    self.calc_steps = []
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -135,18 +157,71 @@ class LayerNetwork(object):
                          **cls.init_args_from_config(config))
 
   @classmethod
-  def from_json(cls, json_content, n_in, n_out, mask=None, sparse_input=False, target='classes', train_flag=False):
+  def from_base_network(cls, base_network, share_params=True, base_as_calc_step=False):
+    """
+    :param LayerNetwork base_network: base network to derive from
+    :rtype: LayerNetwork
+    """
+    network = cls(n_in=None, n_out=None, base_network=base_network)
+    network.default_mask = base_network.default_mask
+    network.sparse_input = base_network.sparse_input
+    network.default_target = base_network.default_target
+    network.train_flag = base_network.train_flag
+    if base_as_calc_step:
+      network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
+    if share_params:
+      def shared_get_layer_param(layer_name, param_name, param):
+        if base_network.get_layer_param:
+          substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+          if substitute: return substitute
+        base_layer = base_network.get_layer(layer_name)
+        assert base_layer, "%s not found in base_network" % layer_name
+        return base_layer.params.get(param_name, None)
+      network.get_layer_param = shared_get_layer_param
+    json_content = base_network.to_json_content()
+    cls.from_json(json_content, network=network)
+    if share_params:
+      trainable_params = network.get_all_params_vars()
+      assert len(trainable_params) == 0
+    return network
+
+  def get_calc_step(self, i):
+    if self.calc_step_base:
+      return self.calc_step_base.get_calc_step(i)  # go up to the main network
+    if i == 0: return self
+    if i <= len(self.calc_steps):
+      return self.calc_steps[i - 1]
+    print >> log.v4, "creating calc steps up to %i" % i
+    while i > len(self.calc_steps):
+      base_network = self
+      if self.calc_steps: base_network = self.calc_steps[-1]
+      subnetwork = self.from_base_network(
+        base_network=base_network, share_params=True, base_as_calc_step=True)
+      self.calc_steps += [subnetwork]
+    return self.calc_steps[i - 1]
+
+  @classmethod
+  def from_json(cls, json_content, n_in=None, n_out=None, network=None,
+                mask=None, sparse_input=False, target='classes', train_flag=False):
     """
     :type json_content: dict[str]
-    :type n_in: int
-    :type n_out: dict[str,(int,int)]
+    :type n_in: int | None
+    :type n_out: dict[str,(int,int)] | None
+    :param LayerNetwork | None network: optional already existing instance
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
-    network = cls(n_in, n_out)
-    network.json_content = json.dumps(json_content, sort_keys=True)
+    if network is None:
+      network = cls(n_in=n_in, n_out=n_out)
+      network.json_content = json.dumps(json_content, sort_keys=True)
+      network.recurrent = False
+      network.default_mask = mask
+      network.sparse_input = sparse_input
+      network.default_target = target
+      network.train_flag = train_flag
+    n_in = network.n_in
+    n_out = network.n_out
     assert isinstance(json_content, dict)
-    network.recurrent = False
     network.y['data'].n_out = network.n_out['data'][0]
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
@@ -266,6 +341,10 @@ class LayerNetwork(object):
       print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
     network = cls(n_in_model, n_out_model)
     network.recurrent = False
+    network.default_mask = input_mask
+    network.sparse_input = sparse_input
+    network.default_target = target
+    network.train_flag = train_flag
 
     if 'target' in model['n_out'].attrs:
       target = model['n_out'].attrs['target']

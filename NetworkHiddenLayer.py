@@ -347,6 +347,55 @@ class ReverseLayer(_NoOpLayer):
     self.output = s.output[::-1]
 
 
+class CalcStepLayer(_NoOpLayer):
+  layer_class = "calc_step"
+
+  def __init__(self, n_out=None, from_prev="", apply=False, step=None, initial="zero", **kwargs):
+    super(CalcStepLayer, self).__init__(**kwargs)
+    if n_out is not None:
+      self.set_attr("n_out", n_out)
+    if from_prev:
+      self.set_attr("from_prev", from_prev.encode("utf8"))
+    self.set_attr("apply", apply)
+    if step is not None:
+      self.set_attr("step", step)
+    self.set_attr("initial", initial.encode("utf8"))
+    if not apply:
+      assert n_out is not None
+      assert self.network
+      if self.network.calc_step_base:
+        prev_layer = self.network.calc_step_base.get_layer(from_prev)
+        assert n_out == prev_layer.attrs["n_out"]
+        self.output = prev_layer.output
+      else:
+        # First calc step. Just use zero.
+        shape = [self.index.shape[0], self.index.shape[1], n_out]
+        if initial == "zero":
+          self.output = T.zeros(shape, dtype="float32")
+        elif initial == "param":
+          values = numpy.asarray(self.rng.normal(loc=0.0, scale=numpy.sqrt(12. / n_out), size=(n_out,)), dtype="float32")
+          initial_param = self.add_param(theano.shared(value=values, borrow=True, name="output_initial"))
+          self.output = initial_param.dimshuffle('x', 'x', 0)
+        else:
+          raise Exception("CalcStepLayer: initial %s invalid" % initial)
+    else:
+      assert step is not None
+      assert len(self.sources) == 1
+      assert not from_prev
+      # We will refer to the previous calc-step layer this way
+      # so that we ensure that we have already traversed it.
+      # This is important so that share_params correctly works.
+      from_prev = self.sources[0].name
+      assert self.network
+      subnetwork = self.network.get_calc_step(step)
+      prev_layer = subnetwork.get_layer(from_prev)
+      assert prev_layer, "%s not found in subnetwork" % from_prev
+      if n_out is not None:
+        assert n_out == prev_layer.attrs["n_out"]
+      self.set_attr("n_out", prev_layer.attrs["n_out"])
+      self.output = prev_layer.output
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 

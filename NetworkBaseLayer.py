@@ -131,14 +131,18 @@ class Container(object):
 
   def add_param(self, param, name=""):
     """
-    :type param: T
+    :type param: theano.SharedVariable
     :type name: str
-    :rtype: T
+    :rtype: theano.SharedVariable
     """
     if not name:
       name = getattr(param, "name", None)
     if not name:
       name = "param_%d" % len(self.params)
+    if self.network and self.network.get_layer_param:
+      substitute = self.network.get_layer_param(layer_name=self.name, param_name=name, param=param)
+      if substitute:
+        return substitute
     if self.substitute_param_expr:
       substitute = eval(self.substitute_param_expr, {"self": self, "name": name, "value": param})
       if substitute:
@@ -296,6 +300,7 @@ class Layer(Container):
 
   def __init__(self, sources, n_out, index, y_in=None, target=None, sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
+               with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, carry=False,
                sparse_filtering=False,
                **kwargs):
@@ -335,7 +340,11 @@ class Layer(Container):
       self.set_attr('target', target)
     if cost_scale != 1:
       self.set_attr("cost_scale", cost_scale)
-    self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    if with_bias:
+      self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
+    else:
+      self.set_attr('with_bias', False)
+      self.b = numpy.float32(0)
     self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
     self.masks = [None] * len(self.sources)
     assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
@@ -366,9 +375,9 @@ class Layer(Container):
 
   def add_param(self, param, name="", constraints=True):
     """
-    :type param: T
+    :type param: theano.SharedVariable
     :type name: str
-    :rtype: T
+    :rtype: theano.SharedVariable
     """
     param = super(Layer, self).add_param(param, name)
     if constraints:
