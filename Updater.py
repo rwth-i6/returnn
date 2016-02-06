@@ -477,13 +477,13 @@ class Updater:
         if self.use_corrected_grad:
           updates.append((old_grad, corrected_grad))
 
-      elif self.nadam:
+      elif self.nadam: # http://cs229.stanford.edu/proj2015/054_report.pdf
         m_cache = self.var(1, name="momemtum_cache")
-        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
-        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
+        m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
         self.adam_offset = numpy.float32(1e-8)
 
-        mt = beta1 * ( 1 - 0.5 * 0.96**( i_t/ (1.0*250) ) ) # momentum scedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mt = (beta1 * ( 1 - 0.5 * 0.96**( i_t/ (1.0*250) ) )) # momentum scedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
         mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) / (1.0*250) ) ) # for simplified NAG
 
         m_cache_new = m_cache * mt
@@ -491,10 +491,10 @@ class Updater:
 
         _deltas = deltas / ( 1 - m_cache_new )
 
-        m = beta1 * m_prev + (1 - beta1) * deltas
+        m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
         _m = m / ( 1 - bias_corr ) # bias correction (with momentum schedule (include the next t+1))
 
-        v = beta2 * v_prev + (1 - beta2) * (deltas**2)
+        v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
         _v = v / (1 - beta2 ** i_t)
 
         __m = (1 - mt) * _deltas + mtnext * _m
