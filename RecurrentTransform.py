@@ -466,7 +466,6 @@ class AttentionBase(RecurrentTransformBase):
     self.n_in = n_in
     src = [e.output for e in base]
 
-    self.xb = layer.add_param(layer.create_bias(n_in, name='b_att'))
     #self.B = theano.gradient.disconnected_grad((T.concatenate(src, axis=2)) * base[0].index.dimshuffle(0,1,'x').repeat(n_in,axis=2)) + self.xb  # == B
     self.B = T.concatenate(src, axis=2) # + self.xb  # == B
     #self.B = self.B[::layer.attrs['direction'] or 1]
@@ -660,6 +659,7 @@ class AttentionTemplate(AttentionBase):
     #self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
+    self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in'))
     #values = numpy.zeros((self.W_att_in.get_value().shape[1],),dtype='float32')
     #self.b_att_in = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_in"))
     if self.layer.attrs['attention_beam'] >= 0:
@@ -781,7 +781,7 @@ class AttentionTemplate(AttentionBase):
         assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
     else:
       updates[self.w] = self.w_t[:,:,0]
-    result = T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in)
+    result = T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in) + self.b_att_in
     if self.layer.attrs['attention_lm'] != "none":
       #h_e = T.exp(T.dot(y_p, self.W_lm_in))
       #p_re = h_e / (T.sum(h_e,axis=1,keepdims=True))
