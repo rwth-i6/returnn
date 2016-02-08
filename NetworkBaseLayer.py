@@ -302,7 +302,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, carry=False,
-               sparse_filtering=False,
+               sparse_filtering=False, gradient_scale=1.0,
                **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
@@ -316,12 +316,14 @@ class Layer(Container):
     self.index = index
     self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
+    self.gradient_scale = gradient_scale
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
     self.set_attr('sparse_filtering', sparse_filtering)
     self.set_attr('carry', carry)
+    self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)

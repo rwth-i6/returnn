@@ -268,7 +268,7 @@ class Updater:
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
     for param in grads.keys():
-      deltas = grads[param]
+      deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
 

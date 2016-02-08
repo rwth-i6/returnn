@@ -262,7 +262,10 @@ class LayerNetwork(object):
       if 'base' in obj: # TODO(doetsch) string/layer transform should be smarter
         base = []
         if not isinstance(obj['base'], list):
-          obj['base'] = [obj['base']]
+          if ',' in obj['base']:
+            obj['base'] = obj['base'].split(',')
+          else:
+            obj['base'] = [obj['base']]
         for prev in obj['base']:
           if prev == 'data':
             base.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
