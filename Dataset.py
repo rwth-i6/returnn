@@ -181,8 +181,9 @@ class Dataset(object):
   def _load_seqs(self, start, end):
     """
     Load data sequences.
-    :param int start: start sorted seq idx
-    :param int end: end sorted seq idx. might be outside
+    :param int start: inclusive seq idx start
+    :param int end: exclusive seq idx end. can be more than num_seqs
+    If end > num_seqs, will not load them.
     """
     raise NotImplementedError
 
