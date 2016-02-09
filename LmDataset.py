@@ -35,6 +35,7 @@ class LmDataset(CachedDataset2):
     else:
       assert not orth_symbols_file
       self.lexicon = _Lexicon(lexicon_file)
+      self.seq_gen = _PhoneSeqGenerator(lexicon=self.lexicon)
       self.orth_symbols = None
       # TODO context, etc (allophones)
       self.labels["data"] = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -76,8 +77,8 @@ class LmDataset(CachedDataset2):
     self.next_orth_idx = 0
     self.num_skipped = 0
     self._num_timesteps_accumulated = NumbersDict(0)
-    if self.lexicon:
-      self.lexicon.random_seed(epoch or 1)
+    if self.seq_gen:
+      self.seq_gen.random_seed(epoch or 1)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -94,7 +95,8 @@ class LmDataset(CachedDataset2):
 
       if self.lexicon:
         try:
-          phones = self.lexicon.orth_to_phones(orth)
+          phones = self.seq_gen.generate_seq(orth)
+          print phones
         except KeyError as e:
           if self.log_skipped_seqs:
             print >> log.v4, "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (
@@ -102,7 +104,7 @@ class LmDataset(CachedDataset2):
           self.num_skipped += 1
           continue
         # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
-        data = numpy.array([self.lexicon.phonemes[p]["index"] for p in phones.split()], dtype=self.dtype)
+        data = numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=self.dtype)
 
       elif self.orth_symbols:
         orth_syms = parse_orthography(orth)
@@ -188,6 +190,37 @@ def _iter_txt(filename, callback):
     callback(l)
 
 
+class _AllophoneState:
+  # In Sprint, see AllophoneStateAlphabet::index().
+  id = None  # u16 in Sprint. here just str
+  context_history = ()  # list[u16] of phone id. here just list[str]
+  context_future = ()  # list[u16] of phone id. here just list[str]
+  boundary = 0  # s16. flags. 1 -> initial (@i), 2 -> final (@f)
+  state = None  # s16, e.g. 0,1,2
+
+  def format(self):
+    s = "%s{%s+%s}" % (
+      self.id,
+      "-".join(self.context_history) or "#",
+      "-".join(self.context_future) or "#")
+    if self.boundary & 1:
+      s += "@i"
+    if self.boundary & 2:
+      s += "@f"
+    if self.state is not None:
+      s += ".%i" % self.state
+    return s
+
+  def __repr__(self):
+    return self.format()
+
+  def mark_initial(self):
+    self.boundary = self.boundary | 1
+
+  def mark_final(self):
+    self.boundary = self.boundary | 2
+
+
 class _Lexicon:
 
   def __init__(self, filename):
@@ -197,7 +230,6 @@ class _Lexicon:
       lex_file = gzip.GzipFile(fileobj=lex_file)
     self.phonemes = {}
     self.lemmas = {}
-    self.rnd = Random(0)
 
     context = iter(etree.iterparse(lex_file, events=('start', 'end')))
     _, root = next(context)  # get root element
@@ -226,17 +258,31 @@ class _Lexicon:
           root.clear()  # free memory
     print >> log.v4, "Finished whole lexicon, %i lemmas" % len(self.lemmas)
 
+
+class _PhoneSeqGenerator:
+  def __init__(self, lexicon):
+    self.lexicon = lexicon
+    self.rnd = Random(0)
+    self.allo_num_states = 3
+    self.allo_context_len = 1  # for both left/right. i.e. triphone
+    self.add_silence_beginning = 0.1
+    self.add_silence_end = 0.1
+    self.add_silence_between_words = 0.1
+    self.repetition = 0.5
+
   def random_seed(self, seed):
     self.rnd.seed(seed)
 
-  def orth_to_phones(self, orth):
-    phones = []
+  def _iter_orth(self, orth):
+    si_lemma = self.lexicon.lemmas["[SILENCE]"]
+    if self.rnd.random() < self.add_silence_beginning:
+      yield si_lemma
     symbols = list(orth.split())
     i = 0
     while i < len(symbols):
       symbol = symbols[i]
       try:
-        lemma = self.lemmas[symbol]
+        lemma = self.lexicon.lemmas[symbol]
       except KeyError:
         if "/" in symbol:
           symbols[i:i+1] = symbol.split("/")
@@ -246,9 +292,68 @@ class _Lexicon:
           continue
         raise
       i += 1
+      yield lemma
+      if i < len(symbols):
+        if self.rnd.random() < self.add_silence_between_words:
+          yield si_lemma
+    if self.rnd.random() < self.add_silence_end:
+      yield si_lemma
+
+  def orth_to_phones(self, orth):
+    phones = []
+    for lemma in self._iter_orth(orth):
       phon = self.rnd.choice(lemma["phons"])
       phones += [phon["phon"]]
     return " ".join(phones)
+
+  def _phon_to_allos(self, phon):
+    for p in phon.split():
+      a = _AllophoneState()
+      a.id = p
+      yield a
+
+  def _allos_add_states(self, allos):
+    for _a in allos:
+      for state in range(self.allo_num_states):
+        while True:
+          a = _AllophoneState()
+          a.id = _a.id
+          a.context_history = _a.context_history
+          a.context_future = _a.context_future
+          a.boundary = _a.boundary
+          a.state = state
+          yield a
+          if self.rnd.random() >= self.repetition:
+            break
+
+  def _allos_set_context(self, allos):
+    ctx = []
+    for a in allos:
+      if self.lexicon.phonemes[a.id]["variation"] == "context":
+        a.context_history = tuple(ctx)
+        ctx += [a.id]
+        ctx = ctx[-self.allo_context_len:]
+      else:
+        ctx = []
+    for a in reversed(allos):
+      if self.lexicon.phonemes[a.id]["variation"] == "context":
+        a.context_future = tuple(reversed(ctx))
+        ctx += [a.id]
+        ctx = ctx[-self.allo_context_len:]
+      else:
+        ctx = []
+
+  def generate_seq(self, orth):
+    allos = []
+    for lemma in self._iter_orth(orth):
+      phon = self.rnd.choice(lemma["phons"])
+      l_allos = list(self._phon_to_allos(phon["phon"]))
+      l_allos[0].mark_initial()
+      l_allos[-1].mark_final()
+      allos += l_allos
+    self._allos_set_context(allos)
+    allos = list(self._allos_add_states(allos))
+    return allos
 
 
 def _main(argv):
