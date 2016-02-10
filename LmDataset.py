@@ -14,11 +14,11 @@ from random import Random
 class LmDataset(CachedDataset2):
 
   def __init__(self,
-               corpus_file, lexicon_file=None, orth_symbols_file=None, orth_replace_map_file=None,
+               corpus_file, phone_info=None, orth_symbols_file=None, orth_replace_map_file=None,
                log_skipped_seqs=False, **kwargs):
     """
     :param str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param str | None lexicon_file: Lexicon XML file, if you want to get phoneme sequences
+    :param dict | None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see _PhoneSeqGenerator
     :param str | None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
     :param str | None orth_replace_map_file: JSON file with replacement dict for orth symbols
     :param bool log_skipped_seqs: log skipped seqs
@@ -26,19 +26,18 @@ class LmDataset(CachedDataset2):
     super(LmDataset, self).__init__(**kwargs)
 
     if orth_symbols_file:
-      assert not lexicon_file
+      assert not phone_info
       orth_symbols = open(orth_symbols_file).read().splitlines()
       self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
       self.orth_symbols = orth_symbols
-      self.lexicon = None
       self.labels["data"] = orth_symbols
+      self.seq_gen = None
     else:
       assert not orth_symbols_file
-      self.lexicon = _Lexicon(lexicon_file)
-      self.seq_gen = _PhoneSeqGenerator(lexicon=self.lexicon)
+      assert isinstance(phone_info, dict)
+      self.seq_gen = _PhoneSeqGenerator(**phone_info)
       self.orth_symbols = None
-      # TODO context, etc (allophones)
-      self.labels["data"] = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+      self.labels["data"] = self.seq_gen.get_class_labels()
     if orth_replace_map_file:
       orth_replace_map = load_json(filename=orth_replace_map_file)
       assert isinstance(orth_replace_map, dict)
@@ -91,9 +90,9 @@ class LmDataset(CachedDataset2):
         return None
       orth = self.orths[self.seq_order[self.next_orth_idx]]
       self.next_orth_idx += 1
-      if orth == "</s>": continue  # special empty symbol
+      if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
 
-      if self.lexicon:
+      if self.seq_gen:
         try:
           phones = self.seq_gen.generate_seq(orth)
           print phones
@@ -103,8 +102,7 @@ class LmDataset(CachedDataset2):
                              orth, e)
           self.num_skipped += 1
           continue
-        # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
-        data = numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=self.dtype)
+        data = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
 
       elif self.orth_symbols:
         orth_syms = parse_orthography(orth)
@@ -260,23 +258,46 @@ class _Lexicon:
 
 
 class _PhoneSeqGenerator:
-  def __init__(self, lexicon):
-    self.lexicon = lexicon
+  def __init__(self, lexicon_file, allo_num_states=3, allo_context_len=1,
+               add_silence_beginning=0.1, add_silence_between_words=0.1, add_silence_end=0.1,
+               repetition=0.5, silence_repetition=0.7):
+    """
+    :param str lexicon_file: lexicon XML file
+    :param int allo_num_states: how much HMM states per allophone (all but silence)
+    :param int allo_context_len: how much context to store left and right. 1 -> triphone
+    :param float add_silence_beginning: prob of adding silence at beginning
+    :param float add_silence_between_words: prob of adding silence between words
+    :param float add_silence_end: prob of adding silence at end
+    :param float repetition: prob of repeating an allophone
+    :param float silence_repetition: prob of repeating the silence allophone
+    """
+    self.lexicon = _Lexicon(lexicon_file)
     self.rnd = Random(0)
-    self.allo_num_states = 3
-    self.allo_context_len = 1  # for both left/right. i.e. triphone
-    self.add_silence_beginning = 0.1
-    self.add_silence_end = 0.1
-    self.add_silence_between_words = 0.1
-    self.repetition = 0.5
+    self.allo_num_states = allo_num_states
+    self.allo_context_len = allo_context_len
+    self.add_silence_beginning = add_silence_beginning
+    self.add_silence_between_words = add_silence_between_words
+    self.add_silence_end = add_silence_end
+    self.repetition = repetition
+    self.silence_repetition = silence_repetition
+    self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
+    self.si_phone = self.si_lemma["phons"][0]["phon"]
 
   def random_seed(self, seed):
     self.rnd.seed(seed)
 
+  def get_class_labels(self):
+    # TODO context, etc (allophones)
+    return sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+
+  def seq_to_class_idxs(self, phones, dtype=None):
+    if dtype is None: dtype = "int32"
+    # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
+    return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
+
   def _iter_orth(self, orth):
-    si_lemma = self.lexicon.lemmas["[SILENCE]"]
     if self.rnd.random() < self.add_silence_beginning:
-      yield si_lemma
+      yield self.si_lemma
     symbols = list(orth.split())
     i = 0
     while i < len(symbols):
@@ -295,9 +316,9 @@ class _PhoneSeqGenerator:
       yield lemma
       if i < len(symbols):
         if self.rnd.random() < self.add_silence_between_words:
-          yield si_lemma
+          yield self.si_lemma
     if self.rnd.random() < self.add_silence_end:
-      yield si_lemma
+      yield self.si_lemma
 
   def orth_to_phones(self, orth):
     phones = []
@@ -314,17 +335,29 @@ class _PhoneSeqGenerator:
 
   def _allos_add_states(self, allos):
     for _a in allos:
-      for state in range(self.allo_num_states):
+      if _a.id == self.si_phone:
         while True:
           a = _AllophoneState()
           a.id = _a.id
           a.context_history = _a.context_history
           a.context_future = _a.context_future
           a.boundary = _a.boundary
-          a.state = state
+          a.state = 0  # silence only has one state
           yield a
-          if self.rnd.random() >= self.repetition:
+          if self.rnd.random() >= self.silence_repetition:
             break
+      else:  # non-silence
+        for state in range(self.allo_num_states):
+          while True:
+            a = _AllophoneState()
+            a.id = _a.id
+            a.context_history = _a.context_history
+            a.context_future = _a.context_future
+            a.boundary = _a.boundary
+            a.state = state
+            yield a
+            if self.rnd.random() >= self.repetition:
+              break
 
   def _allos_set_context(self, allos):
     ctx = []
@@ -360,7 +393,7 @@ def _main(argv):
   import better_exchook
   better_exchook.install()
   log.initialize(verbosity=[5])
-  dataset = LmDataset(*argv)
+  dataset = LmDataset(**eval(argv[0]))
   dataset.init_seq_order(epoch=1)
 
   seq_idx = 0
