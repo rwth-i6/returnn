@@ -1,0 +1,101 @@
+
+January 11, 2007
+
+
+The IEEEtrantools.sty package provides several commands from the
+IEEEtran.cls file so that they can be used under other LaTeX classes. The
+user guide provided here covers only the differences in the use of the
+commands from those provided by IEEEtran.cls. For complete documentation
+on these commands, see the relevant sections in the IEEEtran_HOWTO manual
+of the IEEEtran LaTeX class.
+
+The IEEEtrantools.sty package provides the following IEEEtran.cls commands:
+
+ 1. \IEEEPARstart which produces large initial "drop cap" letters.
+ 2. the \bstctlcite command for the control entry types of IEEEtran.bst
+    V1.00 and later
+ 3. the IEEE itemize, enumerate and description list environments
+ 4. the complete IEEEeqnarray family for producing multiline equations
+    as well as matrices and tables, including the IEEEeqnarray support
+    commands.
+
+IEEEtrantools.sty should not be used with IEEEtran.cls.
+
+For helpful tips, answers to frequently asked questions and other support,
+visit the IEEEtrantools support page at my website:
+
+http://www.michaelshell.org/tex/ieeetran/tools/
+
+
+Enjoy!
+
+Michael Shell
+http://www.michaelshell.org/
+
+
+*******
+1/2007 V1.2 (V1.7 of IEEEtran.cls) changes:
+
+ 1. Several commands and enviroments have depreciated in favor of
+    replacements with IEEE prefixes to better avoid potential future name
+    clashes with other packages. Legacy code retained to allow use of the
+    obsolete forms, but with an warning message to the console during
+    compilation:
+    \IEEEPARstart
+    For IED lists:
+    \IEEEiedlabeljustifyc, \IEEEiedlabeljustifyl, \IEEEiedlabeljustifyr,
+    \IEEEnocalcleftmargin, \IEEElabelindent, \IEEEsetlabelwidth,
+    \IEEEusemathlabelsep
+ 
+ 2. These commands/lengths now require the IEEE prefix and do not have
+    legacy support: \IEEEnormaljot.
+    For IED lists: \ifIEEEnocalcleftmargin, \ifIEEEnolabelindentfactor,
+    \IEEEiedlistdecl, \IEEElabelindentfactor
+
+ 3. \normalsizebaselineskip no longer provided. 
+
+ 4. New \IEEEPARstart controls:
+    \IEEEPARstartHEIGHTTEXT, \IEEEPARstartFONTSTYLE, \IEEEPARstartCAPSTYLE,
+    \IEEEPARstartWORDFONTSTYLE, \IEEEPARstartWORDCAPSTYLE,
+    \IEEEPARstartHOFFSET, \IEEEPARstartITLCORRECT
+    and the (output) length \IEEEPARstartletwidth.
+
+ 5. Provide for an optional argument to \bstctlcite to provide a way to
+    specify a different aux file. Define \bstctlcite even if it has already
+    been defined.
+
+********************************** Files **********************************
+
+README                - This file.
+
+IEEEtrantools.sty     - The LaTeX package file.
+
+IEEEtrantools_doc.txt - The user manual - supplementary to the 
+                        IEEEtran_HOWTO manual.
+
+***************************************************************************
+Legal Notice:
+This code is offered as-is without any warranty either expressed or
+implied; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE! 
+User assumes all risk.
+In no event shall IEEE or any contributor to this code be liable for
+any damages or losses, including, but not limited to, incidental,
+consequential, or any other damages, resulting from the use or misuse
+of any information contained here.
+
+All comments are the opinions of their respective authors and are not
+necessarily endorsed by the IEEE.
+
+This work is distributed under the LaTeX Project Public License (LPPL)
+( http://www.latex-project.org/ ) version 1.3, and may be freely used,
+distributed and modified. A copy of the LPPL, version 1.3, is included
+in the base LaTeX documentation of all distributions of LaTeX released
+2003/12/01 or later.
+Retain all contribution notices and credits.
+** Modified files should be clearly indicated as such, including  **
+** renaming them and changing author support contact information. **
+
+File list of work: IEEEtrantools.sty, IEEEtrantools_doc.txt
+***************************************************************************
+
