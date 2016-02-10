@@ -95,7 +95,7 @@ class LmDataset(CachedDataset2):
       if self.seq_gen:
         try:
           phones = self.seq_gen.generate_seq(orth)
-          print phones
+          print orth, "->", len(phones), phones
         except KeyError as e:
           if self.log_skipped_seqs:
             print >> log.v4, "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (
@@ -257,14 +257,35 @@ class _Lexicon:
     print >> log.v4, "Finished whole lexicon, %i lemmas" % len(self.lemmas)
 
 
+class _StateTying:
+  def __init__(self, state_tying_file):
+    self.allo_map = {}  # allophone-state-str -> class-idx
+    self.class_map = {}  # class-idx -> set(allophone-state-str)
+    ls = open(state_tying_file).read().splitlines()
+    for l in ls:
+      allo_str, class_idx_str = l.split()
+      class_idx = int(class_idx_str)
+      assert allo_str not in self.allo_map
+      self.allo_map[allo_str] = class_idx
+      self.class_map.setdefault(class_idx, set()).add(allo_str)
+    min_class_idx = min(self.class_map.keys())
+    max_class_idx = max(self.class_map.keys())
+    assert min_class_idx == 0
+    assert max_class_idx == len(self.class_map) - 1, "some classes are not represented"
+    self.num_classes = len(self.class_map)
+
+
 class _PhoneSeqGenerator:
-  def __init__(self, lexicon_file, allo_num_states=3, allo_context_len=1,
+  def __init__(self, lexicon_file,
+               allo_num_states=3, allo_context_len=1,
+               state_tying_file=None,
                add_silence_beginning=0.1, add_silence_between_words=0.1, add_silence_end=0.1,
                repetition=0.5, silence_repetition=0.7):
     """
     :param str lexicon_file: lexicon XML file
     :param int allo_num_states: how much HMM states per allophone (all but silence)
     :param int allo_context_len: how much context to store left and right. 1 -> triphone
+    :param str | None state_tying_file: for state-tying, if you want that
     :param float add_silence_beginning: prob of adding silence at beginning
     :param float add_silence_between_words: prob of adding silence between words
     :param float add_silence_end: prob of adding silence at end
@@ -282,18 +303,37 @@ class _PhoneSeqGenerator:
     self.silence_repetition = silence_repetition
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
     self.si_phone = self.si_lemma["phons"][0]["phon"]
+    if state_tying_file:
+      self.state_tying = _StateTying(state_tying_file)
+    else:
+      self.state_tying = None
 
   def random_seed(self, seed):
     self.rnd.seed(seed)
 
   def get_class_labels(self):
-    # TODO context, etc (allophones)
-    return sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+    if self.state_tying:
+      # State tying labels. Represented by some allophone state str.
+      return ["|".join(sorted(self.state_tying.class_map[i])) for i in range(self.state_tying.num_classes)]
+    else:
+      # The phonemes are the labels.
+      return sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
 
   def seq_to_class_idxs(self, phones, dtype=None):
+    """
+    :param list[_AllophoneState] phones: list of allophone states
+    :param str dtype: eg "int32"
+    :rtype: numpy.ndarray
+    :returns 1D numpy array with the indices
+    """
     if dtype is None: dtype = "int32"
-    # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
-    return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
+    if self.state_tying:
+      # State tying indices.
+      return numpy.array([self.state_tying.allo_map[a.format()] for a in phones], dtype=dtype)
+    else:
+      # Phoneme indices. This must be consistent with get_class_labels.
+      # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
+      return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
 
   def _iter_orth(self, orth):
     if self.rnd.random() < self.add_silence_beginning:
@@ -368,6 +408,7 @@ class _PhoneSeqGenerator:
         ctx = ctx[-self.allo_context_len:]
       else:
         ctx = []
+    ctx = []
     for a in reversed(allos):
       if self.lexicon.phonemes[a.id]["variation"] == "context":
         a.context_future = tuple(reversed(ctx))
