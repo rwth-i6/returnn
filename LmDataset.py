@@ -15,12 +15,14 @@ class LmDataset(CachedDataset2):
 
   def __init__(self,
                corpus_file, phone_info=None, orth_symbols_file=None, orth_replace_map_file=None,
+               add_random_phone_seqs=0,
                log_skipped_seqs=False, **kwargs):
     """
     :param str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
     :param dict | None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see _PhoneSeqGenerator
     :param str | None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
     :param str | None orth_replace_map_file: JSON file with replacement dict for orth symbols
+    :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data
     :param bool log_skipped_seqs: log skipped seqs
     """
     super(LmDataset, self).__init__(**kwargs)
@@ -54,6 +56,9 @@ class LmDataset(CachedDataset2):
     self.num_inputs = self.num_outputs["data"][0]
     self.seq_order = None
     self.log_skipped_seqs = log_skipped_seqs
+    self.add_random_phone_seqs = add_random_phone_seqs
+    for i in range(add_random_phone_seqs):
+      self.num_outputs["random%i" % i] = self.num_outputs["data"]
 
     if _is_bliss(corpus_file):
       iter_f = _iter_bliss
@@ -64,6 +69,9 @@ class LmDataset(CachedDataset2):
     iter_f(corpus_file, self.orths.append)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths)
+
+  def get_target_list(self):
+    return sorted([k for k in self.num_outputs.keys() if k != "data"])
 
   def get_data_dtype(self, key):
     return self.dtype
@@ -95,7 +103,6 @@ class LmDataset(CachedDataset2):
       if self.seq_gen:
         try:
           phones = self.seq_gen.generate_seq(orth)
-          print orth, "->", len(phones), phones
         except KeyError as e:
           if self.log_skipped_seqs:
             print >> log.v4, "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (
@@ -125,8 +132,13 @@ class LmDataset(CachedDataset2):
       else:
         assert False
 
-      self._num_timesteps_accumulated += len(data)
-      return DatasetSeq(seq_idx=seq_idx, features=data, targets=None)
+      targets = {}
+      for i in range(self.add_random_phone_seqs):
+        assert self.seq_gen  # not implemented atm for orths
+        phones = self.seq_gen.generate_garbage_seq(target_len=data.shape[0])
+        targets["random%i"] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
+      self._num_timesteps_accumulated += data.shape[0]
+      return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
 
 
 def _is_bliss(filename):
@@ -280,7 +292,7 @@ class _PhoneSeqGenerator:
                allo_num_states=3, allo_context_len=1,
                state_tying_file=None,
                add_silence_beginning=0.1, add_silence_between_words=0.1, add_silence_end=0.1,
-               repetition=0.5, silence_repetition=0.7):
+               repetition=0.9, silence_repetition=0.95):
     """
     :param str lexicon_file: lexicon XML file
     :param int allo_num_states: how much HMM states per allophone (all but silence)
@@ -293,6 +305,7 @@ class _PhoneSeqGenerator:
     :param float silence_repetition: prob of repeating the silence allophone
     """
     self.lexicon = _Lexicon(lexicon_file)
+    self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
     self.rnd = Random(0)
     self.allo_num_states = allo_num_states
     self.allo_context_len = allo_context_len
@@ -317,7 +330,7 @@ class _PhoneSeqGenerator:
       return ["|".join(sorted(self.state_tying.class_map[i])) for i in range(self.state_tying.num_classes)]
     else:
       # The phonemes are the labels.
-      return sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+      return self.phonemes
 
   def seq_to_class_idxs(self, phones, dtype=None):
     """
@@ -367,25 +380,29 @@ class _PhoneSeqGenerator:
       phones += [phon["phon"]]
     return " ".join(phones)
 
-  def _phon_to_allos(self, phon):
-    for p in phon.split():
+  def _phones_to_allos(self, phones):
+    for p in phones:
       a = _AllophoneState()
       a.id = p
       yield a
 
+  def _random_allo_silence(self, phone=None):
+    if phone is None: phone = self.si_phone
+    while True:
+      a = _AllophoneState()
+      a.id = phone
+      a.mark_initial()
+      a.mark_final()
+      a.state = 0  # silence only has one state
+      yield a
+      if self.rnd.random() >= self.silence_repetition:
+        break
+
   def _allos_add_states(self, allos):
     for _a in allos:
       if _a.id == self.si_phone:
-        while True:
-          a = _AllophoneState()
-          a.id = _a.id
-          a.context_history = _a.context_history
-          a.context_future = _a.context_future
-          a.boundary = _a.boundary
-          a.state = 0  # silence only has one state
+        for a in self._random_allo_silence(_a.id):
           yield a
-          if self.rnd.random() >= self.silence_repetition:
-            break
       else:  # non-silence
         for state in range(self.allo_num_states):
           while True:
@@ -418,15 +435,57 @@ class _PhoneSeqGenerator:
         ctx = []
 
   def generate_seq(self, orth):
+    """
+    :param str orth: orthography as a str. orth.split() should give words in the lexicon
+    :rtype: list[_AllophoneState]
+    :returns allophone state list. those will have repetitions etc
+    """
     allos = []
     for lemma in self._iter_orth(orth):
       phon = self.rnd.choice(lemma["phons"])
-      l_allos = list(self._phon_to_allos(phon["phon"]))
+      l_allos = list(self._phones_to_allos(phon["phon"].split()))
       l_allos[0].mark_initial()
       l_allos[-1].mark_final()
       allos += l_allos
     self._allos_set_context(allos)
     allos = list(self._allos_add_states(allos))
+    return allos
+
+  def _random_phone_seq(self, prob_add=0.8):
+    while True:
+      yield self.rnd.choice(self.phonemes)
+      if self.rnd.random() >= prob_add:
+        break
+
+  def _random_allo_seq(self, prob_word_add=0.8):
+    allos = []
+    while True:
+      phones = self._random_phone_seq()
+      w_allos = list(self._phones_to_allos(phones))
+      w_allos[0].mark_initial()
+      w_allos[-1].mark_final()
+      allos += w_allos
+      if self.rnd.random() >= prob_word_add:
+        break
+    self._allos_set_context(allos)
+    return list(self._allos_add_states(allos))
+
+  def generate_garbage_seq(self, target_len):
+    """
+    :param int target_len: len of the returned seq
+    :rtype: list[_AllophoneState]
+    :returns allophone state list. those will have repetitions etc.
+    It will randomly generate a sequence of phonemes and transform that
+    into a list of allophones in a similar way than generate_seq().
+    """
+    allos = []
+    while True:
+      allos += self._random_allo_seq()
+      # Add some silence so that left/right context is correct for further allophones.
+      allos += list(self._random_allo_silence())
+      if len(allos) >= target_len:
+        allos = allos[:target_len]
+        break
     return allos
 
 
