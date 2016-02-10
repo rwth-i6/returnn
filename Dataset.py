@@ -50,7 +50,7 @@ class Dataset(object):
     cls.kwargs_update_from_config(config, kwargs)
     return cls(**kwargs)
 
-  def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0):
+  def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0, estimated_num_seqs=None):
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
@@ -63,6 +63,7 @@ class Dataset(object):
     self._num_timesteps = 0
     self._num_codesteps = None; " :type: int "  # Num output frames, could be different from input, seq2seq, ctc.
     self._num_seqs = 0
+    self._estimated_num_seqs = estimated_num_seqs
     self.chunk_size = int(chunking.split(':')[0])
     if ':' in chunking:
       self.chunk_step = int(chunking.split(':')[1])
@@ -180,8 +181,9 @@ class Dataset(object):
   def _load_seqs(self, start, end):
     """
     Load data sequences.
-    :param int start: start sorted seq idx
-    :param int end: end sorted seq idx. might be outside
+    :param int start: inclusive seq idx start
+    :param int end: exclusive seq idx end. can be more than num_seqs
+    If end > num_seqs, will not load them.
     """
     raise NotImplementedError
 
@@ -292,18 +294,51 @@ class Dataset(object):
   def get_max_ctc_length(self):
     return 0
 
+  @classmethod
+  def generic_complete_frac(cls, seq_idx, num_seqs):
+    """
+    :param int seq_idx: idx
+    :param int|None num_seqs: None if not available
+    :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
+      for this seq in the dataset.
+      This does not have to be exact. This is only for the user.
+    """
+    if num_seqs:
+      return min(float(seq_idx + 1) / num_seqs, 1.0)
+    else:
+      # We don't know. So:
+      # Some monotonic increasing function in [0,1] which never reaches 1.
+      import math
+      return max(1.e-10, 1.0 - math.exp(-seq_idx * 1000))
+
   def get_complete_frac(self, seq_idx):
     """
     :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
       for this seq in the dataset.
       This does not have to be exact. This is only for the user.
     """
-    assert self.num_seqs > 0
-    return float(seq_idx + 1) / self.num_seqs
+    try:
+      num_seqs = self.num_seqs
+    except Exception:  # num_seqs not always available
+      try:
+        num_seqs = self.estimated_num_seqs
+      except Exception:  # also not always available
+        num_seqs = None  # ignore
+    return self.generic_complete_frac(seq_idx, num_seqs)
 
   @property
   def num_seqs(self):
     raise NotImplementedError
+
+  @property
+  def estimated_num_seqs(self):
+    try:
+      return self.num_seqs
+    except Exception:  # might not be available
+      pass
+    if self._estimated_num_seqs is not None:
+      return self._estimated_num_seqs
+    return None
 
   def get_data_keys(self):
     return ["data"] + self.get_target_list()

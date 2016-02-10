@@ -398,8 +398,7 @@ class RecurrentUnitLayer(Layer):
       assert self.depth == 1
       assert unit.n_units * 4 == unit.n_in  # (input gate, forget gate, output gate, net input)
       bias_init_value[unit.n_units:2 * unit.n_units] += bias_random_init_forget_shift
-    #self.b = theano.shared(value=value, borrow=True, name="b_%s"%self.name) #self.create_bias()
-    #self.params["b_%s"%self.name] = self.b
+    #bias_init_value = numpy.asarray(self.rng.normal(loc=0.0, scale=, size=(unit.n_in,)), dtype="float32")
     self.b.set_value(bias_init_value)
     self.W_in = []
     for s in self.sources:

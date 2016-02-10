@@ -102,17 +102,24 @@ def eval_shell_env(token):
 
 def eval_shell_str(s):
   """
-  :type s: str | list[str]
+  :type s: str | list[str] | ()->str | list[()->str] | ()->list[str] | ()->list[()->str]
   :rtype: list[str]
 
   Parses `s` as shell like arguments (via shlex.split) and evaluates shell environment variables (eval_shell_env).
+  `s` or its elements can also be callable. In those cases, they will be called and the returned value is used.
   """
   tokens = []
+  if callable(s):
+    s = s()
   if isinstance(s, (list, tuple)):
     l = s
   else:
+    assert isinstance(s, (str, unicode))
     l = shlex.split(s)
   for token in l:
+    if callable(token):
+      token = token()
+    assert isinstance(token, (str, unicode))
     if token.startswith("$"):
       tokens += eval_shell_str(eval_shell_env(token))
     else:

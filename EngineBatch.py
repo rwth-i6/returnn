@@ -191,12 +191,12 @@ class BatchSetGenerator:
   def completed_frac(self):
     """
     :rtype: float
-    :returns 0-1
+    :returns 0-1, >0
     """
     if self.cache_active:
-      return self.current_batch_idx / float(len(self.cache))
+      return self.dataset.generic_complete_frac(self.current_batch_idx, len(self.cache))
     if not self.last_batch:
-      return 0.0
+      return self.dataset.generic_complete_frac(0, None)
     # We cannot use the batch idx because we don't know the number
     # of batches in advance. Thus, we use the seq idx instead.
     # It's good enough.

@@ -19,7 +19,7 @@ class ExternSprintDataset(SprintDataset):
   See SprintExternInterface.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, *args, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, *args, **kwargs):
     """
     :type sprintTrainerExecPath: str
     :type sprintConfigStr: str
@@ -27,7 +27,8 @@ class ExternSprintDataset(SprintDataset):
     super(ExternSprintDataset, self).__init__(*args, **kwargs)
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
-    self.sprintConfig = eval_shell_str(sprintConfigStr)
+    self.sprintConfig = sprintConfigStr
+    self.partitionEpoch = partitionEpoch
     self._num_seqs = None
     self.child_pid = None
     self.parent_pid = os.getpid()
@@ -116,9 +117,15 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
+    epoch = self.crnnEpoch or 1
     args = [
       self.sprintTrainerExecPath,
-      "--*.seed=%i" % (self.crnnEpoch or 1),
+      "--*.seed=%i" % (epoch // self.partitionEpoch)]
+    if self.partitionEpoch > 1:
+      args += [
+        "--*.corpus.partition=%i" % self.partitionEpoch,
+        "--*.corpus.select-partition=%i" % (epoch % self.partitionEpoch)]
+    args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
       "--*.python-segment-order-pymod-name=SprintExternInterface",
@@ -137,7 +144,7 @@ class ExternSprintDataset(SprintDataset):
           f.write("\n")
         f.close()
       args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
-    args += self.sprintConfig
+    args += eval_shell_str(self.sprintConfig)
     return args
 
   def _read_next_raw(self):
@@ -228,6 +235,10 @@ class ExternSprintDataset(SprintDataset):
     with self.lock:
       if epoch == self.crnnEpoch and self.expected_load_seq_start == 0:
         return
+      if epoch != self.crnnEpoch:
+        if self._num_seqs is not None:
+          self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
+          self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._exit_child()
     self._start_child(epoch)
@@ -241,14 +252,3 @@ class ExternSprintDataset(SprintDataset):
     with self.lock:
       assert self._num_seqs is not None
       return self._num_seqs
-
-  def get_complete_frac(self, seq_idx):
-    """
-    :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
-      for this seq in the dataset.
-      This does not have to be exact. This is only for the user.
-    """
-    with self.lock:
-      if self._num_seqs is not None:
-        return float(seq_idx + 1) / self._num_seqs
-      return super(ExternSprintDataset, self).get_complete_frac(seq_idx)

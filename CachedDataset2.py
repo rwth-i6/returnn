@@ -76,27 +76,11 @@ class CachedDataset2(Dataset):
     # Some monotonic increasing function in [0,1] which never reaches 1.
     return max(1.e-20, 1.0 - math.exp(-seq_idx * 1000))
 
-  def _find_num_seqs(self, start, end):
-    """
-    We might not know the num seqs in advance.
-    When we hit behind the end, now find the real num seqs via self.is_less_than_num_seqs().
-    """
-    try:
-      return self.num_seqs
-    except Exception:  # might not be defined yet.
-      pass
-    assert self.is_less_than_num_seqs(start)
-    assert not self.is_less_than_num_seqs(end)
-    # We could do binary search, but this is just simpler.
-    for n in range(start + 1, end + 1):
-      if not self.is_less_than_num_seqs(n):
-        return n
-    assert False  # should not get here
-
   def _load_seqs(self, start, end):
     """
     :param int start: inclusive seq idx start
-    :param int end: exclusive seq idx end
+    :param int end: exclusive seq idx end. can be more than num_seqs
+    If end > num_seqs, will not load them.
     """
     # We expect that start increase monotonic on each call
     # for not-yet-loaded data.
@@ -108,19 +92,31 @@ class CachedDataset2(Dataset):
       self.expected_load_seq_start = start
     if self.added_data:
       start = max(self.added_data[-1].seq_idx + 1, start)
-    # We might not know the num seqs in advance, thus this more generic check.
-    if not self.is_less_than_num_seqs(end):
-      self._num_seqs = self._find_num_seqs(start, end)
-      self.reached_final_seq = True
-      end = self.num_seqs
     seqs = [self._collect_single_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
+    seqs = filter(None, seqs)  # We might not know the num seqs in advance.
     self._num_timesteps_accumulated += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
+
+  def is_less_than_num_seqs(self, n):
+    if n < self.expected_load_seq_start:
+      return True
+    try:
+      return super(CachedDataset2, self).is_less_than_num_seqs(n)
+    except Exception:  # can fail
+      assert n >= self.expected_load_seq_start
+      self._load_seqs(self.expected_load_seq_start, n + 1)
+      if self._get_seq(n) is not None:
+        return True
+      self._num_seqs = self.added_data[-1].seq_idx + 1
+      assert n >= self._num_seqs
+      self.reached_final_seq = True
+      return False
 
   def _collect_single_seq(self, seq_idx):
     """
     :type seq_idx: int
-    :rtype: DatasetSeq
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
     raise NotImplementedError
 
