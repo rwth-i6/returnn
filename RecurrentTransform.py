@@ -875,6 +875,7 @@ class AttentionTreeBase(AttentionBase):
       #f_e = T.exp(-f_z) #* index
       #w_i = f_z # T.exp(-f_z) #f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       w_i = T.exp(-f_z)
+      w_i = w_i / T.sum(w_i,axis=0,keepdims=True)
       if i > 0:
         factor = self.layer.base[i].attrs['factor'][0]
         #factor = self.layer.base[i].sources[0].attrs['factor'][0]
@@ -888,11 +889,112 @@ class AttentionTreeBase(AttentionBase):
         #w_i = T.set_subtensor(container[:w_c.shape[0]], w_c)
         #w_i = theano.printing.Print("after", attrs=['shape'])(w_i)
         #w_i = w_i.T.flatten().repeat(2**i,axis=0).reshape(((2**i)*w_i.shape[0],w_i.shape[1])).T
-      alpha *= w_i
+      alpha += w_i
       #alpha -= w_i
     #alpha = T.exp(alpha)
-    alpha = (alpha / alpha.sum(axis=0,keepdims=True)).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    alpha = (alpha / T.constant(len(self.layer.base), 'float32')).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
     return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
+
+
+class AttentionBinaryBase(AttentionBase):
+  """
+  attention over hierarchy of bases in different time resolutions
+  """
+  name = "attention_binbase"
+
+  def ugly_init(self, i):
+    B = self.custom_vars['B_%d' % i]
+    try:
+      C = self.custom_vars['C_%d' % i]
+    except:
+      C = None
+    if i == 0:
+      self.B_0 = B
+      self.C_0 = C
+    elif i == 1:
+      self.B_1 = B
+      self.C_1 = C
+    elif i == 2:
+      self.B_2 = B
+      self.C_2 = C
+    elif i == 3:
+      self.B_3 = B
+      self.C_3 = C
+    elif i == 4:
+      self.B_4 = B
+      self.C_4 = C
+
+  def create_vars(self):
+    layer = self.layer
+    base = layer.base
+    assert base, "attention networks are only defined for decoder networks"
+    n_tmp = self.layer.attrs['attention_template']
+
+    self.n_in = base[0].attrs['n_out'] # resolution is assumed to decrease with index
+    n_in = self.n_in
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
+    self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
+    values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
+    self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
+    #self.index = self.add_input(T.cast(self.layer.base[0].index, 'float32'), 'index')
+
+    for i,e in enumerate(layer.base):
+      self.add_input(e.output, 'B_%d' % i)
+      if self.layer.attrs['attention_template'] > 0:
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
+        W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
+        values = numpy.zeros((n_tmp,),dtype='float32')
+        b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
+        self.add_input(T.tanh(T.dot(base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
+      else:
+        n_in = self.n_in
+      self.ugly_init(i) # TODO
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
+    self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
+
+  def step(self, y_p):
+    updates = {}
+    h_p = T.tanh(T.dot(y_p, self.W_att_re) + self.b_att_re)
+    context = self.custom_vars['B_0']
+    alpha = T.ones_like(context[:,:,0])
+    dist = 'l2'
+    if 'attention_distance' in self.layer.attrs:
+      dist = self.layer.attrs['attention_distance']
+
+    resolution = self.custom_vars['C_0' if self.layer.attrs['attention_template'] > 0 else 'B_0']
+    beam_start = 0
+    beam_end = resolution.shape[0]
+    for i in xrange(len(self.layer.base)-1,-1,-1):
+      ctx = self.custom_vars[('C_%d' % i) if self.layer.attrs['attention_template'] > 0 else ('B_%d' % i)]
+      if i > 0:
+        factor = self.layer.base[i].attrs['factor'][0]
+      else:
+        factor = 1
+      beam_start = beam_start / T.constant(factor,'int8')
+      beam_end = beam_end / T.constant(factor,'int8')
+      base = ctx[beam_start:beam_end]
+      if dist == 'l2':
+        f_z = T.mean((base - h_p.dimshuffle('x',0,1).repeat(base.shape[0],axis=0)) ** 2, axis=2)
+      elif dist == 'dot':
+        f_z = T.mean(base * h_p.dimshuffle('x',0,1).repeat(base.shape[0],axis=0), axis=2)
+      else:
+        assert False, "invalid distance: %s" % dist
+      f_z = f_z * self.layer.attrs['attention_sharpening']
+      w_i = T.exp(-f_z)
+      w_i = w_i / T.sum(w_i,axis=0,keepdims=True)
+      bin = T.argmax(w_i,axis=0) #[:,0]
+      w_i = T.set_subtensor(T.zeros_like(ctx[:,:,0])[beam_start:beam_end],w_i)
+      if i > 0:
+        w_c = T.tile(w_i, (1,factor)).reshape((factor*w_i.shape[0],w_i.shape[1]))
+        w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c)
+        beam_start = T.min(bin) * factor
+        beam_end = (T.max(bin) + 1) * factor
+      alpha += w_i
+    alpha = (alpha / T.constant(len(self.layer.base), 'float32')).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
+    return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
+
 
 
 class AttentionLinear(AttentionBase):
