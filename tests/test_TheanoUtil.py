@@ -5,6 +5,21 @@ import numpy.testing
 from TheanoUtil import *
 
 
+def test_class_idx_seq_to_1_of_k():
+  from theano.tensor.extra_ops import to_one_hot
+  v = theano.tensor.as_tensor_variable(numpy.array([1, 2, 3, 5, 6]))
+  out = to_one_hot(v, 10).eval()
+  assert numpy.allclose(
+      out,
+      [[0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+       [0., 0., 1., 0., 0., 0., 0., 0., 0., 0.],
+       [0., 0., 0., 1., 0., 0., 0., 0., 0., 0.],
+       [0., 0., 0., 0., 0., 1., 0., 0., 0., 0.],
+       [0., 0., 0., 0., 0., 0., 1., 0., 0., 0.]])
+  out2 = class_idx_seq_to_1_of_k(v, 10).eval()
+  assert numpy.allclose(out, out2)
+
+
 def naive_windowed_batch(source, window):
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
   n_time = source.shape[0]

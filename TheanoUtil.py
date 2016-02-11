@@ -22,6 +22,16 @@ def time_batch_make_flat(val):
 
 
 def class_idx_seq_to_1_of_k(seq, num_classes, dtype="float32"):
+  """
+  :param theano.Variable seq: ndarray with indices
+  :param int | theano.Variable num_classes: number of classes
+  :param str dtype: eg "float32"
+  :rtype: theano.Variable
+  :returns ndarray with one added dimension of size num_classes.
+  That is the one-hot-encoding.
+  This function is like theano.tensor.extra_ops.to_one_hot
+  but we can handle multiple dimensions.
+  """
   shape = [seq.shape[i] for i in range(seq.ndim)] + [num_classes]
   eye = T.eye(num_classes, dtype=dtype)
   m = eye[T.cast(seq, 'int32')].reshape(shape)
