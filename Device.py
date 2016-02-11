@@ -132,6 +132,7 @@ class Device(object):
     self.update_total_time = 0
     self.num_frames = NumbersDict(0)
     self.num_updates = 0
+    self.epoch = None
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
@@ -691,8 +692,13 @@ class Device(object):
         output_queue.send("generic-exec-result")
         output_queue.send(res)
       elif cmd == "reset":  # via self.reset()
+        self.epoch = input_queue.recv()
         if self.updater:
           self.updater.reset()
+        if self.trainnet:
+          self.trainnet.epoch = self.epoch
+        if self.testnet:
+          self.testnet.epoch = self.epoch
       elif cmd == "reinit":  # via self.reinit()
         json_content = input_queue.recv()
         train_param_args = input_queue.recv()
@@ -994,7 +1000,7 @@ class Device(object):
       self.sync_used_targets()
       return r
 
-  def prepare(self, network, updater=None, train_param_args=None):
+  def prepare(self, network, updater=None, train_param_args=None, epoch=None):
     """
     Call this from the main proc before we do anything else.
     This is called before we start any training, e.g. at the begin of an epoch.
@@ -1006,11 +1012,17 @@ class Device(object):
     # Reinit if needed.
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
+    self.epoch = epoch
     if self.blocking:
       if self.updater:
         self.updater.reset()
+      if self.trainnet:
+        self.trainnet.epoch = epoch
+      if self.testnet:
+        self.testnet.epoch = epoch
     else:
       self.input_queue.send('reset')
+      self.input_queue.send(epoch)
 
   def run(self, task):
     """

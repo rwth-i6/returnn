@@ -13,7 +13,7 @@ from math import ceil
 
 
 class TaskThread(threading.Thread):
-    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, share_batches = False, report_prefix=None, exclude=None):
+    def __init__(self, task, network, devices, data, batches, eval_batch_size=0, start_batch=0, share_batches = False, report_prefix=None, exclude=None, epoch=None):
       """
       :type task: str
       :type network: Network.LayerNetwork
@@ -46,6 +46,7 @@ class TaskThread(threading.Thread):
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
+      self.epoch = epoch
       self.lock = threading.Lock()
       self.start()
 
@@ -372,7 +373,7 @@ class TaskThread(threading.Thread):
     def run_inner(self):
       self.start_time = time.time()
       for device in self.devices:
-        device.prepare(**self.get_device_prepare_args())
+        device.prepare(epoch=self.epoch, **self.get_device_prepare_args())
       self.initialize()
       terminal_width, _ = terminal_size()
       self.interactive = (log.v[3] and terminal_width >= 0)

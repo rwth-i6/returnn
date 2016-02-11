@@ -423,6 +423,8 @@ class Engine:
       print >> log.v5, "execute init_train_epoch_posthook:", self.init_train_epoch_posthook
       exec self.init_train_epoch_posthook
 
+    self.network.epoch = epoch
+
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
 
@@ -445,7 +447,8 @@ class Engine:
                               eval_batch_size=self.update_batch_size,
                               start_batch=start_batch, share_batches=self.share_batches,
                               exclude=self.exclude,
-                              report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
+                              report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch,
+                              epoch=self.epoch)
     trainer.join()
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
@@ -483,7 +486,7 @@ class Engine:
       else:
         self.dataset_batches[dataset_name].reset()
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
-                              report_prefix=self.get_epoch_str() + " eval")
+                              report_prefix=self.get_epoch_str() + " eval", epoch=self.epoch)
       tester.join()
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]

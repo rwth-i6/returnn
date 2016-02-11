@@ -69,6 +69,8 @@ class LayerNetwork(object):
     self.get_layer_param = None  # used by Container.add_param()
     self.calc_step_base = None
     self.calc_steps = []
+    self.base_network = base_network
+    self.epoch = None
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -701,3 +703,6 @@ class LayerNetwork(object):
     model.close()
     return epoch
 
+  def get_epoch(self):
+    if self.base_network: return self.base_network.get_epoch()
+    return self.epoch
