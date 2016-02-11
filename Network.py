@@ -35,7 +35,8 @@ class LayerNetwork(object):
       assert 1 <= n_out["data"][1] <= 2  # maybe obsolete check...
       data_dim = n_out["data"][1] + 1  # one more because of batch-dim
     if base_network is None:
-      self.x = T.TensorType('float32', ((False,) * data_dim))('x')
+      dtype = "float32" if data_dim >= 3 else "int32"
+      self.x = T.TensorType(dtype, ((False,) * data_dim))('x')
       self.y = {"data": self.x}
       self.i = T.bmatrix('i'); """ :type: theano.Variable """
       self.j = {"data": self.i}
