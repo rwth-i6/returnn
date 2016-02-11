@@ -16,6 +16,7 @@ class LmDataset(CachedDataset2):
   def __init__(self,
                corpus_file, phone_info=None, orth_symbols_file=None, orth_replace_map_file=None,
                add_random_phone_seqs=0,
+               partition_epoch=1,
                log_skipped_seqs=False, **kwargs):
     """
     :param str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
@@ -56,6 +57,7 @@ class LmDataset(CachedDataset2):
     self.num_inputs = self.num_outputs["data"][0]
     self.seq_order = None
     self.log_skipped_seqs = log_skipped_seqs
+    self.partition_epoch = partition_epoch
     self.add_random_phone_seqs = add_random_phone_seqs
     for i in range(add_random_phone_seqs):
       self.num_outputs["random%i" % i] = self.num_outputs["data"]
@@ -68,7 +70,7 @@ class LmDataset(CachedDataset2):
     print >> log.v4, "LmDataset, loading file", corpus_file
     iter_f(corpus_file, self.orths.append)
     # It's only estimated because we might filter some out or so.
-    self._estimated_num_seqs = len(self.orths)
+    self._estimated_num_seqs = len(self.orths) // self.partition_epoch
 
   def get_target_list(self):
     return sorted([k for k in self.num_outputs.keys() if k != "data"])
@@ -79,13 +81,17 @@ class LmDataset(CachedDataset2):
   def init_seq_order(self, epoch=None, seq_list=None):
     assert seq_list is None
     super(LmDataset, self).init_seq_order(epoch=epoch)
+    epoch = epoch or 1
+    self.orths_epoch = self.orths[
+                       len(self.orths) * (epoch % self.partition_epoch) // self.partition_epoch:
+                       len(self.orths) * ((epoch % self.partition_epoch) + 1) // self.partition_epoch]
     self.seq_order = self.get_seq_order_for_epoch(
-      epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i]))
+      epoch=epoch, num_seqs=len(self.orths_epoch), get_seq_len=lambda i: len(self.orths_epoch[i]))
     self.next_orth_idx = 0
     self.num_skipped = 0
     self._num_timesteps_accumulated = NumbersDict(0)
     if self.seq_gen:
-      self.seq_gen.random_seed(epoch or 1)
+      self.seq_gen.random_seed(epoch)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -94,9 +100,9 @@ class LmDataset(CachedDataset2):
     :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
     while True:
-      if self.next_orth_idx >= len(self.orths):
+      if self.next_orth_idx >= len(self.orths_epoch):
         return None
-      orth = self.orths[self.seq_order[self.next_orth_idx]]
+      orth = self.orths_epoch[self.seq_order[self.next_orth_idx]]
       self.next_orth_idx += 1
       if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
 
@@ -504,8 +510,8 @@ def _main(argv):
     if time.time() - last_log_time > 2.0:
       last_log_time = time.time()
       print >> log.v5, "Loading %s progress, %i/%i (%.0f%%) seqs loaded (%.0f%% skipped), total syms %i ..." % (
-                       dataset.__class__.__name__, dataset.next_orth_idx, len(dataset.orths),
-                       100.0 * dataset.next_orth_idx / len(dataset.orths),
+                       dataset.__class__.__name__, dataset.next_orth_idx, dataset.estimated_num_seqs,
+                       100.0 * dataset.next_orth_idx / dataset.estimated_num_seqs,
                        100.0 * dataset.num_skipped / (dataset.next_orth_idx or 1),
                        dataset._num_timesteps_accumulated["data"])
 
