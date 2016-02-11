@@ -136,7 +136,7 @@ class LmDataset(CachedDataset2):
       for i in range(self.add_random_phone_seqs):
         assert self.seq_gen  # not implemented atm for orths
         phones = self.seq_gen.generate_garbage_seq(target_len=data.shape[0])
-        targets["random%i"] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
+        targets["random%i" % i] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
       self._num_timesteps_accumulated += data.shape[0]
       return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
 
