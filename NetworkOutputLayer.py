@@ -96,6 +96,7 @@ class OutputLayer(Layer):
     if self.loss == 'priori':
       self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
     #self.make_output(self.z, collapse = False)
+    # Note that self.output is going to be overwritten in our derived classes.
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
 
   def create_bias(self, n, prefix='b', name=""):
