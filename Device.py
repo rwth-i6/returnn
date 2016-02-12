@@ -326,7 +326,7 @@ class Device(object):
     self.update_specs = update_specs
     self.block_start = T.lscalar()
     self.block_end = T.lscalar()
-    self.epoch_var = T.iscalar("epoch_var")
+    self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
 
     if self.network_task == 'train' or self.network_task == 'theano_graph':
       if self.trainnet.loss == 'ctc':
@@ -360,7 +360,7 @@ class Device(object):
       if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
-        self.trainer = theano.function(inputs=[self.block_start, self.block_end, self.epoch_var],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        updates=self.updater.getUpdateList(),
@@ -374,7 +374,7 @@ class Device(object):
         assert len(gparams_outputs_format) == len(gparams)
         self.train_outputs_format += gparams_outputs_format
         outputs += gparams
-        self.trainer = theano.function(inputs=[self.block_start, self.block_end, self.epoch_var],
+        self.trainer = theano.function(inputs=[self.block_start, self.block_end],
                                        outputs=outputs,
                                        givens=train_givens,
                                        no_default_updates=False,
@@ -385,7 +385,7 @@ class Device(object):
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
       test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
-      self.tester = theano.function(inputs=[self.block_start, self.block_end, self.epoch_var],
+      self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
                                     givens=test_givens,
                                     on_unused_input='warn',
@@ -458,20 +458,20 @@ class Device(object):
           source.append(self.testnet.hidden[param].aux[-1].dimshuffle(0,2,1) * T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].aux[-1].shape[1],axis=2))
         else:
           assert False, "invalid extraction: " + extract
-      self.extractor = theano.function(inputs = [self.epoch_var],
+      self.extractor = theano.function(inputs = [],
                                        outputs = source if len(source) == 1 else [T.concatenate(source, axis=1)],
                                        givens = givens,
                                        on_unused_input='warn',
                                        name = "extractor")
 
     elif self.network_task == 'classify':
-      self.classifier = theano.function(inputs = [self.epoch_var],
+      self.classifier = theano.function(inputs = [],
                                         outputs = [T.argmax(self.testnet.get_layer('output').p_y_given_x, axis = 1)],
                                         givens = self.make_input_givens(self.testnet),
                                         name = "classifier")
 
     elif self.network_task == 'analyze':
-      self.analyzer = theano.function(inputs = [self.epoch_var],
+      self.analyzer = theano.function(inputs = [],
                                       outputs = [self.testnet.get_layer('output').p_y_given_x],
                                               #+ [self.testnet.jacobian],
                                               #+ [hidden.output for hidden in self.network.hidden]
@@ -493,18 +493,18 @@ class Device(object):
         if self.config.bool("debug_shell_first_compute", False):
           print >>log.v1, "debug_shell_first_compute"
           Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-        block_output = func(batch_start, batch_end, self.epoch)
+        block_output = func(batch_start, batch_end)
         if not output:
           output = block_output
         else:
           for j in xrange(len(block_output)):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
-      output = self.extractor(self.epoch)
+      output = self.extractor()
     elif task == 'classify':
-      output = self.classifier(self.epoch)
+      output = self.classifier()
     elif task == "analyze":
-      output = self.analyzer(self.epoch)
+      output = self.analyzer()
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -694,6 +694,7 @@ class Device(object):
         output_queue.send(res)
       elif cmd == "reset":  # via self.reset()
         self.epoch = input_queue.recv()
+        self.epoch_var.set_value(self.epoch)
         if self.updater:
           self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
@@ -1011,6 +1012,7 @@ class Device(object):
     self.set_net_params(network)
     self.epoch = epoch
     if self.blocking:
+      self.epoch_var.set_value(epoch)
       if self.updater:
         self.updater.reset()
     else:
