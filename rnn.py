@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import json
+import numpy
 from optparse import OptionParser
 from Log import log
 from Device import Device, get_num_devices
@@ -380,10 +381,12 @@ def executeMainTask():
           theano.printing.debugprint(inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
       theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
                                  outfile = "%s.png" % prefix)
-  elif task == 'analyze':
+  elif task == 'analyze':  # anything based on the network + Device
     statistics = config.list('statistics', ['confusion_matrix'])
     engine.init_network_from_config(config)
     engine.analyze(engine.devices[0], eval_data, statistics)
+  elif task == "analyze_data":  # anything just based on the data
+    analyze_data(config)
   elif task == "classify":
     assert eval_data is not None, 'no eval data provided'
     assert config.has('label_file'), 'no output file provided'
@@ -397,6 +400,55 @@ def executeMainTask():
     assert False, "unknown task: %s" % task
 
   print >> log.v3, ("elapsed: %f" % (time.time() - st))
+
+
+def analyze_data(config):
+  dss = config.value('analyze_dataset', 'train')
+  ds = {"train": train_data, "dev": dev_data, "eval": eval_data}[dss]
+  epoch = config.int('epoch', 1)
+  print >> log.v1, "Analyze dataset", dss, "epoch", epoch
+  ds.init_seq_order(epoch=epoch)
+  stat_prefix = config.value('statistics_save_prefix', 'statistics')
+  dtype = config.value('statistics_dtype', 'float64')
+  target = config.value('target', 'classes')
+  data_key = config.value('data_key', 'data')
+  assert ds.is_data_sparse(target), "need for prior calculation"
+  assert not ds.is_data_sparse(data_key), "needed for mean/var estimation"
+  from Util import inplace_increment, progress_bar_with_time, NumbersDict
+
+  priori = numpy.zeros((ds.num_outputs[target][0],), dtype=dtype)
+  mean = numpy.zeros((ds.num_outputs[data_key][0],), dtype=dtype)
+  mean_sq = numpy.zeros((ds.num_outputs[data_key][0],), dtype=dtype)
+  total_targets_len = 0
+  total_data_len = 0
+
+  seq_idx = 0
+  while ds.is_less_than_num_seqs(seq_idx):
+    progress_bar_with_time(ds.get_complete_frac(seq_idx))
+    ds.load_seqs(seq_idx, seq_idx + 1)
+    targets = ds.get_data(target, seq_idx)
+    inplace_increment(priori, targets, 1)
+    total_targets_len += targets.shape[0]
+    data = ds.get_data(data_key, seq_idx)
+    new_total_data_len = total_data_len + data.shape[0]
+    f = float(total_data_len) / new_total_data_len
+    mean = mean * f + numpy.sum(data, axis=0) * (1.0 - f)
+    mean_sq = mean_sq * f + numpy.sum(data * data, axis=0) * (1.0 - f)
+    total_data_len = new_total_data_len
+    seq_idx += 1
+  priori /= NumbersDict(ds.get_num_timesteps())[target]
+  var = numpy.sqrt(mean_sq - mean * mean)
+  print >> log.v1, "Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len)
+  priori_fn = stat_prefix + ".priori.txt"
+  mean_fn = stat_prefix + ".mean.txt"
+  var_fn = stat_prefix + ".var.txt"
+  print >> log.v1, "Dump prioris to", priori_fn
+  numpy.savetxt(priori_fn, priori)
+  print >> log.v1, "Dump mean to", mean_fn
+  numpy.savetxt(mean_fn, mean)
+  print >> log.v1, "Dump var to", var_fn
+  numpy.savetxt(var_fn, var)
+  print >> log.v1, "Done."
 
 
 def main(argv):

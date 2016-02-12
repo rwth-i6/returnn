@@ -476,6 +476,38 @@ def uniq(seq):
   return seq[idx]
 
 
+_have_inplace_increment = None
+_native_inplace_increment = None
+
+def inplace_increment(x, idx, y):
+  """
+  This basically does `x[idx] += y`.
+  The difference to the Numpy version is that in case some index is there multiple
+  times, it will only be incremented once (and it is not specified which one).
+  See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
+  """
+  global _have_inplace_increment, inplace_increment, _native_inplace_increment
+  if _have_inplace_increment is None:
+    native_inpl_incr = None
+    import theano
+    if theano.config.cxx:
+      import theano.gof.cutils  # needed to import cutils_ext
+      try:
+        from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr
+      except ImportError:
+        pass
+    if native_inpl_incr:
+      _have_inplace_increment = True
+      _native_inplace_increment = native_inpl_incr
+      inplace_increment = native_inpl_incr  # replace myself
+      return inplace_increment(x, idx, y)
+    _have_inplace_increment = False
+  if _have_inplace_increment is True:
+    return _native_inplace_increment(x, idx, y)
+  raise NotImplementedError("need Numpy 1.8 or later")
+
+
+
 def parse_orthography_into_symbols(orthography, upper_case_special=True):
   """
   For Speech.
