@@ -1008,7 +1008,7 @@ class AttentionGlimpse(AttentionBase):
     n_tmp = self.layer.attrs['attention_template']
     n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimesi" in self.layer.attrs else 1
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
-    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + (n_tmp if n_glm > 1 else 0), n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + self.n_in, n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
     values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
     self.b_att_re = self.add_param(theano.shared(value=values, borrow=True, name="b_att_re"))
@@ -1017,7 +1017,7 @@ class AttentionGlimpse(AttentionBase):
     if self.layer.attrs['attention_template'] > 0:
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.n_in, n_tmp)), dtype=theano.config.floatX)
       self.W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs"))
-      values = numpy.zeros((n_tmp,),dtype='float32')
+      values = numpy.zeros((n_tmp,), dtype='float32')
       self.b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs"))
       self.C = T.tanh(T.dot(self.B, self.W_att_bs) + self.b_att_bs)
       if 'attention_distance' in self.layer.attrs and self.layer.attrs['attention_distance'] == 'cos':
@@ -1035,151 +1035,39 @@ class AttentionGlimpse(AttentionBase):
       n_in = n_tmp
     else:
       n_in = self.n_in
-    self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
+    #self.w = self.add_state_var(T.zeros((self.B.shape[0],self.B.shape[1]), dtype="float32"), name="w")
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
-    self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in'))
-    if self.layer.attrs['attention_beam'] >= 0:
-      self.beam = self.add_var(theano.shared(numpy.cast['float32'](self.layer.attrs['attention_beam']), name="beam"))
-      self.loc = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'loc')
-      self.frac = self.add_input(T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'frac')
-    if self.layer.attrs['attention_lm'] != "none":
-      self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
-      self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
-      self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
-      self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
-      y = self.layer.y_in[self.layer.attrs['target']].flatten()
-      eos = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
-      if self.layer.attrs['direction'] == 1:
-        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
-        self.cls = T.concatenate([eos, y_t], axis=0)
-      else:
-        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-        self.cls = T.concatenate([eos,y_t[::-1]], axis=0)
-      self.add_input(self.cls, 'cls')
+    self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in')) 
 
   def step(self, y_p):
     updates = {}
     base = self.C if self.layer.attrs['attention_template'] > 0 else self.B
     context = self.B
-    index = self.index
-    if self.layer.attrs['attention_beam'] >= 0:
-      if self.layer.attrs['attention_beam'] == 0:
-        focus_start = T.cast(T.clip(T.min(self.loc), 0, self.bounds - 1), 'int32')
-        focus_end = focus_start + 1
-      else:
-        focus_start = T.cast(T.clip(T.min(self.loc - self.beam), 0, T.max(self.bounds) - 2 * self.beam - 1), 'int32')
-        focus_end = focus_start + 2 * T.cast(self.beam, 'int32') + 1
-      #import theano.printing
-      #focus_start = theano.printing.Print("focus_start")(focus_start)
-      #focus_end = theano.printing.Print("focus_end")(focus_end)
-      if not self.layer.attrs['attention_mbeam']:
-        base = base[focus_start:focus_end]
-        context = context[focus_start:focus_end]
-        index = index[focus_start:focus_end]
-      else:
-        base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
-        context = multi_batch_beam(context, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
-        index = multi_batch_beam(index, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
+    index = self.index[:,:]
     n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimes" in self.layer.attrs else 1
-    def glimpse(xt, yp, W_re):
-      c = T.concatenate([xt,yp],axis=1)
-      h_p = T.tanh(T.dot(c, W_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
+    glimpse = T.zeros((context.shape[1],context.shape[2]), 'float32')
     dist = 'l2'
-    if 'attention_distance' in self.layer.attrs:
-      dist = self.layer.attrs['attention_distance']
-    #f_z = T.sum((self.B - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
-    if dist == 'l2':
-      f_z = T.sqrt(T.sum((base - h_p) ** 2, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)) # / self.sigma
-    elif dist == 'l1':
-      f_z = T.sum(abs(base - h_p), axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2) # / self.sigma
-    elif dist == 'dot': # use with template size <= 32
-      f_z = T.mean(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
-    elif dist == 'cos': # use with template size > 32
-      h_p = h_p / T.sqrt(T.sum(h_p**2,axis=2,keepdims=True))
-      f_z = T.sum(base * h_p, axis=2).dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
-    elif dist == 'rnn':
-      if self.layer.attrs['attention_beam'] >= 0:
-        updates[self.loc] = self.loc + self.frac
-      updates[self.w] = self.w
-      base = self.B
-      if self.layer.attrs['attention_beam'] >= 0:
-        if self.layer.attrs['attention_mbeam']:
-          base = base[focus_start:focus_end]
-        else:
-          base = multi_batch_beam(base, T.floor(self.loc), self.bounds, self.layer.attrs['attention_beam'], "wrap_around")
-      def attent(xt, yp, W_in, W_re):
-        return elu(T.dot(xt, W_in) + T.dot(yp, W_re))
-        #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
-      inp, _ = theano.scan(attent, sequences = base, outputs_info = [h_p[0]], non_sequences=[self.A_in,self.A_re])
-      #result = LSTMOpInstance(base, self.A_re, h_p[0], index[:,:,0])
-      #result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
-      #return [ result[0], result[2].dimshuffle('x',0,1) ]
-      #result = LSTMOp2Instance(*([A_re, outputs_info[1], b, index + [h_p[0]] + [A_in]))
-      return T.dot(inp[-1], self.W_att_in), updates
-      #return T.dot(result[0][-1], self.W_att_in), updates
-    else:
-      assert False, "invalid distance: %s" % dist
-    f_z = f_z * self.layer.attrs['attention_sharpening']
-    #f_z = -T.sqrt(T.sum(T.sqr(self.B - T.tanh(T.dot(y_p, self.W_att_re) + self.W_att_b).dimshuffle('x',0,1).repeat(self.B.shape[0],axis=0)), axis=2, keepdims=True)) / self.sigma
-    if self.layer.attrs['attention_norm'] == 'exp':
-      f_e = T.exp(-f_z) * index
-    elif self.layer.attrs['attention_norm'] == 'sigmoid':
-      f_e = T.nnet.sigmoid(f_z) * index
-    else:
-      assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
-    #f_e *= self.w[focus_start:focus_end].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2)
-    if self.layer.attrs['attention_nbest'] > 0:
-      nbest = T.minimum(self.layer.attrs['attention_nbest'], f_e.shape[0])
-      #prune_idx = T.argsort(f_e, axis=0)[:-nbest]
-      #f_e = T.set_subtensor(f_e[prune_idx], 0.0) # this freezes pycuda
-      prune_score = (T.sort(f_e, axis=0)[-nbest]).dimshuffle('x',0,1).repeat(f_e.shape[0],axis=0)
-      f_e = T.switch(T.lt(f_e,prune_score), T.zeros_like(f_e), f_e)
-    self.w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
-    #self.w_t = T.cast(T.argmax(self.w_t, axis=0, keepdims=True),'float32')
-    #import theano.printing
-    #self.w_t = theano.printing.Print("w_t")(self.w_t)
-    #delta = w_t[:,:,0] - self.w
-    #delta = theano.printing.Print("delta")(delta)
-    #updates[self.w] = self.w + delta
-    #w_t = T.extra_ops.to_one_hot(T.argmax(w_t[:,:,0],axis=0), self.B.shape[0], dtype='float32').dimshuffle(1,0,'x').repeat(self.B.shape[2],axis=2)
-    #return T.dot(self.B[T.argmax(w_t[:,:,0],axis=0)], self.W_att_in), updates
-    #return T.dot(T.sum(self.B * updates[self.w].dimshuffle(0,1,'x').repeat(self.B.shape[2],axis=2), axis=0, keepdims=False), self.W_att_in), updates
-    #return T.dot(T.sum(self.B * self.w_t, axis=0, keepdims=False), self.W_att_in), updates
-    if self.layer.attrs['attention_beam'] >= 0:
-      updates[self.w] = T.set_subtensor(T.zeros_like(self.w)[focus_start:focus_end], self.w_t[:,:,0])
-      #w_step = T.cast(T.argmax(self.w_t,axis=0)[:,0],'float32') - 0.5 * T.cast(focus_end - focus_start, 'float32')
-      #frac = T.cast(T.sum(self.layer.base[0].index,axis=0), 'float32') / T.cast(T.sum(self.layer.index,axis=0), 'float32')
-      #updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(focus_end - focus_start, dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) + self.frac
-      if self.layer.attrs['attention_step'] == 'focus':
-        updates[self.loc] = T.cast(focus_start,'float32') + T.sum(self.w_t[:,:,0] * T.arange(self.w_t.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0)
-      elif self.layer.attrs['attention_step'] == 'linear':
-        updates[self.loc] = self.loc + self.frac
-      elif self.layer.attrs['attention_step'] == 'warped':
-        updates[self.loc] = self.loc + self.frac + T.sum(self.w_t[:,:,0] * T.arange(self.w_t.shape[0], dtype='float32').dimshuffle(0,'x').repeat(self.w_t.shape[1],axis=1), axis=0) - 0.5 * T.cast(self.w_t.shape[0], 'float32')
+      if 'attention_distance' in self.layer.attrs:
+        dist = self.layer.attrs['attention_distance']
+    for glm in xrange(n_glm):
+      c = T.concatenate([y_p,glimpse],axis=1)
+      h_p = T.tanh(T.dot(c, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
+      if dist == 'l2':
+        f_z = T.sqrt(T.sum((base - h_p) ** 2, axis=2, keepdims=False))
       else:
-        assert False, "unknown attention step: %s" % self.layer.attrs['attention_step']
-    else:
-      updates[self.w] = self.w_t[:,:,0]
-    result = T.dot(T.sum(context * self.w_t, axis=0, keepdims=False), self.W_att_in) + self.b_att_in
-    if self.layer.attrs['attention_lm'] != "none":
-      #h_e = T.exp(T.dot(y_p, self.W_lm_in))
-      #p_re = h_e / (T.sum(h_e,axis=1,keepdims=True))
-      p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in))
-      if self.layer.attrs['droplm'] < 1.0:
-        mask = self.lmmask[T.cast(self.t[0],'int32')]
-        if self.layer.attrs['attention_lm'] == "hard":
-          result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
-        else:
-          result += T.dot(p_re,self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+        assert False, "invalid distance: %s" % dist
+      f_z = f_z * self.layer.attrs['attention_sharpening']
+      if self.layer.attrs['attention_norm'] == 'exp':
+        f_e = T.exp(-f_z) #* index
+      elif self.layer.attrs['attention_norm'] == 'sigmoid':
+        f_e = T.nnet.sigmoid(f_z) #* index
       else:
-        if self.layer.attrs['attention_lm'] == "hard":
-          result += self.W_lm_out[T.argmax(p_re, axis=1)]
-        else:
-          result += T.dot(p_re,self.W_lm_out)
-      updates[self.t] = self.t + 1
-    return result, updates
+        assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
+      w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
+      glimpse = T.sum(context * w_t.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2), axis=0, keepdims=False)
+    return T.dot(glimpse, self.W_att_in) + self.b_att_in
 
 
 class AttentionLinear(AttentionBase):

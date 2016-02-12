@@ -302,6 +302,7 @@ class RecurrentUnitLayer(Layer):
                attention_mbeam = False,
                attention_nbest = 0,
                attention_treebase = False,
+               attention_glimpse = 1,
                attention_lm = 'none',
                base = None,
                lm = False, # language model
@@ -356,6 +357,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_nbest', attention_nbest)
     self.set_attr('attention_mbeam', attention_mbeam)
     self.set_attr('attention_treebase', attention_treebase)
+    self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
