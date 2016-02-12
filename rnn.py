@@ -416,9 +416,9 @@ def analyze_data(config):
   assert not ds.is_data_sparse(data_key), "needed for mean/var estimation"
   from Util import inplace_increment, progress_bar_with_time, NumbersDict
 
-  priori = numpy.zeros((ds.num_outputs[target][0],), dtype=dtype)
-  mean = numpy.zeros((ds.num_outputs[data_key][0],), dtype=dtype)
-  mean_sq = numpy.zeros((ds.num_outputs[data_key][0],), dtype=dtype)
+  priori = numpy.zeros((ds.get_data_dim(target),), dtype=dtype)
+  mean = numpy.zeros((ds.get_data_dim(data_key),), dtype=dtype)
+  mean_sq = numpy.zeros((ds.get_data_dim(data_key),), dtype=dtype)
   total_targets_len = 0
   total_data_len = 0
 
@@ -426,10 +426,10 @@ def analyze_data(config):
   while ds.is_less_than_num_seqs(seq_idx):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))
     ds.load_seqs(seq_idx, seq_idx + 1)
-    targets = ds.get_data(target, seq_idx)
+    targets = ds.get_data(seq_idx, target)
     inplace_increment(priori, targets, 1)
     total_targets_len += targets.shape[0]
-    data = ds.get_data(data_key, seq_idx)
+    data = ds.get_data(seq_idx, data_key)
     new_total_data_len = total_data_len + data.shape[0]
     f = float(total_data_len) / new_total_data_len
     mean = mean * f + numpy.sum(data, axis=0) * (1.0 - f)
