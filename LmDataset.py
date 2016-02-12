@@ -88,6 +88,7 @@ class LmDataset(CachedDataset2):
     self.seq_order = self.get_seq_order_for_epoch(
       epoch=epoch, num_seqs=len(self.orths_epoch), get_seq_len=lambda i: len(self.orths_epoch[i]))
     self.next_orth_idx = 0
+    self.next_seq_idx = 0
     self.num_skipped = 0
     self._num_timesteps_accumulated = NumbersDict(0)
     if self.seq_gen:
@@ -102,7 +103,9 @@ class LmDataset(CachedDataset2):
     """
     while True:
       if self.next_orth_idx >= len(self.orths_epoch):
+        assert self.next_seq_idx <= seq_idx, "We expect that we iterate through all seqs."
         return None
+      assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
       orth = self.orths_epoch[self.seq_order[self.next_orth_idx]]
       self.next_orth_idx += 1
       if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
@@ -145,6 +148,7 @@ class LmDataset(CachedDataset2):
         phones = self.seq_gen.generate_garbage_seq(target_len=data.shape[0])
         targets["random%i" % i] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
       self._num_timesteps_accumulated += data.shape[0]
+      self.next_seq_idx = seq_idx + 1
       return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
 
 
