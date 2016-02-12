@@ -197,14 +197,14 @@ class Device(object):
     elif self.name[-1] == 'Z':
       self.name = self.name[:-1] + 'X'
     # Set device via flags.
-    if self.name == "cpuX":
+    if self.name[0:3] == "cpu":
       theano_flags["device"] = "cpu"
     elif self.name == "gpuX":
       theano_flags["device"] = "gpu"
     else:
       theano_flags["device"] = self.name
     theano_flags["force_device"] = True
-    env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])}
+    env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in sorted(theano_flags.items())])}
     self.proc = AsyncTask(
       func=self.process,
       name="Device %s proc" % self.name,
@@ -219,7 +219,8 @@ class Device(object):
       self.num_train_params = self.output_queue.recv(); """ :type: int """  # = len(trainnet.gparams)
       self.sync_used_targets()
     except ProcConnectionDied as e:
-      print >>log.v3, "Device proc died:", e
+      print >>log.v3, "Device proc %s (%s) died: %r" % (self.name, device_tag, e)
+      print >>log.v5, "Theano flags:", env_update["THEANO_FLAGS"]
       interrupt_main()
     self.attributes = get_device_attributes()[self.device_name]
     self.name = device_tag[0:3] + str(self.id)
