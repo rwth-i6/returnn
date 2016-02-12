@@ -1039,20 +1039,20 @@ class AttentionGlimpse(AttentionBase):
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
-    self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in')) 
+    self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in'))
 
   def step(self, y_p):
     updates = {}
     base = self.C if self.layer.attrs['attention_template'] > 0 else self.B
     context = self.B
-    index = self.index[:,:]
+    index = self.index[:,:,0]
     n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimes" in self.layer.attrs else 1
-    glimpse = T.zeros((context.shape[1],context.shape[2]), 'float32')
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
+    glimpses = [T.zeros((context.shape[1],context.shape[2]), 'float32')]
     for glm in xrange(n_glm):
-      c = T.concatenate([y_p,glimpse],axis=1)
+      c = T.concatenate([y_p,glimpses[-1]],axis=1)
       h_p = T.tanh(T.dot(c, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
       if dist == 'l2':
         f_z = T.sqrt(T.sum((base - h_p) ** 2, axis=2, keepdims=False))
@@ -1066,8 +1066,8 @@ class AttentionGlimpse(AttentionBase):
       else:
         assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
       w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
-      glimpse = T.sum(context * w_t.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2), axis=0, keepdims=False)
-    return T.dot(glimpse, self.W_att_in) + self.b_att_in
+      glimpses.append(T.sum(context * w_t.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2), axis=0, keepdims=False))
+    return T.dot(glimpses[-1], self.W_att_in) + self.b_att_in, updates
 
 
 class AttentionLinear(AttentionBase):
