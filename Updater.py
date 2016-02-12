@@ -5,6 +5,7 @@ import os
 from Log import log
 from math import sqrt
 from theano.compat.python2x import OrderedDict
+import theano.tensor.shared_randomstreams
 import theano.tensor as T
 import theano.ifelse
 import theano.compile
@@ -267,6 +268,7 @@ class Updater:
     i_t = self.i + dt #1.
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
+    srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
     for param in grads.keys():
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
@@ -276,7 +278,7 @@ class Updater:
         nu = self.gradient_noise # try 0.01 0.3 1.0
         gamma = 0.55
         sigma = nu / (1 + i_t)**gamma
-        deltas += self.rng.normal(size=(1,), avg=0.0, std=sigma)
+        deltas += srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
