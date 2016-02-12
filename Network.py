@@ -40,11 +40,13 @@ class LayerNetwork(object):
       self.y = {"data": self.x}
       self.i = T.bmatrix('i'); """ :type: theano.Variable """
       self.j = {"data": self.i}
+      self.epoch = T.constant(0, name="epoch", dtype="int32")
     else:
       self.x = base_network.x
       self.y = base_network.y
       self.i = base_network.i
       self.j = base_network.j
+      self.epoch = base_network.epoch
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -70,7 +72,6 @@ class LayerNetwork(object):
     self.calc_step_base = None
     self.calc_steps = []
     self.base_network = base_network
-    self.epoch = None
 
   @classmethod
   def from_config_topology(cls, config, mask=None, train_flag = False):
@@ -702,7 +703,3 @@ class LayerNetwork(object):
     epoch = cls.epoch_from_hdf_model(model)
     model.close()
     return epoch
-
-  def get_epoch(self):
-    if self.base_network: return self.base_network.get_epoch()
-    return self.epoch

@@ -423,8 +423,6 @@ class Engine:
       print >> log.v5, "execute init_train_epoch_posthook:", self.init_train_epoch_posthook
       exec self.init_train_epoch_posthook
 
-    self.network.epoch = epoch
-
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
 
