@@ -92,6 +92,7 @@ class LmDataset(CachedDataset2):
     self._num_timesteps_accumulated = NumbersDict(0)
     if self.seq_gen:
       self.seq_gen.random_seed(epoch)
+    return True
 
   def _collect_single_seq(self, seq_idx):
     """
