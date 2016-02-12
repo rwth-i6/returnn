@@ -1003,10 +1003,10 @@ class AttentionGlimpse(AttentionBase):
   name = "attention_glimpse"
 
   def create_vars(self):
-    super(AttentionTemplate, self).create_vars()
+    super(AttentionGlimpse, self).create_vars()
     assert 'attention_template' in self.layer.attrs
     n_tmp = self.layer.attrs['attention_template']
-    n_glm = self.layer.attrs['attention_glimpse'] if attention_glimesin self.layer.attrs else 1
+    n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimesi" in self.layer.attrs else 1
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + (n_tmp if n_glm > 1 else 0), n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
