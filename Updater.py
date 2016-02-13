@@ -56,6 +56,7 @@ class Updater:
                adamax=False,
                adamvr=False, # adam with adasecant variance reduction
                nadam=False, # Adam with nag part momentum
+               nadam_decay=0.004, # Magical 250.0 denominator in nesterov scaling of i_t
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -79,6 +80,7 @@ class Updater:
     self.adasecant = adasecant
     self.adamvr = adamvr
     self.nadam = nadam
+    self.nadam_decay = nadam_decay
     self.adam = adam
     self.adamdelta = adamdelta
     self.adam_fit_learning_rate = adam_fit_learning_rate
@@ -485,8 +487,8 @@ class Updater:
         v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
         self.adam_offset = numpy.float32(1e-8)
 
-        mt = (beta1 * ( 1 - 0.5 * 0.96**( i_t/ (1.0*250) ) )) # momentum scedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) / (1.0*250) ) ) # for simplified NAG
+        mt = (beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) )) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ) # for simplified NAG
 
         m_cache_new = m_cache * mt
         bias_corr = m_cache_new * mtnext
