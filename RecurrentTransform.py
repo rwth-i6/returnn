@@ -1006,7 +1006,6 @@ class AttentionGlimpse(AttentionBase):
     super(AttentionGlimpse, self).create_vars()
     assert 'attention_template' in self.layer.attrs
     n_tmp = self.layer.attrs['attention_template']
-    n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimesi" in self.layer.attrs else 1
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + self.n_in, n_tmp if n_tmp > 0 else self.n_in)), dtype=theano.config.floatX)
     self.W_att_re = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re"))
@@ -1046,7 +1045,7 @@ class AttentionGlimpse(AttentionBase):
     base = self.C if self.layer.attrs['attention_template'] > 0 else self.B
     context = self.B
     index = self.index[:,:,0]
-    n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimes" in self.layer.attrs else 1
+    n_glm = self.layer.attrs['attention_glimpse'] if "attention_glimpse" in self.layer.attrs else 1
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
@@ -1060,9 +1059,9 @@ class AttentionGlimpse(AttentionBase):
         assert False, "invalid distance: %s" % dist
       f_z = f_z * self.layer.attrs['attention_sharpening']
       if self.layer.attrs['attention_norm'] == 'exp':
-        f_e = T.exp(-f_z) #* index
+        f_e = T.exp(-f_z) * index
       elif self.layer.attrs['attention_norm'] == 'sigmoid':
-        f_e = T.nnet.sigmoid(f_z) #* index
+        f_e = T.nnet.sigmoid(f_z) * index
       else:
         assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
       w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
