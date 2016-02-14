@@ -689,10 +689,10 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     residual = z.shape[0] % chunk_size
     padding = T.neq(residual,0) * (chunk_size - residual)
 
-    #calloc = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0] + padding, z.shape[1], z.shape[2])
-    #container = T.set_subtensor(
-    #  calloc[:z.shape[0]],
-    #  z).dimshuffle('x',0,1,2).reshape((chunk_size,calloc.shape[0] / chunk_size,calloc.shape[1],calloc.shape[2])) # CTBD
+    calloc = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0] + padding, z.shape[1], z.shape[2])
+    container = T.set_subtensor(
+      calloc[:z.shape[0]],
+      z).dimshuffle('x',0,1,2).reshape((chunk_size,calloc.shape[0] / chunk_size,calloc.shape[1],calloc.shape[2])) # CTBD
     z = T.concatenate([z,T.zeros((padding,z.shape[1],z.shape[2]), 'float32')], axis=0).dimshuffle('x',0,1,2).reshape((chunk_size,(z.shape[0] + padding) / chunk_size,z.shape[1],z.shape[2]))
     #ialloc = T.alloc(numpy.cast['int32'](1), z.shape[1], self.index.shape[1])
     self.index = T.set_subtensor(T.ones((z.shape[1]*z.shape[0],z.shape[2]),'int8')[:self.index.shape[0]],self.index)[::chunk_size]
@@ -701,13 +701,45 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
       output = z.dimshuffle(1,2,3,0).reshape((z.shape[1], z.shape[2], z.shape[3] * chunk_size))
     elif method == 'average':
       output = z.mean(axis=0)
-    elif method == 'lstm':
-      xin = container.dimshuffle(1,0,2,3).reshape((container.shape[1],container.shape[2] * chunk_size,container.shape[3]))
-      xout = xin
-      output = output.reshape
-
     self.make_output(output)
 
+
+class LengthLayer(HiddenLayer):
+  layer_class = "length"
+  def __init__(self, eos=-1, sos=-2, **kwargs):
+    target = kwargs['target'] if 'target' in kwargs else 'classes'
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(LengthLayer, self).__init__(**kwargs)
+    if eos < 0:
+      eos += self.y_in[target].n_out
+    if sos < 0:
+      sos += self.y_in[target].n_out
+    z = self.get_linear_forward_output()
+    y_m = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+
+    if self.train_flag:
+      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
+      sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[eos_p], y_idx=self.y_in[target][eos_p])
+      self.constraints += T.sum(nll)
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[sos_p], y_idx=self.y_in[target][sos_p])
+      self.constraints += T.sum(nll)
+      length = z.shape[0] #T.zeros((z.shape[1],),'int32') + T.cast(z.shape[0], 'int32')
+    else:
+      pcx = T.nnet.softmax(y_m).reshape(z.shape)
+      length = T.argmax(pcx[:,:,sos] + pcx[:,:,eos],axis=0)
+      length = T.max(length)
+      self.index = T.set_subtensor(self.index[length:], 0)
+
+    assert len(self.sources) == 2
+    fw_z = self.sources[0].output
+    fw = T.inc_subtensor(T.zeros_like(fw_z)[:length], fw_z[:length])
+    bw = T.inc_subtensor(T.zeros_like(self.sources[1].output)[:length], self.sources[1].output[z.shape[0]-length:])
+    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
+    self.output = T.concatenate([fw,bw], axis=2)
+
+  def cost(self):
+    return self.constraints, None
 
 class TruncationLayer(Layer):
   layer_class = "trunc"

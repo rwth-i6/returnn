@@ -1049,7 +1049,7 @@ class AttentionGlimpse(AttentionBase):
     dist = 'l2'
     if 'attention_distance' in self.layer.attrs:
       dist = self.layer.attrs['attention_distance']
-    glimpses = [T.zeros((context.shape[1],context.shape[2]), 'float32')]
+    glimpses = [context[0]]
     for glm in xrange(n_glm):
       c = T.concatenate([y_p,glimpses[-1]],axis=1)
       h_p = T.tanh(T.dot(c, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
