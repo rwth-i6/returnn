@@ -9,6 +9,7 @@ from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
+from Log import log
 
 
 class HiddenLayer(Layer):
@@ -399,13 +400,14 @@ class CalcStepLayer(_NoOpLayer):
 class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
 
-  def __init__(self, n_out, network, data_map=None, **kwargs):
+  def __init__(self, n_out, network, load, data_map=None, **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
     :param list[str] data_map: maps the sources (from) of the layer to data input.
       the list should be as long as the sources.
       default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param str load: load string. filename but can have placeholders via str.format
     For now, the subnetwork will not be trainable. We can easily add that later, i.e. expose all params.
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
@@ -413,6 +415,7 @@ class SubnetworkLayer(_NoOpLayer):
     if isinstance(network, (str, unicode)):
       network = json.loads(network)
     self.set_attr("network", network)
+    self.set_attr("load", load)
     if isinstance(data_map, (str, unicode)):
       data_map = json.loads(data_map)
     if data_map:
@@ -428,8 +431,18 @@ class SubnetworkLayer(_NoOpLayer):
       sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
       data_map_d[k] = s.output
       data_map_di[k] = s.index
+    print >>log.v2, "New subnetwork", self.name, "with data", {k: self.sources[k].name for k in data_map}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=network, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    from Config import get_global_config
+    config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+    model_filename = load % {"self": self,
+                             "global_config_load": config.value("load", None),
+                             "global_config_epoch": config.int("epoch", None)}
+    print >>log.v2, "loading subnetwork weights from", model_filename
+    import h5py
+    model_hdf = h5py.File(model_filename, "r")
+    self.subnetwork.load_hdf(model_hdf)
     self.output = self.subnetwork.output["output"].output
 
 
