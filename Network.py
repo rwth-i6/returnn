@@ -229,7 +229,7 @@ class LayerNetwork(object):
   def new_subnetwork(self, json_content, n_out, data_map, data_map_i):
     """
     :param dict[str,dict] json_content: subnetwork specification
-    :param dict[str,(int,int)] n_out: n_out info for subnetwork
+    :param dict[str,list[int,int]] n_out: n_out info for subnetwork
     :param dict[str,theano.Variable] data_map: data
     :param dict[str,theano.Variable] data_map_i: indices for data
     :rtype: LayerNetwork
@@ -529,6 +529,8 @@ class LayerNetwork(object):
         self.y[target] = self.base_network.y[target]
       if not self.j is self.base_network.j:
         self.j[target] = self.base_network.j[target]
+      if target not in self.n_out:
+        self.n_out[target] = self.base_network.n_out[target]
       return
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim

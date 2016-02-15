@@ -400,7 +400,7 @@ class CalcStepLayer(_NoOpLayer):
 class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
 
-  def __init__(self, n_out, network, load, data_map=None, **kwargs):
+  def __init__(self, n_out, subnetwork, load, data_map=None, **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
@@ -412,9 +412,9 @@ class SubnetworkLayer(_NoOpLayer):
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    if isinstance(network, (str, unicode)):
-      network = json.loads(network)
-    self.set_attr("network", network)
+    if isinstance(subnetwork, (str, unicode)):
+      subnetwork = json.loads(subnetwork)
+    self.set_attr("subnetwork", subnetwork)
     self.set_attr("load", load)
     if isinstance(data_map, (str, unicode)):
       data_map = json.loads(data_map)
@@ -424,16 +424,16 @@ class SubnetworkLayer(_NoOpLayer):
       data_map = ["data"]
     assert isinstance(data_map, list)
     assert len(data_map) == len(self.sources)
-    sub_n_out = {}
+    sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
     data_map_d = {}
-    data_map_di = {}
+    data_map_di = {"classes": self.index}
     for k, s in zip(data_map, self.sources):
       sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
       data_map_d[k] = s.output
       data_map_di[k] = s.index
-    print >>log.v2, "New subnetwork", self.name, "with data", {k: self.sources[k].name for k in data_map}, sub_n_out
+    print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
-      json_content=network, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+      json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
     from Config import get_global_config
     config = get_global_config()  # this is a bit hacky but works fine in all my cases...
     model_filename = load % {"self": self,
