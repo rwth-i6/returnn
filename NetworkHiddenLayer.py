@@ -468,6 +468,41 @@ class ConstantLayer(_NoOpLayer):
     self.make_output(value)
 
 
+class AddZeroRowsLayer(_NoOpLayer):
+  layer_class = "add_zero_rows"
+
+  def __init__(self, row_index, number=1, **kwargs):
+    super(AddZeroRowsLayer, self).__init__(**kwargs)
+    z, n_out = concat_sources(self.sources, unsparse=True)
+    assert 0 <= row_index <= n_out
+    n_out += number
+    self.set_attr("n_out", n_out)
+    self.set_attr("row_index", row_index)
+    self.set_attr("number", number)
+    self.output = T.concatenate(
+      [z[:, :, :row_index],
+       T.zeros((z.shape[0], z.shape[1], number), dtype=z.dtype),
+       z[:, :, row_index:]],
+      axis=2)
+
+
+class RemoveRowsLayer(_NoOpLayer):
+  layer_class = "remove_rows"
+
+  def __init__(self, row_index, number=1, **kwargs):
+    super(RemoveRowsLayer, self).__init__(**kwargs)
+    z, n_out = concat_sources(self.sources, unsparse=True)
+    assert 0 <= row_index + number <= n_out
+    n_out -= number
+    self.set_attr("n_out", n_out)
+    self.set_attr("row_index", row_index)
+    self.set_attr("number", number)
+    self.output = T.concatenate(
+      [z[:, :, :row_index],
+       z[:, :, row_index + number:]],
+      axis=2)
+
+
 class BinOpLayer(_NoOpLayer):
   layer_class = "bin_op"
 
