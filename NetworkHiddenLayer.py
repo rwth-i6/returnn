@@ -438,7 +438,7 @@ class SubnetworkLayer(_NoOpLayer):
     config = get_global_config()  # this is a bit hacky but works fine in all my cases...
     model_filename = load % {"self": self,
                              "global_config_load": config.value("load", None),
-                             "global_config_epoch": config.int("epoch", None)}
+                             "global_config_epoch": config.int("epoch", 0)}
     print >>log.v2, "loading subnetwork weights from", model_filename
     import h5py
     model_hdf = h5py.File(model_filename, "r")
