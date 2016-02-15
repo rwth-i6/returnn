@@ -288,7 +288,7 @@ class Device(object):
     if self.trainnet.loss in ('ctc','ce_ctc'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
-    if self.network_task == 'train' or self.network_task == 'theano_graph':
+    if self.network_task in ['train', 'theano_graph']:
       gparams = []
       exclude = []
       self.gradients = {}; ":type: dict[theano.SharedVariable,theano.Variable]"
@@ -329,7 +329,7 @@ class Device(object):
     self.block_end = T.lscalar()
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
 
-    if self.network_task == 'train' or self.network_task == 'theano_graph':
+    if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
@@ -382,6 +382,19 @@ class Device(object):
                                        on_unused_input='warn',
                                        name="train_distributed")
 
+      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
+      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
+      test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
+      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
+      self.tester = theano.function(inputs=[self.block_start, self.block_end],
+                                    outputs=test_outputs,
+                                    givens=test_givens,
+                                    on_unused_input='warn',
+                                    no_default_updates=True,
+                                    name="tester")
+
+    elif self.network_task == "eval":
+      test_givens = self.make_givens(self.testnet)
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
       test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]

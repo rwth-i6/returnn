@@ -356,6 +356,12 @@ def executeMainTask():
     assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.train()
+  elif task == "eval":
+    engine.init_train_from_config(config, train_data, dev_data, eval_data)
+    engine.epoch = config.int("epoch", None)
+    assert engine.epoch
+    print >> log.v4, "Evaluate epoch", engine.epoch
+    engine.eval_model()
   elif task == 'forward':
     assert eval_data is not None, 'no eval data provided'
     assert config.has('output_file'), 'no output file provided'

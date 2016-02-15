@@ -79,8 +79,8 @@ class Container(object):
     if grp_class == "<unknown_softmax>": grp_class = "softmax"  # bug in some CRNN version. can be ignored.
     if grp_class != self.layer_class:
       from NetworkLayer import get_layer_class
-      assert get_layer_class(grp_class) is get_layer_class(self.layer_class), \
-        "invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+      if not get_layer_class(grp_class, raise_exception=False) is get_layer_class(self.layer_class):
+        print >>log.v3, "warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
     for p in self.params:
       if p not in grp:
         print >> log.v4, "unable to load parameter %s in %s" % (p, self.name)
@@ -151,6 +151,12 @@ class Container(object):
     return param
 
   def set_attr(self, name, value):
+    """
+    :param str name: key name
+    :param bool|int|float|str|list|dict value: value
+    This will be stored in to_json() and save() (in HDF).
+    More complex types like list or dict will be encoded as a JSON-str when saved to HDF.
+    """
     self.attrs[name] = value
 
   def create_bias(self, n, prefix='b', name=""):

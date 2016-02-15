@@ -155,14 +155,14 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   else:
     assert False, "unknown action: %r" % action
 
-  initBase(targetMode=targetMode, configfile=configfile)
+  initBase(targetMode=targetMode, configfile=configfile, epoch=epoch)
   sprintDataset.setDimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
   if Task == "train":
     startTrainThread(epoch)
   elif Task == "forward":
-    prepareForwarding(epoch)
+    prepareForwarding()
 
   global startTime
   startTime = time.time()
@@ -292,7 +292,7 @@ def setTargetMode(mode):
   config.set("task", task)
 
 
-def initBase(configfile=None, targetMode=None):
+def initBase(configfile=None, targetMode=None, epoch=None):
   """
   :type configfile: str | None
   """
@@ -317,6 +317,15 @@ def initBase(configfile=None, targetMode=None):
     setTargetMode(targetMode)
 
   initDataset()
+
+  if targetMode and targetMode == "forward" and epoch:
+    model_filename = config.value('model', '')
+    fns = [Engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
+    fns_existing = [fn for fn in fns if os.path.exists(fn)]
+    assert len(fns_existing) == 1, "%s not found" % fns
+    model_epoch_filename = fns_existing[0]
+    config.set('load', model_epoch_filename)
+    assert Engine.get_epoch_model(config)[1] == model_epoch_filename
 
   global engine
   if not engine:
@@ -373,21 +382,12 @@ def startTrainThread(epoch=None):
   isTrainThreadStarted = True
 
 
-def prepareForwarding(epoch):
+def prepareForwarding():
   assert engine
   assert config
   # Should already be set via setTargetMode().
   assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
                                                    "You have: %s" % config.list('extract')
-
-  if epoch:
-    model_filename = config.value('model', '')
-    fns = [engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
-    fns_existing = [fn for fn in fns if os.path.exists(fn)]
-    assert len(fns_existing) == 1, "%s not found" % fns
-    model_epoch_filename = fns_existing[0]
-    config.set('load', model_epoch_filename)
-    assert engine.get_epoch_model(config)[1] == model_epoch_filename
 
   # Load network.
   engine.init_network_from_config(config)

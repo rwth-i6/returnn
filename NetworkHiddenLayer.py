@@ -9,6 +9,7 @@ from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
+from Log import log
 
 
 class HiddenLayer(Layer):
@@ -396,6 +397,56 @@ class CalcStepLayer(_NoOpLayer):
       self.output = prev_layer.output
 
 
+class SubnetworkLayer(_NoOpLayer):
+  layer_class = "subnetwork"
+
+  def __init__(self, n_out, subnetwork, load, data_map=None, **kwargs):
+    """
+    :param int n_out: output dimension of output layer
+    :param dict[str,dict] network: subnetwork as dict (JSON content)
+    :param list[str] data_map: maps the sources (from) of the layer to data input.
+      the list should be as long as the sources.
+      default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param str load: load string. filename but can have placeholders via str.format
+    For now, the subnetwork will not be trainable. We can easily add that later, i.e. expose all params.
+    """
+    super(SubnetworkLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(subnetwork, (str, unicode)):
+      subnetwork = json.loads(subnetwork)
+    self.set_attr("subnetwork", subnetwork)
+    self.set_attr("load", load)
+    if isinstance(data_map, (str, unicode)):
+      data_map = json.loads(data_map)
+    if data_map:
+      self.set_attr("data_map", data_map)
+    if not data_map:
+      data_map = ["data"]
+    assert isinstance(data_map, list)
+    assert len(data_map) == len(self.sources)
+    sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+    data_map_d = {}
+    data_map_di = {"classes": self.index}
+    for k, s in zip(data_map, self.sources):
+      sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+      data_map_d[k] = s.output
+      data_map_di[k] = s.index
+    print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
+    self.subnetwork = self.network.new_subnetwork(
+      json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    from Config import get_global_config
+    config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+    model_filename = load % {"self": self,
+                             "global_config_load": config.value("load", None),
+                             "global_config_epoch": config.int("epoch", 0)}
+    print >>log.v2, "loading subnetwork weights from", model_filename
+    import h5py
+    model_hdf = h5py.File(model_filename, "r")
+    self.subnetwork.load_hdf(model_hdf)
+    print >>log.v2, "done loading subnetwork weights for", self.name
+    self.output = self.subnetwork.output["output"].output
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 
@@ -416,6 +467,41 @@ class ConstantLayer(_NoOpLayer):
     shape = [source.output.shape[0], source.output.shape[1], n_out]
     value += T.zeros(shape, dtype=dtype)  # so we have the same shape as the source output
     self.make_output(value)
+
+
+class AddZeroRowsLayer(_NoOpLayer):
+  layer_class = "add_zero_rows"
+
+  def __init__(self, row_index, number=1, **kwargs):
+    super(AddZeroRowsLayer, self).__init__(**kwargs)
+    z, n_out = concat_sources(self.sources, unsparse=True)
+    assert 0 <= row_index <= n_out
+    n_out += number
+    self.set_attr("n_out", n_out)
+    self.set_attr("row_index", row_index)
+    self.set_attr("number", number)
+    self.output = T.concatenate(
+      [z[:, :, :row_index],
+       T.zeros((z.shape[0], z.shape[1], number), dtype=z.dtype),
+       z[:, :, row_index:]],
+      axis=2)
+
+
+class RemoveRowsLayer(_NoOpLayer):
+  layer_class = "remove_rows"
+
+  def __init__(self, row_index, number=1, **kwargs):
+    super(RemoveRowsLayer, self).__init__(**kwargs)
+    z, n_out = concat_sources(self.sources, unsparse=True)
+    assert 0 <= row_index + number <= n_out
+    n_out -= number
+    self.set_attr("n_out", n_out)
+    self.set_attr("row_index", row_index)
+    self.set_attr("number", number)
+    self.output = T.concatenate(
+      [z[:, :, :row_index],
+       z[:, :, row_index + number:]],
+      axis=2)
 
 
 class BinOpLayer(_NoOpLayer):
