@@ -803,35 +803,28 @@ class LengthLayer(HiddenLayer):
 
     assert len(self.sources) == 2
 
-    z_fw = T.dot(self.W_in[0], sources[0].output)
-    z_bw = T.dot(self.W_in[1], sources[1].output)
-    y_fw = z.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
-    y_bw = z.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
+    z_fw = T.dot(self.sources[0].output, self.W_in[0])
+    z_bw = T.dot(self.sources[1].output, self.W_in[1])
+    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
+    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
 
-    if self.train_flag:
-      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
-      sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos += T.sum(nll)
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-      self.cost_sos += T.sum(nll)
-      length = z_fw.shape[0] #T.zeros((z.shape[1],),'int32') + T.cast(z.shape[0], 'int32')
-    else:
-      pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
-      pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)
-      length = T.argmax(pcx_fw[:,:,sos] + pcx_bw[:,:,eos],axis=0)
-      length = T.max(length)
-      self.index = T.set_subtensor(self.index[length:], 0)
-      self.cost_eos = 0
-      self.cost_sos = 0
+    eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
+    sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
+    nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
+    self.cost_eos = T.sum(nll)
+    nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
+    self.cost_sos = T.sum(nll)
 
-    assert len(self.sources) == 2
-    fw_z = self.sources[0].output
-    bw_z = self.sources[1].output
-    fw = T.inc_subtensor(T.zeros_like(fw_z)[:length], fw_z[:length])
-    bw = T.inc_subtensor(T.zeros_like(bw_z)[:length], bw_z[z_bw.shape[0]-length:])
+    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
+    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
+    length = T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos],axis=0)
+    length = T.maximum(T.minimum(T.max(length) + 1, z_fw.shape[0]), 2)
+
     self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
+    fw = self.sources[0].output[:length]
+    bw = self.sources[1].output[self.sources[1].output.shape[0]-length:]
     self.output = T.concatenate([fw,bw], axis=2)
+    self.length = length
 
   def cost(self):
     return self.cost_eos + self.cost_sos, None

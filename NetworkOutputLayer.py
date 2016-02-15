@@ -80,6 +80,19 @@ class OutputLayer(Layer):
       self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
       self.norm = nom / T.cast(T.sum(self.index),'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
+
+    if len(self.sources) == 1 and self.sources[0].layer_class == 'length':
+      import theano.ifelse
+      pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
+      self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
+                                    T.concatenate([self.z,pad],axis=0),
+                                    self.z)
+      self.z = self.z[:self.index.shape[0]]
+
+      #import theano.printing
+      #self.index = theano.printing.Print("i", attrs=['shape'])(self.index)
+      #self.z = theano.printing.Print("z", attrs=['shape'])(self.z)
+
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
     #outputs_info = None #[ T.alloc(numpy.cast[theano.config.floatX](0), index.shape[1], self.attrs['n_out']) ]
