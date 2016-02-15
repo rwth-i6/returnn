@@ -151,6 +151,12 @@ class Container(object):
     return param
 
   def set_attr(self, name, value):
+    """
+    :param str name: key name
+    :param bool|int|float|str|list|dict value: value
+    This will be stored in to_json() and save() (in HDF).
+    More complex types like list or dict will be encoded as a JSON-str when saved to HDF.
+    """
     self.attrs[name] = value
 
   def create_bias(self, n, prefix='b', name=""):
