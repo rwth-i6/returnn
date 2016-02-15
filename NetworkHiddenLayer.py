@@ -443,6 +443,7 @@ class SubnetworkLayer(_NoOpLayer):
     import h5py
     model_hdf = h5py.File(model_filename, "r")
     self.subnetwork.load_hdf(model_hdf)
+    print >>log.v2, "done loading subnetwork weights for", self.name
     self.output = self.subnetwork.output["output"].output
 
 
