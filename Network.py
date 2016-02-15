@@ -12,12 +12,15 @@ from Util import collect_class_init_kwargs
 from Log import log
 
 class LayerNetwork(object):
-  def __init__(self, n_in=None, n_out=None, base_network=None):
+  def __init__(self, n_in=None, n_out=None, base_network=None, data_map=None, data_map_i=None):
     """
     :param int n_in: input dim of the network
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
+    :param dict[str,theano.Variable] data_map: if specified, this will be used for x/y (and it expects data_map_i)
+    :param dict[str,theano.Variable] data_map_i: if specified, this will be used for i/j
     :param LayerNetwork base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
+      data_map will have precedence over base_network.
     """
     if n_out is None:
       assert base_network is not None
@@ -34,19 +37,27 @@ class LayerNetwork(object):
     else:
       assert 1 <= n_out["data"][1] <= 2  # maybe obsolete check...
       data_dim = n_out["data"][1] + 1  # one more because of batch-dim
-    if base_network is None:
+    if data_map is not None:
+      assert data_map_i is not None
+      self.y = data_map
+      self.x = data_map["data"]
+      self.j = data_map_i
+      self.i = data_map_i["data"]
+    elif base_network is not None:
+      self.x = base_network.x
+      self.y = base_network.y
+      self.i = base_network.i
+      self.j = base_network.j
+    else:
       dtype = "float32" if data_dim >= 3 else "int32"
       self.x = T.TensorType(dtype, ((False,) * data_dim))('x')
       self.y = {"data": self.x}
       self.i = T.bmatrix('i'); """ :type: theano.Variable """
       self.j = {"data": self.i}
-      self.epoch = T.constant(0, name="epoch", dtype="int32")
-    else:
-      self.x = base_network.x
-      self.y = base_network.y
-      self.i = base_network.i
-      self.j = base_network.j
+    if base_network is not None:
       self.epoch = base_network.epoch
+    else:
+      self.epoch = T.constant(0, name="epoch", dtype="int32")
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -161,12 +172,16 @@ class LayerNetwork(object):
                          **cls.init_args_from_config(config))
 
   @classmethod
-  def from_base_network(cls, base_network, share_params=True, base_as_calc_step=False):
+  def from_base_network(cls, base_network, json_content=None, share_params=False, base_as_calc_step=False, **kwargs):
     """
     :param LayerNetwork base_network: base network to derive from
+    :param dict[str]|None json_content: JSON content for subnetwork. if None, will use from base network
+    :param bool share_params: will use the same params as the base network
+    :param bool base_as_calc_step: base is calc step 0. see below
+    :param dict[str] kwargs: kwargs for __init__
     :rtype: LayerNetwork
     """
-    network = cls(n_in=None, n_out=None, base_network=base_network)
+    network = cls(base_network=base_network, **kwargs)
     network.default_mask = base_network.default_mask
     network.sparse_input = base_network.sparse_input
     network.default_target = base_network.default_target
@@ -182,7 +197,8 @@ class LayerNetwork(object):
         assert base_layer, "%s not found in base_network" % layer_name
         return base_layer.params.get(param_name, None)
       network.get_layer_param = shared_get_layer_param
-    json_content = base_network.to_json_content()
+    if json_content is None:
+      json_content = base_network.to_json_content()
     cls.from_json(json_content, network=network)
     if share_params:
       trainable_params = network.get_all_params_vars()
@@ -190,6 +206,12 @@ class LayerNetwork(object):
     return network
 
   def get_calc_step(self, i):
+    """
+    :param int i: calc step, 0 to n
+    :rtype: LayerNetwork
+    Used by CalcStepLayer. Will automatically create the requested calc step.
+    Calc step 0 is the base network (calc_step_base).
+    """
     if self.calc_step_base:
       return self.calc_step_base.get_calc_step(i)  # go up to the main network
     if i == 0: return self
@@ -203,6 +225,18 @@ class LayerNetwork(object):
         base_network=base_network, share_params=True, base_as_calc_step=True)
       self.calc_steps += [subnetwork]
     return self.calc_steps[i - 1]
+
+  def new_subnetwork(self, json_content, n_out, data_map, data_map_i):
+    """
+    :param dict[str,dict] json_content: subnetwork specification
+    :param dict[str,(int,int)] n_out: n_out info for subnetwork
+    :param dict[str,theano.Variable] data_map: data
+    :param dict[str,theano.Variable] data_map_i: indices for data
+    :rtype: LayerNetwork
+    The data input for the subnetwork is not derived from ourselves but specified
+    explicitly through n_out & data_map.
+    """
+    return self.from_base_network(self, json_content=json_content, n_out=n_out, data_map=data_map, data_map_i=data_map_i)
 
   @classmethod
   def from_json(cls, json_content, n_in=None, n_out=None, network=None,
@@ -489,6 +523,13 @@ class LayerNetwork(object):
     if target == "null": return
     if target == 'sizes' and not 'sizes' in self.n_out: #TODO(voigtlaender): fix data please
       self.n_out['sizes'] = [2,1]
+    if self.base_network:
+      self.base_network.use_target(target=target, dtype=dtype)
+      if not self.y is self.base_network.y:
+        self.y[target] = self.base_network.y[target]
+      if not self.j is self.base_network.j:
+        self.j[target] = self.base_network.j[target]
+      return
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim
     self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)

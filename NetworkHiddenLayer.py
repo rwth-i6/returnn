@@ -396,6 +396,43 @@ class CalcStepLayer(_NoOpLayer):
       self.output = prev_layer.output
 
 
+class SubnetworkLayer(_NoOpLayer):
+  layer_class = "subnetwork"
+
+  def __init__(self, n_out, network, data_map=None, **kwargs):
+    """
+    :param int n_out: output dimension of output layer
+    :param dict[str,dict] network: subnetwork as dict (JSON content)
+    :param list[str] data_map: maps the sources (from) of the layer to data input.
+      the list should be as long as the sources.
+      default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    For now, the subnetwork will not be trainable. We can easily add that later, i.e. expose all params.
+    """
+    super(SubnetworkLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(network, (str, unicode)):
+      network = json.loads(network)
+    self.set_attr("network", network)
+    if isinstance(data_map, (str, unicode)):
+      data_map = json.loads(data_map)
+    if data_map:
+      self.set_attr("data_map", data_map)
+    if not data_map:
+      data_map = ["data"]
+    assert isinstance(data_map, list)
+    assert len(data_map) == len(self.sources)
+    sub_n_out = {}
+    data_map_d = {}
+    data_map_di = {}
+    for k, s in zip(data_map, self.sources):
+      sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+      data_map_d[k] = s.output
+      data_map_di[k] = s.index
+    self.subnetwork = self.network.new_subnetwork(
+      json_content=network, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    self.output = self.subnetwork.output["output"].output
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 
