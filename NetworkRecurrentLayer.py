@@ -304,6 +304,7 @@ class RecurrentUnitLayer(Layer):
                attention_treebase = False,
                attention_glimpse = 1,
                attention_lm = 'none',
+               linear_extend = False,
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -359,6 +360,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_treebase', attention_treebase)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)
+    self.set_attr('linear_extend', linear_extend)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -374,6 +376,7 @@ class RecurrentUnitLayer(Layer):
     pact = strtoact(pact)
     if n_dec:
       self.set_attr('n_dec', n_dec)
+
     if direction == 0:
       self.depth *= 2
     # initialize recurrent weights
@@ -502,6 +505,9 @@ class RecurrentUnitLayer(Layer):
         outputs_info = [ [] for adx in xrange(unit.n_act) ]
         if 'n_dec' in self.attrs:
           n_dec = self.attrs['n_dec']
+          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+        elif linear_extend:
+          n_dec = self.index.shape[0] / 3
           index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
         #for e in encoder:
         #  sidx = T.max((index > 0).nonzero(),axis=0)
