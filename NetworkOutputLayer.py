@@ -24,7 +24,7 @@ from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, copy_input=None, time_limit=0,
+  def __init__(self, loss, y, dtype=None, copy_input=None, time_limit=0,
                grad_clip_z=None, grad_discard_out_of_bound_z=None,
                **kwargs):
     """
@@ -34,6 +34,8 @@ class OutputLayer(Layer):
     super(OutputLayer, self).__init__(**kwargs)
     self.y = y
     self.y_data_flat = time_batch_make_flat(y)
+    if dtype:
+      self.set_attr('dtype', dtype)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
     if grad_clip_z is not None:

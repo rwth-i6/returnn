@@ -603,8 +603,7 @@ class LayerNetwork(object):
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
       kwargs.setdefault('n_out', self.n_out[target][0])
-    self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
-    self.output[name].set_attr('dtype', dtype)
+    self.output[name] = layer_class(name=name, target=target, y=targets, dtype=dtype, **kwargs)
     if target != "null":
       self.errors[name] = self.output[name].errors()
     self.add_cost_and_constraints(self.output[name])
