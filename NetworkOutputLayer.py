@@ -87,7 +87,9 @@ class OutputLayer(Layer):
       self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
                                     T.concatenate([self.z,pad],axis=0),
                                     self.z)
-      self.z = theano.ifelse.ifelse(T.eq(self.index.shape[0],1),self.z,self.z[:self.index.shape[0]])
+      is_eval = T.eq(self.index.shape[0], 1)
+      self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
+      self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
 
       #import theano.printing
       #self.index = theano.printing.Print("i", attrs=['shape'])(self.index)

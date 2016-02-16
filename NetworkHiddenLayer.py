@@ -796,12 +796,11 @@ class LengthLayer(HiddenLayer):
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(LengthLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
     if eos < 0:
       eos += self.y_in[target].n_out
     if sos < 0:
       sos += self.y_in[target].n_out
-
-    assert len(self.sources) == 2
 
     z_fw = T.dot(self.sources[0].output, self.W_in[0])
     z_bw = T.dot(self.sources[1].output, self.W_in[1])
@@ -811,18 +810,31 @@ class LengthLayer(HiddenLayer):
     eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
     sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
     nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-    self.cost_eos = z_fw.shape[0] * T.sum(nll)
+    self.cost_eos = T.sum(nll) #* z_fw.shape[0]
     nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-    self.cost_sos = z_bw.shape[0] * T.sum(nll)
+    self.cost_sos = T.sum(nll) #* z_bw.shape[0]
 
     pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
     pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
-    length = T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos],axis=0)
-    length = T.maximum(T.minimum(T.max(length) + 1, z_fw.shape[0]), 2)
+    batch = T.ones((self.index.shape[1],), 'int32')
+    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos], axis=0) + 1)), 'int32')
+    max_length = T.max(length)
+    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
+    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
 
+    def cut(fw_t, bw_t, len_t, *args):
+      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
+      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
+      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
+      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
+      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
+    reduced, _ = theano.scan(cut,
+                             sequences = [fw, bw, length],
+                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
+    fw = reduced[0].dimshuffle(1,0,2)
+    bw = reduced[1].dimshuffle(1,0,2)[::-1]
+    self.index = reduced[3].dimshuffle(1,0)
     self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    fw = self.sources[0].output[:length]
-    bw = self.sources[1].output[self.sources[1].output.shape[0]-length:]
     self.output = T.concatenate([fw,bw], axis=2)
     self.length = length
 
