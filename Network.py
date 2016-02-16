@@ -551,16 +551,17 @@ class LayerNetwork(object):
     :rtype NetworkHiddenLayer.Layer
     """
     assert layer.name
-    if layer.name == "output" or isinstance(layer, OutputLayer):
+    layer_errors = layer.errors()
+    if layer.name == "output" or layer_errors is not None:
       is_output_layer = True
       self.output[layer.name] = layer
     else:
       is_output_layer = False
       self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
+    if layer_errors is not None:
+      self.errors[layer.name] = layer_errors
     if is_output_layer:
-      if layer.attrs.get("target", "") not in ["", "null"]:
-        self.errors[layer.name] = layer.errors()
       self.declare_train_params()
     return layer
 

@@ -498,3 +498,9 @@ class Layer(Container):
     :rtype: theano.Variable
     """
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    return None

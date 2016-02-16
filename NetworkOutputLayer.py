@@ -134,6 +134,8 @@ class OutputLayer(Layer):
     """
     :rtype: theano.Variable
     """
+    if self.attrs.get("target", "") == "null":
+      return None
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
