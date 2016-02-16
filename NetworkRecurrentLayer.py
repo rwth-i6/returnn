@@ -304,7 +304,6 @@ class RecurrentUnitLayer(Layer):
                attention_treebase = False,
                attention_glimpse = 1,
                attention_lm = 'none',
-               linear_extend = False,
                base = None,
                lm = False, # language model
                force_lm = False, # assumes y to be given during test
@@ -360,7 +359,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_treebase', attention_treebase)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)
-    self.set_attr('linear_extend', linear_extend)
+    self.set_attr('n_dec', n_dec)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -374,11 +373,12 @@ class RecurrentUnitLayer(Layer):
     self.unit = unit
     kwargs.setdefault("n_out", unit.n_out)
     pact = strtoact(pact)
-    if n_dec:
-      self.set_attr('n_dec', n_dec)
-    elif linear_extend:
-      n_dec = encoder[0].index.shape[0]
+    if n_dec != 0:
+      if n_dec == 'encoder':
+        n_dec = encoder[0].index.shape[0]
       self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+    else:
+      n_dec = self.index.shape[0]
 
     if direction == 0:
       self.depth *= 2
@@ -497,18 +497,12 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     self.recurrent_transform = recurrent_transform_inst
 
-    self.out_dec = self.index.shape[0]
     # scan over sequence
     for s in xrange(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z
       sources = self.sources
-      n_dec = self.out_dec
       if encoder:
-        if 'n_dec' in self.attrs:
-          n_dec = self.attrs['n_dec']
-          index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
-
         outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         if self.depth == 1:
           sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if attention == 'input' else 0)
@@ -521,21 +515,6 @@ class RecurrentUnitLayer(Layer):
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
 
-      if False and self.attrs['lm'] and self.attrs['droplm'] < 1.0:
-        y = self.y_in[self.attrs['target']].flatten() #.reshape(self.index.shape)
-        n_cls = self.y_in[self.attrs['target']].n_out
-        #real_weight = T.constant(1.0 - (self.attrs['droplm'] if self.train_flag else 1.0), dtype='float32')
-        #sequences = T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * real_weight + self.b #* lmmask * float(int(self.train_flag)) + self.b
-        if direction == 1:
-          y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[:-1] # (T-1)BD
-          #sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1), y_t], axis=0) * self.lmmask
-        else:
-          y_t = self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))[1:] # (T-1)BD
-          #sequences += T.concatenate([y_t, self.W_lm_out[0].dimshuffle('x','x',0).repeat(num_batches,axis=1)], axis=0) * self.lmmask
-        #sequences += T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask
-        #sequences += self.W_lm_out[self.y_in[self.attrs['target']]].reshape((index.shape[0],index.shape[1],unit.n_in)) #T.concatenate([self.W_lm_out[0].dimshuffle('x','x',0).repeat(self.index.shape[1],axis=1), y_t], axis=0) * self.lmmask
-        #sequences = T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + self.b + (self.zc if attention == 'input' else 0)
-        #outputs_info.append(T.eye(n_cls, 1).flatten().dimshuffle('x',0).repeat(index.shape[1],0))
       if sequences == self.b:
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['attention'] == 'input' else 0)
 

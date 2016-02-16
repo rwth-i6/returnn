@@ -811,9 +811,9 @@ class LengthLayer(HiddenLayer):
     eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
     sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
     nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-    self.cost_eos = T.sum(nll)
+    self.cost_eos = z_fw.shape[0] * T.sum(nll)
     nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-    self.cost_sos = T.sum(nll)
+    self.cost_sos = z_bw.shape[0] * T.sum(nll)
 
     pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
     pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
