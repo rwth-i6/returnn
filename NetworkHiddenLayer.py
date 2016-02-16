@@ -825,6 +825,7 @@ class LengthLayer(HiddenLayer):
     def cut(fw_t, bw_t, len_t, *args):
       residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
       fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
+      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
       bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
       ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
       return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
