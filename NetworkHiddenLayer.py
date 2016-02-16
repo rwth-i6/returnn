@@ -1042,6 +1042,30 @@ class LossLayer(Layer):
     else:
       raise NotImplementedError()
 
+
+class ErrorsLayer(_NoOpLayer):
+  layer_class = "errors"
+
+  def __init__(self, target, **kwargs):
+    super(ErrorsLayer, self).__init__(**kwargs)
+    self.set_attr("target", target)
+    assert target in self.network.y
+    self.y = self.network.y[target]
+    assert self.y.ndim == 2
+    n_out = self.network.n_out[target][0]
+    self.set_attr("n_out", n_out)
+    self.set_attr("sparse", True)
+    self.z, z_dim = concat_sources(self.sources, unsparse=True)
+    assert z_dim == n_out
+    self.output = T.neq(T.argmax(self.z, axis=2), self.y)
+
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    return T.sum(self.output)
+
+
 ############################################ START HERE #####################################################
 class ConvLayer(_NoOpLayer):
   layer_class = "conv_layer"
