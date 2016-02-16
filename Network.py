@@ -7,7 +7,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
+from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
 from Util import collect_class_init_kwargs
 from Log import log
 
@@ -547,11 +547,11 @@ class LayerNetwork(object):
 
   def add_layer(self, layer):
     """
-    :type layer: NetworkHiddenLayer.HiddenLayer
-    :rtype NetworkHiddenLayer.HiddenLayer
+    :type layer: NetworkHiddenLayer.Layer
+    :rtype NetworkHiddenLayer.Layer
     """
     assert layer.name
-    if layer.name == "output":
+    if layer.name == "output" or isinstance(layer, OutputLayer):
       is_output_layer = True
       self.output[layer.name] = layer
     else:
@@ -559,6 +559,8 @@ class LayerNetwork(object):
       self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
     if is_output_layer:
+      if layer.attrs.get("target", "") not in ["", "null"]:
+        self.errors[layer.name] = layer.errors()
       self.declare_train_params()
     return layer
 
@@ -603,12 +605,9 @@ class LayerNetwork(object):
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
       kwargs.setdefault('n_out', self.n_out[target][0])
-    self.output[name] = layer_class(name=name, target=target, y=targets, dtype=dtype, **kwargs)
-    if target != "null":
-      self.errors[name] = self.output[name].errors()
-    self.add_cost_and_constraints(self.output[name])
-    self.declare_train_params()
-    return self.output[name].index
+    layer = layer_class(name=name, target=target, y=targets, dtype=dtype, **kwargs)
+    self.add_layer(layer)
+    return layer.index
 
   def get_objective(self):
     return self.total_cost + self.constraints
