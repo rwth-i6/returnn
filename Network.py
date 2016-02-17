@@ -7,7 +7,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
-from NetworkOutputLayer import FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
+from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
 from Util import collect_class_init_kwargs
 from Log import log
 
@@ -547,18 +547,25 @@ class LayerNetwork(object):
 
   def add_layer(self, layer):
     """
-    :type layer: NetworkHiddenLayer.HiddenLayer
-    :rtype NetworkHiddenLayer.HiddenLayer
+    :type layer: NetworkHiddenLayer.Layer
+    :rtype NetworkHiddenLayer.Layer
     """
     assert layer.name
-    if layer.name == "output":
+    layer_errors = layer.errors()
+    if layer.name == "output" or layer_errors is not None:
       is_output_layer = True
       self.output[layer.name] = layer
     else:
       is_output_layer = False
       self.hidden[layer.name] = layer
     self.add_cost_and_constraints(layer)
+    if layer_errors is not None:
+      self.errors[layer.name] = layer_errors
     if is_output_layer:
+      if getattr(layer, "p_y_given_x", None) is None:
+        # Small little hack for layers which we use as output-layers which don't set this.
+        from TheanoUtil import time_batch_make_flat
+        layer.p_y_given_x = time_batch_make_flat(layer.output)
       self.declare_train_params()
     return layer
 
@@ -603,13 +610,9 @@ class LayerNetwork(object):
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
       kwargs.setdefault('n_out', self.n_out[target][0])
-    self.output[name] = layer_class(name=name, target=target, y=targets, **kwargs)
-    self.output[name].set_attr('dtype', dtype)
-    if target != "null":
-      self.errors[name] = self.output[name].errors()
-    self.add_cost_and_constraints(self.output[name])
-    self.declare_train_params()
-    return self.output[name].index
+    layer = layer_class(name=name, target=target, y=targets, dtype=dtype, **kwargs)
+    self.add_layer(layer)
+    return layer.index
 
   def get_objective(self):
     return self.total_cost + self.constraints

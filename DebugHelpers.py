@@ -57,18 +57,28 @@ def get_device():
   return _device
 
 
-def compute(var):
+def compute(var, trainnet=True):
+  """
+  :param theano.Variable var: variable which we should compute the value of
+  :param bool trainnet: whether to make givens based on dev.trainnet or dev.testnet
+  :return: the computed value
+  :rtype: numpy.ndarray
+  This expects to calculate some value of the trainnet or testnet of the current Device.
+  """
   dev = get_device()
   assert dev, "no Device instance found"
-  network = dev.trainnet
-  train_givens = dev.make_givens(network)
+  if trainnet:
+    network = dev.trainnet
+  else:
+    network = dev.testnet
+  givens = dev.make_givens(network)
   if isinstance(var, list):
     outputs = var
   else:
     outputs = [var]
   func = theano.function(inputs=[dev.block_start, dev.block_end],
                          outputs=outputs,
-                         givens=train_givens,
+                         givens=givens,
                          on_unused_input='warn',
                          name="debug compute")
   batch_dim = dev.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
