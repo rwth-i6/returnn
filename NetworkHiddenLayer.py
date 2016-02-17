@@ -792,10 +792,13 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, eos=-1, sos=-2, **kwargs):
+  def __init__(self, eos=-1, sos=-2, pad=0, **kwargs):
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(LengthLayer, self).__init__(**kwargs)
+    self.set_attr('eos',eos)
+    self.set_attr('sos',sos)
+    self.set_attr('pad',pad)
     assert len(self.sources) == 2
     if eos < 0:
       eos += self.y_in[target].n_out
@@ -811,9 +814,9 @@ class LengthLayer(HiddenLayer):
       eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
       sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos = T.sum(nll) #* z_fw.shape[0]
+      self.cost_eos = T.sum(nll) * z_fw.shape[0]
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-      self.cost_sos = T.sum(nll) #* z_bw.shape[0]
+      self.cost_sos = T.sum(nll) * z_bw.shape[0]
     else:
       self.cost_sos = 0.0
       self.cost_eos = 0.0
@@ -821,7 +824,7 @@ class LengthLayer(HiddenLayer):
     pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
     pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
     batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos], axis=0) + 1)), 'int32')
+    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos], axis=0) + 1 + pad)), 'int32')
     max_length = T.max(length)
     fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
     bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)

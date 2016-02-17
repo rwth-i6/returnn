@@ -459,7 +459,8 @@ class Device(object):
             hidden = self.testnet.reverse_hidden[-idx - 1]
           source.append(T.reshape(hidden.output[target], (hidden.output[target].shape[0] * hidden.output[target].shape[1], hidden.output[target].shape[2])))
         elif extract in self.testnet.hidden:
-          param = int(param)
+          if param is not None:
+            param = int(param)
           hidden = self.testnet.hidden[extract]
           signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.outputs
           sidx = hidden.index[param].dimshuffle('x',0) if param is not None else hidden.index
