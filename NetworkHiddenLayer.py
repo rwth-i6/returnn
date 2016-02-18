@@ -824,7 +824,7 @@ class LengthLayer(HiddenLayer):
     pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
     pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
     batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] * pcx_bw[:,:,sos], axis=0) + 1 + pad)), 'int32')
+    length = T.cast(T.maximum(3 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] * pcx_bw[:,:,sos], axis=0) + 1 + pad)), 'int32')
     #if self.train_flag:
     #  self.length = T.cast(z_fw.shape[0] * batch,'int32')
     #  self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
