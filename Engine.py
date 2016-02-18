@@ -268,19 +268,7 @@ class Engine:
     fout.close()
 
   def print_network_info(self):
-    network = self.network
-    print >> log.v2, "Network layer topology:"
-    print >> log.v2, "  input #:", network.n_in
-    for layer_name, layer in sorted(network.hidden.items()):
-      print >> log.v2, "  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
-    if not network.hidden:
-      print >> log.v2, "  (no hidden layers)"
-    for layer_name, layer in sorted(network.output.items()):
-      print >> log.v2, "  output %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
-    if not network.output:
-      print >> log.v2, "  (no output layers)"
-    print >> log.v2, "net params #:", network.num_params()
-    print >> log.v2, "net trainable params:", network.train_params_vars
+    self.network.print_network_info()
 
   def check_last_epoch(self):
     if self.start_epoch == 1:
