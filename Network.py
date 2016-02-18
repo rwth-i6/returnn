@@ -750,8 +750,8 @@ class LayerNetwork(object):
     model.close()
     return epoch
 
-  def print_network_info(self):
-    print >> log.v2, "Network layer topology:"
+  def print_network_info(self, name="Network"):
+    print >> log.v2, "%s layer topology:" % name
     print >> log.v2, "  input #:", self.n_in
     for layer_name, layer in sorted(self.hidden.items()):
       print >> log.v2, "  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])

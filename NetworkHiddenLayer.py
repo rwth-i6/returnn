@@ -366,6 +366,9 @@ class CalcStepLayer(_NoOpLayer):
       assert self.network
       if self.network.calc_step_base:
         prev_layer = self.network.calc_step_base.get_layer(from_prev)
+        if not prev_layer:
+          self.network.calc_step_base.print_network_info("Prev-Calc-Step network")
+          raise Exception("%s not found in prev calc step network" % from_prev)
         assert n_out == prev_layer.attrs["n_out"]
         self.output = prev_layer.output
       else:
