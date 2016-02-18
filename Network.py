@@ -749,3 +749,17 @@ class LayerNetwork(object):
     epoch = cls.epoch_from_hdf_model(model)
     model.close()
     return epoch
+
+  def print_network_info(self, name="Network"):
+    print >> log.v2, "%s layer topology:" % name
+    print >> log.v2, "  input #:", self.n_in
+    for layer_name, layer in sorted(self.hidden.items()):
+      print >> log.v2, "  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+    if not self.hidden:
+      print >> log.v2, "  (no hidden layers)"
+    for layer_name, layer in sorted(self.output.items()):
+      print >> log.v2, "  output %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+    if not self.output:
+      print >> log.v2, "  (no output layers)"
+    print >> log.v2, "net params #:", self.num_params()
+    print >> log.v2, "net trainable params:", self.train_params_vars
