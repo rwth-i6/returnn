@@ -402,6 +402,7 @@ class CalcStepLayer(_NoOpLayer):
 
 class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
+  recurrent = True  # we don't know. depends on the subnetwork.
 
   def __init__(self, n_out, subnetwork, load, data_map=None, **kwargs):
     """
