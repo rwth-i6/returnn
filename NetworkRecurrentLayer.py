@@ -373,7 +373,7 @@ class RecurrentUnitLayer(Layer):
     self.unit = unit
     kwargs.setdefault("n_out", unit.n_out)
     pact = strtoact(pact)
-    if n_dec != 0:
+    if n_dec != 0: # and not self.train_flag:
       if isinstance(n_dec,float):
         n_dec = T.cast(T.cast(encoder[0].index.shape[0],'float32') * n_dec,'int32')
       elif n_dec == 'encoder-eval' and self.train_flag:

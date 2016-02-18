@@ -83,16 +83,20 @@ class OutputLayer(Layer):
       self.norm = nom / T.cast(T.sum(self.index),'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
 
-    if len(self.sources) == 1 and self.sources[0].layer_class == 'length':
+    if len(self.sources) == 1 and self.sources[0].layer_class == 'length': # and not self.train_flag:
       import theano.ifelse
       pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
       self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
                                     T.concatenate([self.z,pad],axis=0),
                                     self.z)
-      is_eval = T.eq(self.index.shape[0], 1)
+      is_eval = T.eq(self.index.shape[1], 1)
       self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
       self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
-
+      #self.z = self.z[:self.index.shape[0]]
+      #self.index = theano.ifelse.ifelse(T.lt(self.sources[0].index.shape[0], self.index.shape[0]),
+      #                                  T.concatenate([self.sources[0].index,T.cast(pad[:,:,0],'int8')],axis=0),
+      #                                  self.index)
+      #self.index = self.index[:self.z.shape[0]]
       #import theano.printing
       #self.index = theano.printing.Print("i", attrs=['shape'])(self.index)
       #self.z = theano.printing.Print("z", attrs=['shape'])(self.z)
