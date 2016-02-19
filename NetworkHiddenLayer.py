@@ -503,7 +503,8 @@ class ChunkingSublayer(_NoOpLayer):
         l_index_f32 = l_index_f32 * tri
       else:
         assert False, "unknown chunk distribution %r" % chunk_distribution
-      output = T.inc_subtensor(output[t_start:t_end], layer.output * l_index_f32)
+      assert l_index_f32.ndim == 2
+      output = T.inc_subtensor(output[t_start:t_end], layer.output * l_index_f32.dimshuffle(0, 1, 'x'))
       output_index_sum = T.inc_subtensor(output_index_sum[t_start:t_end], l_index_f32)
       return [output, output_index_sum]
 
