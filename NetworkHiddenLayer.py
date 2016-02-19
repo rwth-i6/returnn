@@ -455,7 +455,9 @@ class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
   recurrent = True  # we don't know
 
-  def __init__(self, n_out, chunk_size, sublayer, chunk_step=1, **kwargs):
+  def __init__(self, n_out, chunk_size, sublayer, chunk_step=1,
+               chunk_distribution="uniform",
+               **kwargs):
     super(ChunkingSublayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
     self.set_attr('chunk_size', chunk_size)
@@ -465,6 +467,7 @@ class ChunkingSublayer(_NoOpLayer):
     sub_n_out = sublayer.pop("n_out", None)
     if sub_n_out: assert sub_n_out == n_out
     self.set_attr('sublayer', sublayer)
+    self.set_attr('chunk_distribution', chunk_distribution)
 
     assert len(self.sources) == 1
     source = self.sources[0].output
@@ -491,8 +494,17 @@ class ChunkingSublayer(_NoOpLayer):
       chunk = source[t_start:t_end]
       chunk_index = index[t_start:t_end]
       layer = make_sublayer(source=chunk, index=chunk_index, name="%s_sublayer" % self.name)
-      output = T.inc_subtensor(output[t_start:t_end], layer.output)
-      output_index_sum = T.inc_subtensor(output_index_sum[t_start:t_end], layer.index)
+      l_index_f32 = T.cast(layer.index, dtype="float32")
+      if chunk_distribution == "uniform": pass  # just leave it as it is
+      elif chunk_distribution == "triangle":
+        ts = T.arange(1, t_end - t_start + 1)
+        ts_rev = ts[::-1]
+        tri = T.cast(T.minimum(ts, ts_rev), dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * tri
+      else:
+        assert False, "unknown chunk distribution %r" % chunk_distribution
+      output = T.inc_subtensor(output[t_start:t_end], layer.output * l_index_f32)
+      output_index_sum = T.inc_subtensor(output_index_sum[t_start:t_end], l_index_f32)
       return [output, output_index_sum]
 
     (output, output_index_sum), _ = theano.reduce(
