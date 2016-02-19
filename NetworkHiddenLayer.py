@@ -457,6 +457,7 @@ class ChunkingSublayer(_NoOpLayer):
 
   def __init__(self, n_out, chunk_size, sublayer, chunk_step=1,
                chunk_distribution="uniform",
+               add_left_context=0,
                **kwargs):
     super(ChunkingSublayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
@@ -468,6 +469,7 @@ class ChunkingSublayer(_NoOpLayer):
     if sub_n_out: assert sub_n_out == n_out
     self.set_attr('sublayer', sublayer)
     self.set_attr('chunk_distribution', chunk_distribution)
+    self.set_attr('add_left_context', add_left_context)
 
     assert len(self.sources) == 1
     source = self.sources[0].output
@@ -491,10 +493,18 @@ class ChunkingSublayer(_NoOpLayer):
     output_index_sum = T.zeros([source.shape[0], source.shape[1]], dtype="float32")
     def step(t_start, output, output_index_sum, source, index):
       t_end = T.minimum(t_start + chunk_size, source.shape[0])
-      chunk = source[t_start:t_end]
-      chunk_index = index[t_start:t_end]
+      if add_left_context > 0:
+        t_start_c = T.maximum(t_start - add_left_context, 0)
+      else:
+        t_start_c = t_start
+      chunk = source[t_start_c:t_end]
+      chunk_index = index[t_start_c:t_end]
       layer = make_sublayer(source=chunk, index=chunk_index, name="%s_sublayer" % self.name)
+      l_output = layer.output
       l_index_f32 = T.cast(layer.index, dtype="float32")
+      if add_left_context > 0:
+        l_output = l_output[t_start - t_start_c:]
+        l_index_f32 = l_index_f32[t_start - t_start_c:]
       if chunk_distribution == "uniform": pass  # just leave it as it is
       elif chunk_distribution == "triangle":
         ts = T.arange(1, t_end - t_start + 1)
@@ -504,7 +514,7 @@ class ChunkingSublayer(_NoOpLayer):
       else:
         assert False, "unknown chunk distribution %r" % chunk_distribution
       assert l_index_f32.ndim == 2
-      output = T.inc_subtensor(output[t_start:t_end], layer.output * l_index_f32.dimshuffle(0, 1, 'x'))
+      output = T.inc_subtensor(output[t_start:t_end], l_output * l_index_f32.dimshuffle(0, 1, 'x'))
       output_index_sum = T.inc_subtensor(output_index_sum[t_start:t_end], l_index_f32)
       return [output, output_index_sum]
 
