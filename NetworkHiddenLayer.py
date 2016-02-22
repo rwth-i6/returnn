@@ -886,7 +886,7 @@ class LengthLayer(HiddenLayer):
     if err == 'ce':
       pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
       neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
-      self.cost_len = T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1])
+      self.cost_len = T.maximum(T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1]), 0.0) * T.sum(T.cast(self.sources[0].target_index.shape[1],'float32')) / T.sum(T.cast(self.sources[0].index.shape[1],'float32'))
     elif err == 'l2':
       self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
     elif err == 'exp':
@@ -909,7 +909,7 @@ class LengthLayer(HiddenLayer):
     return self.cost_len, None
 
   def cost_scale(self):
-    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") / T.sum(self.sources[0].target_index)
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
 class TruncationLayer(Layer):
