@@ -344,7 +344,7 @@ class ReverseLayer(_NoOpLayer):
     for attr in ["n_out", "sparse"]:
       self.set_attr(attr, s.attrs[attr])
     # We get (time,batch,dim) input shape.
-    self.index = s.index[::-1] # TODO: lstmc assumes index to start with 1s
+    self.index = s.index[::-1]
     self.output = s.output[::-1]
 
 
@@ -404,15 +404,15 @@ class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, n_out, subnetwork, load, data_map=None, **kwargs):
+  def __init__(self, n_out, subnetwork, load, data_map=None, trainable=False, **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
     :param list[str] data_map: maps the sources (from) of the layer to data input.
       the list should be as long as the sources.
       default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
-    :param str load: load string. filename but can have placeholders via str.format
-    For now, the subnetwork will not be trainable. We can easily add that later, i.e. expose all params.
+    :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
+    :param bool trainable: if we take over all params from the subnetwork
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
@@ -424,6 +424,7 @@ class SubnetworkLayer(_NoOpLayer):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
+    self.set_attr("trainable", trainable)
     if not data_map:
       data_map = ["data"]
     assert isinstance(data_map, list)
@@ -438,16 +439,21 @@ class SubnetworkLayer(_NoOpLayer):
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
-    from Config import get_global_config
-    config = get_global_config()  # this is a bit hacky but works fine in all my cases...
-    model_filename = load % {"self": self,
-                             "global_config_load": config.value("load", None),
-                             "global_config_epoch": config.int("epoch", 0)}
-    print >>log.v2, "loading subnetwork weights from", model_filename
-    import h5py
-    model_hdf = h5py.File(model_filename, "r")
-    self.subnetwork.load_hdf(model_hdf)
-    print >>log.v2, "done loading subnetwork weights for", self.name
+    if trainable:
+      self.params.update(self.subnetwork.get_params_shared_flat_dict())
+    if load == "<random>":
+      print >>log.v2, "subnetwork with random initialization"
+    else:
+      from Config import get_global_config
+      config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+      model_filename = load % {"self": self,
+                               "global_config_load": config.value("load", None),
+                               "global_config_epoch": config.int("epoch", 0)}
+      print >>log.v2, "loading subnetwork weights from", model_filename
+      import h5py
+      model_hdf = h5py.File(model_filename, "r")
+      self.subnetwork.load_hdf(model_hdf)
+      print >>log.v2, "done loading subnetwork weights for", self.name
     self.output = self.subnetwork.output["output"].output
 
 
@@ -455,9 +461,11 @@ class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
   recurrent = True  # we don't know
 
-  def __init__(self, n_out, chunk_size, sublayer, chunk_step=1,
+  def __init__(self, n_out, sublayer,
+               chunk_size, chunk_step,
                chunk_distribution="uniform",
                add_left_context=0,
+               trainable=False,
                **kwargs):
     super(ChunkingSublayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
@@ -465,11 +473,17 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('chunk_step', chunk_step)
     if isinstance(sublayer, (str, unicode)):
       sublayer = json.loads(sublayer)
-    sub_n_out = sublayer.pop("n_out", None)
-    if sub_n_out: assert sub_n_out == n_out
-    self.set_attr('sublayer', sublayer)
+    self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
+    self.set_attr('trainable', trainable)
+
+    sub_n_out = sublayer.pop("n_out", None)
+    if sub_n_out: assert sub_n_out == n_out
+    if trainable:
+      sublayer["train_flag"] = self.train_flag
+      sublayer["mask"] = self.attrs.get("mask", "none")
+      sublayer["dropout"] = self.attrs.get("dropout", 0.0)
 
     assert len(self.sources) == 1
     source = self.sources[0].output
@@ -487,7 +501,9 @@ class ChunkingSublayer(_NoOpLayer):
       layer_class = get_layer_class(cl)
       source_layer = SourceLayer(name="%s_source" % name, n_out=n_in, x_out=source, index=index)
       layer = layer_class(sources=[source_layer], index=index, name=name, n_out=n_out, network=self.network, **layer_opts)
+      self.sublayer = layer
       return layer
+    self.sublayer = None
 
     output = T.zeros((source.shape[0], source.shape[1], n_out), dtype=source.dtype)
     output_index_sum = T.zeros([source.shape[0], source.shape[1]], dtype="float32")
@@ -527,6 +543,9 @@ class ChunkingSublayer(_NoOpLayer):
     assert output.ndim == 3
     assert output_index_sum.ndim == 2
     self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+    assert self.sublayer
+    if trainable:
+      self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
 
 
 class ConstantLayer(_NoOpLayer):
@@ -929,7 +948,8 @@ class TruncationLayer(Layer):
 
 class CorruptionLayer(ForwardLayer): # x = x + noise
   layer_class = "corruption"
-  rng = T.shared_randomstreams.RandomStreams(hash(layer_class) % 4294967295)
+  from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+  rng = RandomStreams(hash(layer_class) % 4294967295)
 
   def __init__(self, noise='gaussian', p=0.0, **kwargs):
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])

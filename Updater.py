@@ -270,7 +270,8 @@ class Updater:
     i_t = self.i + dt #1.
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
-    srng = theano.tensor.shared_randomstreams.RandomStreams(self.rng.randint(1234))
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234))
     for param in grads.keys():
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
