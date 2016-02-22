@@ -951,7 +951,7 @@ class TruncationLayer(Layer):
 class CorruptionLayer(ForwardLayer): # x = x + noise
   layer_class = "corruption"
   from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-  rng = RandomStreams(hash(layer_class) % 4294967295)
+  rng = RandomStreams(hash(layer_class) % 2147462579)
 
   def __init__(self, noise='gaussian', p=0.0, **kwargs):
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
