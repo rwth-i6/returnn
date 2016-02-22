@@ -344,7 +344,7 @@ class ReverseLayer(_NoOpLayer):
     for attr in ["n_out", "sparse"]:
       self.set_attr(attr, s.attrs[attr])
     # We get (time,batch,dim) input shape.
-    self.index = s.index[::-1] # TODO: lstmc assumes index to start with 1s
+    self.index = s.index[::-1]
     self.output = s.output[::-1]
 
 
