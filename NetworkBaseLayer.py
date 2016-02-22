@@ -364,7 +364,7 @@ class Layer(Container):
       # so mass has to be 1 / (1 - dropout).
       self.mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234))
+      srng = RandomStreams(self.rng.randint(1234) + 1)
       if self.depth > 1:
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
       else:
