@@ -473,12 +473,17 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('chunk_step', chunk_step)
     if isinstance(sublayer, (str, unicode)):
       sublayer = json.loads(sublayer)
-    sub_n_out = sublayer.pop("n_out", None)
-    if sub_n_out: assert sub_n_out == n_out
-    self.set_attr('sublayer', sublayer)
+    self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
     self.set_attr('trainable', trainable)
+
+    sub_n_out = sublayer.pop("n_out", None)
+    if sub_n_out: assert sub_n_out == n_out
+    if trainable:
+      sublayer["train_flag"] = self.train_flag
+      sublayer["mask"] = self.attrs.get("mask", "none")
+      sublayer["dropout"] = self.attrs.get("dropout", 0.0)
 
     assert len(self.sources) == 1
     source = self.sources[0].output
