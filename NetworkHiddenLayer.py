@@ -538,8 +538,10 @@ class ChunkingSublayer(_NoOpLayer):
       step, sequences=[t_range],
       non_sequences=[source, index],
       outputs_info=[output, output_index_sum])
+    self.scan_output = output
+    self.scan_output_index_sum = output_index_sum
     self.index = T.gt(output_index_sum, 0)
-    output_index_sum = T.minimum(output_index_sum, numpy.float32(1.0))
+    output_index_sum = T.maximum(output_index_sum, numpy.float32(1.0))
     assert output.ndim == 3
     assert output_index_sum.ndim == 2
     self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
