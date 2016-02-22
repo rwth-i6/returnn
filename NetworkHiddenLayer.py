@@ -404,15 +404,15 @@ class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, n_out, subnetwork, load, data_map=None, **kwargs):
+  def __init__(self, n_out, subnetwork, load, data_map=None, trainable=False, **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
     :param list[str] data_map: maps the sources (from) of the layer to data input.
       the list should be as long as the sources.
       default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
-    :param str load: load string. filename but can have placeholders via str.format
-    For now, the subnetwork will not be trainable. We can easily add that later, i.e. expose all params.
+    :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
+    :param bool trainable: if we take over all params from the subnetwork
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
@@ -424,6 +424,7 @@ class SubnetworkLayer(_NoOpLayer):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
+    self.set_attr("trainable", trainable)
     if not data_map:
       data_map = ["data"]
     assert isinstance(data_map, list)
@@ -438,16 +439,21 @@ class SubnetworkLayer(_NoOpLayer):
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
-    from Config import get_global_config
-    config = get_global_config()  # this is a bit hacky but works fine in all my cases...
-    model_filename = load % {"self": self,
-                             "global_config_load": config.value("load", None),
-                             "global_config_epoch": config.int("epoch", 0)}
-    print >>log.v2, "loading subnetwork weights from", model_filename
-    import h5py
-    model_hdf = h5py.File(model_filename, "r")
-    self.subnetwork.load_hdf(model_hdf)
-    print >>log.v2, "done loading subnetwork weights for", self.name
+    if trainable:
+      self.params = self.subnetwork.get_params_shared_flat_dict()
+    if load == "<random>":
+      print >>log.v2, "subnetwork with random initialization"
+    else:
+      from Config import get_global_config
+      config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+      model_filename = load % {"self": self,
+                               "global_config_load": config.value("load", None),
+                               "global_config_epoch": config.int("epoch", 0)}
+      print >>log.v2, "loading subnetwork weights from", model_filename
+      import h5py
+      model_hdf = h5py.File(model_filename, "r")
+      self.subnetwork.load_hdf(model_hdf)
+      print >>log.v2, "done loading subnetwork weights for", self.name
     self.output = self.subnetwork.output["output"].output
 
 

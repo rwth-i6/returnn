@@ -680,6 +680,20 @@ class LayerNetwork(object):
     for h in self.hidden:
       self.hidden[h].set_params_by_dict(params[h])
 
+  def get_params_shared_flat_dict(self):
+    """
+    :rtype: dict[str,theano.shared]
+    This will collect all vars of all layers in one dict.
+    We extend the param name with our custom scheme.
+    """
+    params = {}
+    for l_name, layer in list(self.output.items()) + list(self.hidden.items()):
+      for p_name, param in layer.params.items():
+        p_name = "%s.%s" % (l_name, p_name)
+        assert p_name not in params
+        params[p_name] = param
+    return params
+
   def save_hdf(self, model, epoch):
     """
     :type model: h5py.File
