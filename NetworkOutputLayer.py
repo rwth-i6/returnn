@@ -76,30 +76,31 @@ class OutputLayer(Layer):
       grad_discard_out_of_bound_z = numpy.float32(grad_discard_out_of_bound_z)
       self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
     self.norm = 1.0
-    if time_limit > 0:
+    self.target_index = self.index
+    if time_limit == 'inf':
+      import theano.ifelse
+      pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
+      #pad = self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0) #
+      is_eval = 0 #False #T.and_(T.eq(self.index.shape[1], 1), T.le(self.index.shape[0],3))
+      #target_length = self.index.shape[0]
+      #mass = T.cast(T.sum(self.index),'float32')
+      #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0],target_length),self.sources[0].index,self.index)
+      #self.norm = mass / T.cast(T.sum(self.index),'float32')
+      self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
+      self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
+                                    #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
+                                    T.concatenate([self.z,pad],axis=0),
+                                    self.z)
+      #self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
+      #self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], target_length),
+      #                                                             T.inc_subtensor((T.cast(T.zeros_like(self.index),'int32') + numpy.int32(y.n_out - 1))[:target_length], y),
+      #                                                             y))
+    elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
       self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
       self.norm = nom / T.cast(T.sum(self.index),'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
-
-    if len(self.sources) == 1 and self.sources[0].layer_class == 'length': # and not self.train_flag:
-      import theano.ifelse
-      pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
-      self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
-                                    T.concatenate([self.z,pad],axis=0),
-                                    self.z)
-      is_eval = T.eq(self.index.shape[1], 1)
-      self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
-      self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
-      #self.z = self.z[:self.index.shape[0]]
-      #self.index = theano.ifelse.ifelse(T.lt(self.sources[0].index.shape[0], self.index.shape[0]),
-      #                                  T.concatenate([self.sources[0].index,T.cast(pad[:,:,0],'int8')],axis=0),
-      #                                  self.index)
-      #self.index = self.index[:self.z.shape[0]]
-      #import theano.printing
-      #self.index = theano.printing.Print("i", attrs=['shape'])(self.index)
-      #self.z = theano.printing.Print("z", attrs=['shape'])(self.z)
 
     #xs = [s.output for s in self.sources]
     #self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)

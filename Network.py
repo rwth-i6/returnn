@@ -317,7 +317,7 @@ class LayerNetwork(object):
       if 'centroids' in obj:
         index = traverse(content, obj['centroids'], target, index)
         obj['centroids'] = network.get_layer(obj['centroids'])
-      if 'encoder' in obj:
+      if 'encoder' in obj and not source:
         index = output_index
       if 'target' in obj:
         index = network.j[obj['target']]
@@ -446,7 +446,7 @@ class LayerNetwork(object):
       if 'centroids' in model[layer_name].attrs:
         index = traverse(model, model[layer_name].attrs['centroids'], index)
         centroids = network.hidden[model[layer_name].attrs['centroids']]
-      if 'encoder' in model[layer_name].attrs:
+      if 'encoder' in model[layer_name].attrs and not x_in:
         index = output_index
       if 'target' in model[layer_name].attrs:
         target = model[layer_name].attrs['target']

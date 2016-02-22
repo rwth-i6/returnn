@@ -796,68 +796,40 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, eos=-2, sos=-1, pad=0, **kwargs):
-    target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, **kwargs):
+    kwargs['n_out'] = 1 #kwargs['y_in'][target].n_out
     super(LengthLayer, self).__init__(**kwargs)
-    self.set_attr('eos',eos)
-    self.set_attr('sos',sos)
-    self.set_attr('pad',pad)
-    assert len(self.sources) == 2
-    if eos < 0:
-      eos += self.y_in[target].n_out
-    if sos < 0:
-      sos += self.y_in[target].n_out
-
-    z_fw = T.dot(self.sources[0].output, self.W_in[0])
-    z_bw = T.dot(self.sources[1].output, self.W_in[1])
-    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
-    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
-
+    self.set_attr('min_len',min_len)
+    self.set_attr('max_len',max_len)
+    #pcx = T.nnet.softmax(self.get_linear_forward_output()[:,:,0].dimshuffle(1,0)).dimshuffle(1,0)
+    pcx = T.exp(self.get_linear_forward_output()[:,:,0]) * T.cast(self.index, 'float32')
+    pcx = pcx / T.sum(pcx,axis=0,keepdims=True)
+    hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(pcx.shape[1],axis=1) * pcx, axis=0) + numpy.float32(1)
+    real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
+    #self.cost_len = T.sum(self.sources[0].target_index) * T.mean(T.switch(T.lt(real + numpy.float32(1.),hyp),
+    #                                                                      T.sqrt(hyp-real),
+    #                                                                      (real - hyp)**2))
+    #self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
+    pos = -T.log(pcx[T.cast(real,'int32')])
+    neg = -T.log(numpy.float32(1.) - pcx)
+    self.cost_len = T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')])
     if self.train_flag:
-      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
-      sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos = T.sum(nll) * 0.5
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-      self.cost_sos = T.sum(nll) * 0.5
+      self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
+      #self.index = self.sources[0].target_index
     else:
-      self.cost_sos = 0.0
-      self.cost_eos = 0.0
-
-    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
-    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
-    batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(3 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] * pcx_bw[:,:,sos], axis=0) + 1 + pad)), 'int32')
-    #if self.train_flag:
-    #  self.length = T.cast(z_fw.shape[0] * batch,'int32')
-    #  self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    #  self.output = T.concatenate([self.sources[0].output,self.sources[1].output], axis=2)
-    #  return
-
-    max_length = T.max(length)
-    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
-    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
-
-    def cut(fw_t, bw_t, len_t, *args):
-      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
-      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
-      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
-      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
-      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
-      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
-    reduced, _ = theano.scan(cut,
-                             sequences = [fw, bw, length],
-                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
-    fw = reduced[0].dimshuffle(1,0,2)
-    bw = reduced[1].dimshuffle(1,0,2)[::-1]
-    self.index = reduced[3].dimshuffle(1,0)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    self.output = T.concatenate([fw,bw], axis=2)
-    self.length = length
+      #self.length = T.cast(real,'int32')
+      self.length = T.cast(hyp,'int32')
+    idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                        sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    self.index = idx.dimshuffle(1,0)[:-1]
+    self.output = self.b
 
   def cost(self):
-    return self.cost_eos + self.cost_sos, None
+    return self.cost_len, None
+
+  #def cost_scale(self):
+  #  return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") / T.sum(self.sources[0].target_index)
+
 
 class TruncationLayer(Layer):
   layer_class = "trunc"

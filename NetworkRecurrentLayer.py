@@ -326,6 +326,8 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
       assert n_units == n_out
+    if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class == 'length':
+      kwargs['sources'] = []
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
     self.set_attr('n_out', n_out)
@@ -374,13 +376,26 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", unit.n_out)
     pact = strtoact(pact)
     if n_dec != 0: # and not self.train_flag:
+      self.target_index = self.index
       if isinstance(n_dec,float):
-        n_dec = T.cast(T.cast(encoder[0].index.shape[0],'float32') * n_dec,'int32')
+        lengths = T.cast(T.ceil(T.sum(T.cast(encoder[0].index,'float32'),axis=0) * n_dec), 'int32')
+        if n_dec <= 1.0:
+          idx, _ = theano.map(lambda l_i, l_m:T.concatenate([T.ones((l_i,),'int8'),T.zeros((l_m-l_i,),'int8')]),
+                              [lengths], [T.max(lengths)+1])
+          self.index = idx.dimshuffle(1,0)[:-1]
+        else:
+          self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+        n_dec = T.cast(T.ceil(T.cast(encoder[0].index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
       elif n_dec == 'encoder-eval' and self.train_flag:
         n_dec = self.index.shape[0]
+        self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+      elif n_dec == 'encoder-hack':
+        self.index = encoder[0].index
+        n_dec = self.index.shape[0]
+        encoder = None
       elif n_dec == 'encoder' or (n_dec == 'encoder-eval' and not self.train_flag):
         n_dec = encoder[0].index.shape[0]
-      self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+        self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
     else:
       n_dec = self.index.shape[0]
 
