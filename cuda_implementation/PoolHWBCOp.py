@@ -1,6 +1,6 @@
 import theano.sandbox.cuda
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable, gpu_contiguous, GpuContiguous, GpuDimShuffle)
-from Util import get_c_support_code_common
+from .Util import get_c_support_code_common
 from theano.gof.opt import OpSub
 from theano.compile import optdb
 from theano import gof

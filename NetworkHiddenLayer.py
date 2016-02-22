@@ -451,6 +451,84 @@ class SubnetworkLayer(_NoOpLayer):
     self.output = self.subnetwork.output["output"].output
 
 
+class ChunkingSublayer(_NoOpLayer):
+  layer_class = "chunking_sublayer"
+  recurrent = True  # we don't know
+
+  def __init__(self, n_out, chunk_size, sublayer, chunk_step=1,
+               chunk_distribution="uniform",
+               add_left_context=0,
+               **kwargs):
+    super(ChunkingSublayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('chunk_size', chunk_size)
+    self.set_attr('chunk_step', chunk_step)
+    if isinstance(sublayer, (str, unicode)):
+      sublayer = json.loads(sublayer)
+    sub_n_out = sublayer.pop("n_out", None)
+    if sub_n_out: assert sub_n_out == n_out
+    self.set_attr('sublayer', sublayer)
+    self.set_attr('chunk_distribution', chunk_distribution)
+    self.set_attr('add_left_context', add_left_context)
+
+    assert len(self.sources) == 1
+    source = self.sources[0].output
+    n_in = self.sources[0].attrs["n_out"]
+    index = self.sources[0].index
+    assert source.ndim == 3  # not complicated to support others, just not implemented
+    t_last_start = T.maximum(source.shape[0] - chunk_size, 1)
+    t_range = T.arange(t_last_start, step=chunk_step)
+
+    from NetworkBaseLayer import SourceLayer
+    from NetworkLayer import get_layer_class
+    def make_sublayer(source, index, name):
+      layer_opts = sublayer.copy()
+      cl = layer_opts.pop("class")
+      layer_class = get_layer_class(cl)
+      source_layer = SourceLayer(name="%s_source" % name, n_out=n_in, x_out=source, index=index)
+      layer = layer_class(sources=[source_layer], index=index, name=name, n_out=n_out, network=self.network, **layer_opts)
+      return layer
+
+    output = T.zeros((source.shape[0], source.shape[1], n_out), dtype=source.dtype)
+    output_index_sum = T.zeros([source.shape[0], source.shape[1]], dtype="float32")
+    def step(t_start, output, output_index_sum, source, index):
+      t_end = T.minimum(t_start + chunk_size, source.shape[0])
+      if add_left_context > 0:
+        t_start_c = T.maximum(t_start - add_left_context, 0)
+      else:
+        t_start_c = t_start
+      chunk = source[t_start_c:t_end]
+      chunk_index = index[t_start_c:t_end]
+      layer = make_sublayer(source=chunk, index=chunk_index, name="%s_sublayer" % self.name)
+      l_output = layer.output
+      l_index_f32 = T.cast(layer.index, dtype="float32")
+      if add_left_context > 0:
+        l_output = l_output[t_start - t_start_c:]
+        l_index_f32 = l_index_f32[t_start - t_start_c:]
+      if chunk_distribution == "uniform": pass  # just leave it as it is
+      elif chunk_distribution == "triangle":
+        ts = T.arange(1, t_end - t_start + 1)
+        ts_rev = ts[::-1]
+        tri = T.cast(T.minimum(ts, ts_rev), dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * tri
+      else:
+        assert False, "unknown chunk distribution %r" % chunk_distribution
+      assert l_index_f32.ndim == 2
+      output = T.inc_subtensor(output[t_start:t_end], l_output * l_index_f32.dimshuffle(0, 1, 'x'))
+      output_index_sum = T.inc_subtensor(output_index_sum[t_start:t_end], l_index_f32)
+      return [output, output_index_sum]
+
+    (output, output_index_sum), _ = theano.reduce(
+      step, sequences=[t_range],
+      non_sequences=[source, index],
+      outputs_info=[output, output_index_sum])
+    self.index = T.gt(output_index_sum, 0)
+    output_index_sum = T.minimum(output_index_sum, numpy.float32(1.0))
+    assert output.ndim == 3
+    assert output_index_sum.ndim == 2
+    self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 

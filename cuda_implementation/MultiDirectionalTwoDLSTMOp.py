@@ -4,11 +4,11 @@ import theano.printing
 import theano.gof
 from theano import gof
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable, gpu_contiguous)
-from Util import raw_variable
+from .Util import raw_variable
 from theano.gof.opt import OpSub
 from theano.compile import optdb
 import theano.tensor as T
-from Util import get_c_support_code_common, get_c_support_code_mdlstm
+from .Util import get_c_support_code_common, get_c_support_code_mdlstm
 
 
 

@@ -3,7 +3,7 @@ from theano import gof
 from theano.compile import optdb
 from theano.gof import OpSub
 from theano.sandbox.cuda.basic_ops import gpu_contiguous, as_cuda_ndarray_variable
-from Util import get_c_support_code_common
+from .Util import get_c_support_code_common
 
 
 class CropToBatchImageSizeOp(theano.sandbox.cuda.GpuOp):

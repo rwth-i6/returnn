@@ -74,6 +74,7 @@ class LayerNetwork(object):
     self.total_cost = T.constant(0)
     self.update_step = 0
     self.errors = {}
+    self.loss = None
     self.ctc_priors = None
     self.default_mask = None  # any of the from_...() functions will set this
     self.sparse_input = None  # any of the from_...() functions will set this
