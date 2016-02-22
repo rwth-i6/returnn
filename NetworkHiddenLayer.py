@@ -440,7 +440,7 @@ class SubnetworkLayer(_NoOpLayer):
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
     if trainable:
-      self.params = self.subnetwork.get_params_shared_flat_dict()
+      self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
       print >>log.v2, "subnetwork with random initialization"
     else:
@@ -461,9 +461,11 @@ class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
   recurrent = True  # we don't know
 
-  def __init__(self, n_out, chunk_size, sublayer, chunk_step=1,
+  def __init__(self, n_out, sublayer,
+               chunk_size, chunk_step,
                chunk_distribution="uniform",
                add_left_context=0,
+               trainable=False,
                **kwargs):
     super(ChunkingSublayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
@@ -476,6 +478,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('sublayer', sublayer)
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
+    self.set_attr('trainable', trainable)
 
     assert len(self.sources) == 1
     source = self.sources[0].output
@@ -493,7 +496,9 @@ class ChunkingSublayer(_NoOpLayer):
       layer_class = get_layer_class(cl)
       source_layer = SourceLayer(name="%s_source" % name, n_out=n_in, x_out=source, index=index)
       layer = layer_class(sources=[source_layer], index=index, name=name, n_out=n_out, network=self.network, **layer_opts)
+      self.sublayer = layer
       return layer
+    self.sublayer = None
 
     output = T.zeros((source.shape[0], source.shape[1], n_out), dtype=source.dtype)
     output_index_sum = T.zeros([source.shape[0], source.shape[1]], dtype="float32")
@@ -533,6 +538,9 @@ class ChunkingSublayer(_NoOpLayer):
     assert output.ndim == 3
     assert output_index_sum.ndim == 2
     self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+    assert self.sublayer
+    if trainable:
+      self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
 
 
 class ConstantLayer(_NoOpLayer):
