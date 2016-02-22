@@ -903,8 +903,8 @@ class LengthLayer(HiddenLayer):
     hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(pcx.shape[1],axis=1) * pcx, axis=0) + numpy.float32(1)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
     if err == 'ce':
-      pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
-      neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
+      pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
+      neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
       self.cost_len = T.maximum(T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1]), 0.0) * T.sum(T.cast(self.sources[0].target_index.shape[1],'float32')) / T.sum(T.cast(self.sources[0].index.shape[1],'float32'))
     elif err == 'l2':
       self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
