@@ -124,7 +124,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
     //TODO: DX and DW are not checked here anymore, as they are harder to handle as arrays
     if(%(DV_h)s || %(Dc)s || %(Db)s)
     {
-      printf("output storage already exists\\n");
+      //printf("output storage already exists\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(DV_h)s);
       Py_XDECREF(%(Db)s);
@@ -277,7 +277,7 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
     return """
     if(%(Y)s || %(H)s || %(d)s)
     {
-      printf("Y or H or d already exist\\n");
+      //printf("Y or H or d already exist\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(Y)s);
       Py_XDECREF(%(H)s);

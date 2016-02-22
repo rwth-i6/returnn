@@ -76,7 +76,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
     if(%(DZ)s || %(DV_h)s || %(Dc)s)
     {
-      printf("output storage already exists\\n");
+      //printf("output storage already exists\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(DZ)s);
       Py_XDECREF(%(DV_h)s);
