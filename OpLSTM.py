@@ -207,7 +207,7 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
     return """
     if(%(Y)s || %(H)s || %(d)s)
     {
-      printf("Y or H or d already exist\\n");
+      //printf("Y or H or d already exist\\n");
       //TODO check if we can reuse it
       Py_XDECREF(%(Y)s);
       Py_XDECREF(%(H)s);
