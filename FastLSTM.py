@@ -197,7 +197,7 @@ class LSTMOp2Grad(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 3
+    return 1, 4
 
 LSTMOpGradNoInplaceInstance = LSTMOp2Grad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOp2Grad(inplace=True)
@@ -374,6 +374,6 @@ class LSTMOp2(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 3
+    return 1, 4
 
 LSTMOp2Instance = LSTMOp2()
