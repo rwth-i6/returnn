@@ -874,29 +874,32 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, **kwargs):
-    kwargs['n_out'] = 1 #kwargs['y_in'][target].n_out
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, **kwargs):
+    kwargs['n_out'] = 1
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
     self.set_attr('max_len',max_len)
-    #pcx = T.nnet.softmax(self.get_linear_forward_output()[:,:,0].dimshuffle(1,0)).dimshuffle(1,0)
     pcx = T.exp(self.get_linear_forward_output()[:,:,0]) * T.cast(self.index, 'float32')
     pcx = pcx / T.sum(pcx,axis=0,keepdims=True)
     hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(pcx.shape[1],axis=1) * pcx, axis=0) + numpy.float32(1)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
-    #self.cost_len = T.sum(self.sources[0].target_index) * T.mean(T.switch(T.lt(real + numpy.float32(1.),hyp),
-    #                                                                      T.sqrt(hyp-real),
-    #                                                                      (real - hyp)**2))
-    #self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
-    pos = -T.log(pcx[T.cast(real,'int32')])
-    neg = -T.log(numpy.float32(1.) - pcx)
-    self.cost_len = T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')])
-    if self.train_flag:
-      self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
-      #self.index = self.sources[0].target_index
+    if err == 'ce':
+      pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
+      neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-5,'float32'), T.constant(1.0,'float32')))
+      self.cost_len = T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1])
+    elif err == 'l2':
+      self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
+    elif err == 'exp':
+      self.cost_len = T.sum(self.sources[0].target_index) * T.mean(T.switch(T.lt(real + numpy.float32(1.),hyp),
+                                                                   T.sqrt(hyp-real), (real - hyp)**2))
     else:
-      #self.length = T.cast(real,'int32')
+      assert False, "invalid error: %s" % err
+
+    if oracle or self.train_flag:
+      self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
+    else:
       self.length = T.cast(hyp,'int32')
+
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
@@ -905,8 +908,8 @@ class LengthLayer(HiddenLayer):
   def cost(self):
     return self.cost_len, None
 
-  #def cost_scale(self):
-  #  return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") / T.sum(self.sources[0].target_index)
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") / T.sum(self.sources[0].target_index)
 
 
 class TruncationLayer(Layer):
