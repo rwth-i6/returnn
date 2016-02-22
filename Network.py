@@ -200,7 +200,7 @@ class LayerNetwork(object):
       network.get_layer_param = shared_get_layer_param
     if json_content is None:
       json_content = base_network.to_json_content()
-    cls.from_json(json_content, network=network)
+    cls.from_json(json_content, network=network, train_flag=base_network.train_flag)
     if share_params:
       trainable_params = network.get_all_params_vars()
       assert len(trainable_params) == 0
@@ -237,7 +237,8 @@ class LayerNetwork(object):
     The data input for the subnetwork is not derived from ourselves but specified
     explicitly through n_out & data_map.
     """
-    return self.from_base_network(self, json_content=json_content, n_out=n_out, data_map=data_map, data_map_i=data_map_i)
+    return self.from_base_network(self, json_content=json_content,
+                                  n_out=n_out, data_map=data_map, data_map_i=data_map_i)
 
   @classmethod
   def from_json(cls, json_content, n_in=None, n_out=None, network=None,
