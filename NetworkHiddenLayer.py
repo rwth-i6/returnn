@@ -900,26 +900,16 @@ class LengthLayer(HiddenLayer):
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
     self.set_attr('max_len',max_len)
-    p = T.exp(self.get_linear_forward_output()) * T.cast(self.index, 'float32').dimshuffle(0,1,'x').repeat(2,axis=2)
-    z = p / T.sum(p,axis=0,keepdims=True)
-    #z = self.get_linear_forward_output()
-    #p = z #T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1], z.shape[2])))
-    #pcx = p #.reshape(z.shape)
+    z = self.get_linear_forward_output() # * T.cast(self.index, 'float32').dimshuffle(0,1,'x').repeat(2,axis=2)
+    z = T.nnet.softmax(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))).reshape(z.shape)
+    p = T.nnet.softmax(z[:,:,1].dimshuffle(1,0)).dimshuffle(1,0)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
-    hyp = T.sum(T.arange(z.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * z[:,:,1], axis=0) + numpy.float32(1)
+    hyp = T.sum(T.arange(z.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * p, axis=0) + numpy.float32(1)
     if err == 'ce':
-      #trg = T.arange(z.shape[1], dtype='int32') * z.shape[0] + T.sum(self.sources[0].target_index,axis=0) - numpy.int32(1)
-      #self.cost_len = -T.sum(T.log(T.maximum(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))[trg,1],numpy.float32(1e-10))))
-      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
       targets = T.set_subtensor(T.zeros((z.shape[0],z.shape[1]),'int32')[T.sum(self.sources[0].target_index,axis=0) - numpy.int32(1)], numpy.int32(1)).flatten()
-      idx = (self.index.flatten() > 0).nonzero()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=targets[idx])
+      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z, y_idx=targets)
       self.cost_len = T.sum(nll)
-      #pcx = T.nnet.softmax(p).reshape(z.shape)
-      #hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * pcx[:,:,1], axis=0) + numpy.float32(1)
-      #pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
-      #neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
-      #self.cost_len = T.maximum(T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1]), 0.0) * T.sum(T.cast(self.sources[0].target_index.shape[1],'float32')) / T.sum(T.cast(self.sources[0].index.shape[1],'float32'))
     elif err == 'l2':
       self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
     elif err == 'exp':
@@ -943,122 +933,6 @@ class LengthLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-
-class OldLengthLayer(HiddenLayer):
-  layer_class = "oldlength"
-  def __init__(self, sos=-2, eos=-1, pad=0, **kwargs):
-    target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(OldLengthLayer, self).__init__(**kwargs)
-    self.set_attr('eos',eos)
-    self.set_attr('sos',sos)
-    self.set_attr('pad',pad)
-    assert len(self.sources) == 2
-    if eos < 0:
-      eos += self.y_in[target].n_out
-    if sos < 0:
-      sos += self.y_in[target].n_out
-
-    z_fw = T.dot(self.sources[0].output, self.W_in[0])
-    z_bw = T.dot(self.sources[1].output, self.W_in[1])
-    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
-    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
-
-    if self.train_flag:
-      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
-      sos_p = (T.eq(self.y_in[target], sos) > 0).nonzero()
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos = T.sum(nll) * z_fw.shape[0]
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[sos_p], y_idx=self.y_in[target][sos_p])
-      self.cost_sos = T.sum(nll) * z_bw.shape[0]
-    else:
-      self.cost_sos = 0.0
-      self.cost_eos = 0.0
-
-    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
-    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
-    batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,sos], axis=0) + 1 + pad)), 'int32')
-    max_length = T.max(length)
-    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
-    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
-
-    def cut(fw_t, bw_t, len_t, *args):
-      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
-      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
-      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
-      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
-      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
-      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
-    reduced, _ = theano.scan(cut,
-                             sequences = [fw, bw, length],
-                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
-    fw = reduced[0].dimshuffle(1,0,2)
-    bw = reduced[1].dimshuffle(1,0,2)[::-1]
-    self.index = reduced[3].dimshuffle(1,0)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    self.output = T.concatenate([fw,bw], axis=2)
-    self.length = length
-
-  def cost(self):
-    return self.cost_eos + self.cost_sos, None
-
-
-class EosLengthLayer(HiddenLayer):
-  layer_class = "eoslength"
-  def __init__(self, eos=-1, pad=0, **kwargs):
-    target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(EosLengthLayer, self).__init__(**kwargs)
-    self.set_attr('eos',eos)
-    self.set_attr('pad',pad)
-    assert len(self.sources) == 2
-    if eos < 0:
-      eos += self.y_in[target].n_out
-
-    z_fw = T.dot(self.sources[0].output, self.W_in[0])
-    z_bw = T.dot(self.sources[1].output, self.W_in[1])
-    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
-    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
-
-    if self.train_flag:
-      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos = T.sum(nll) * z_fw.shape[0]
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[::-1][eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_sos = T.sum(nll) * z_bw.shape[0]
-    else:
-      self.cost_sos = 0.0
-      self.cost_eos = 0.0
-
-    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
-    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
-    batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,eos], axis=0) + 1 + pad)), 'int32')
-    max_length = T.max(length)
-    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
-    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
-
-    def cut(fw_t, bw_t, len_t, *args):
-      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
-      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
-      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
-      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
-      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
-      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
-    reduced, _ = theano.scan(cut,
-                             sequences = [fw, bw, length],
-                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
-    fw = reduced[0].dimshuffle(1,0,2)
-    bw = reduced[1].dimshuffle(1,0,2)[::-1]
-    self.index = reduced[3].dimshuffle(1,0)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    self.output = T.concatenate([fw,bw], axis=2)
-    self.length = length
-
-  def cost(self):
-    return self.cost_eos + self.cost_sos, None
 
 
 class TruncationLayer(Layer):
