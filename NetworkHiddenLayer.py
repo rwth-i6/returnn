@@ -896,18 +896,30 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 class LengthLayer(HiddenLayer):
   layer_class = "length"
   def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, **kwargs):
-    kwargs['n_out'] = 1
+    kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
     self.set_attr('max_len',max_len)
-    pcx = T.exp(self.get_linear_forward_output()[:,:,0]) * T.cast(self.index, 'float32')
-    pcx = pcx / T.sum(pcx,axis=0,keepdims=True)
-    hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(pcx.shape[1],axis=1) * pcx, axis=0) + numpy.float32(1)
+    p = T.exp(self.get_linear_forward_output()) * T.cast(self.index, 'float32').dimshuffle(0,1,'x').repeat(2,axis=2)
+    z = p / T.sum(p,axis=0,keepdims=True)
+    #z = self.get_linear_forward_output()
+    #p = z #T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1], z.shape[2])))
+    #pcx = p #.reshape(z.shape)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
+    hyp = T.sum(T.arange(z.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * z[:,:,1], axis=0) + numpy.float32(1)
     if err == 'ce':
-      pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
-      neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
-      self.cost_len = T.maximum(T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1]), 0.0) * T.sum(T.cast(self.sources[0].target_index.shape[1],'float32')) / T.sum(T.cast(self.sources[0].index.shape[1],'float32'))
+      #trg = T.arange(z.shape[1], dtype='int32') * z.shape[0] + T.sum(self.sources[0].target_index,axis=0) - numpy.int32(1)
+      #self.cost_len = -T.sum(T.log(T.maximum(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))[trg,1],numpy.float32(1e-10))))
+      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+      targets = T.set_subtensor(T.zeros((z.shape[0],z.shape[1]),'int32')[T.sum(self.sources[0].target_index,axis=0) - numpy.int32(1)], numpy.int32(1)).flatten()
+      idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=targets[idx])
+      self.cost_len = T.sum(nll)
+      #pcx = T.nnet.softmax(p).reshape(z.shape)
+      #hyp = T.sum(T.arange(pcx.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * pcx[:,:,1], axis=0) + numpy.float32(1)
+      #pos = -T.log(T.clip(pcx[T.cast(real,'int32')-1], T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
+      #neg = -T.log(T.clip(numpy.float32(1.) - pcx, T.constant(1e-20,'float32'), T.constant(1.0,'float32')))
+      #self.cost_len = T.maximum(T.sum(pos) + T.sum(neg) - T.sum(neg[T.cast(real,'int32')-1]), 0.0) * T.sum(T.cast(self.sources[0].target_index.shape[1],'float32')) / T.sum(T.cast(self.sources[0].index.shape[1],'float32'))
     elif err == 'l2':
       self.cost_len = T.sum(self.sources[0].target_index) * T.mean((real - hyp)**2)
     elif err == 'exp':
