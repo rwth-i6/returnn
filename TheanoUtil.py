@@ -185,3 +185,21 @@ def grad_discard_out_of_bound(x, lower_bound, upper_bound):
 def _local_grad_discard(node):
   if isinstance(node.op, GradDiscardOutOfBound):
     return node.inputs
+
+
+def global_softmax_norm(z, index):
+  """
+  :param theano.Variable z: 3D array. time*batch*feature
+  :param theano.Variable index: 2D array, 0 or 1, time*batch
+  :rtype: theano.Variable
+  :returns 3D array. exp(z) / Z, where Z = sum(exp(z),axis=[0,2]) / z.shape[0].
+  """
+  assert z.ndim == 3
+  assert index.ndim == 2
+  index = T.cast(index, dtype="float32")
+  index_bc = index.dimshuffle(0, 1, 'x')
+  times = T.sum(index, axis=0)  # 1D, batch
+  ez = T.exp(z)
+  Z = T.sum(ez * index_bc, axis=[0, 2]) / times  # 1D, batch
+  Z_bc = Z.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  return ez / Z_bc
