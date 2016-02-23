@@ -1278,7 +1278,7 @@ class ErrorsLayer(_NoOpLayer):
     self.set_attr("sparse", True)
     self.z, z_dim = concat_sources(self.sources, unsparse=True)
     assert z_dim == n_out
-    self.output = T.neq(T.argmax(self.z, axis=2), self.y)
+    self.output = T.neq(T.argmax(self.z, axis=2), self.y) * self.index
 
   def errors(self):
     """
