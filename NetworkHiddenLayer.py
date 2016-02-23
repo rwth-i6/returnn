@@ -465,6 +465,7 @@ class ChunkingSublayer(_NoOpLayer):
                chunk_size, chunk_step,
                chunk_distribution="uniform",
                add_left_context=0,
+               normalize_output=True,
                trainable=False,
                **kwargs):
     super(ChunkingSublayer, self).__init__(**kwargs)
@@ -476,6 +477,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
+    self.set_attr('normalize_output', normalize_output)
     self.set_attr('trainable', trainable)
 
     sub_n_out = sublayer.pop("n_out", None)
@@ -541,10 +543,13 @@ class ChunkingSublayer(_NoOpLayer):
     self.scan_output = output
     self.scan_output_index_sum = output_index_sum
     self.index = T.gt(output_index_sum, 0)
-    output_index_sum = T.maximum(output_index_sum, numpy.float32(1.0))
     assert output.ndim == 3
-    assert output_index_sum.ndim == 2
-    self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+    if normalize_output:
+      output_index_sum = T.maximum(output_index_sum, numpy.float32(1.0))
+      assert output_index_sum.ndim == 2
+      self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+    else:
+      self.output = output
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
