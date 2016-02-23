@@ -478,14 +478,14 @@ class RecurrentUnitLayer(Layer):
         recurrent_transform = recurrent_transform[:-3]
       elif self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-        srng = RandomStreams(self.rng.randint(1234))
+        srng = RandomStreams(self.rng.randint(1234) + 1)
         self.lmmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['droplm'], size=self.index.shape), theano.config.floatX).dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
       else:
         self.lmmask = T.zeros_like(self.index, dtype='float32').dimshuffle(0,1,'x').repeat(unit.n_in,axis=2)
 
     if self.attrs['dropconnect'] > 0.0:
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234))
+      srng = RandomStreams(self.rng.randint(1234) + 1)
       connectmask = T.cast(srng.binomial(n=1, p=1.0 - self.attrs['dropconnect'], size=(unit.n_out,)), theano.config.floatX)
       connectmass = T.constant(1.0 / (1.0 - self.attrs['dropconnect']), dtype='float32')
       non_sequences += [connectmask, connectmass]
