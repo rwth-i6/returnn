@@ -950,7 +950,7 @@ class OldLengthLayer(HiddenLayer):
   def __init__(self, sos=-2, eos=-1, pad=0, **kwargs):
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(LengthLayer, self).__init__(**kwargs)
+    super(OldLengthLayer, self).__init__(**kwargs)
     self.set_attr('eos',eos)
     self.set_attr('sos',sos)
     self.set_attr('pad',pad)
