@@ -300,6 +300,12 @@ class SourceLayer(Container):
   def cost(self):
     return None, None
 
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    return None
+
 
 class Layer(Container):
   recurrent = False
