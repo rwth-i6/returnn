@@ -3,6 +3,7 @@ import theano
 import theano.sandbox.cuda
 import theano.tensor as T
 from theano.compile import ViewOp
+import numpy
 
 
 def time_batch_make_flat(val):
@@ -160,6 +161,14 @@ def chunked_time_reverse(source, chunk_size):
   return rev_correct_ndim[:source.shape[0]]
 
 
+def try_register_canonicalize(f):
+  try:
+    return T.opt.register_canonicalize(f)
+  except ValueError as e:
+    print "try_register_canonicalize warning:", e
+    return f  # just ignore
+
+
 class GradDiscardOutOfBound(ViewOp):
   # See also theano.gradient.GradClip for a similar Op.
   __props__ = ()
@@ -180,11 +189,16 @@ class GradDiscardOutOfBound(ViewOp):
 def grad_discard_out_of_bound(x, lower_bound, upper_bound):
   return GradDiscardOutOfBound(lower_bound, upper_bound)(x)
 
-@T.opt.register_canonicalize
+@try_register_canonicalize
 @theano.gof.local_optimizer([GradDiscardOutOfBound])
 def _local_grad_discard(node):
   if isinstance(node.op, GradDiscardOutOfBound):
     return node.inputs
+
+
+def log_sum_exp(x, axis):
+    x_max = T.max(x, axis=axis, keepdims=True)
+    return T.log(T.sum(T.exp(x - x_max), axis=axis)) + x_max
 
 
 def global_softmax_norm(z, index):
@@ -196,10 +210,15 @@ def global_softmax_norm(z, index):
   """
   assert z.ndim == 3
   assert index.ndim == 2
-  index = T.cast(index, dtype="float32")
+  index = T.cast(index, dtype="float32")  # 2D, time*batch
   index_bc = index.dimshuffle(0, 1, 'x')
   times = T.sum(index, axis=0)  # 1D, batch
-  ez = T.exp(z)
-  Z = T.sum(ez * index_bc, axis=[0, 2]) / times  # 1D, batch
-  Z_bc = Z.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
-  return ez / Z_bc
+  z_min = T.min(z, keepdims=True)
+  z_filtered = z * index_bc + z_min * (numpy.float32(1) - index_bc)
+  z_max = T.max(z_filtered, axis=2, keepdims=True)  # we ignore the out-of-index frames
+  ez = T.exp(z - z_max)
+  Z_frame = T.sum(ez, axis=2)  # 2D, time*batch
+  Z_log_sum = T.log(Z_frame) + z_max.dimshuffle(0, 1)
+  Z_norm = T.exp(T.sum(Z_log_sum * index, axis=0) / times)  # log-normalized. 1D, batch
+  Z_norm_bc = Z_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  return ez / Z_norm_bc
