@@ -780,6 +780,7 @@ class Device(object):
         except RuntimeError:
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.send("error")
+          sys.excepthook(*sys.exc_info())
           return
         except MemoryError:
           output_queue.send("error")
