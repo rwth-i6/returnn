@@ -481,6 +481,7 @@ class Layer(Container):
       nfs = fs / l2fs.dimshuffle(0, 'x')      # normalize rows
       l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
       self.output = nfs / l2fn.dimshuffle('x', 0)   # normalize columns
+    self.output.name = "%s.output" % self.name
 
   def to_json(self):
     attrs = super(Layer, self).to_json()
