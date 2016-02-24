@@ -191,8 +191,7 @@ def initCudaNotInMainProcCheck():
 
 
 def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
-  from Log import log
-  print >>log.v1, "Debug shell:"
+  print "Debug shell:"
   from Util import ObjAsDict
   import DebugHelpers
   user_global_ns_new = dict(ObjAsDict(DebugHelpers).items())
@@ -206,9 +205,13 @@ def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
   print "Also DebugHelpers available as 'debug'."
   if not user_ns:
     user_ns = {}
+  if user_ns:
+    print "Locals:"
+    for k, v in sorted(user_ns.items()):
+      print "  %s (%s)" % (k, type(v))
   import better_exchook
   better_exchook.debug_shell(user_ns, user_global_ns_new)
   if exit_afterwards:
-    print >>log.v1, "Debug shell exit. Exit now."
+    print "Debug shell exit. Exit now."
     sys.exit(1)
 

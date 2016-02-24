@@ -584,4 +584,5 @@ def demo():
   exit()
 
 if __name__ == "__main__":
-  demo()
+  Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
+
