@@ -905,7 +905,7 @@ class LengthLayer(HiddenLayer):
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
     self.set_attr('max_len',max_len)
-    z = self.get_linear_forward_output() # * T.cast(self.index, 'float32').dimshuffle(0,1,'x').repeat(2,axis=2)
+    z = self.get_linear_forward_output()
     z = T.nnet.softmax(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))).reshape(z.shape)
     p = T.nnet.softmax(z[:,:,1].dimshuffle(1,0)).dimshuffle(1,0)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
