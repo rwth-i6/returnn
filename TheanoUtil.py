@@ -3,6 +3,7 @@ import theano
 import theano.sandbox.cuda
 import theano.tensor as T
 from theano.compile import ViewOp
+import numpy
 
 
 def time_batch_make_flat(val):
@@ -160,6 +161,14 @@ def chunked_time_reverse(source, chunk_size):
   return rev_correct_ndim[:source.shape[0]]
 
 
+def try_register_canonicalize(f):
+  try:
+    return T.opt.register_canonicalize(f)
+  except ValueError as e:
+    print "try_register_canonicalize warning:", e
+    return f  # just ignore
+
+
 class GradDiscardOutOfBound(ViewOp):
   # See also theano.gradient.GradClip for a similar Op.
   __props__ = ()
@@ -180,7 +189,7 @@ class GradDiscardOutOfBound(ViewOp):
 def grad_discard_out_of_bound(x, lower_bound, upper_bound):
   return GradDiscardOutOfBound(lower_bound, upper_bound)(x)
 
-@T.opt.register_canonicalize
+@try_register_canonicalize
 @theano.gof.local_optimizer([GradDiscardOutOfBound])
 def _local_grad_discard(node):
   if isinstance(node.op, GradDiscardOutOfBound):
@@ -199,7 +208,10 @@ def global_softmax_norm(z, index):
   index = T.cast(index, dtype="float32")
   index_bc = index.dimshuffle(0, 1, 'x')
   times = T.sum(index, axis=0)  # 1D, batch
-  ez = T.exp(z)
+  z_min = T.min(z, keepdims=True)
+  z_filtered = z * index_bc + z_min * (numpy.float32(1) - index_bc)
+  z_max = T.max(z_filtered, axis=[0, 2], keepdims=True)  # we ignore the out-of-index frames
+  ez = T.exp(z - z_max)
   Z = T.sum(ez * index_bc, axis=[0, 2]) / times  # 1D, batch
   Z_bc = Z.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
   return ez / Z_bc
