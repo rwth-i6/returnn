@@ -500,6 +500,9 @@ class Device(object):
     compute_start_time = time.time()
     batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
+    if self.config.bool("debug_shell_first_compute", False):
+      print >>log.v1, "debug_shell_first_compute"
+      Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task == "train" or task == "theano_graph" or task == "eval":
       func = self.tester if task == "eval" else self.trainer
       output = []
@@ -507,9 +510,6 @@ class Device(object):
       while batch_end < batch_dim:
         batch_start = batch_end
         batch_end = min(batch_start + block_size, batch_dim)
-        if self.config.bool("debug_shell_first_compute", False):
-          print >>log.v1, "debug_shell_first_compute"
-          Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
         block_output = func(batch_start, batch_end)
         if not output:
           output = block_output
