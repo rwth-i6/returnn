@@ -149,3 +149,24 @@ void synchronize_streams()
 {
   dummy_kernel<<<1,1>>>();
 }
+
+__global__ void initKernel(float * data, float val, int size)
+{
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(; idx < size; idx += stride)
+    {
+      data[idx] = val;
+    }
+}
+
+void CudaNdarray_fill(CudaNdarray * a, float val)
+{
+  const int * dim = CudaNdarray_HOST_DIMS(a);
+  int n = CudaNdarray_SIZE(a);
+  float * a_data = CudaNdarray_DEV_DATA(a);
+  initKernel<<<DIM_GRID, DIM_BLOCK>>>(a_data, val, n);
+  CHECK_KERNEL_ERROR();
+}
+

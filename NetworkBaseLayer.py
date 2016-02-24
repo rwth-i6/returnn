@@ -300,11 +300,18 @@ class SourceLayer(Container):
   def cost(self):
     return None, None
 
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    return None
+
 
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in=None, target=None, sparse=False, cost_scale=1.0,
+  def __init__(self, sources, n_out, index, y_in=None, target=None, target_index=None,
+               sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, carry=False,
@@ -346,6 +353,10 @@ class Layer(Container):
     self.constraints = T.constant(0)
     if target:
       self.set_attr('target', target)
+    if target_index:
+      self.set_attr('target_index', target_index)
+      assert target_index in self.network.j
+      self.index = index = self.network.j[target_index]
     if cost_scale != 1:
       self.set_attr("cost_scale", cost_scale)
     if with_bias:
@@ -481,6 +492,7 @@ class Layer(Container):
       nfs = fs / l2fs.dimshuffle(0, 'x')      # normalize rows
       l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
       self.output = nfs / l2fn.dimshuffle('x', 0)   # normalize columns
+    self.output.name = "%s.output" % self.name
 
   def to_json(self):
     attrs = super(Layer, self).to_json()

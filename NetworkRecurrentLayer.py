@@ -648,6 +648,8 @@ class RecurrentUnitLayer(Layer):
 
       if not isinstance(outputs, list):
         outputs = [outputs]
+      if outputs:
+        outputs[0].name = "%s.act[0]" % self.name
 
       if self.recurrent_transform:
         self.recurrent_transform_state_var_seqs = outputs[-len(self.recurrent_transform.state_vars):]

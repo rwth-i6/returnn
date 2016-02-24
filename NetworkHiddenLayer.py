@@ -547,9 +547,8 @@ class ChunkingSublayer(_NoOpLayer):
     if normalize_output:
       output_index_sum = T.maximum(output_index_sum, numpy.float32(1.0))
       assert output_index_sum.ndim == 2
-      self.output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
-    else:
-      self.output = output
+      output = output / output_index_sum.dimshuffle(0, 1, 'x')  # renormalize
+    self.make_output(output)
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
@@ -588,11 +587,11 @@ class AddZeroRowsLayer(_NoOpLayer):
     self.set_attr("n_out", n_out)
     self.set_attr("row_index", row_index)
     self.set_attr("number", number)
-    self.output = T.concatenate(
+    self.make_output(T.concatenate(
       [z[:, :, :row_index],
        T.zeros((z.shape[0], z.shape[1], number), dtype=z.dtype),
        z[:, :, row_index:]],
-      axis=2)
+      axis=2))
 
 
 class RemoveRowsLayer(_NoOpLayer):
@@ -606,10 +605,10 @@ class RemoveRowsLayer(_NoOpLayer):
     self.set_attr("n_out", n_out)
     self.set_attr("row_index", row_index)
     self.set_attr("number", number)
-    self.output = T.concatenate(
+    self.make_output(T.concatenate(
       [z[:, :, :row_index],
        z[:, :, row_index + number:]],
-      axis=2)
+      axis=2))
 
 
 class BinOpLayer(_NoOpLayer):
