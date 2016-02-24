@@ -495,6 +495,11 @@ def forward(segmentName, features):
   print "posteriors min/max/mean/std:", stats
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print "posteriors:", posteriors
+    debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
+    debug_post_fn = "/tmp/crnn.pid%i.sprintinterface.debug.posteriors.txt" % os.getpid()
+    print "Wrote to files %s, %s" % (debug_feat_fn, debug_post_fn)
+    numpy.savetxt(debug_feat_fn, features)
+    numpy.savetxt(debug_post_fn, posteriors)
     assert False, "Error, posteriors contain invalid numbers."
 
   return posteriors
