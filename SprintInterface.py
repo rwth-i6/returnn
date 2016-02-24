@@ -456,6 +456,11 @@ def train(segmentName, features, targets=None):
 
 
 def forward(segmentName, features):
+  """
+  :param numpy.ndarray features: format (input-feature,time) (via Sprint)
+  :return numpy.ndarray, format (output-dim,time)
+  """
+  print "Sprint forward", segmentName, features.shape
   assert engine is not None, "not initialized"
   assert sprintDataset
 
@@ -486,6 +491,11 @@ def forward(segmentName, features):
   # Reformat to Sprint expected format (emission,time).
   posteriors = posteriors.transpose()
   assert posteriors.shape == (OutputDim, T)
+  stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
+  print "posteriors min/max/mean/std:", stats
+  if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
+    print "posteriors:", posteriors
+    assert False, "Error, posteriors contain invalid numbers."
 
   return posteriors
 
