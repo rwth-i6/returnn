@@ -5,6 +5,7 @@ from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInsta
 from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
 from cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
 from cuda_implementation.PoolHWBCOp import PoolHWBCOp
+from cuda_implementation.FractionalMaxPoolingOp import fmp
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
@@ -185,38 +186,31 @@ def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width,
     return Y
 
 
-class ConvPoolLayer2(TwoDBaseLayer):
-  layer_class = "conv2"
+class ConvBaseLayer(TwoDBaseLayer):
+  layer_class = "conv_base"
   recurrent = False
 
-  def __init__(self, n_features, filter, pool_size, activation="tanh", **kwargs):
+  def __init__(self, n_features, filter, activation="tanh", **kwargs):
     kwargs['n_out'] = n_features
-    super(ConvPoolLayer2, self).__init__(**kwargs)
+    super(ConvBaseLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
-    source = self.sources[0]
-    n_in = source.attrs['n_out']
-    X = source.output
-    assert X.ndim == 4
-    sizes = source.output_sizes
+    self.source = self.sources[0]
+    self.n_in = self.source.attrs['n_out']
+    self.X = self.source.output
+    assert self.X.ndim == 4
+    self.n_features = n_features
 
     self.set_attr('n_features', n_features)
     self.set_attr('filter', filter)
-    self.set_attr('pool_size', pool_size)
     self.set_attr('activation', activation)
+    self.set_attr('n_out', n_features)
 
     #TODO: maybe this ordering is not consistent with Dewis implementation
     self.filter_height = filter[0]
     self.filter_width = filter[1]
-    self.pool_size = pool_size
-
-    W = self.create_conv_weights(n_features, n_in, self.filter_height, self.filter_width)
-    b = self.create_and_add_bias(n_features)
-
-    Z = conv_crop_pool_op(X, sizes, W, b, n_in, n_features, self.filter_height, self.filter_width, pool_size)
-    Y = strtoact(activation)(Z)
-    self.output = Y
-    self.output_sizes = self.output_size_from_input_size(sizes)
-    self.set_attr('n_out', n_features)
+    self.activation = strtoact(activation)
+    self.W = self.create_conv_weights(n_features, self.n_in, self.filter_height, self.filter_width)
+    self.b = self.create_and_add_bias(n_features)
 
   def create_conv_weights(self, n_features, n_in, filter_height, filter_width, name_suffix = ""):
     filter_shape = (n_features, n_in, filter_height, filter_width)
@@ -230,6 +224,29 @@ class ConvPoolLayer2(TwoDBaseLayer):
     b = self.add_param(b)
     return b
 
+  def conv_output_size_from_input_size(self, sizes):
+    heights = sizes[:, 0]
+    widths = sizes[:, 1]
+    heights = heights - self.filter_height + 1
+    widths = widths - self.filter_width + 1
+    return T.concatenate((heights[:, None], widths[:, None]), axis=1)
+
+
+class ConvPoolLayer2(ConvBaseLayer):
+  layer_class = "conv2"
+  recurrent = False
+
+  def __init__(self, pool_size, **kwargs):
+    super(ConvPoolLayer2, self).__init__(**kwargs)
+    self.pool_size = pool_size
+    sizes = self.output_size_from_input_size(self.source.output_sizes)
+
+    Z = conv_crop_pool_op(self.X, sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
+                          self.filter_width, pool_size)
+    Y = self.activation(Z)
+    self.output = Y
+    self.output_sizes = self.output_size_from_input_size(sizes)
+
   def output_size_from_input_size(self, sizes):
     heights = sizes[:, 0]
     widths = sizes[:, 1]
@@ -239,3 +256,14 @@ class ConvPoolLayer2(TwoDBaseLayer):
     heights //= p1
     widths //= p2
     return T.concatenate((heights[:, None], widths[:, None]), axis=1)
+
+
+class ConvFMPLayer(ConvBaseLayer):
+  layer_class = "conv_fmp"
+  recurrent = False
+
+  def __init__(self, factor=numpy.sqrt(2), **kwargs):
+    super(ConvFMPLayer, self).__init__(**kwargs)
+    conv_out = CuDNNConvHWBCOpValidInstance(self.X, self.W, self.b)
+    conv_out_sizes = self.conv_output_size_from_input_size(self.source.output_sizes)
+    self.output, self.output_sizes = fmp(conv_out, conv_out_sizes, numpy.cast["float32"](factor))
