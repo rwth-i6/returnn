@@ -308,14 +308,24 @@ def global_softmax(z, index, mode):
     Z_log_norm = T.log(Z_norm)
     Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
     Z_log_norm_bc = Z_log_norm_bc + z_max2_bc
-  elif mode.startswith("gauss("):
+  elif mode.startswith("gauss-maxshift("):
     modeend = mode.find(")-")
     assert modeend >= 0
-    sigma = float(mode[len("gauss("):modeend])
+    sigma = float(mode[len("gauss-maxshift("):modeend])
     z_gmax2 = gaussian_filter_1d(z_max2, sigma=sigma, axis=0)
     z_gmax2_bc = z_gmax2.dimshuffle(0, 1, 'x')
     z = z - z_gmax2_bc
     return global_softmax(z - z_gmax2_bc, mode=mode[modeend + 2:], index=index)
+  elif mode.startswith("gauss-std-norm("):
+    modeend = mode.find(")")
+    assert modeend >= 0 and modeend == len(mode) - 1
+    sigma = float(mode[len("gauss-std-norm("):modeend])
+    Z_log_frame = T.log(Z_frame) + z_max2
+    assert Z_log_frame.ndim == 2
+    Z_log_frame_g = gaussian_filter_1d(z_max2, sigma=sigma, axis=0)
+    Z_log_norm = log_sum_exp_index(Z_log_frame_g, index=index, axis=0) - T.log(times)
+    assert Z_log_norm.ndim == 1
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
   else:
     assert False, "invalid global_softmax mode %r" % mode
   return T.exp(z - Z_log_norm_bc)
@@ -345,7 +355,8 @@ def show_global_softmax_stats(z):
   z = z.dimshuffle(0, 'x', 1)  # add batch-dim
   index = T.ones((z.shape[0], 1))
   for mode in ["local", "log-norm", "maxshift-log-norm", "std-norm", "maxshift-std-norm",
-               "gauss(2.0)-std-norm", "gauss(5.0)-std-norm", "gauss(2.0)-log-norm"]:
+               "gauss-maxshift(2.0)-std-norm", "gauss-maxshift(5.0)-std-norm", "gauss-maxshift(2.0)-log-norm",
+               "gauss-std-norm(2.0)", "gauss-std-norm(5.0)"]:
     print " mode", mode
     y = global_softmax(z, index=index, mode=mode).eval()
     assert y.ndim == 3 and y.shape[1] == 1
