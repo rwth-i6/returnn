@@ -331,29 +331,29 @@ def show_global_softmax_stats(z):
   z_numpy = z
   z = T.as_tensor_variable(z)
   if not isinstance(z, numpy.ndarray): z = z.eval()
-  print "show_global_softmax_stats for shape", z_numpy.shape
-  print " z min/max/mean/var =", stats(z_numpy)
+  print("show_global_softmax_stats for shape %s" % (z_numpy.shape,))
+  print(" z min/max/mean/var = %s" % (stats(z_numpy),))
   z_max1 = numpy.max(z_numpy, axis=1)
-  print " z max1 min/max/mean/var =", stats(z_max1)
+  print(" z max1 min/max/mean/var = %s" % (stats(z_max1),))
   z_dmax1 = z_max1[:-1] - z_max1[1:]
-  print " z dmax1 min/max/mean/var =", stats(z_dmax1)
+  print(" z dmax1 min/max/mean/var = %s" % (stats(z_dmax1),))
   z_gmax1 = gaussian_filter_1d(T.as_tensor_variable(z_max1).dimshuffle(0, 'x'), sigma=10.0, axis=0).eval()[:,0]
-  print " z gmax1 min/max/mean/var =", stats(z_gmax1)
+  print(" z gmax1 min/max/mean/var = %s" % (stats(z_gmax1),))
   z_dgmax1 = z_gmax1[:-1] - z_gmax1[1:]
-  print " z dgmax1 min/max/mean/var =", stats(z_dgmax1)
+  print(" z dgmax1 min/max/mean/var = %s" % (stats(z_dgmax1),))
   z = T.cast(z, "float32")  # we always expect this precision
   z = z.dimshuffle(0, 'x', 1)  # add batch-dim
   index = T.ones((z.shape[0], 1))
   for mode in ["local", "log-norm", "maxshift-log-norm", "std-norm", "maxshift-std-norm",
                "gauss(2.0)-std-norm", "gauss(5.0)-std-norm", "gauss(2.0)-log-norm"]:
-    print " mode", mode
+    print(" mode %s" % mode)
     y = global_softmax(z, index=index, mode=mode).eval()
     assert y.ndim == 3 and y.shape[1] == 1
     y = y[:,0,:]
-    print "  min/max/mean/var =", stats(y)
+    print("  min/max/mean/var = %s" % (stats(y),))
     log_y = numpy.log(y)
-    print "  log min/max/mean/var =", stats(log_y)
+    print("  log min/max/mean/var = %s" % (stats(log_y),))
     y_sum1 = numpy.sum(y, axis=1)
-    print "  sum1 min/max/mean/var =", stats(y_sum1)
+    print("  sum1 min/max/mean/var = %s" % (stats(y_sum1),))
     log_y_sum1 = numpy.log(y_sum1)
-    print "  log sum1 min/max/mean/var =", stats(log_y_sum1)
+    print("  log sum1 min/max/mean/var = %s" % (stats(log_y_sum1),))
