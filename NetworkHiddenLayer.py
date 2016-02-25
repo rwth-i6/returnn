@@ -899,7 +899,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, proj, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
     kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
@@ -950,16 +950,18 @@ class LengthProjectionLayer(HiddenLayer):
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
     super(LengthProjectionLayer, self).__init__(**kwargs)
     self.params = {}
-    z = T.concatenate([s.act[0][-1:] for s in self.sources], axis=1)
-    self.W = self.add_param(self.create_forward_weights(sum([s.attrs['n_out'] for s in self.sources]), 1, name='W_%s' % self.name))
+    z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
+    dim = sum([s.attrs['n_out'] for s in self.sources])
+    self.W = self.add_param(self.create_forward_weights(1, dim, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    hyp = (T.dot(self.W, z) + self.b)
+    #hyp = (T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0))**2 #+ T.sum(self.sources[0].index, axis=0)
+    hyp = T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
     self.cost_val = T.sum((hyp - real)**2)
     if self.train_flag:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
       self.length = T.ceil(hyp)
-    self.length = T.cast(self.length, 'int32')[0,:,0]
+    self.length = T.cast(self.length, 'int32')
 
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
@@ -970,7 +972,7 @@ class LengthProjectionLayer(HiddenLayer):
     return self.cost_val, None
 
   def cost_scale(self):
-    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") 
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
 class DetectionLayer(HiddenLayer):
