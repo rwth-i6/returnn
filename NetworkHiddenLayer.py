@@ -899,7 +899,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, proj, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
     kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
@@ -940,6 +940,55 @@ class LengthLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class LengthProjectionLayer(HiddenLayer):
+  layer_class = "length_projection"
+  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(LengthProjectionLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.act[0][-1:] for s in self.sources], axis=1)
+    self.W = self.add_param(self.create_forward_weights(sum([s.attrs['n_out'] for s in self.sources]), 1, name='W_%s' % self.name))
+    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    hyp = (T.dot(self.W, z) + self.b)
+    self.cost_val = T.sum((hyp - real)**2)
+    if self.train_flag:
+      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
+    else:
+      self.length = T.ceil(hyp)
+    self.length = T.cast(self.length, 'int32')[0,:,0]
+
+    idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                        sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    self.index = idx.dimshuffle(1,0)[:-1]
+    self.output = z
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32") 
+
+
+class DetectionLayer(HiddenLayer):
+  layer_class = "detection"
+  def __init__(self, label_idx, **kwargs):
+    kwargs['n_out'] = 2
+    super(DetectionLayer, self).__init__(**kwargs)
+    z = self.get_linear_forward_output()
+    z = T.nnet.softmax(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))).reshape(z.shape)
+    idx = (self.index.flatten() > 0).nonzero()
+    targets = T.eq(self.y_in[self.attrs['target']], label_idx)
+    z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=targets[idx])
+    self.cost_val = T.sum(nll)
+    self.output = z
+
+  def cost(self):
+    return self.cost_val, None
 
 
 class TruncationLayer(Layer):
