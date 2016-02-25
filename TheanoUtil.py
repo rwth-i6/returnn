@@ -165,7 +165,7 @@ def try_register_canonicalize(f):
   try:
     return T.opt.register_canonicalize(f)
   except ValueError as e:
-    print "try_register_canonicalize warning:", e
+    print("try_register_canonicalize warning: %s" % e)
     return f  # just ignore
 
 
