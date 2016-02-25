@@ -201,7 +201,7 @@ def log_sum_exp(x, axis):
     return T.log(T.sum(T.exp(x - x_max), axis=axis)) + x_max
 
 
-def global_softmax_norm(z, index):
+def global_softmax_norm(z, index, log_norm=True):
   """
   :param theano.Variable z: 3D array. time*batch*feature
   :param theano.Variable index: 2D array, 0 or 1, time*batch
@@ -218,7 +218,13 @@ def global_softmax_norm(z, index):
   z_max = T.max(z_filtered, axis=2, keepdims=True)  # we ignore the out-of-index frames
   ez = T.exp(z - z_max)
   Z_frame = T.sum(ez, axis=2)  # 2D, time*batch
-  Z_log_sum = T.log(Z_frame) + z_max.dimshuffle(0, 1)
-  Z_norm = T.exp(T.sum(Z_log_sum * index, axis=0) / times)  # log-normalized. 1D, batch
-  Z_norm_bc = Z_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
-  return ez / Z_norm_bc
+  if log_norm:
+    Z_log_sum = T.log(Z_frame) + z_max.dimshuffle(0, 1)
+    Z_log_norm = T.sum(Z_log_sum * index, axis=0) / times  # log-normalized. 1D, batch
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  else:
+    Z_norm = T.sum(Z_frame * index, axis=0) / times  # 1D, batch
+    Z_log_norm = T.log(Z_norm)
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+    Z_log_norm_bc += z_max
+  return T.exp(z - Z_log_norm_bc)
