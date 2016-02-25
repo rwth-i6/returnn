@@ -909,10 +909,10 @@ class LengthLayer(HiddenLayer):
     p = T.nnet.softmax(z[:,:,1].dimshuffle(1,0)).dimshuffle(1,0)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
     hyp = T.sum(T.arange(z.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * p, axis=0) + numpy.float32(1)
+    idx = (self.index.flatten() > 0).nonzero()
     if err == 'ce':
       targets = T.set_subtensor(T.zeros((z.shape[0],z.shape[1]),'int32')[T.sum(self.sources[0].target_index,axis=0) - numpy.int32(1)], numpy.int32(1)).flatten()
       z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
-      idx = (self.index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=targets[idx])
       self.cost_len = T.sum(nll)
     elif err == 'l2':
