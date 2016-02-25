@@ -112,7 +112,7 @@ class OutputLayer(Layer):
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.i = (self.index.flatten() > 0).nonzero()
-    self.j = ((T.constant(1.0) - self.index.flatten()) > 0).nonzero()
+    self.j = ((1 - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':

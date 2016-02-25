@@ -326,7 +326,7 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
       assert n_units == n_out
-    if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class == 'length':
+    if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('length'):
       kwargs['sources'] = []
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
