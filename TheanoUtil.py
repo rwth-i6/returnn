@@ -3,6 +3,7 @@ import theano
 import theano.sandbox.cuda
 import theano.tensor as T
 from theano.compile import ViewOp
+import numpy
 
 
 def time_batch_make_flat(val):
@@ -160,6 +161,14 @@ def chunked_time_reverse(source, chunk_size):
   return rev_correct_ndim[:source.shape[0]]
 
 
+def try_register_canonicalize(f):
+  try:
+    return T.opt.register_canonicalize(f)
+  except ValueError as e:
+    print("try_register_canonicalize warning: %s" % e)
+    return f  # just ignore
+
+
 class GradDiscardOutOfBound(ViewOp):
   # See also theano.gradient.GradClip for a similar Op.
   __props__ = ()
@@ -180,14 +189,84 @@ class GradDiscardOutOfBound(ViewOp):
 def grad_discard_out_of_bound(x, lower_bound, upper_bound):
   return GradDiscardOutOfBound(lower_bound, upper_bound)(x)
 
-@T.opt.register_canonicalize
+@try_register_canonicalize
 @theano.gof.local_optimizer([GradDiscardOutOfBound])
 def _local_grad_discard(node):
   if isinstance(node.op, GradDiscardOutOfBound):
     return node.inputs
 
 
-def global_softmax_norm(z, index):
+
+def gaussian_filter_1d(x, sigma, axis, window_radius=40):
+  """
+  Filter 1d input with a Gaussian using mode `nearest`.
+  x is expected to be 2D/3D of type (time,batch,...).
+  Adapted via: https://github.com/Theano/Theano/issues/3793
+  Original Author: https://github.com/matthias-k
+  """
+  assert 2 <= x.ndim <= 3
+  assert 0 <= axis < x.ndim
+
+  # Construction of 1d kernel
+  filter_1d = T.arange(2*window_radius + 1) - window_radius
+  filter_1d = T.exp(-0.5*filter_1d**2/sigma**2)
+  filter_1d = filter_1d / filter_1d.sum()
+  filter_1d = filter_1d.astype(x.dtype)  # 1D, window-dim
+
+  blur_dims = [1] + [i for i in range(x.ndim) if i not in (1, axis)] + [axis]
+  while len(blur_dims) < 4:
+    blur_dims.insert(len(blur_dims) - 1, 'x')
+  assert len(blur_dims) == 4
+  blur_input = x.dimshuffle(blur_dims)
+  assert blur_input.ndim == 4
+  filter_W = filter_1d.dimshuffle(['x','x','x',0])
+
+  # Construction of filter pipeline
+  blur_input_start = blur_input[:, :, :, :1]
+  blur_input_start_padding = T.repeat(blur_input_start, window_radius, axis=3)
+  blur_input_end = blur_input[:, :, :, -1:]
+  blur_input_end_padding = T.repeat(blur_input_end, window_radius, axis=3)
+
+  padded_input = T.concatenate([blur_input_start_padding, blur_input, blur_input_end_padding], axis=3)
+
+  # padded_input supposed to be 4D (batch size, stack size, nb row, nb col).
+  # filter_W supposed to be 4D (nb filters, stack size, nb row, nb col).
+  blur_op = T.nnet.conv2d(padded_input, filter_W, border_mode='valid', filter_shape=[1, 1, 1, None])
+  # blur_op is 4D (batch size, nb filters, output row, output col).
+  # output row = stack size * nb row.
+  blur_op = blur_op[:, 0, :, :]  # only one filter, remove dimension
+  # blur_op is 3D (batch size, output row, output col).
+  y = blur_op.dimshuffle({0:2,2:1}[axis], 0, {0:1,2:2}[axis])
+  if x.ndim == 2: y = y[:, :, 0]
+  return y
+
+
+def log_sum_exp(x, axis):
+  x_max = T.max(x, axis=axis)
+  x_max_bc = T.makeKeepDims(x, x_max, axis=axis)
+  return T.log(T.sum(T.exp(x - x_max_bc), axis=axis)) + x_max
+
+def max_filtered(x, axis, index):
+  index = T.cast(index, dtype="float32")  # 2D, time*batch
+  index_bc = index.dimshuffle(*(range(index.ndim) + ['x'] * (x.ndim - index.ndim)))
+  x_min = T.min(x, axis=axis, keepdims=True)
+  x_filtered = x * index_bc + x_min * (numpy.float32(1) - index_bc)
+  assert x_filtered.ndim == x.ndim
+  x_max = T.max(x_filtered, axis=axis)  # we ignore the out-of-index frames
+  return x_max
+
+def log_sum_exp_index(x, axis, index):
+  index = T.cast(index, dtype="float32")  # 2D, time*batch
+  index_bc = index.dimshuffle(*(range(index.ndim) + ['x'] * (x.ndim - index.ndim)))
+  assert index_bc.ndim == x.ndim
+  x_max = max_filtered(x, axis=axis, index=index)  # we ignore the out-of-index frames
+  x_max_bc = T.makeKeepDims(x, x_max, axis=axis)
+  assert x.ndim == x_max_bc.ndim
+  x_shift = (x - x_max_bc) * index_bc  # filter out out-of-index. exp() could be inf otherwise
+  return T.log(T.sum(T.exp(x_shift) * index_bc, axis=axis)) + x_max
+
+
+def global_softmax(z, index, mode):
   """
   :param theano.Variable z: 3D array. time*batch*feature
   :param theano.Variable index: 2D array, 0 or 1, time*batch
@@ -196,10 +275,96 @@ def global_softmax_norm(z, index):
   """
   assert z.ndim == 3
   assert index.ndim == 2
-  index = T.cast(index, dtype="float32")
+  index = T.cast(index, dtype="float32")  # 2D, time*batch
   index_bc = index.dimshuffle(0, 1, 'x')
   times = T.sum(index, axis=0)  # 1D, batch
-  ez = T.exp(z)
-  Z = T.sum(ez * index_bc, axis=[0, 2]) / times  # 1D, batch
-  Z_bc = Z.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
-  return ez / Z_bc
+  assert times.ndim == 1
+  z_max2 = T.max(z, axis=2)
+  z_max2_bc = z_max2.dimshuffle(0, 1, 'x')
+  ez = T.exp(z - z_max2_bc)
+  Z_frame = T.sum(ez, axis=2)  # 2D, time*batch
+  if mode == "local":  # this is classic framewise softmax
+    Z_log_norm_bc = T.log(Z_frame).dimshuffle(0, 1, 'x') + z_max2_bc
+  elif mode == "log-norm":
+    Z_log_frame = T.log(Z_frame) + z_max2
+    Z_log_norm = T.sum(Z_log_frame * index, axis=0) / times  # log-normalized. 1D, batch
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  elif mode == "maxshift-log-norm":
+    Z_log_frame = T.log(Z_frame)
+    Z_log_norm = T.sum(Z_log_frame * index, axis=0) / times  # log-normalized. 1D, batch
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+    Z_log_norm_bc = Z_log_norm_bc + z_max2_bc
+  elif mode == "std-norm":
+    #Z_log_norm = T.log( T.sum(T.exp(T.log(Z_frame) + z_max), axis=0) / times )  <- we want that
+    Z_log_frame = T.log(Z_frame) + z_max2
+    assert Z_log_frame.ndim == 2
+    Z_log_norm = log_sum_exp_index(Z_log_frame, index=index, axis=0) - T.log(times)
+    assert Z_log_norm.ndim == 1
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  elif mode == "maxshift-std-norm":
+    # We normalize each shifted frame.
+    Z_norm = T.sum(Z_frame * index, axis=0) / times  # 1D, batch
+    assert Z_norm.ndim == 1
+    Z_log_norm = T.log(Z_norm)
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+    Z_log_norm_bc = Z_log_norm_bc + z_max2_bc
+  elif mode.startswith("gauss-maxshift("):
+    modeend = mode.find(")-")
+    assert modeend >= 0
+    sigma = float(mode[len("gauss-maxshift("):modeend])
+    z_gmax2 = gaussian_filter_1d(z_max2, sigma=sigma, axis=0)
+    z_gmax2_bc = z_gmax2.dimshuffle(0, 1, 'x')
+    z = z - z_gmax2_bc
+    return global_softmax(z - z_gmax2_bc, mode=mode[modeend + 2:], index=index)
+  elif mode.startswith("gauss-std-norm("):
+    modeend = mode.find(")")
+    assert modeend >= 0 and modeend == len(mode) - 1
+    sigma = float(mode[len("gauss-std-norm("):modeend])
+    Z_log_frame = T.log(Z_frame) + z_max2
+    assert Z_log_frame.ndim == 2
+    Z_log_frame_g = gaussian_filter_1d(z_max2, sigma=sigma, axis=0)
+    Z_log_norm = log_sum_exp_index(Z_log_frame_g, index=index, axis=0) - T.log(times)
+    assert Z_log_norm.ndim == 1
+    Z_log_norm_bc = Z_log_norm.dimshuffle('x', 0, 'x')  # 3D, time*batch*feature
+  else:
+    assert False, "invalid global_softmax mode %r" % mode
+  return T.exp(z - Z_log_norm_bc)
+
+
+def show_global_softmax_stats(z):
+  """
+  :param z: numpy.ndarray or Theano Var (eval-able), 2D time*features
+  """
+  def stats(y): return numpy.min(y), numpy.max(y), numpy.mean(y), numpy.var(y)
+  if z.ndim == 3: z = z[:,0,:]
+  assert z.ndim == 2
+  z_numpy = z
+  z = T.as_tensor_variable(z)
+  if not isinstance(z, numpy.ndarray): z = z.eval()
+  print("show_global_softmax_stats for shape %s" % (z_numpy.shape,))
+  print(" z min/max/mean/var = %s" % (stats(z_numpy),))
+  z_max1 = numpy.max(z_numpy, axis=1)
+  print(" z max1 min/max/mean/var = %s" % (stats(z_max1),))
+  z_dmax1 = z_max1[:-1] - z_max1[1:]
+  print(" z dmax1 min/max/mean/var = %s" % (stats(z_dmax1),))
+  z_gmax1 = gaussian_filter_1d(T.as_tensor_variable(z_max1).dimshuffle(0, 'x'), sigma=10.0, axis=0).eval()[:,0]
+  print(" z gmax1 min/max/mean/var = %s" % (stats(z_gmax1),))
+  z_dgmax1 = z_gmax1[:-1] - z_gmax1[1:]
+  print(" z dgmax1 min/max/mean/var = %s" % (stats(z_dgmax1),))
+  z = T.cast(z, "float32")  # we always expect this precision
+  z = z.dimshuffle(0, 'x', 1)  # add batch-dim
+  index = T.ones((z.shape[0], 1))
+  for mode in ["local", "log-norm", "maxshift-log-norm", "std-norm", "maxshift-std-norm",
+               "gauss-maxshift(2.0)-std-norm", "gauss-maxshift(5.0)-std-norm", "gauss-maxshift(2.0)-log-norm",
+               "gauss-std-norm(2.0)", "gauss-std-norm(5.0)"]:
+    print(" mode %s" % mode)
+    y = global_softmax(z, index=index, mode=mode).eval()
+    assert y.ndim == 3 and y.shape[1] == 1
+    y = y[:,0,:]
+    print("  min/max/mean/var = %s" % (stats(y),))
+    log_y = numpy.log(y)
+    print("  log min/max/mean/var = %s" % (stats(log_y),))
+    y_sum1 = numpy.sum(y, axis=1)
+    print("  sum1 min/max/mean/var = %s" % (stats(y_sum1),))
+    log_y_sum1 = numpy.log(y_sum1)
+    print("  log sum1 min/max/mean/var = %s" % (stats(log_y_sum1),))

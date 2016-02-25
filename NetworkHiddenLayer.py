@@ -899,14 +899,15 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, **kwargs):
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
     kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
     self.set_attr('max_len',max_len)
-    z = self.get_linear_forward_output() # * T.cast(self.index, 'float32').dimshuffle(0,1,'x').repeat(2,axis=2)
+    z = self.get_linear_forward_output()
     z = T.nnet.softmax(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))).reshape(z.shape)
-    p = T.nnet.softmax(z[:,:,1].dimshuffle(1,0)).dimshuffle(1,0)
+    p = T.clip(T.cast(self.index,'float32') * z[:,:,1], T.constant(1e-20, 'float32'), T.constant(1., 'float32'))
+    p = p / T.sum(p,axis=0) #T.nnet.softmax(z[:,:,1].dimshuffle(1,0)).dimshuffle(1,0)
     real = T.sum(T.cast(self.sources[0].target_index,'float32'), axis=0)
     hyp = T.sum(T.arange(z.shape[0],dtype='float32').dimshuffle(0,'x').repeat(z.shape[1],axis=1) * p, axis=0) + numpy.float32(1)
     idx = (self.index.flatten() > 0).nonzero()
@@ -923,10 +924,11 @@ class LengthLayer(HiddenLayer):
     else:
       assert False, "invalid error: %s" % err
 
-    if oracle or self.train_flag:
+    if oracle or self.train_flag and T.and_(T.eq(self.index.shape[1], 1), T.le(self.sources[0].target_index[0],3)):
       self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
     else:
       self.length = T.cast(hyp,'int32')
+    self.length += numpy.int32(pad)
 
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
