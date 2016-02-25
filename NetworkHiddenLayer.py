@@ -928,7 +928,7 @@ class LengthLayer(HiddenLayer):
       self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
     else:
       self.length = T.cast(hyp,'int32')
-    self.length += numpy.int32(pad)
+    #self.length += numpy.int32(pad)
 
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
