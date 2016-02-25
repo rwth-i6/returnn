@@ -266,7 +266,7 @@ def log_sum_exp_index(x, axis, index):
   return T.log(T.sum(T.exp(x_shift) * index_bc, axis=axis)) + x_max
 
 
-def global_softmax(z, index, mode="log-norm"):
+def global_softmax(z, index, mode):
   """
   :param theano.Variable z: 3D array. time*batch*feature
   :param theano.Variable index: 2D array, 0 or 1, time*batch
