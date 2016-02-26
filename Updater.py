@@ -494,15 +494,15 @@ class Updater:
         m_cache_new = m_cache * mt
         bias_corr = m_cache_new * mtnext
 
-        _deltas = deltas / ( 1 - m_cache_new )
+        _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
 
         m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        _m = m / ( 1 - bias_corr ) # bias correction (with momentum schedule (include the next t+1))
+        _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
 
         v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
-        _v = v / (1 - beta2 ** i_t)
+        _v = v / (numpy.float32(1) - beta2 ** i_t)
 
-        __m = (1 - mt) * _deltas + mtnext * _m
+        __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
 
         step = -self.learning_rate_var * __m / ( T.sqrt(_v) + self.adam_offset )
 
