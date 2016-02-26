@@ -10,6 +10,8 @@ from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
 from Log import log
+from cuda_implementation.FractionalMaxPoolingOp import fmp
+from math import ceil
 
 
 class HiddenLayer(Layer):
@@ -1676,6 +1678,201 @@ class NewConv(_NoOpLayer):
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    self.make_output(self.output)
+
+
+  # function for calculating the weight parameter of this class
+  def _create_weights(self, filter_shape, pool_size):
+    rng = numpy.random.RandomState(23455)
+    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+
+    W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+    return theano.shared(
+      numpy.asarray(
+        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+        dtype=theano.config.floatX
+      ),
+      borrow=True,
+      name="W_conv"
+    )
+
+  # function for calculating the bias parameter of this class
+  def _create_bias(self, n_features):
+    return theano.shared(
+      numpy.zeros(
+        (n_features,),
+        dtype=theano.config.floatX
+      ),
+      borrow=True,
+      name="b_conv"
+    )
+
+################################################# NEW WITH FRACTIONAL MAX POOLING #######################################################
+class ConvFMP(_NoOpLayer):
+  layer_class = "frac_conv"
+
+  """
+    This is class for Convolution Neural Networks
+    Get the reference from deeplearning.net/tutorial/lenet.html
+  """
+
+  def __init__(self, n_features, filter, factor, d_row=1, border_mode='valid', **kwargs):
+
+    """
+
+    :param n_features: integer
+        the number of feature map(s) / filter(S) that will be used for the filter shape
+
+    :param filter: integer
+        the number of row(s) or columns(s) from the filter shape
+        this filter is the square, therefore we only need one parameter that represents row and column
+
+    :param d_row: integer
+        the number of row(s) from the input
+        this has to be filled only for the first convolutional neural network layer
+        the remaining layer will used the number of row from the previous layer
+
+    :param factor: factor of fractional max pooling e.g. sqrt(2)
+
+    :param border_mode: string
+        'valid'-- only apply filter to complete patches of the image. Generates
+                  output of shape: (image_shape - filter_shape + 1)
+        'full' -- zero-pads image to multiple of filter shape to generate output
+                  of shape: (image_shape + filter_shape - 1)
+        'same' -- the size of image will remain the same with the previous layer
+        (default value is 'valid')
+
+    """
+
+    super(ConvFMP, self).__init__(**kwargs)
+
+    n_sources = len(self.sources)   # calculate how many input
+    is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
+
+    # check whether the input is conv layer
+    if is_conv_layer:
+      d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
+      stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
+      dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
+
+      # check whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the spatial dimension of all inputs
+        assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
+        stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
+    else:   # input is not conv layer
+      stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
+      dimension = self.sources[0].attrs['n_out']  # set the dimension of input
+
+      # whether number of inputs are more than 1 for concatenating the inputs
+      if n_sources != 1:
+        # check the number of layer unit
+        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
+        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from inputself.b 
+
+    # calculating the number of input columns
+    d_col = dimension/d_row
+
+    # number of output dimension validation based on the border_mode
+    if border_mode == 'valid':
+      d_row_new = int(ceil((d_row - filter + 1)/factor))
+      d_col_new = int(ceil((d_col - filter + 1)/factor))
+    elif border_mode == 'full':
+      d_row_new = int(ceil((d_row + filter - 1)/factor))
+      d_col_new = int(ceil((d_col + filter - 1)/factor))
+    elif border_mode == 'same':
+      d_row_new = int(ceil(d_row/factor))
+      d_col_new = int(ceil(d_col/factor))
+    else:
+      assert False, 'invalid border_mode %r' % border_mode
+    n_out = (d_row_new * d_col_new) * n_features
+
+    # set all attributes of this class
+    self.set_attr('n_features', n_features)
+    self.set_attr('filter', filter)
+    self.set_attr('factor', factor)
+    self.set_attr('border_mode', border_mode)
+    self.set_attr('d_row', d_row_new)   # number of output row
+    self.set_attr('n_out', n_out)   # number of output dimension
+
+    # our CRNN input is 3D tensor that consists of (time, batch, dim)
+    # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
+    # therefore, we should convert our input into 4D tensor
+    if n_sources != 1:
+      if is_conv_layer:
+        input = T.concatenate([s.tempOutput for s in self.sources], axis=3)   # (time, batch, input-dim = row * col, stack_size)
+        #input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
+      else:
+        input = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * col * stack_size)
+    else:
+      input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
+
+    input.name = 'conv_layer_input_concat'
+    time = input.shape[0]
+    batch = input.shape[1]
+    input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
+    self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
+    self.input.name = 'conv_layer_input_final'
+
+    # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
+    self.filter_shape = (n_features, stack_size, filter, filter)
+
+    # weight parameter
+    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=(factor,factor)))
+    # bias parameter
+    self.b = self.add_param(self._create_bias(n_features=n_features))
+
+    # when convolutional layer 1x1, it gave the same size even full or valid border mode
+    if filter == 1:
+      border_mode = 'valid'
+
+    # convolutional function
+    # when border mode = same, remove width and height from beginning and last based on the filter size
+    if border_mode == 'same':
+      new_filter_size = (self.W.shape[2]-1)/2
+      self.conv_out = conv.conv2d(
+        input=self.input,
+        filters=self.W,
+        border_mode='full'
+      )[:,:,new_filter_size:-new_filter_size,new_filter_size:-new_filter_size]
+    else:
+      self.conv_out = conv.conv2d(
+        input=self.input,
+        filters=self.W,
+        border_mode=border_mode
+      )
+    self.conv_out.name = 'conv_layer_conv_out'
+
+    # max pooling function
+    
+    #self.pooled_out = downsample.max_pool_2d(
+    #  input=self.conv_out,
+    #  ds=pool_size,
+    #  ignore_border=ignore_border
+    #)
+    
+    height = self.conv_out.shape[2]
+    width = self.conv_out.shape[3]
+    batch2 = self.conv_out.shape[0]
+    X = self.conv_out.dimshuffle(2, 3, 0, 1)
+    sizes = T.zeros((batch2, 2))
+    sizes = T.set_subtensor(sizes[:, 0], height)
+    sizes = T.set_subtensor(sizes[:, 1], width)
+    
+    self.pooled_out, _ = fmp(X, sizes, factor)
+    
+    self.pooled_out.name = 'conv_layer_pooled_out'
+
+    # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+    output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 'x', 'x', 0))  # (time*batch, filter, out-row, out-col)
+    output.name = 'conv_layer_output_plus_bias'
+
+    # our CRNN only accept 3D tensor (time, batch, dim)
+    # so, we have to convert the output back to 3D tensor
+    output2 = output.dimshuffle(2, 0, 1, 3)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
     self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
     self.make_output(self.output)
