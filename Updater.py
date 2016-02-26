@@ -500,7 +500,7 @@ class Updater:
         _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
 
         v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
-        _v = v / (numpy.float32(1) - beta2 ** i_t)
+        _v = v / T.cast(1 - beta2 ** i_t, dtype="float32")
 
         __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
 
