@@ -1039,6 +1039,7 @@ class AttentionGlimpse(AttentionBase):
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_in, self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
     self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
     self.b_att_in = self.add_param(self.layer.create_bias(self.layer.attrs['n_out'] * 4, name='b_att_in'))
+    self.alpha = self.add_var(self.layer.attention_weight, 'alpha')
 
   def step(self, y_p):
     updates = {}
@@ -1066,7 +1067,8 @@ class AttentionGlimpse(AttentionBase):
         assert False, "invalid normalization: %s" % self.layer.attrs['attention_norm']
       w_t = f_e / (T.sum(f_e, axis=0, keepdims=True) + T.constant(1e-32,dtype='float32'))
       glimpses.append(T.sum(context * w_t.dimshuffle(0,1,'x').repeat(context.shape[2],axis=2), axis=0, keepdims=False))
-    return T.dot(glimpses[-1], self.W_att_in) + self.b_att_in, updates
+    return self.alpha * (T.dot(glimpses[-1], self.W_att_in) + self.b_att_in), updates
+    #return (T.dot(glimpses[-1], self.W_att_in) + self.b_att_in), updates
 
 
 class AttentionLinear(AttentionBase):

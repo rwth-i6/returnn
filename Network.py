@@ -7,7 +7,7 @@ from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
-from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer
+from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
 from Util import collect_class_init_kwargs
 from Log import log
 
@@ -596,6 +596,8 @@ class LayerNetwork(object):
       layer_class = SequenceOutputLayer
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer
+    elif self.loss == 'unsupervised':
+      layer_class = UnsupervisedOutputLayer
     else:
       layer_class = FramewiseOutputLayer
 
