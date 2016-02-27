@@ -200,7 +200,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m) #(TB)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD
-      ee = self.index * -T.sum(pcx * T.log(pcx)) # TB
+      ee = -T.sum(pcx[self.i] * T.log(pcx[self.i])) # TB
       #nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat) # TB
       ce = nll.reshape(self.index.shape) * self.index # TB
@@ -334,3 +334,39 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     else:
       return super(SequenceOutputLayer, self).errors()
+
+
+class UnsupervisedOutputLayer(OutputLayer):
+  def __init__(self, base, **kwargs):
+    kwargs['loss'] = 'ce'
+    super(UnsupervisedOutputLayer, self).__init__(**kwargs)
+    self.set_attr('base', base[0].name)
+    self.set_attr('loss', 'unsupervised')
+    self.xflag = base[0].xflag
+
+  def cost(self):
+    known_grads = None
+    x = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    # cross-entropy
+    ce, _ = T.nnet.crossentropy_softmax_1hot(x=x[self.i], y_idx=self.y_data_flat[self.i])
+    ce = T.sum(ce)
+    # AM
+    pcx = T.max(T.clip(T.nnet.softmax(x[self.i]), 1e-20, 1.0),axis=1)
+    #e = -T.sum(pcx * T.log(pcx))
+    e = -T.sum(pcx * T.log(pcx))
+
+    import theano.ifelse
+    if self.train_flag:
+      return theano.ifelse.ifelse(T.cast(self.xflag,'int8'),e,ce), known_grads
+    else:
+      return ce, known_grads
+
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    self.y_m = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    if self.y_data_flat.type == T.ivector().type:
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+    else:
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))

@@ -944,20 +944,23 @@ class LengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, method="scale", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
     super(LengthProjectionLayer, self).__init__(**kwargs)
     self.params = {}
+    self.set_attr('method',method)
     z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
     dim = sum([s.attrs['n_out'] for s in self.sources])
-    self.W = self.add_param(self.create_forward_weights(1, dim, name='W_%s' % self.name))
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.1, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    #hyp = (T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0))**2 #+ T.sum(self.sources[0].index, axis=0)
-    hyp = T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
+    if method == 'scale':
+      hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1))) * T.sum(self.sources[0].index, axis=0) + self.b.repeat(z.shape[0],axis=0)
+    elif method == 'map':
+      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
     self.cost_val = T.sum((hyp - real)**2)
-    if self.train_flag:
+    if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
       self.length = T.ceil(hyp)
@@ -973,6 +976,46 @@ class LengthProjectionLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class SignalSplittingLayer(HiddenLayer):
+  layer_class = "signal_splitter"
+  def __init__(self, p=0.5, oracle=False, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(SignalSplittingLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
+    dim = sum([s.attrs['n_out'] for s in self.sources])
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.1, name='W_%s' % self.name))
+    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1)) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
+    self.cost_val = 0.0 #T.sum((hyp - real)**2)
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234) + 1)
+    if self.train_flag:
+      self.xflag = T.cast(srng.binomial(n=1, p=1.0 - p, size=(1,)), 'float32')[0]
+    else:
+      self.xflag = T.constant(1., 'float32')
+
+    if oracle:
+      self.length = real
+    else:
+      self.length = self.xflag * T.ceil(hyp) + (1 - self.xflag) * real
+    self.length = T.cast(self.length, 'int32')
+
+    idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                        sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    self.index = idx.dimshuffle(1,0)[:-1]
+    self.output = z
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
 
 
 class DetectionLayer(HiddenLayer):

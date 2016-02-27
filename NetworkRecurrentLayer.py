@@ -326,7 +326,11 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
       assert n_units == n_out
+    self.attention_weight = T.constant(1.,'float32')
     if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('length'):
+      kwargs['sources'] = []
+    elif len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('signal_splitter'):
+      self.attention_weight = kwargs['sources'][0].xflag
       kwargs['sources'] = []
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
@@ -524,7 +528,7 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if encoder:
-        outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+        outputs_info = [ T.concatenate([e.act[i][-1] * self.attention_weight for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         if self.depth == 1:
           sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if attention == 'input' else 0)
         else:
