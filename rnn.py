@@ -113,7 +113,7 @@ def getDevicesInitArgs(config):
   device_info = config.list('device', ['cpu0'])
   if len(device_info) == 1 and device_info[0] == 'json':
     try:
-      specs = json.loads(open(config.value('initialize_from_json', '')).read())['worker']
+      specs = json.loads(open(config.value('initialize_from_json', '')).read().replace('(','\"').replace(')','\"'))['worker']
     except Exception:
       raise Exception('Unable to parse worker information from json content')
     devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key].pop('num_batches', 1), "update_specs" : specs[key].pop('update_specs', {}) } for key in specs ]

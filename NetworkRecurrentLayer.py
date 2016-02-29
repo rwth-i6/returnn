@@ -329,8 +329,8 @@ class RecurrentUnitLayer(Layer):
     self.attention_weight = T.constant(1.,'float32')
     if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('length'):
       kwargs['sources'] = []
-    elif len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('signal_splitter'):
-      self.attention_weight = kwargs['sources'][0].xflag
+    elif len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.startswith('signal'):
+      #self.attention_weight = kwargs['sources'][0].xflag
       kwargs['sources'] = []
     super(RecurrentUnitLayer, self).__init__(**kwargs)
     self.set_attr('from', ",".join([s.name for s in self.sources]) if self.sources else "null")
@@ -471,7 +471,6 @@ class RecurrentUnitLayer(Layer):
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
-
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
       self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
@@ -479,7 +478,8 @@ class RecurrentUnitLayer(Layer):
       self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
-        recurrent_transform = recurrent_transform[:-3]
+        if recurrent_transform != 'none':
+          recurrent_transform = recurrent_transform[:-3]
       elif self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
         srng = RandomStreams(self.rng.randint(1234) + 1)
@@ -539,6 +539,10 @@ class RecurrentUnitLayer(Layer):
         else:
           assert False
           outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, self.depth, unit.n_out) for i in xrange(unit.n_act) ]
+
+      if self.attrs['lm'] and self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
+        y = self.y_in[self.attrs['target']].flatten()
+        sequences += self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
 
       if sequences == self.b:
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['attention'] == 'input' else 0)

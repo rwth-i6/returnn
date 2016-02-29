@@ -967,7 +967,6 @@ class LengthProjectionLayer(HiddenLayer):
     else:
       self.length = T.ceil(hyp)
     self.length = T.cast(self.length, 'int32')
-
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
@@ -982,18 +981,19 @@ class LengthProjectionLayer(HiddenLayer):
 
 class SignalSplittingLayer(HiddenLayer):
   layer_class = "signal_splitter"
-  def __init__(self, p=0.5, oracle=False, **kwargs):
+  def __init__(self, base, p=0.5, oracle=False, **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
-    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    #kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
     super(SignalSplittingLayer, self).__init__(**kwargs)
     self.params = {}
-    z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
-    dim = sum([s.attrs['n_out'] for s in self.sources])
+    z = T.concatenate([s.output[-1] for s in base], axis=1)
+    dim = sum([s.attrs['n_out'] for s in base])
     self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.1, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1)) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
+    hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1)) + self.b.repeat(z.shape[0],axis=0)) * T.sum(base[0].index, axis=0)
     self.cost_val = 0.0 #T.sum((hyp - real)**2)
+    self.p = p
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(self.rng.randint(1234) + 1)
     if self.train_flag:
@@ -1011,6 +1011,38 @@ class SignalSplittingLayer(HiddenLayer):
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
     self.output = z
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class RoutingLayer(HiddenLayer):
+  layer_class = "signal_router"
+  def __init__(self, base, p=0.5, oracle=False, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    #kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(RoutingLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output[-1] for s in base], axis=1)
+    self.cost_val = 0.0 #T.sum((hyp - real)**2)
+    self.p = p
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234) + 1)
+    if self.train_flag:
+      self.xflag = T.cast(srng.binomial(n=1, p=1.0 - p, size=(1,)), 'float32')[0]
+    else:
+      self.xflag = T.constant(1., 'float32')
+    import theano.ifelse
+    self.output = z #theano.ifelse.ifelse(self.xflag, base[0].output, base[1].output)
+    self.act = [ theano.ifelse.ifelse(self.xflag, base[0].act[i][-1:], base[1].act[i][-1:]) for i in xrange(len(base[0].act))]
+    self.length = real
+    #idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+    #                    sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    #self.index = idx.dimshuffle(1,0)[:-1]
 
   def cost(self):
     return self.cost_val, None
@@ -1814,7 +1846,7 @@ class ConvFMP(_NoOpLayer):
       if n_sources != 1:
         # check the number of layer unit
         assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
-        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from inputself.b 
+        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from inputself.b
 
     # calculating the number of input columns
     d_col = dimension/d_row
@@ -1890,13 +1922,13 @@ class ConvFMP(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    
+
     #self.pooled_out = downsample.max_pool_2d(
     #  input=self.conv_out,
     #  ds=pool_size,
     #  ignore_border=ignore_border
     #)
-    
+
     height = self.conv_out.shape[2]
     width = self.conv_out.shape[3]
     batch2 = self.conv_out.shape[0]
@@ -1904,9 +1936,9 @@ class ConvFMP(_NoOpLayer):
     sizes = T.zeros((batch2, 2))
     sizes = T.set_subtensor(sizes[:, 0], height)
     sizes = T.set_subtensor(sizes[:, 1], width)
-    
+
     self.pooled_out, _ = fmp(X, sizes, factor)
-    
+
     self.pooled_out.name = 'conv_layer_pooled_out'
 
     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)

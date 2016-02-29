@@ -337,23 +337,41 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, **kwargs):
+  def __init__(self, base=None, blur=0.0, e_t=1e-5, e_b=0.1, e_d=1.0, use_max=False, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
-    self.set_attr('base', base[0].name)
+    if base:
+      self.set_attr('base', base[0].name)
     self.set_attr('loss', 'unsupervised')
-    self.xflag = base[0].xflag
+    self.xflag = base[0].xflag if base else numpy.float32(1)
+    self.blur = blur
+    self.e_t = e_t
+    self.e_b = e_b
+    self.e_d = e_d
+    self.use_max = use_max
+    self.p = base[0].p if base else numpy.float32(0)
 
   def cost(self):
     known_grads = None
-    x = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    xd = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    epsilon = numpy.float32(1e-10)
     # cross-entropy
-    ce, _ = T.nnet.crossentropy_softmax_1hot(x=x[self.i], y_idx=self.y_data_flat[self.i])
-    ce = T.sum(ce)
-    # AM
-    pcx = T.max(T.clip(T.nnet.softmax(x[self.i]), 1e-20, 1.0),axis=1)
-    #e = -T.sum(pcx * T.log(pcx))
-    e = -T.sum(pcx * T.log(pcx))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=xd[self.i], y_idx=self.y_data_flat[self.i])
+    ce = T.sum(nll)
+    # entropy
+    def entropy(p, axis=None):
+      if self.use_max and axis is not None:
+        q = p.dimshuffle(axis, *(range(axis) + range(axis+1,p.ndim)))
+        #return -T.mean(T.log(T.maximum(T.max(q,axis=0),epsilon)))
+        return -T.mean(T.max(q,axis=0)+epsilon) + T.log(T.cast(p.shape[axis],'float32'))
+      else:
+        return -T.mean(p*T.log(p+epsilon)) + T.log(T.cast(p.shape[axis],'float32'))
+    ez = T.exp(self.z) * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2), 'float32')
+    et = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=0,keepdims=True)),axis=0)
+    eb = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=1,keepdims=True)),axis=1)
+    ed = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=2,keepdims=True)),axis=2)
+    # maximize entropy across T and B and minimize entropy across D
+    e = self.e_d * ed - (self.e_t * et + self.e_b * eb) / numpy.float32(self.e_t + self.e_b)
 
     import theano.ifelse
     if self.train_flag:
