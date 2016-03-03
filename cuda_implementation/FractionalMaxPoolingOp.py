@@ -12,6 +12,7 @@ def pooling_regions_1D(sizes, factor):
   regions = numpy.full((sizes.size, max_size), float("-inf"), dtype="float32")
   for idx, s in enumerate(sizes):
     out_size = numpy.ceil(s / factor)  #TODO we could also do floor or round
+    #print s, factor, out_size
     if out_size == s:
       out_size -= 1
     assert out_size > 0
