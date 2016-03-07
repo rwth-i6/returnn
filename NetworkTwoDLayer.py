@@ -239,7 +239,7 @@ class ConvPoolLayer2(ConvBaseLayer):
   def __init__(self, pool_size, **kwargs):
     super(ConvPoolLayer2, self).__init__(**kwargs)
     self.pool_size = pool_size
-    sizes = self.output_size_from_input_size(self.source.output_sizes)
+    sizes = self.source.output_sizes
 
     Z = conv_crop_pool_op(self.X, sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
                           self.filter_width, pool_size)

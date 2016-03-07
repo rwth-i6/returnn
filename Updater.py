@@ -744,6 +744,8 @@ class Updater:
       for param in grads.keys():
         models = [param]
         for i in range(self.update_multiple_models - 1):
+          # TODO: this will copy the param. this means that param must already be loaded.
+          # This is not the case when we call this function, where they are just randomly initialized!
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []

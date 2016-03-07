@@ -1940,7 +1940,9 @@ class ConvFMP(_NoOpLayer):
     self.pooled_out.name = 'conv_layer_pooled_out'
 
     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+    #TODO make activation function configurable
     output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 'x', 'x', 0))  # (time*batch, filter, out-row, out-col)
+    #output = T.nnet.relu(self.pooled_out + self.b.dimshuffle('x', 'x', 'x', 0))  # (time*batch, filter, out-row, out-col)
     output.name = 'conv_layer_output_plus_bias'
 
     # our CRNN only accept 3D tensor (time, batch, dim)
