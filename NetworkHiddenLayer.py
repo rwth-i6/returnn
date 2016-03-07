@@ -901,7 +901,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=0.0, err='ce', oracle=False, pad=0, **kwargs):
     kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
@@ -926,12 +926,11 @@ class LengthLayer(HiddenLayer):
     else:
       assert False, "invalid error: %s" % err
 
-    if oracle or self.train_flag and T.and_(T.eq(self.index.shape[1], 1), T.le(self.sources[0].target_index[0],3)):
+    if (oracle or self.train_flag) and T.and_(T.eq(self.index.shape[1], 1), T.le(self.sources[0].target_index[0],3)):
       self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
     else:
       self.length = T.cast(hyp,'int32')
     #self.length += numpy.int32(pad)
-
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
@@ -955,10 +954,10 @@ class LengthProjectionLayer(HiddenLayer):
     self.set_attr('method',method)
     z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
     dim = sum([s.attrs['n_out'] for s in self.sources])
-    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.1, name='W_%s' % self.name))
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.01, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
     if method == 'scale':
-      hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1))) * T.sum(self.sources[0].index, axis=0) + self.b.repeat(z.shape[0],axis=0)
+      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0))
     elif method == 'map':
       hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
     self.cost_val = T.sum((hyp - real)**2)
@@ -1000,7 +999,6 @@ class SignalSplittingLayer(HiddenLayer):
       self.xflag = T.cast(srng.binomial(n=1, p=1.0 - p, size=(1,)), 'float32')[0]
     else:
       self.xflag = T.constant(1., 'float32')
-
     if oracle:
       self.length = real
     else:

@@ -991,7 +991,8 @@ class AttentionBinaryBase(AttentionBase):
         w_i = T.set_subtensor(T.zeros_like(context[:,:,0])[:w_c.shape[0]], w_c)
         beam_start = T.min(bin) * factor
         beam_end = (T.max(bin) + 1) * factor
-      alpha += w_i
+      else:
+        alpha += w_i
     alpha = (alpha / T.constant(len(self.layer.base), 'float32')).dimshuffle(0,1,'x').repeat(context.shape[2],axis=2)
     return T.dot(T.sum(context * alpha, axis=0, keepdims=False), self.W_att_in), updates
 

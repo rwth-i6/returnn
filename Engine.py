@@ -317,6 +317,7 @@ class Engine:
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
+      rebatch = self.batch_variance > 0.0 or rebatch
       self.epoch = epoch
 
       for dataset_name,dataset in self.get_eval_datasets().items():
