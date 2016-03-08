@@ -83,7 +83,7 @@ def windowed_batch(source, window):
 
 
 def slice_for_axis(axis, s):
-  return (slice(None),) * (axis - 1) + (s,)
+  return (slice(None),) * axis + (s,)
 
 
 def downsample(source, axis, factor, method="average"):
