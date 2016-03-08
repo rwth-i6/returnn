@@ -894,7 +894,7 @@ class AttentionList(AttentionStruct):
       if not self.glimpses[i]:
         self.glimpses[i] = [ C[-1] ] * (self.layer.attrs['attention_glimpse'] + 1)
       c_p = T.concatenate([y_p,self.glimpses[i][g]],axis=1)
-      h_p = T.tanh(T.dot(c_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
+      h_p = T.tanh(T.dot(c_p, W_att_re) + b_att_re)
     else:
       h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re) 
     return self.custom_vars[('B_%d' % i)], \
