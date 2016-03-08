@@ -537,6 +537,15 @@ class ChunkingSublayer(_NoOpLayer):
         w = alpha - (1.0 - alpha) * T.cos(2.0 * numpy.pi * ts / (ts.shape[0] - 1))  # always >0
         w_bc = T.cast(w, dtype="float32").dimshuffle(0, 'x')  # time,batch
         l_index_f32 = l_index_f32 * w_bc
+      elif chunk_distribution.startswith("gauss("):  # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+        modeend = chunk_distribution.find(")")
+        assert modeend >= 0
+        sigma = float(chunk_distribution[len("gauss("):modeend])
+        ts = T.arange(0, t_end - t_start)
+        N = ts.shape[0] - 1
+        w = T.exp(-0.5 * ((ts - N / 2.0) / (sigma * N / 2.0)) ** 2)  # always >0
+        w_bc = T.cast(w, dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * w_bc
       else:
         assert False, "unknown chunk distribution %r" % chunk_distribution
       assert l_index_f32.ndim == 2
