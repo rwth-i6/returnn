@@ -375,9 +375,9 @@ def complex_elemwise_mult(a, b, axis=-1):
   if axis < 0: axis %= a.ndim
   assert 0 <= axis < a.ndim
   a_real = a[slice_for_axis(axis=axis, s=slice(0, a.shape[axis] / 2))]
-  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, 0))]
+  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, None))]
   b_real = b[slice_for_axis(axis=axis, s=slice(0, b.shape[axis] / 2))]
-  b_imag = b[slice_for_axis(axis=axis, s=slice(b.shape[axis] / 2, 0))]
+  b_imag = b[slice_for_axis(axis=axis, s=slice(b.shape[axis] / 2, None))]
   r_real = a_real * b_real - a_imag * b_imag
   r_imag = a_real * b_imag + a_imag * b_real
   return T.concatenate([r_real, r_imag], axis=axis)
@@ -387,7 +387,7 @@ def complex_bound(a, axis=-1):
   if axis < 0: axis %= a.ndim
   assert 0 <= axis < a.ndim
   a_real = a[slice_for_axis(axis=axis, s=slice(0, a.shape[axis] / 2))]
-  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, 0))]
+  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, None))]
   d = T.maximum(numpy.float32(1), T.sqrt(a_real * a_real + a_imag * a_imag))
   r_real = a_real / d
   r_imag = a_imag / d

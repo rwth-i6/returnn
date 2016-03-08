@@ -543,7 +543,9 @@ class AssociativeLstmLayer(HiddenLayer):
     def make_permut():
       p = numpy.zeros((n_copies, n_cells), dtype="int32")
       for i in range(n_copies):
-        p[i] = static_rng.permutation(n_cells)
+        p[i, :n_complex_cells] = static_rng.permutation(n_complex_cells)
+        # Same permutation for imaginary part.
+        p[i, n_complex_cells:] = p[i, :n_complex_cells] + n_complex_cells
       return T.constant(p)
     P = make_permut()  # (n_copies,n_cells) -> list of indices
     from TheanoUtil import complex_elemwise_mult, complex_bound
@@ -590,7 +592,6 @@ class AssociativeLstmLayer(HiddenLayer):
         s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
-
 
     def lstm(z, i, grad_clip=None):
       # z: (n_time,n_batch,n_cells*4)
