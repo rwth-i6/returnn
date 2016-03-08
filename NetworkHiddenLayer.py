@@ -531,6 +531,12 @@ class ChunkingSublayer(_NoOpLayer):
         ts_rev = ts[::-1]
         tri = T.cast(T.minimum(ts, ts_rev), dtype="float32").dimshuffle(0, 'x')  # time,batch
         l_index_f32 = l_index_f32 * tri
+      elif chunk_distribution == "hamming":  # https://en.wikipedia.org/wiki/Window_function#Hamming_window
+        ts = T.arange(0, t_end - t_start)
+        alpha = 0.53836
+        w = alpha - (1.0 - alpha) * T.cos(2.0 * numpy.pi * ts / (ts.shape[0] - 1))  # always >0
+        w_bc = T.cast(w, dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * w_bc
       else:
         assert False, "unknown chunk distribution %r" % chunk_distribution
       assert l_index_f32.ndim == 2
