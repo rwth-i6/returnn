@@ -419,7 +419,7 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    if not 'train' in self.dataset_batches or self.batch_variance > 0.0:
+    if not 'train' in self.dataset_batches:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,

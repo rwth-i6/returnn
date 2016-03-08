@@ -806,7 +806,8 @@ class AttentionStruct(RecurrentTransformBase):
   def distance(self, C, H):
     dist = self.layer.attrs['attention_distance']
     if dist == 'l2':
-      return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
+      return T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
+      #return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
     elif dist == 'dot':
       return T.mean(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
     else:
@@ -896,7 +897,7 @@ class AttentionList(AttentionStruct):
       c_p = T.concatenate([y_p,self.glimpses[i][g]],axis=1)
       h_p = T.tanh(T.dot(c_p, W_att_re) + b_att_re)
     else:
-      h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re) 
+      h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
     return self.custom_vars[('B_%d' % i)], \
            C, \
            h_p, \
@@ -914,9 +915,8 @@ class AttentionList(AttentionStruct):
         B, C, h_p, W_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, h_p)
         w_i = self.softmax(z_i)
-      proto = T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
-      self.glimpses[i].append(proto)
-      inp += proto
+        self.glimpses[i].append(T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in))
+      inp += self.glimpses[i][-1]
     return inp, updates
 
 
