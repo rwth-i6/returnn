@@ -800,6 +800,7 @@ class AttentionStruct(RecurrentTransformBase):
     pass
 
   def default_updates(self):
+    self.glimpses = []
     return {}
 
   def distance(self, C, H):
@@ -867,7 +868,10 @@ class AttentionList(AttentionStruct):
       self.add_input(e.output, 'B_%d' % i)
       # mapping from base output to template size
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
-      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
+      if self.layer.attrs['attention_glimpse'] == 1:
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
+      else:
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + n_tmp, n_tmp)), dtype=theano.config.floatX)
       self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re_%d" % i))
       values = numpy.zeros((n_tmp if n_tmp > 0 else self.n_in,),dtype='float32')
       self.add_param(theano.shared(value=values, borrow=True, name="b_att_re_%d" % i))
@@ -882,22 +886,37 @@ class AttentionList(AttentionStruct):
       self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
       self.ugly_init(i) # TODO
 
-  def get(self, y_p, i):
+  def get(self, y_p, i, g):
     W_att_re = self.custom_vars[('W_att_re_%d' % i)]
     b_att_re = self.custom_vars[('b_att_re_%d' % i)]
+    C = self.custom_vars[('C_%d' % i)]
+    if self.layer.attrs['attention_glimpse'] > 1:
+      if not self.glimpses[i]:
+        self.glimpses[i] = [ C[-1] ] * (self.layer.attrs['attention_glimpse'] + 1)
+      c_p = T.concatenate([y_p,self.glimpses[i][g]],axis=1)
+      h_p = T.tanh(T.dot(c_p, self.W_att_re) + self.b_att_re).dimshuffle('x',0,1).repeat(context.shape[0],axis=0)
+    else:
+      h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re) 
     return self.custom_vars[('B_%d' % i)], \
-           self.custom_vars[('C_%d' % i)], \
-           T.tanh(T.dot(y_p, W_att_re) + b_att_re), \
+           C, \
+           h_p, \
            self.custom_vars[('W_att_in_%d' % i)]
+
+  def default_updates(self):
+    self.glimpses = [ [] ] * len(self.layer.base)
+    return {}
 
   def step(self, y_p):
     updates = self.default_updates()
     inp = 0
     for i in xrange(len(self.layer.base)):
-      B, C, h_p, W_att_in = self.get(y_p, i)
-      z_i = self.distance(C, h_p)
-      w_i = self.softmax(z_i)
-      inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
+      for g in xrange(self.layer.attrs['attention_glimpse']):
+        B, C, h_p, W_att_in = self.get(y_p, i, g)
+        z_i = self.distance(C, h_p)
+        w_i = self.softmax(z_i)
+      proto = T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
+      self.glimpses[i].append(proto)
+      inp += proto
     return inp, updates
 
 
@@ -909,16 +928,20 @@ class AttentionTree(AttentionList):
   def step(self, y_p):
     updates = self.default_updates()
     base = self.custom_vars['B_0']
-    for i in xrange(len(self.layer.base)):
-      _, C, h_p, _ = self.get(y_p, i)
-      z_i = self.distance(C, h_p)
-      if i == 0:
-        z = z_i
-      else:
-        factor = self.layer.base[i].attrs['factor'][0]
-        w_c = T.tile(z_i, (1,factor)).reshape((factor * z_i.shape[0],z_i.shape[1]))
-        z += T.set_subtensor(T.zeros_like(base[:,:,0])[:w_c.shape[0]], w_c)
-    return T.dot(T.sum(base * self.softmax(z).dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0), self.custom_vars['W_att_in_0']), updates
+    for g in xrange(self.layer.attrs['attention_glimpse']):
+      for i in xrange(len(self.layer.base)):
+        _, C, h_p, _ = self.get(y_p, i, g)
+        z_i = self.distance(C, h_p)
+        if i == 0:
+          z = z_i
+        else:
+          factor = self.layer.base[i].attrs['factor'][0]
+          w_c = T.tile(z_i, (1,factor)).reshape((factor * z_i.shape[0],z_i.shape[1]))
+          z += T.set_subtensor(T.zeros_like(base[:,:,0])[:w_c.shape[0]], w_c)
+      proto = T.dot(T.sum(base * self.softmax(z).dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0))
+      for i in xrange(len(self.layer.base)):
+        self.glimpses[i].append(proto)
+    return proto, updates
 
 
 class AttentionBin(AttentionList):
@@ -929,26 +952,32 @@ class AttentionBin(AttentionList):
 
   def step(self, y_p):
     updates = self.default_updates()
-    for i in xrange(len(self.layer.base)-1,-1,-1):
-      factor = T.constant(self.layer.base[i].attrs['factor'][0], 'int32') if i > 0 else 1
-      B, C, h_p, _ = self.get(y_p, i)
-      if i == len(self.layer.base) - 1:
-        z_i = self.distance(C, h_p)
-      else:
-        def pick(c, b, i_t, ext):
-          return T.concatenate([c[i_t:T.minimum(i_t+ext,c.shape[0])],
-                               T.zeros((T.maximum(i_t+ext-c.shape[0]+1,1),c.shape[1]), 'float32')]), \
-                 T.concatenate([b[i_t:T.minimum(i_t+ext,b.shape[0])],
-                               T.zeros((T.maximum(i_t+ext-b.shape[0]+1,1),b.shape[1]), 'float32')])
-        out, _ = theano.map(pick, sequences = [C.dimshuffle(1,0,2),B.dimshuffle(1,0,2),pos/factor], non_sequences = [ext/factor])
-        context = out[0].dimshuffle(1,0,2)[:-1]
-        base = out[1].dimshuffle(1,0,2)[:-1]
-        z_i = self.distance(context, h_p)
-      w_i = self.softmax(z_i)
-      if i > 0:
-        pos = T.argmax(w_i,axis=0) * factor
-        ext = factor
-    return T.dot(T.sum(base * w_i.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0), self.custom_vars['W_att_in_0']), updates
+    for g in xrange(self.layer.attrs['attention_glimpse']):
+      for i in xrange(len(self.layer.base)-1,-1,-1):
+        factor = T.constant(self.layer.base[i].attrs['factor'][0], 'int32') if i > 0 else 1
+        B, C, h_p, _ = self.get(y_p, i, g)
+        if i == len(self.layer.base) - 1:
+          z_i = self.distance(C, h_p)
+        else:
+          def pick(c, b, i_t, ext):
+            end = T.minimum(i_t+ext,c.shape[0])
+            pad = T.maximum(i_t+ext-c.shape[0]+1, 1)
+            return T.concatenate([c[i_t:end], T.zeros((pad,c.shape[1]), 'float32')]), \
+                   T.concatenate([b[i_t:end], T.zeros((pad,b.shape[1]), 'float32')])
+          out, _ = theano.map(pick, sequences = [C.dimshuffle(1,0,2),B.dimshuffle(1,0,2),pos/factor], non_sequences = [ext/factor])
+          context = out[0].dimshuffle(1,0,2)[:-1]
+          base = out[1].dimshuffle(1,0,2)[:-1]
+          z_i = self.distance(context, h_p)
+        if i > 0:
+          pos = T.argmax(z_i,axis=0) * factor
+          ext = factor
+        else:
+          w_i = self.softmax(z_i)
+      proto = T.dot(T.sum(base * w_i.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0), self.custom_vars['W_att_in_0'])
+      for i in xrange(len(self.layer.base)):
+        self.glimpses[i].append(proto)
+
+    return proto, updates
 
 
 class AttentionGlimpse(AttentionBase):
