@@ -593,27 +593,20 @@ class AssociativeLstmLayer(HiddenLayer):
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
 
-    def lstm(z, i, grad_clip=None):
-      # z: (n_time,n_batch,n_cells*4)
-      # i: (n_time,n_batch)
-      # W_re: (n_out,n_cells*4)
-      # W_proj: (n_cells,n_out) or None
-      n_batch = z.shape[1]
-      assert self.W_re.ndim == 2
-      i = T.cast(i, dtype="float32")  # so that it can run on gpu
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
 
-      s_initial = T.zeros((n_batch, n_copies, n_cells), dtype="float32")
-      h_initial = T.zeros((n_batch, n_out), dtype="float32")
-      go_backwards = {1:False, -1:True}[direction]
-      (s, h), _ = theano.scan(lstm_step,
-                              sequences=[z, i], go_backwards=go_backwards,
-                              non_sequences=[self.W_re],
-                              outputs_info=[s_initial, h_initial])
-      h = h[::direction]
-      return h
-
-    z = self.get_linear_forward_output()
-    h = lstm(z=z, i=self.index, grad_clip=grad_clip)
+    s_initial = T.zeros((n_batch, n_copies, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[self.W_re],
+                            outputs_info=[s_initial, h_initial])
+    h = h[::direction]
     self.make_output(h)
 
 
