@@ -937,9 +937,9 @@ class AttentionBin(AttentionList):
       else:
         def pick(c, b, i_t, ext):
           return T.concatenate([c[i_t:T.minimum(i_t+ext,c.shape[0])],
-                               T.zeros((T.maximum(i_t+ext-c.shape[0],1),c.shape[1]), 'float32')]), \
+                               T.zeros((T.maximum(i_t+ext-c.shape[0]+1,1),c.shape[1]), 'float32')]), \
                  T.concatenate([b[i_t:T.minimum(i_t+ext,b.shape[0])],
-                               T.zeros((T.maximum(i_t+ext-b.shape[0],1),b.shape[1]), 'float32')])
+                               T.zeros((T.maximum(i_t+ext-b.shape[0]+1,1),b.shape[1]), 'float32')])
         out, _ = theano.map(pick, sequences = [C.dimshuffle(1,0,2),B.dimshuffle(1,0,2),pos/factor], non_sequences = [ext/factor])
         context = out[0].dimshuffle(1,0,2)[:-1]
         base = out[1].dimshuffle(1,0,2)[:-1]
