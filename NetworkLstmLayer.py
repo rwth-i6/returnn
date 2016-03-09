@@ -518,6 +518,10 @@ class Lstm2Layer(HiddenLayer):
 
 
 class AssociativeLstmLayer(HiddenLayer):
+  """
+  Associative Long Short-Term Memory
+  http://arxiv.org/abs/1602.03032
+  """
   recurrent = True
   layer_class = "associative_lstm"
 
