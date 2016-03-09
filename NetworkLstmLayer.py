@@ -614,6 +614,7 @@ class AssociativeLstmLayer(HiddenLayer):
                             sequences=[z, i], go_backwards=go_backwards,
                             non_sequences=[self.W_re],
                             outputs_info=[s_initial, h_initial])
+    self.act = [h, s]
     h = h[::direction]
     self.make_output(h)
 
