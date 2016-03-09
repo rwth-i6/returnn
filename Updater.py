@@ -64,7 +64,8 @@ class Updater:
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
                enforce_triangular_matrix_zero=False,
-               gradient_noise=0.0
+               gradient_noise=0.0,
+               grad_noise_rel_grad_norm=0.0
                ):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = numpy.float32(momentum)
@@ -95,6 +96,7 @@ class Updater:
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.gradient_noise = gradient_noise
+    self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
     self.params = {}
     self.pid = -1
     if self.adadelta or self.adamdelta:
@@ -272,6 +274,8 @@ class Updater:
     beta2=numpy.float32(0.999)
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(self.rng.randint(1234) + 1)
+    total_grad_norm = numpy.float32(0)
+    for grad in grads.values(): total_grad_norm += T.sum(grad * grad)
     for param in grads.keys():
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
@@ -282,6 +286,16 @@ class Updater:
         gamma = 0.55
         sigma = nu / (1 + i_t)**gamma
         deltas += srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
+      if self.grad_noise_rel_grad_norm > 0.0:
+        # Idea extended from here: RandomOut, http://arxiv.org/pdf/1602.05931v2.pdf
+        # We consider the relative gradient norm for each element.
+        elemwise_grad_norm = grads[param] * grads[param]
+        eps = numpy.float32(1e-7)
+        rel_elemwise_grad_norm = (elemwise_grad_norm + eps) / (total_grad_norm + eps)
+        sigma = self.grad_noise_rel_grad_norm
+        noise = srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
+        noise *= numpy.float32(1) - rel_elemwise_grad_norm
+        deltas += noise
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
