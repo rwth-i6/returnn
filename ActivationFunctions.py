@@ -1,5 +1,6 @@
 
 import theano.tensor as T
+from TheanoUtil import complex_bound
 
 
 def relu(z):
@@ -44,7 +45,8 @@ ActivationFunctions = {
   'softsquare': softsquare,
   'maxout': maxout,
   'sin': T.sin,
-  'cos': T.cos
+  'cos': T.cos,
+  'complex_bound': complex_bound
 }
 
 
