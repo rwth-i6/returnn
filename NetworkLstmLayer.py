@@ -699,6 +699,95 @@ class LstmHalfGatesLayer(HiddenLayer):
     self.make_output(h)
 
 
+class LstmProjGatesLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "lstm_proj_gates"
+
+  def __init__(self, n_out, n_gate_proj, direction=1, activation='relu', grad_clip=None, **kwargs):
+    n_cells = n_out
+    # {input,forget,out}-gate have n_gate_proj dim.
+    # update u (earlier called net-input) has n_cells dim.
+    n_z = n_gate_proj * 3 + n_cells
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(LstmProjGatesLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_gate_proj', n_gate_proj)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    self.W_igate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_igate_proj_%s" % self.name))
+    self.W_fgate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_fgate_proj_%s" % self.name))
+    self.W_ogate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_ogate_proj_%s" % self.name))
+
+    from ActivationFunctions import relu
+
+    # Some defaults.
+    PG = relu
+    CI, CO = [T.tanh] * 2
+    GI, GF, GO = [T.nnet.sigmoid] * 3
+
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 3:
+        PG, CI, CO = actf
+      elif len(actf) == 6:
+        PG, CI, CO, GI, GF, GO = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      PG = actf  # This is what this layer is about.
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, self.W_re)
+      z_t *= i_t_bc
+
+      igate_in = PG(z_t[:, :n_gate_proj])
+      fgate_in = PG(z_t[:, n_gate_proj:2 * n_gate_proj])
+      ogate_in = PG(z_t[:, 2 * n_gate_proj:3 * n_gate_proj])
+      u = CI(z_t[:, 3 * n_gate_proj:])
+
+      igate = GI(T.dot(igate_in, self.W_igate_proj))
+      fgate = GF(T.dot(fgate_in, self.W_fgate_proj))
+      ogate = GO(T.dot(ogate_in, self.W_ogate_proj))
+
+      s_t = u * igate + s_p * fgate
+      h_t = CO(s_t) * ogate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    h = h[::direction]
+    self.make_output(h)
+
+
 
 class GRULayer(RecurrentLayer):
   layer_class = "gru"
