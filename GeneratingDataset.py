@@ -202,13 +202,13 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
   """
   Episodic Copy memory task.
   This is a simple memory task where we need to remember a sequence.
-  Described in Arjovsky et al. (2015) where they tested it for Unitary RNNs.
+  Described in: http://arxiv.org/abs/1511.06464
   Also tested for Associative LSTMs.
   This is a variant where the lengths are random, both for the chars and for blanks.
   """
 
   # Blank, delimiter and some chars.
-  _input_classes = " .abcdefghijklmnopqrstuvwxyz0123456789"
+  _input_classes = " .01234567"
   _output_classes = _input_classes
 
   def __init__(self, **kwargs):
