@@ -392,3 +392,17 @@ def complex_bound(a, axis=-1):
   r_real = a_real / d
   r_imag = a_imag / d
   return T.concatenate([r_real, r_imag], axis=axis)
+
+def complex_dot(a, b):
+  assert a.ndim >= 1
+  assert b.ndim >= 1
+  a_axis = a.ndim - 1
+  a_real = a[slice_for_axis(axis=a_axis, s=slice(0, a.shape[a_axis] / 2))]
+  a_imag = a[slice_for_axis(axis=a_axis, s=slice(a.shape[a_axis] / 2, None))]
+  b_axis = 0
+  b_real = b[slice_for_axis(axis=b_axis, s=slice(0, b.shape[b_axis] / 2))]
+  b_imag = b[slice_for_axis(axis=b_axis, s=slice(b.shape[b_axis] / 2, None))]
+  r_real = T.dot(a_real, b_real) - T.dot(a_imag, b_imag)
+  r_imag = T.dot(a_real, b_imag) + T.dot(a_imag, b_real)
+  r_axis = r_real.ndim - 1
+  return T.concatenate([r_real, r_imag], axis=r_axis)
