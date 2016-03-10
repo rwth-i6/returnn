@@ -6,7 +6,7 @@ import numpy
 
 class GeneratingDataset(Dataset):
 
-  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), **kwargs):
+  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
     assert window == 1
     super(GeneratingDataset, self).__init__(window, **kwargs)
     assert self.shuffle_frames_of_nseqs == 0
@@ -18,7 +18,8 @@ class GeneratingDataset(Dataset):
     self.num_outputs = output_dim
     self.expected_load_seq_start = 0
     self._num_seqs = num_seqs
-    self.random = numpy.random.RandomState(0)
+    self.random = numpy.random.RandomState(1)
+    self.fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -28,7 +29,7 @@ class GeneratingDataset(Dataset):
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
     assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
-    self.random.seed(epoch or 1)
+    self.random.seed(self.fixed_random_seed or epoch or 1)
     self._num_timesteps = 0
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
