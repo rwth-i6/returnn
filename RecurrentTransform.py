@@ -842,6 +842,16 @@ class AttentionList(AttentionStruct):
     W_att_re = self.custom_vars['W_att_re_%d' % i]
     b_att_re = self.custom_vars['b_att_re_%d' % i]
     W_att_in = self.custom_vars['W_att_in_%d' % i]
+    if self.layer.attrs['attention_beam'] > 0:
+      pad_i = T.zeros((self.layer.attrs['attention_beam'],I.shape[1]), 'int8')
+      self.add_input(T.concatenate([pad_i,I,pad_i],axis=0), 'I_%d' % i)
+      pad_c = T.zeros((self.layer.attrs['attention_beam'],C.shape[1],C.shape[2]), 'float32')
+      self.add_input(T.concatenate([pad_c,C,pad_c],axis=0), 'C_%d' % i)
+      pad_b = T.zeros((self.layer.attrs['attention_beam'],B.shape[1],B.shape[2]), 'float32')
+      self.add_input(T.concatenate([pad_b,B,pad_b],axis=0), 'B_%d' % i)
+      B = self.custom_vars['B_%d' % i]
+      C = self.custom_vars['C_%d' % i]
+      I = self.custom_vars['I_%d' % i]
     if i == 0:
       self.B_0 = B
       self.C_0 = C
@@ -911,10 +921,25 @@ class AttentionList(AttentionStruct):
     B = self.custom_vars[('B_%d' % i)]
     C = self.custom_vars[('C_%d' % i)]
     I = self.custom_vars[('I_%d' % i)]
+    loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
+    if self.layer.attrs['attention_beam'] > 0:
+      beam_size = self.layer.attrs['attention_beam']
+      loc += T.constant(beam_size,'int32') # start in non-padded area
+      from theano.tensor.signal import downsample
+      img = T.extra_ops.to_one_hot(loc,C.shape[0],'float32').dimshuffle(1,0)
+      beam_idx = (downsample.max_pool_2d(img,
+        ds=(self.layer.attrs['attention_beam'], 1),
+        st=(1,1),
+        ignore_border=True,
+        mode='max'
+      ).flatten() > 0).nonzero()
+      I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
+      C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
+      B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
+
     mode = self.layer.attrs['attention_step']
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
-        loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
         if mode == 'linear-hard':
           self.glimpses[i] = [ C[loc,T.arange(C.shape[1],dtype='int32')] ]
         elif mode == 'linear-soft':
