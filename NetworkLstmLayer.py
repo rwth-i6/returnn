@@ -589,8 +589,11 @@ class AssociativeLstmLayer(HiddenLayer):
       outgate2 = T.concatenate([outgate, outgate], axis=1)
       batches = T.arange(0, i_t.shape[0]).dimshuffle(0, 'x', 'x')  # (batch,n_copies,n_cells)
       P_bc = P.dimshuffle('x', 0, 1)  # (batch,n_copies,n_cells)
-      meminkeyP = meminkey[batches, P_bc]  # (batch,n_copies,n_cells)
-      memoutkeyP = memoutkey[batches, P_bc]  # (batch,n_copies,n_cells)
+      from TheanoUtil import indices_in_flatten_array
+      # meminkeyP & memoutkeyP have shape (batch,n_copies,n_cells).
+      # We use this variant to be able to run on GPU. http://stackoverflow.com/questions/35918811/
+      meminkeyP = meminkey.flatten()[indices_in_flatten_array(meminkey.ndim, meminkey.shape, batches, P_bc)]
+      memoutkeyP = memoutkey.flatten()[indices_in_flatten_array(memoutkey.ndim, memoutkey.shape, batches, P_bc)]
       u_gated = u * ingate2  # (batch,n_cells)
       u_gated_bc = u_gated.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
       forgetgate2_bc = forgetgate2.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)

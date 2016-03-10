@@ -406,3 +406,23 @@ def complex_dot(a, b):
   r_imag = T.dot(a_real, b_imag) + T.dot(a_imag, b_real)
   r_axis = r_real.ndim - 1
   return T.concatenate([r_real, r_imag], axis=r_axis)
+
+
+def indices_in_flatten_array(ndim, shape, *args):
+  """
+  We expect that all args can be broadcasted together.
+  So, if we have some array A with ndim&shape as given,
+  A[args] would give us a subtensor.
+  We return the indices so that A[args].flatten()
+  and A.flatten()[indices] are the same.
+  """
+  assert ndim > 0
+  assert len(args) == ndim
+  indices_per_axis = [args[i] for i in range(ndim)]
+  for i in range(ndim):
+    for j in range(i + 1, ndim):
+      indices_per_axis[i] *= shape[j]
+  indices = indices_per_axis[0]
+  for i in range(1, ndim):
+    indices += indices_per_axis[i]
+  return indices
