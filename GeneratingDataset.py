@@ -203,6 +203,7 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
   This is a simple memory task where we need to remember a sequence.
   Described in Arjovsky et al. (2015) where they tested it for Unitary RNNs.
   Also tested for Associative LSTMs.
+  This is a variant where the lengths are random, both for the chars and for blanks.
   """
 
   # Blank, delimiter and some chars.
@@ -217,11 +218,14 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
 
   def generate_input_seq(self):
     seq = ""
-    for i in range(10):  # 10 random chars
-      seq += self.random.choice(list(self._input_classes[2:]))
-    seq += " " * 100  # 100 blanks
+    # Start with random chars.
+    rnd_char_len = self.random.randint(1, 10)
+    seq += "".join([self.random.choice(list(self._input_classes[2:]))
+                    for i in range(rnd_char_len)])
+    blank_len = self.random.randint(1, 100)
+    seq += " " * blank_len  # blanks
     seq += "."  # 1 delim
-    seq += "." * 11  # we wait for the 10 outputs + 1 delim
+    seq += "." * (rnd_char_len + 1)  # we wait for the outputs + 1 delim
     return list(map(self._input_classes.index, seq))
 
   @classmethod
