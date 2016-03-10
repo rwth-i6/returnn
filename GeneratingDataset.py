@@ -197,6 +197,66 @@ class Task12AXDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class TaskEpisodicCopyDataset(GeneratingDataset):
+  """
+  Episodic Copy memory task.
+  This is a simple memory task where we need to remember a sequence.
+  Described in Arjovsky et al. (2015) where they tested it for Unitary RNNs.
+  Also tested for Associative LSTMs.
+  """
+
+  # Blank, delimiter and some chars.
+  _input_classes = " .abcdefghijklmnopqrstuvwxyz0123456789"
+  _output_classes = _input_classes
+
+  def __init__(self, **kwargs):
+    super(TaskEpisodicCopyDataset, self).__init__(
+      input_dim=len(self._input_classes),
+      output_dim=len(self._output_classes),
+      **kwargs)
+
+  def generate_input_seq(self):
+    seq = ""
+    for i in range(10):  # 10 random chars
+      seq += self.random.choice(list(self._input_classes[2:]))
+    seq += " " * 100  # 100 blanks
+    seq += "."  # 1 delim
+    return list(map(self._input_classes.index, seq))
+
+  @classmethod
+  def make_output_seq(cls, input_seq):
+    """
+    :type input_seq: list[int]
+    :rtype: list[int]
+    """
+    input_classes = cls._input_classes
+    input_mem = ""
+    output_seq_str = ""
+    state = 0
+    for i in input_seq:
+      c = input_classes[i]
+      if state == 0:
+        output_seq_str += " "
+        if c == " ": pass  # just ignore
+        elif c == ".": state = 1  # start with recall now
+        else: input_mem += c
+      else:  # recall from memory
+        # Ignore input.
+        if not input_mem:
+          output_seq_str += "."
+        else:
+          output_seq_str += input_mem[:1]
+          input_mem = input_mem[1:]
+    return list(map(cls._output_classes.index, output_seq_str))
+
+  def generate_seq(self, seq_idx):
+    input_seq = self.generate_input_seq()
+    output_seq = self.make_output_seq(input_seq)
+    features = class_idx_seq_to_1_of_k(input_seq, num_classes=len(self._input_classes))
+    targets = numpy.array(output_seq)
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
 class DummyDataset(GeneratingDataset):
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
