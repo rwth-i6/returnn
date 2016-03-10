@@ -569,14 +569,7 @@ class AssociativeLstmLayer(HiddenLayer):
     else:
       CI, CO, RI, RO = [actf] * 4  # Not for the gates.
 
-    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
-    n_batch = z.shape[1]
-    batches = T.arange(0, n_batch).dimshuffle(0, 'x', 'x')  # (batch,n_copies,n_cells)
-    P_bc = P.dimshuffle('x', 0, 1)  # (batch,n_copies,n_cells)
-    from TheanoUtil import indices_in_flatten_array
-    indices_flat_memkey = indices_in_flatten_array(2, (n_batch, n_cells), batches, P_bc)
-
-    def lstm_step(z_t, i_t, s_p, h_p, W_re, indices_flat_memkey):
+    def lstm_step(z_t, i_t, s_p, h_p, W_re):
       # z_t: current input. (batch,n_z)
       # i_t: 0 or 1 (via index). (batch,)
       # s_p: previous cell state. (batch,n_copies,n_cells)
@@ -592,10 +585,8 @@ class AssociativeLstmLayer(HiddenLayer):
       ingate2 = T.tile(gates[:, 0:n_complex_cells], (1, 2))
       forgetgate2 = T.tile(gates[:, n_complex_cells:2 * n_complex_cells], (1, 2))
       outgate2 = T.tile(gates[:, 2 * n_complex_cells:], (1, 2))
-      # meminkeyP & memoutkeyP have shape (batch,n_copies,n_cells).
-      # We use this variant to be able to run on GPU. http://stackoverflow.com/questions/35918811/
-      meminkeyP = meminkey.flatten()[indices_flat_memkey]
-      memoutkeyP = memoutkey.flatten()[indices_flat_memkey]
+      meminkeyP = meminkey[:, P]  # (batch,n_copies,n_cells)
+      memoutkeyP = memoutkey[:, P]  # (batch,n_copies,n_cells)
       u_gated = u * ingate2  # (batch,n_cells)
       u_gated_bc = u_gated.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
       forgetgate2_bc = forgetgate2.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
@@ -610,6 +601,8 @@ class AssociativeLstmLayer(HiddenLayer):
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
 
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
     assert self.W_re.ndim == 2
     # i: (n_time,n_batch)
     i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
@@ -619,7 +612,7 @@ class AssociativeLstmLayer(HiddenLayer):
     go_backwards = {1:False, -1:True}[direction]
     (s, h), _ = theano.scan(lstm_step,
                             sequences=[z, i], go_backwards=go_backwards,
-                            non_sequences=[self.W_re, indices_flat_memkey],
+                            non_sequences=[self.W_re],
                             outputs_info=[s_initial, h_initial])
     self.act = [h, s]
     h = h[::direction]
