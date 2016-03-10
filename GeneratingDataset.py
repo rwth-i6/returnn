@@ -221,6 +221,7 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
       seq += self.random.choice(list(self._input_classes[2:]))
     seq += " " * 100  # 100 blanks
     seq += "."  # 1 delim
+    seq += "." * 11  # we wait for the 10 outputs + 1 delim
     return list(map(self._input_classes.index, seq))
 
   @classmethod
@@ -247,6 +248,97 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
         else:
           output_seq_str += input_mem[:1]
           input_mem = input_mem[1:]
+    return list(map(cls._output_classes.index, output_seq_str))
+
+  def generate_seq(self, seq_idx):
+    input_seq = self.generate_input_seq()
+    output_seq = self.make_output_seq(input_seq)
+    features = class_idx_seq_to_1_of_k(input_seq, num_classes=len(self._input_classes))
+    targets = numpy.array(output_seq)
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
+class TaskXmlModelingDataset(GeneratingDataset):
+  """
+  XML modeling memory task.
+  This is a simple memory task where we need to remember a sequence.
+  Defined in Jozefowicz et al. (2015).
+  Also tested for Associative LSTMs.
+  """
+
+  # Blank, XML-tags and some chars.
+  _input_classes = " <>/abcdefghijklmnopqrstuvwxyz"
+  _output_classes = _input_classes
+
+  def __init__(self, **kwargs):
+    super(TaskXmlModelingDataset, self).__init__(
+      input_dim=len(self._input_classes),
+      output_dim=len(self._output_classes),
+      **kwargs)
+
+  def generate_input_seq(self):
+    # Because this is a prediction task, start with blank,
+    # and the output seq should predict the next char after the blank.
+    seq = " "
+    xml_stack = []
+    while True:
+      if not xml_stack or (len(xml_stack) < 4 and self.random.rand() > 0.6):
+        tag_len = self.random.randint(1, 10)
+        tag = "".join([self.random.choice(list(self._input_classes[4:]))
+                       for i in range(tag_len)])
+        seq += "<%s>" % tag
+        xml_stack += [tag]
+      else:
+        seq += "</%s>" % xml_stack.pop()
+      if not xml_stack and self.random.rand() > 0.2:
+        break
+    return list(map(self._input_classes.index, seq))
+
+  @classmethod
+  def make_output_seq(cls, input_seq):
+    """
+    :type input_seq: list[int]
+    :rtype: list[int]
+    """
+    input_classes = cls._input_classes
+    input_seq_str = "".join(cls._input_classes[i] for i in input_seq)
+    xml_stack = []
+    output_seq_str = ""
+    state = 0
+    for c in input_seq_str:
+      if c in " >":
+        output_seq_str += "<"  # We expect an open char.
+        assert state != 1, repr(input_seq_str)
+        state = 1  # expect beginning of tag
+      elif state == 1:  # in beginning of tag
+        output_seq_str += " "  # We don't know yet.
+        assert c == "<", repr(input_seq_str)
+        state = 2
+      elif state == 2:  # first char in tag
+        if c == "/":
+          assert xml_stack, repr(input_seq_str)
+          output_seq_str += xml_stack[-1][0]
+          xml_stack[-1] = xml_stack[-1][1:]
+          state = 4  # closing tag
+        else:  # opening tag
+          output_seq_str += " "  # We don't know yet.
+          assert c not in " <>/", repr(input_seq_str)
+          state = 3
+          xml_stack += [c]
+      elif state == 3:  # opening tag
+        output_seq_str += " "  # We don't know.
+        xml_stack[-1] += c
+      elif state == 4:  # closing tag
+        assert xml_stack, repr(input_seq_str)
+        if not xml_stack[-1]:
+          output_seq_str += ">"
+          xml_stack.pop()
+          state = 0
+        else:
+          output_seq_str += xml_stack[-1][0]
+          xml_stack[-1] = xml_stack[-1][1:]
+      else:
+        assert False, "invalid state %i. input %r" % (state, input_seq_str)
     return list(map(cls._output_classes.index, output_seq_str))
 
   def generate_seq(self, seq_idx):
@@ -369,3 +461,33 @@ class CopyTaskDataset(GeneratingDataset):
     seq = [self.random.randint(0, self.nsymbols) for i in range(seq_len)]
     seq_np = numpy.array(seq, dtype="int8")
     return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
+
+
+def demo():
+  import better_exchook
+  better_exchook.install()
+  import sys
+  dsclazzeval = sys.argv[1]
+  dataset = eval(dsclazzeval)
+  assert isinstance(dataset, GeneratingDataset)
+  assert dataset._input_classes and dataset._output_classes
+  assert dataset.num_outputs["data"][1] == 2  # expect 1-hot
+  assert dataset.num_outputs["classes"][1] == 1  # expect sparse
+  for i in range(10):
+    print "Seq idx", i, ":"
+    s = dataset.generate_seq(i)
+    assert isinstance(s, DatasetSeq)
+    features = s.features
+    output_seq = s.targets["classes"]
+    assert features.ndim == 2
+    assert output_seq.ndim == 1
+    input_seq = numpy.argmax(features, axis=1)
+    input_seq_str = "".join([dataset._input_classes[i] for i in input_seq])
+    output_seq_str = "".join([dataset._output_classes[i] for i in output_seq])
+    print " ", repr(input_seq_str)
+    print " ", repr(output_seq_str)
+    assert features.shape[1] == dataset.num_outputs["data"][0]
+    assert features.shape[0] == output_seq.shape[0]
+
+if __name__ == "__main__":
+  demo()
