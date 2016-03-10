@@ -556,14 +556,14 @@ class AssociativeLstmLayer(HiddenLayer):
 
     # Some defaults.
     CI, CO, RI, RO = [T.tanh] * 4  # original complex_bound, but tanh works better?
-    GI, GF, GO = [T.nnet.sigmoid] * 3
+    G = T.nnet.sigmoid
 
     actf = strtoact(activation)
     if isinstance(actf, list):
       if len(actf) == 4:
         CI, CO, RI, RO = actf
-      elif len(actf) == 7:
-        CI, CO, RI, RO, GI, GF, GO = actf
+      elif len(actf) == 5:
+        CI, CO, RI, RO, G = actf
       else:
         assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
     else:
@@ -578,15 +578,13 @@ class AssociativeLstmLayer(HiddenLayer):
       i_t_bc = i_t.dimshuffle(0, 'x')
       z_t += T.dot(h_p, W_re)
       z_t *= i_t_bc
-      ingate = GI(z_t[:, 0:n_complex_cells])
-      forgetgate = GF(z_t[:, n_complex_cells:2 * n_complex_cells])
-      outgate = GO(z_t[:, 2 * n_complex_cells:3 * n_complex_cells])
+      gates = G(z_t[:, 0:n_complex_cells * 3])
       meminkey = RI(z_t[:, 3 * n_complex_cells:3 * n_complex_cells + n_cells])
       memoutkey = RO(z_t[:, 3 * n_complex_cells + n_cells:3 * n_complex_cells + 2 * n_cells])
       u = CI(z_t[:, 3 * n_complex_cells + 2 * n_cells:])
-      ingate2 = T.tile(ingate, (1, 2))
-      forgetgate2 = T.tile(forgetgate, (1, 2))
-      outgate2 = T.tile(outgate, (1, 2))
+      ingate2 = T.tile(gates[:, 0:n_complex_cells], (1, 2))
+      forgetgate2 = T.tile(gates[:, n_complex_cells:2 * n_complex_cells], (1, 2))
+      outgate2 = T.tile(gates[:, 2 * n_complex_cells:], (1, 2))
       batches = T.arange(0, i_t.shape[0]).dimshuffle(0, 'x', 'x')  # (batch,n_copies,n_cells)
       P_bc = P.dimshuffle('x', 0, 1)  # (batch,n_copies,n_cells)
       from TheanoUtil import indices_in_flatten_array
