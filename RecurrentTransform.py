@@ -836,9 +836,9 @@ class AttentionList(AttentionStruct):
   name = "attention_list"
 
   def ugly_init(self, i):
-    B = self.custom_vars['B_%d' % i]
-    C = self.custom_vars['C_%d' % i]
-    I = self.custom_vars['I_%d' % i]
+    B = self.custom_vars['B_%d' % i][::self.layer.attrs['direction']]
+    C = self.custom_vars['C_%d' % i][::self.layer.attrs['direction']]
+    I = self.custom_vars['I_%d' % i][::self.layer.attrs['direction']]
     W_att_re = self.custom_vars['W_att_re_%d' % i]
     b_att_re = self.custom_vars['b_att_re_%d' % i]
     W_att_in = self.custom_vars['W_att_in_%d' % i]
@@ -921,13 +921,15 @@ class AttentionList(AttentionStruct):
     B = self.custom_vars[('B_%d' % i)]
     C = self.custom_vars[('C_%d' % i)]
     I = self.custom_vars[('I_%d' % i)]
-    loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
+    #loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
+    loc = T.cast(T.minimum(T.sum(I,axis=0) * self.n / self.bound, T.sum(I,axis=0)),'int32')
     #loc = T.cast((T.sum(I,axis=0) * self.n / T.cast(I.shape[0],'float32')),'int32')
-    if self.layer.attrs['direction'] == -1:
-      loc = T.cast(T.sum(I,axis=0),'int32') - loc - T.constant(1,'int32')
+    #if self.layer.attrs['direction'] == -1:
+    #  loc = T.cast(T.sum(I,axis=0),'int32') - loc - T.constant(1,'int32')
     if self.layer.attrs['attention_beam'] > 0:
       beam_size = self.layer.attrs['attention_beam']
-      loc += T.constant(beam_size,'int32') # start in non-padded area
+      loc += T.constant(beam_size * self.layer.attrs['direction'],'int32') # start in non-padded area
+      #loc = T.clip(loc,beam_size,I.shape[0]-beam_size)
       from theano.tensor.signal import downsample
       img = T.extra_ops.to_one_hot(loc,C.shape[0],'float32').dimshuffle(1,0)
       smp = downsample.max_pool_2d(img, ds=(beam_size,1), st=(1,1), ignore_border=True, mode='max')
