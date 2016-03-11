@@ -927,12 +927,8 @@ class AttentionList(AttentionStruct):
       loc += T.constant(beam_size,'int32') # start in non-padded area
       from theano.tensor.signal import downsample
       img = T.extra_ops.to_one_hot(loc,C.shape[0],'float32').dimshuffle(1,0)
-      beam_idx = (downsample.max_pool_2d(img,
-        ds=(self.layer.attrs['attention_beam'], 1),
-        st=(1,1),
-        ignore_border=True,
-        mode='max'
-      ).flatten() > 0).nonzero()
+      smp = downsample.max_pool_2d(img, ds=(beam_size,1), st=(1,1), ignore_border=True, mode='max')
+      beam_idx = (smp.flatten() > 0).nonzero()
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
