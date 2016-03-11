@@ -1994,3 +1994,18 @@ class ConvFMP(_NoOpLayer):
       borrow=True,
       name="b_conv"
     )
+
+
+class TorchLayer(_NoOpLayer):
+  recurrent = True  # who knows
+  layer_class = "torch"
+
+  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, **kwargs):
+    super(TorchLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.input_index = self.index
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=False)
+    from TorchWrapper import TorchWrapperOp
+    op = TorchWrapperOp(
+      n_in=n_in, n_out=n_out, lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
+    self.output, self.index = op(x, self.input_index)
