@@ -160,5 +160,7 @@ def test_indices_in_flatten_array():
   P_bc = P.dimshuffle('x', 0, 1)  # (batch,n_copies,n_cells)
   meminkeyP1 = meminkey[batches, P_bc]  # (batch,n_copies,n_cells)
   meminkeyP2 = meminkey.flatten()[indices_in_flatten_array(meminkey.ndim, meminkey.shape, batches, P_bc)]
+  meminkeyP3 = meminkey[:, P]  # (batch,n_copies,n_cells)
 
   numpy.testing.assert_allclose(meminkeyP1.eval(), meminkeyP2.eval())
+  numpy.testing.assert_allclose(meminkeyP1.eval(), meminkeyP3.eval())
