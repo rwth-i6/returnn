@@ -266,20 +266,21 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
 class TaskXmlModelingDataset(GeneratingDataset):
   """
   XML modeling memory task.
-  This is a simple memory task where we need to remember a sequence.
+  This is a memory task where we need to remember a stack.
   Defined in Jozefowicz et al. (2015).
   Also tested for Associative LSTMs.
   """
 
   # Blank, XML-tags and some chars.
-  _input_classes = " <>/abcdefghijklmnopqrstuvwxyz"
+  _input_classes = " <>/abcdefgh"
   _output_classes = _input_classes
 
-  def __init__(self, **kwargs):
+  def __init__(self, limit_stack_depth=4, **kwargs):
     super(TaskXmlModelingDataset, self).__init__(
       input_dim=len(self._input_classes),
       output_dim=len(self._output_classes),
       **kwargs)
+    self.limit_stack_depth = limit_stack_depth
 
   def generate_input_seq(self):
     # Because this is a prediction task, start with blank,
@@ -287,7 +288,7 @@ class TaskXmlModelingDataset(GeneratingDataset):
     seq = " "
     xml_stack = []
     while True:
-      if not xml_stack or (len(xml_stack) < 4 and self.random.rand() > 0.6):
+      if not xml_stack or (len(xml_stack) < self.limit_stack_depth and self.random.rand() > 0.6):
         tag_len = self.random.randint(1, 10)
         tag = "".join([self.random.choice(list(self._input_classes[4:]))
                        for i in range(tag_len)])
@@ -344,6 +345,127 @@ class TaskXmlModelingDataset(GeneratingDataset):
           xml_stack[-1] = xml_stack[-1][1:]
       else:
         assert False, "invalid state %i. input %r" % (state, input_seq_str)
+    return list(map(cls._output_classes.index, output_seq_str))
+
+  def generate_seq(self, seq_idx):
+    input_seq = self.generate_input_seq()
+    output_seq = self.make_output_seq(input_seq)
+    features = class_idx_seq_to_1_of_k(input_seq, num_classes=len(self._input_classes))
+    targets = numpy.array(output_seq)
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
+class TaskVariableAssignmentDataset(GeneratingDataset):
+  """
+  Variable Assignment memory task.
+  This is a memory task to test for key-value retrieval.
+  Defined in Associative LSTM paper.
+  """
+
+  # Blank/Delim/End, Store/Query, and some chars for key/value.
+  _input_classes = " ,.SQ()abcdefgh"
+  _output_classes = _input_classes
+
+  def __init__(self, **kwargs):
+    super(TaskVariableAssignmentDataset, self).__init__(
+      input_dim=len(self._input_classes),
+      output_dim=len(self._output_classes),
+      **kwargs)
+
+  def generate_input_seq(self):
+    seq = ""
+    from collections import OrderedDict
+    store = OrderedDict()
+    # First the assignments.
+    num_assignments = self.random.randint(1, 5)
+    for i in range(num_assignments):
+      key_len = self.random.randint(2, 5)
+      while True:  # find unique key
+        key = "".join([self.random.choice(list(self._input_classes[7:]))
+                       for i in range(key_len)])
+        if key not in store: break
+      value_len = self.random.randint(1, 2)
+      value = "".join([self.random.choice(list(self._input_classes[7:]))
+                       for i in range(value_len)])
+      if seq: seq += ","
+      seq += "S(%s,%s)" % (key, value)
+      store[key] = value
+    # Now one query.
+    key = self.random.choice(store.keys())
+    value = store[key]
+    seq += ",Q(%s)" % key
+    seq += "%s." % value
+    return list(map(self._input_classes.index, seq))
+
+  @classmethod
+  def make_output_seq(cls, input_seq):
+    """
+    :type input_seq: list[int]
+    :rtype: list[int]
+    """
+    input_classes = cls._input_classes
+    input_seq_str = "".join(cls._input_classes[i] for i in input_seq)
+    store = {}
+    key, value = "", ""
+    output_seq_str = ""
+    state = 0
+    for c in input_seq_str:
+      if state == 0:
+        key = ""
+        if c == "S": state = 1  # store
+        elif c == "Q": state = 2  # query
+        elif c in " ,": pass  # can be ignored
+        else: assert False, "c %r in %r" % (c, input_seq_str)
+        output_seq_str += " "
+      elif state == 1:  # store
+        assert c == "(", repr(input_seq_str)
+        state = 1.1
+        output_seq_str += " "
+      elif state == 1.1:  # store.key
+        if c == ",":
+          assert key
+          value = ""
+          state = 1.5  # store.value
+        else:
+          assert c not in " .,SQ()", repr(input_seq_str)
+          key += c
+        output_seq_str += " "
+      elif state == 1.5:  # store.value
+        if c == ")":
+          assert value
+          store[key] = value
+          state = 0
+        else:
+          assert c not in " .,SQ()", repr(input_seq_str)
+          value += c
+        output_seq_str += " "
+      elif state == 2:  # query
+        assert c == "(", repr(input_seq_str)
+        state = 2.1
+        output_seq_str += " "
+      elif state == 2.1:  # query.key
+        if c == ")":
+          value = store[key]
+          output_seq_str += value[0]
+          value = value[1:]
+          state = 2.5
+        else:
+          assert c not in " .,SQ()", repr(input_seq_str)
+          key += c
+          output_seq_str += " "
+      elif state == 2.5:  # query result
+        assert c not in " .,SQ()", repr(input_seq_str)
+        if value:
+          output_seq_str += value[0]
+          value = value[1:]
+        else:
+          output_seq_str += "."
+          state = 2.6
+      elif state == 2.6:  # query result end
+        assert c == ".", repr(input_seq_str)
+        output_seq_str += " "
+      else:
+        assert False, "invalid state %i, input %r" % (state, input_seq_str)
     return list(map(cls._output_classes.index, output_seq_str))
 
   def generate_seq(self, seq_idx):
