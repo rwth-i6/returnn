@@ -922,6 +922,9 @@ class AttentionList(AttentionStruct):
     C = self.custom_vars[('C_%d' % i)]
     I = self.custom_vars[('I_%d' % i)]
     loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
+    #loc = T.cast((T.sum(I,axis=0) * self.n / T.cast(I.shape[0],'float32')),'int32')
+    if self.layer.attrs['direction'] == -1:
+      loc = T.cast(T.sum(I,axis=0),'int32') - loc - T.constant(1,'int32')
     if self.layer.attrs['attention_beam'] > 0:
       beam_size = self.layer.attrs['attention_beam']
       loc += T.constant(beam_size,'int32') # start in non-padded area
