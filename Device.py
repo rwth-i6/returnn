@@ -464,7 +464,7 @@ class Device(object):
           if param is not None:
             param = int(param)
           hidden = self.testnet.hidden[extract]
-          signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.outputs
+          signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.output
           sidx = hidden.index[param].dimshuffle('x',0) if param is not None else hidden.index
           source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
         elif extract == 'input':
