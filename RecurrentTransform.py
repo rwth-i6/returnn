@@ -836,9 +836,9 @@ class AttentionList(AttentionStruct):
   name = "attention_list"
 
   def ugly_init(self, i):
-    B = self.custom_vars['B_%d' % i][::self.layer.attrs['direction']]
-    C = self.custom_vars['C_%d' % i][::self.layer.attrs['direction']]
-    I = self.custom_vars['I_%d' % i][::self.layer.attrs['direction']]
+    B = self.custom_vars['B_%d' % i]
+    C = self.custom_vars['C_%d' % i]
+    I = self.custom_vars['I_%d' % i]
     W_att_re = self.custom_vars['W_att_re_%d' % i]
     b_att_re = self.custom_vars['b_att_re_%d' % i]
     W_att_in = self.custom_vars['W_att_in_%d' % i]
@@ -893,7 +893,7 @@ class AttentionList(AttentionStruct):
     n_tmp = self.layer.attrs['attention_template']
     for i,e in enumerate(self.base):
       # base output
-      self.add_input(e.output, 'B_%d' % i)
+      self.add_input(e.output[::self.layer.attrs['direction']], 'B_%d' % i)
       # mapping from base output to template size
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re) # + self.base[i].attrs['n_out'])
       if self.layer.attrs['attention_glimpse'] == 0:
@@ -907,8 +907,8 @@ class AttentionList(AttentionStruct):
       W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
       b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
-      self.add_input(T.tanh(T.dot(self.base[i].output, W_att_bs) + b_att_bs), 'C_%d' % i)
-      self.add_input(T.cast(self.base[i].index, 'float32'), 'I_%d' % i)
+      self.add_input(T.tanh(T.dot(self.base[i].output, W_att_bs) + b_att_bs)[::self.layer.attrs['direction']], 'C_%d' % i)
+      self.add_input(T.cast(self.base[i].index, 'float32')[::self.layer.attrs['direction']], 'I_%d' % i)
       # mapping from template size to cell input
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
