@@ -572,7 +572,72 @@ class ChunkingSublayer(_NoOpLayer):
 
 
 class TimeBlurLayer(_NoOpLayer):
-  pass  # TODO... gauss blur or so in time dimension
+  layer_class = "time_blur"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, t_start, t_end, t_step, distribution, **kwargs):
+    super(TimeBlurLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('t_start', t_start)
+    self.set_attr('t_end', t_end)
+    self.set_attr('t_step', t_step)
+    self.set_attr('distribution', distribution)
+
+    t_offsets = numpy.arange(start=t_start, stop=t_end, step=t_step)
+    nums = numpy.arange(t_offsets.shape[0])
+    if distribution == "uniform":
+      t_weights = numpy.ones_like(nums, dtype="float32")
+    elif distribution == "triangle":
+      nums_rev = nums[::-1]
+      t_weights = 1 + numpy.minimum(nums, nums_rev)
+    elif distribution == "hamming":  # https://en.wikipedia.org/wiki/Window_function#Hamming_window
+      alpha = 0.53836
+      t_weights = alpha - (1.0 - alpha) * numpy.cos(2.0 * numpy.pi * nums / (nums.shape[0] - 1))  # always >0
+    elif distribution.startswith("gauss("):  # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+      modeend = distribution.find(")")
+      assert modeend >= 0
+      sigma = float(distribution[len("gauss("):modeend])
+      N = nums.shape[0] - 1
+      t_weights = numpy.exp(-0.5 * ((nums - N / 2.0) / (sigma * N / 2.0)) ** 2)  # always >0
+    else:
+      assert False, "unknown distribution %r" % distribution
+
+    findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
+    self.output = T.zeros_like(z)
+    weight_sum = T.zeros_like(findex)
+    assert len(t_weights) == len(t_offsets)
+    for t_offset, w in zip(t_offsets, t_weights):
+      if t_offset < 0:
+        z_slice = slice(-t_offset, None)
+        o_slice = slice(0, t_offset)
+      elif t_offset == 0:
+        z_slice = slice(None, None)
+        o_slice = slice(None, None)
+      else:  # t_offset > 0
+        z_slice = slice(0, -t_offset)
+        o_slice = slice(t_offset, None)
+      w = findex[z_slice] * numpy.float32(w)
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
+    self.output = self.output / weight_sum
+
+
+class GaussianFilter1DLayer(_NoOpLayer):
+  layer_class = "gaussian_filter_1d"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, sigma, axis, window_radius=40, **kwargs):
+    super(GaussianFilter1DLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('sigma', sigma)
+    self.set_attr('axis', axis)
+    self.set_attr('window_radius', window_radius)
+    from TheanoUtil import gaussian_filter_1d
+    self.output = gaussian_filter_1d(z, sigma=sigma, axis=axis, window_radius=window_radius)
 
 
 class TimeWarpLayer(_NoOpLayer):
