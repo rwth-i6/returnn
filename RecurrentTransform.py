@@ -835,58 +835,28 @@ class AttentionList(AttentionStruct):
   """
   name = "attention_list"
 
-  def ugly_init(self, i):
+  def init(self, i):
     B = self.custom_vars['B_%d' % i]
     C = self.custom_vars['C_%d' % i]
     I = self.custom_vars['I_%d' % i]
-    W_att_re = self.custom_vars['W_att_re_%d' % i]
-    b_att_re = self.custom_vars['b_att_re_%d' % i]
-    W_att_in = self.custom_vars['W_att_in_%d' % i]
     if self.layer.attrs['attention_beam'] > 0:
-      pad_i = T.zeros((self.layer.attrs['attention_beam'],I.shape[1]), 'int8')
+      pad = self.layer.attrs['attention_beam'] #2*(self.layer.attrs['attention_beam']/2)
+      pad_i = T.zeros((pad,I.shape[1]), 'int8')
       self.add_input(T.concatenate([pad_i,I,pad_i],axis=0), 'I_%d' % i)
-      pad_c = T.zeros((self.layer.attrs['attention_beam'],C.shape[1],C.shape[2]), 'float32')
+      pad_c = T.zeros((pad,C.shape[1],C.shape[2]), 'float32')
       self.add_input(T.concatenate([pad_c,C,pad_c],axis=0), 'C_%d' % i)
-      pad_b = T.zeros((self.layer.attrs['attention_beam'],B.shape[1],B.shape[2]), 'float32')
+      pad_b = T.zeros((pad,B.shape[1],B.shape[2]), 'float32')
       self.add_input(T.concatenate([pad_b,B,pad_b],axis=0), 'B_%d' % i)
-      B = self.custom_vars['B_%d' % i]
-      C = self.custom_vars['C_%d' % i]
-      I = self.custom_vars['I_%d' % i]
-    if i == 0:
-      self.B_0 = B
-      self.C_0 = C
-      self.I_0 = I
-      self.W_att_re_0 = W_att_re
-      self.b_att_re_0 = b_att_re
-      self.W_att_in_0 = W_att_in
-    elif i == 1:
-      self.B_1 = B
-      self.C_1 = C
-      self.I_1 = I
-      self.W_att_re_1 = W_att_re
-      self.b_att_re_1 = b_att_re
-      self.W_att_in_1 = W_att_in
-    elif i == 2:
-      self.B_2 = B
-      self.C_2 = C
-      self.I_2 = I
-      self.W_att_re_2 = W_att_re
-      self.b_att_re_2 = b_att_re
-      self.W_att_in_2 = W_att_in
-    elif i == 3:
-      self.B_3 = B
-      self.C_3 = C
-      self.I_3 = I
-      self.W_att_re_3 = W_att_re
-      self.b_att_re_3 = b_att_re
-      self.W_att_in_3 = W_att_in
-    elif i == 4:
-      self.B_4 = B
-      self.C_4 = C
-      self.I_4 = I
-      self.W_att_re_4 = W_att_re
-      self.b_att_re_4 = b_att_re
-      self.W_att_in_4 = W_att_in
+      from theano.tensor.signal import downsample
+      img = T.eye(self.custom_vars['C_%d' % i].shape[0],self.custom_vars['C_%d' % i].shape[0],0,dtype='float32')
+      smp = downsample.max_pool_2d(img, ds=(self.layer.attrs['attention_beam'],1), st=(1,1), ignore_border=False, mode='max')
+      self.__setattr__("P_%d" % i, self.add_input(smp, 'P_%d' %i))
+    self.__setattr__("B_%d" % i, self.custom_vars['B_%d' % i])
+    self.__setattr__("C_%d" % i, self.custom_vars['C_%d' % i])
+    self.__setattr__("I_%d" % i, self.custom_vars['I_%d' % i])
+    self.__setattr__("W_att_re_%d" % i, self.custom_vars['W_att_re_%d' % i])
+    self.__setattr__("b_att_re_%d" % i, self.custom_vars['b_att_re_%d' % i])
+    self.__setattr__("W_att_in_%d" % i, self.custom_vars['W_att_in_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -907,13 +877,13 @@ class AttentionList(AttentionStruct):
       W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
       b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
-      self.add_input(T.tanh(T.dot(self.base[i].output, W_att_bs) + b_att_bs)[::self.layer.attrs['direction']], 'C_%d' % i)
-      self.add_input(T.cast(self.base[i].index, 'float32')[::self.layer.attrs['direction']], 'I_%d' % i)
+      self.add_input(T.tanh(T.dot(self.base[i].output[::self.layer.attrs['direction']], W_att_bs) + b_att_bs), 'C_%d' % i)
+      self.add_input(T.cast(self.base[i].index[::self.layer.attrs['direction']], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
       self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
-      self.ugly_init(i) # TODO
+      self.init(i)
 
   def get(self, y_p, i, g):
     W_att_re = self.custom_vars[('W_att_re_%d' % i)]
@@ -921,23 +891,14 @@ class AttentionList(AttentionStruct):
     B = self.custom_vars[('B_%d' % i)]
     C = self.custom_vars[('C_%d' % i)]
     I = self.custom_vars[('I_%d' % i)]
-    #loc = T.cast((T.sum(I,axis=0) * self.n / self.bound),'int32') % T.cast(T.sum(I,axis=0),'int32')
-    loc = T.cast(T.minimum(T.sum(I,axis=0) * self.n / self.bound, T.sum(I,axis=0)),'int32')
-    #loc = T.cast((T.sum(I,axis=0) * self.n / T.cast(I.shape[0],'float32')),'int32')
-    #if self.layer.attrs['direction'] == -1:
-    #  loc = T.cast(T.sum(I,axis=0),'int32') - loc - T.constant(1,'int32')
+    loc = T.cast(T.minimum(T.sum(I,axis=0) * self.n / self.bound, T.sum(I,axis=0)-1),'int32')
     if self.layer.attrs['attention_beam'] > 0:
-      beam_size = self.layer.attrs['attention_beam']
-      loc += T.constant(beam_size * self.layer.attrs['direction'],'int32') # start in non-padded area
-      #loc = T.clip(loc,beam_size,I.shape[0]-beam_size)
-      from theano.tensor.signal import downsample
-      img = T.extra_ops.to_one_hot(loc,C.shape[0],'float32').dimshuffle(1,0)
-      smp = downsample.max_pool_2d(img, ds=(beam_size,1), st=(1,1), ignore_border=True, mode='max')
-      beam_idx = (smp.flatten() > 0).nonzero()
+      beam_size = int(self.layer.attrs['attention_beam'])
+      loc += T.constant(beam_size,'int32') # start in non-padded area
+      beam_idx = (self.custom_vars[('P_%d' % i)][loc].dimshuffle(1,0).flatten() > 0).nonzero()
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
-
     mode = self.layer.attrs['attention_step']
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
