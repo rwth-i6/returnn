@@ -571,6 +571,16 @@ class ChunkingSublayer(_NoOpLayer):
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
 
 
+class TimeBlurLayer(_NoOpLayer):
+  pass  # TODO... gauss blur or so in time dimension
+
+
+class TimeWarpLayer(_NoOpLayer):
+  pass  # TODO... warp time
+  # like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
+  # a bit like simple local feed-forward attention.
+
+
 class ConstantLayer(_NoOpLayer):
   layer_class = "constant"
 
