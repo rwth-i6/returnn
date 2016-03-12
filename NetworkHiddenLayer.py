@@ -2000,12 +2000,49 @@ class TorchLayer(_NoOpLayer):
   recurrent = True  # who knows
   layer_class = "torch"
 
-  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, **kwargs):
+  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, params, **kwargs):
     super(TorchLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    self.input_index = self.index
-    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=False)
+    if isinstance(params, (str, unicode)):
+      params = json.loads(params)
+    self.set_attr("params", params)
+    assert isinstance(params, (tuple, list))  # list[param-init-dict]
+
+    args = []
+    args_info = []  # dict with ndim, shape, n_in
+
+    for s, m in zip(self.sources, self.masks):
+      arg_info = {"ndim": s.output.ndim, "n_in": s.attrs['n_out']}
+      args_info += [arg_info]
+      arg_info["shape"] = [[None] * s.output.ndim]
+      if not s.attrs['sparse']:
+        arg_info["shape"][-1] = s.attrs['n_out']
+      if s.attrs['sparse'] or m is None:
+        args += [s.output]
+      else:
+        args += [self.mass * m * s.output]
+
+    for param_init_dict in params:
+      assert isinstance(param_init_dict, dict)
+      assert "name" in param_init_dict
+      param_init_dict["name"] += "_%s" % self.name
+      func_name = param_init_dict.pop("class", "create_random_uniform_weights")
+      func = getattr(self, func_name)
+      p = func(**param_init_dict)
+      assert isinstance(p, theano.compile.SharedVariable)
+      p = self.add_param(p)
+      p_shape = p.get_value(borrow=True, return_internal_type=True).shape
+      p_ndim = len(p_shape)
+      args += [p]
+      args_info += [{"ndim": p_ndim, "shape": p_shape}]
+
+    args += [self.index]
+    args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected"}]
+
     from TorchWrapper import TorchWrapperOp
     op = TorchWrapperOp(
-      n_in=n_in, n_out=n_out, lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
-    self.output, self.index = op(x, self.input_index)
+      in_info=args_info,
+      out_info=[{"n_out": n_out, "ndim": 3, "shape": ((0, 0), (0, 1), n_out),
+                 "dtype": "float32"}],
+      lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
+    self.output = op(*args)

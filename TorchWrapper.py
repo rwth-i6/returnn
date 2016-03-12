@@ -14,34 +14,33 @@ def _init():
 
 
 class TorchWrapperOp(theano.Op):
-  __props__ = ("n_in", "n_out", "ndim", "dtype", "lua_file", "lua_fw_func", "lua_bw_func")
+  __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func")
 
-  def __init__(self, n_in, n_out, lua_file, lua_fw_func, lua_bw_func=None, ndim=3, dtype="float32"):
+  def __init__(self, in_info, out_info, lua_file, lua_fw_func, lua_bw_func=None):
     _init()
     super(TorchWrapperOp, self).__init__()
-    assert ndim in [2, 3]  # sparse or not. dense is time*batch*feature.
-    self.ndim = ndim
-    self.dtype = dtype
-    if isinstance(n_in, (int, long)): n_in = [n_in]
-    assert isinstance(n_in, (tuple, list))
-    self.n_in = n_in
-    self.n_out = n_out
+    self.in_info = in_info
+    self.out_info = out_info
     self.lua_file = lua_file
     self.lua_fw_func = lua_fw_func
     self.lua_bw_func = lua_bw_func
 
   def make_node(self, *args):
     args = [T.as_tensor_variable(arg) for arg in args]
-    index = args[-1]
-    assert len(args) - 1 == len(self.n_in)
-    assert index.ndim == 2  # time*batch
-    return theano.Apply(self, args, [T.TensorType(self.dtype, (False,) * self.ndim)(), index.type()])
+    assert len(args) == len(self.in_info)
+    outputs = [T.TensorType(info["dtype"], (False,) * info["ndim"])() for info in self.out_info]
+    return theano.Apply(self, args, outputs)
 
   def infer_shape(self, node, input_shapes):
-    index_shape = input_shapes[-1]
-    y_shape = [index_shape[0], index_shape[1]]  # time*batch
-    if self.ndim == 3: y_shape += [self.n_out]
-    return [tuple(y_shape), index_shape]
+    out_shapes = []
+    for info in self.out_info:
+      out_shape = list(info["shape"])
+      for idx, s in enumerate(out_shape):
+        if isinstance(s, tuple):  # we interpret this as a reference to input shapes
+          assert len(s) == 2
+          out_shape[idx] = input_shapes[s[0]][s[1]]
+      out_shapes += [tuple(out_shape)]
+    return [out_shapes]
 
   def perform(self, node, inputs, output_storage):
     raise NotImplementedError  # only C code...
@@ -56,31 +55,42 @@ class TorchWrapperOp(theano.Op):
     pass  # TODO...
 
   def grad(self, inputs, output_grads):
-    # Only gradient of first arg supported at the moment.
-    x = inputs[0]
-    x_index = inputs[-1]
-    D_y, D_y_index = output_grads
     if not self.lua_bw_func:
-      D_x = T.DisconnectedType()()  # Unknown how to calculate gradient.
-    elif x.ndim == 2:
-      D_x = T.DisconnectedType()()  # Sparse input. Discrete values.
-    else:
-      assert x.ndim == 3
-      grad_op = TorchWrapperOp(
-        n_in=(self.n_out, self.n_in[0]),  # D_y, x, x_index
-        n_out=self.n_in,
-        lua_file=self.lua_file,
-        lua_fw_func=self.lua_bw_func
-      )
-      D_x = grad_op(D_y, x, x_index)
-    Ds_remaining = [T.DisconnectedType()() for inp in inputs[1:]]  # Discrete values or not supported.
-    return [D_x] + Ds_remaining
+      # Unknown how to calculate gradient.
+      return [T.DisconnectedType()() for inp in inputs]
+
+    assert len(self.in_info) == len(inputs)
+    assert len(self.out_info) == len(output_grads)
+    out_info = [dict(info) for info in self.in_info]
+    for idx, info in enumerate(out_info):
+      # Refer to input shapes. See infer_shape().
+      info["shape"] = [(idx, i) for i in range(info["ndim"])]
+    out_info = [info for info in self.in_info if info.get("gradient", "") != "disconnected"]
+
+    grad_op = TorchWrapperOp(
+      in_info=self.in_info + self.out_info,  # inputs + output_grads
+      out_info=out_info,
+      lua_file=self.lua_file,
+      lua_fw_func=self.lua_bw_func
+    )
+    input_grads = grad_op(*[inputs + output_grads])
+    assert len(out_info) == len(input_grads)
+
+    results = []
+    for inp in self.in_info:
+      if info.get("gradient", "") == "disconnected":
+        results += [T.DisconnectedType()()]
+      else:
+        results += input_grads[:1]
+        input_grads = input_grads[1:]
+    assert len(input_grads) == 0
+    assert len(results) == len(self.in_info)
+    return results
 
   def connection_pattern(self, node):
-    # The last is the index and it's disconnected (because discrete).
-    # All others are connected.
-    pattern = [[True] for inp in node.inputs[:-1]] + [[False]]
-    assert len(pattern) == len(node.inputs)
+    assert len(node.inputs) == len(self.in_info)
+    pattern = [[info.get("gradient", "") != "disconnected"]
+               for info in self.in_info]
     return pattern
 
 
@@ -91,9 +101,10 @@ class GpuTorchWrapperOp(GpuOp, TorchWrapperOp):
 @try_register_gpu_opt
 def local_gpu_TorchWrapper(node):
   if isinstance(node.op, TorchWrapperOp):
-    args = node.inputs[:-1]
-    index = node.inputs[-1]
-    if all([(x.owner and x.owner.op == host_from_gpu) for x in args]):
+    args = node.inputs
+    if any([(x.owner and x.owner.op == host_from_gpu) for x in args]):
       gpu_op = GpuTorchWrapperOp(**{key: getattr(node.op, key) for key in node.op.__props__})
-      return [host_from_gpu(gpu_op([x.owner.inputs[0] for x in args] + [index]))]
+      args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
+              for x in args]
+      return [host_from_gpu(gpu_op(*args))]
 
