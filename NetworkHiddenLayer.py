@@ -606,7 +606,7 @@ class TimeBlurLayer(_NoOpLayer):
 
     findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
     self.output = T.zeros_like(z)
-    weight_sum = T.zeros_like(findex)
+    weight_sum = T.zeros_like(findex)  # time,batch
     assert len(t_weights) == len(t_offsets)
     for t_offset, w in zip(t_offsets, t_weights):
       if t_offset < 0:
@@ -618,10 +618,10 @@ class TimeBlurLayer(_NoOpLayer):
       else:  # t_offset > 0
         z_slice = slice(0, -t_offset)
         o_slice = slice(t_offset, None)
-      w = findex[z_slice] * numpy.float32(w)
-      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      w = findex[z_slice] * numpy.float32(w)  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
-    self.output = self.output / weight_sum
+    self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
 
 
 class GaussianFilter1DLayer(_NoOpLayer):
@@ -643,7 +643,8 @@ class GaussianFilter1DLayer(_NoOpLayer):
 class TimeWarpLayer(_NoOpLayer):
   """
   Like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
-  A bit like simple local feed-forward attention.
+  A bit like simple local feed-forward attention,
+  where the attention is controlled by the input (encoder) and not output (decoder).
   Maybe similar: A Hybrid Dynamic Time Warping-Deep Neural Network Architecture for Unsupervised Acoustic Modeling, http://ewan.website/interspeech_2015_dnn_dtw.pdf
   Implementation is very similar to TimeBlurLayer except
   that the weight distribution is different every time frame
@@ -652,7 +653,7 @@ class TimeWarpLayer(_NoOpLayer):
   layer_class = "time_warp"
   recurrent = True  # Force no frame shuffling or so.
 
-  def __init__(self, t_start, t_end, t_step, sigma, **kwargs):
+  def __init__(self, t_start, t_end, t_step, sigma, input_window, input_proj=None, **kwargs):
     super(TimeWarpLayer, self).__init__(**kwargs)
     z, n_in = concat_sources(self.sources)
     n_out = n_in
@@ -661,10 +662,32 @@ class TimeWarpLayer(_NoOpLayer):
     self.set_attr('t_end', t_end)
     self.set_attr('t_step', t_step)
     self.set_attr('sigma', sigma)
+    self.set_attr('input_window', input_window)
+    if input_proj:
+      self.set_attr('input_proj', input_proj)
 
-    self.W_warp = self.add_param(self.create_random_normal_weights(n=n_in, m=1, name="W_warp"))
-    self.b_warp = self.add_param(self.create_bias(n=1, name="b_warp"))
-    warp = T.dot(z, self.W_warp[:,0]) + self.b_warp[0]  # time,batch
+    n_batch = z.shape[1]
+    n_warp_in = n_in
+    warp_in = z
+    if input_proj:
+      self.W_warp_in_proj = self.add_param(self.create_forward_weights(n=n_in, m=input_proj, name="W_warp_in_proj"))
+      warp_in = T.dot(z, self.W_warp_in_proj)
+      n_warp_in = input_proj
+    self.W_warp = self.add_param(self.create_random_normal_weights(n=input_window, m=n_warp_in, name="W_warp"))
+
+    conv_input = warp_in.dimshuffle(1, 'x', 0, 2)  # batch,stack,row(time),col(feature)
+    in_win_right = input_window // 2
+    in_win_left = input_window - in_win_right - 1
+    conv_input = T.concatenate([T.zeros((n_batch, 1, in_win_left, n_warp_in), dtype="float32"),
+                                conv_input,
+                                T.zeros((n_batch, 1, in_win_right, n_warp_in), dtype="float32")],
+                               axis=2)
+    filter_W = self.W_warp.dimshuffle('x', 'x', 0, 1)  # filter,stack,row(time_window),col(feature)
+    conv_out = T.nnet.conv2d(conv_input, filter_W, border_mode='valid',
+                             filter_shape=[1, 1, input_window, n_warp_in],
+                             image_shape=[None, 1, None, n_in])
+    # conv_out is 4D (batch size, nb filters=1, output row=time, output col=1).
+    warp = conv_out[:, 0, :, 0].dimshuffle(1, 0)  # time,batch
     warp_bc = warp.dimshuffle('x', 0, 1)  # offset,time,batch
 
     t_offsets = numpy.arange(start=t_start, stop=t_end, step=t_step)  # offset
@@ -673,13 +696,14 @@ class TimeWarpLayer(_NoOpLayer):
     # If warp would be all 0, the weighting would always be highest at t_offset == 0.
     N = t_end - t_start - 1
     assert N > 0
+    warp_bc = T.nnet.sigmoid(warp_bc) * numpy.float32(N) + numpy.float32(t_start)  # force in range [t_start,t_end)
     t_weights = T.exp(numpy.float32(-0.5) *
                       T.sqr((t_offsets_bc - warp_bc) /
                             T.cast(sigma * N / 2.0, dtype="float32")))  # offset,time,batch
 
     findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
     self.output = T.zeros_like(z)
-    weight_sum = T.zeros_like(findex)
+    weight_sum = T.zeros_like(findex)  # time,batch
     for idx, t_offset in enumerate(t_offsets):
       if t_offset < 0:
         z_slice = slice(-t_offset, None)
@@ -690,10 +714,10 @@ class TimeWarpLayer(_NoOpLayer):
       else:  # t_offset > 0
         z_slice = slice(0, -t_offset)
         o_slice = slice(t_offset, None)
-      w = findex[z_slice] * t_weights[idx, z_slice]
-      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      w = findex[z_slice] * t_weights[idx, z_slice]  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
-    self.output = self.output / weight_sum
+    self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
 
 
 class ConstantLayer(_NoOpLayer):
