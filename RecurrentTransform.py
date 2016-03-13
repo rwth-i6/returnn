@@ -848,9 +848,6 @@ class AttentionList(AttentionStruct):
   name = "attention_list"
 
   def init(self, i):
-    B = self.custom_vars['B_%d' % i]
-    C = self.custom_vars['C_%d' % i]
-    I = self.custom_vars['I_%d' % i]
     if self.layer.attrs['attention_beam'] > 0:
       img = 0
       for b in xrange(self.layer.attrs['attention_beam']):
@@ -957,25 +954,39 @@ class AttentionTree(AttentionList):
   """
   attention over hierarchy of bases in different time resolutions
   """
+  name = "attention_tre2e"
+  def step(self, y_p):
+    updates = self.default_updates()
+    B = self.custom_vars['B_0']
+    for g in xrange(self.n_glm):
+      h_i = T.zeros((y_p.shape[1],self.layer.attrs['attention_template']), 'float32')
+      for i in xrange(len(self.base)-1,-1,-1):
+        _, C, I, h_p, _ = self.get(y_p, i, g)
+        h_p = numpy.float32(1./(len(self.base)-i)) * (h_p + h_i) if i > 0 else h_p
+        w = self.softmax(self.distance(C, h_p), I)
+        self.glimpses[i].append(T.sum(C * w.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
+        h_i += self.glimpses[i][-1]
+    proto = T.sum(B * w.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0)
+    return T.dot(proto, self.custom_vars['W_att_in_0']), updates
+
+
+class AttentionTree(AttentionList):
+  """
+  attention over hierarchy of bases in different time resolutions
+  """
   name = "attention_tree"
   def step(self, y_p):
     updates = self.default_updates()
-    base = self.custom_vars['B_0']
-    index = self.custom_vars['I_0']
+    B = self.custom_vars['B_0']
     for g in xrange(self.n_glm):
-      for i in xrange(len(self.base)):
-        _, C, _, h_p, _ = self.get(y_p, i, g)
-        z_i = self.distance(C, h_p)
-        if i == 0:
-          z = z_i
-        else:
-          factor = self.base[i].attrs['factor'][0]
-          w_c = T.tile(z_i, (1,factor)).reshape((factor * z_i.shape[0],z_i.shape[1]))
-          z += T.set_subtensor(T.zeros_like(base[:,:,0])[:w_c.shape[0]], w_c)
-      proto = T.sum(base * self.softmax(z, index).dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0)
-      for i in xrange(len(self.base)):
-        self.glimpses[i].append(proto)
-    return T.dot(proto, self.custom_vars['W_att_in_0']), updates
+      prev = [] #T.zeros((y_p.shape[1],self.layer.attrs['attention_template']), 'float32')
+      for i in xrange(len(self.base)-1,-1,-1):
+        _, C, I, h_p, _ = self.get(y_p, i, g)
+        h_p = sum([h_p] + prev) / T.constant(len(self.base)-i,'float32')
+        w = self.softmax(self.distance(C, h_p), I)
+        prev.append(T.sum(C * w.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
+        self.glimpses[i].append(prev[-1])
+    return T.dot(T.sum(B * w.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), self.custom_vars['W_att_in_0']), updates
 
 
 class AttentionBin(AttentionList):
