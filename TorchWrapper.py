@@ -98,6 +98,7 @@ class TorchWrapperOp(theano.Op):
         printf("  If you are on MacOSX 64bit, Python must be linked with:\\n");
         printf("    -pagezero_size 10000 -image_base 100000000\\n");
         printf("  See here: http://luajit.org/install.html\\n");
+        printf("  And here: https://groups.google.com/forum/#!topic/torch7/dW2rotAgijY\\n");
         return;
       }
       // http://stackoverflow.com/questions/966162/best-way-to-omit-lua-standard-libraries
