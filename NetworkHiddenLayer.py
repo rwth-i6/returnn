@@ -606,7 +606,7 @@ class TimeBlurLayer(_NoOpLayer):
 
     findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
     self.output = T.zeros_like(z)
-    weight_sum = T.zeros_like(findex)
+    weight_sum = T.zeros_like(findex)  # time,batch
     assert len(t_weights) == len(t_offsets)
     for t_offset, w in zip(t_offsets, t_weights):
       if t_offset < 0:
@@ -618,10 +618,10 @@ class TimeBlurLayer(_NoOpLayer):
       else:  # t_offset > 0
         z_slice = slice(0, -t_offset)
         o_slice = slice(t_offset, None)
-      w = findex[z_slice] * numpy.float32(w)
-      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      w = findex[z_slice] * numpy.float32(w)  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
-    self.output = self.output / weight_sum
+    self.output = self.output / weight_sum.dimshuffle(0, 1, 'x')
 
 
 class GaussianFilter1DLayer(_NoOpLayer):
