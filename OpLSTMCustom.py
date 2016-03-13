@@ -107,7 +107,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     //std::cout << "LSTMCustomOpGrad called" << std::endl;
     if(!%(inplace)s)
     {
-      std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
+      //std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
     }
 
     if(%(DZ)s || %(Dc)s || %(DW_re)s || %(Dy0)s)
