@@ -909,7 +909,8 @@ class AttentionList(AttentionStruct):
         elif mode == 'first':
           self.glimpses[i] = [ C[0] ]
         elif mode == 'mean':
-          self.glimpses[i] = [ T.sum(C * I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0) / T.sum(I,axis=0) ]
+          ext_i = I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2)
+          self.glimpses[i] = [ T.sum(C * ext_i,axis=0) / T.sum(ext_i,axis=0) ]
         elif mode == 'zero':
           self.glimpses[i] = [ T.zeros_like(C[0]) ]
       h_p = sum([h_p] + self.glimpses[i]) / numpy.float32(g+2)
