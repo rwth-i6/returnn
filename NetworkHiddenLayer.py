@@ -685,7 +685,7 @@ class TimeWarpLayer(_NoOpLayer):
     filter_W = self.W_warp.dimshuffle('x', 'x', 0, 1)  # filter,stack,row(time_window),col(feature)
     conv_out = T.nnet.conv2d(conv_input, filter_W, border_mode='valid',
                              filter_shape=[1, 1, input_window, n_warp_in],
-                             image_shape=[None, 1, None, n_in])
+                             image_shape=[None, 1, None, n_warp_in])
     # conv_out is 4D (batch size, nb filters=1, output row=time, output col=1).
     warp = conv_out[:, 0, :, 0].dimshuffle(1, 0)  # time,batch
     warp_bc = warp.dimshuffle('x', 0, 1)  # offset,time,batch
