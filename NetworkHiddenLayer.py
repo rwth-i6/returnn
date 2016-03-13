@@ -641,9 +641,59 @@ class GaussianFilter1DLayer(_NoOpLayer):
 
 
 class TimeWarpLayer(_NoOpLayer):
-  pass  # TODO... warp time
-  # like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
-  # a bit like simple local feed-forward attention.
+  """
+  Like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
+  A bit like simple local feed-forward attention.
+  Maybe similar: A Hybrid Dynamic Time Warping-Deep Neural Network Architecture for Unsupervised Acoustic Modeling, http://ewan.website/interspeech_2015_dnn_dtw.pdf
+  Implementation is very similar to TimeBlurLayer except
+  that the weight distribution is different every time frame
+  and controlled by a NN.
+  """
+  layer_class = "time_warp"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, t_start, t_end, t_step, sigma, **kwargs):
+    super(TimeWarpLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('t_start', t_start)
+    self.set_attr('t_end', t_end)
+    self.set_attr('t_step', t_step)
+    self.set_attr('sigma', sigma)
+
+    self.W_warp = self.add_param(self.create_random_normal_weights(n=n_in, m=1, name="W_warp"))
+    self.b_warp = self.add_param(self.create_bias(n=1, name="b_warp"))
+    warp = T.dot(z, self.W_warp[:,0]) + self.b_warp[0]  # time,batch
+    warp_bc = warp.dimshuffle('x', 0, 1)  # offset,time,batch
+
+    t_offsets = numpy.arange(start=t_start, stop=t_end, step=t_step)  # offset
+    t_offsets_bc = T.constant(t_offsets, dtype="float32").dimshuffle(0, 'x', 'x')  # offset,time,batch
+    # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+    # If warp would be all 0, the weighting would always be highest at t_offset == 0.
+    N = t_end - t_start - 1
+    assert N > 0
+    t_weights = T.exp(numpy.float32(-0.5) *
+                      T.sqr((t_offsets_bc - warp_bc) /
+                            T.cast(sigma * N / 2.0, dtype="float32")))  # offset,time,batch
+
+    findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
+    self.output = T.zeros_like(z)
+    weight_sum = T.zeros_like(findex)
+    for idx, t_offset in enumerate(t_offsets):
+      if t_offset < 0:
+        z_slice = slice(-t_offset, None)
+        o_slice = slice(0, t_offset)
+      elif t_offset == 0:
+        z_slice = slice(None, None)
+        o_slice = slice(None, None)
+      else:  # t_offset > 0
+        z_slice = slice(0, -t_offset)
+        o_slice = slice(t_offset, None)
+      w = findex[z_slice] * t_weights[idx, z_slice]
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
+    self.output = self.output / weight_sum
 
 
 class ConstantLayer(_NoOpLayer):
