@@ -2161,9 +2161,9 @@ class TorchLayer(_NoOpLayer):
     args_info = []  # dict with ndim, shape, n_in
 
     for s, m in zip(self.sources, self.masks):
-      arg_info = {"ndim": s.output.ndim, "n_in": s.attrs['n_out']}
+      arg_info = {"ndim": s.output.ndim, "n_out": s.attrs['n_out'], "type": "input_source"}
       args_info += [arg_info]
-      arg_info["shape"] = [[None] * s.output.ndim]
+      arg_info["shape"] = [None] * s.output.ndim
       if not s.attrs['sparse']:
         arg_info["shape"][-1] = s.attrs['n_out']
       if s.attrs['sparse'] or m is None:
@@ -2174,6 +2174,7 @@ class TorchLayer(_NoOpLayer):
     for param_init_dict in params:
       assert isinstance(param_init_dict, dict)
       assert "name" in param_init_dict
+      param_init_dict = param_init_dict.copy()
       param_init_dict["name"] += "_%s" % self.name
       func_name = param_init_dict.pop("class", "create_random_uniform_weights")
       func = getattr(self, func_name)
@@ -2183,15 +2184,16 @@ class TorchLayer(_NoOpLayer):
       p_shape = p.get_value(borrow=True, return_internal_type=True).shape
       p_ndim = len(p_shape)
       args += [p]
-      args_info += [{"ndim": p_ndim, "shape": p_shape}]
+      args_info += [{"ndim": p_ndim, "shape": tuple(p_shape), "type": "input_param"}]
 
     args += [self.index]
-    args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected"}]
+    args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected", "type": "input_index"}]
 
     from TorchWrapper import TorchWrapperOp
     op = TorchWrapperOp(
       in_info=args_info,
+      # Hardcoded output shape for now, only feature dim can be configured.
       out_info=[{"n_out": n_out, "ndim": 3, "shape": ((0, 0), (0, 1), n_out),
-                 "dtype": "float32"}],
+                 "dtype": "float32", "type": "output"}],
       lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
     self.output = op(*args)

@@ -168,15 +168,16 @@ def try_register_canonicalize(f):
     print("try_register_canonicalize warning: %s" % e)
     return f  # just ignore
 
-def try_register_gpu_opt(f):
-  from theano.sandbox.cuda import register_opt
-  from theano.gof.opt import local_optimizer
-  try:
-    f = register_opt()(f)
-  except ValueError as e:
-    print("register_opt warning: %s" % e)
-  f = local_optimizer([])(f)
-  return f  # just ignore
+
+def try_register_gpu_opt(base_op_class):
+  def do_register_gpu_opt(f):
+    from theano.sandbox.cuda import cuda_available, register_opt
+    from theano.gof.opt import local_optimizer
+    f = local_optimizer([base_op_class])(f)
+    if cuda_available:
+      f = register_opt()(f)
+    return f  # just ignore
+  return do_register_gpu_opt
 
 
 class GradDiscardOutOfBound(ViewOp):
