@@ -904,15 +904,12 @@ class AttentionList(AttentionStruct):
     h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
-        if mode == 'linear-hard':
+        if mode == 'linear':
           self.glimpses[i] = [ C[loc,T.arange(C.shape[1],dtype='int32')] ]
-        elif mode == 'linear-soft':
-          w_l = T.extra_ops.to_one_hot(loc,C.shape[0],'float32').dimshuffle(1,0,'x').repeat(C.shape[2],axis=2)
-          self.glimpses[i] = [ T.sum(C*w_l,axis=0) ]
         elif mode == 'first':
           self.glimpses[i] = [ C[0] ]
         elif mode == 'mean':
-          self.glimpses[i] = [ T.mean(C,axis=0) ]
+          self.glimpses[i] = [ T.sum(C * I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0) / T.sum(I,axis=0) ]
         elif mode == 'zero':
           self.glimpses[i] = [ T.zeros_like(C[0]) ]
       h_p = sum([h_p] + self.glimpses[i]) / numpy.float32(g+2)
