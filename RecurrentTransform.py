@@ -448,22 +448,23 @@ class AttentionBin(AttentionList):
         if i == len(self.base) - 1:
           z_i = self.distance(C, h_p)
         else:
-          length = T.sum(I[:,:,0],axis=0)
-          def pick(c, b, i_t, l_t, ext):
-            end = T.minimum(i_t+ext, l_t)
-            pad = T.maximum(i_t+ext-l_t+1, 1)
-            return T.concatenate([c[i_t:end], T.zeros((pad,c.shape[1]), 'float32')]), \
-                   T.concatenate([b[i_t:end], T.zeros((pad,b.shape[1]), 'float32')])
-          out, _ = theano.map(pick, sequences = [C.dimshuffle(1,0,2),B.dimshuffle(1,0,2),pos/factor,length], non_sequences = [ext/factor])
-          context = out[0].dimshuffle(1,0,2)[:-1]
-          base = out[1].dimshuffle(1,0,2)[:-1]
-          z_i = self.distance(context, h_p)
+          length = T.cast(T.max(T.sum(I,axis=0))+1,'int32')
+          ext = T.cast(T.minimum(ext/factor,T.min(length)),'int32')
+          def pick(i_t, ext):
+            pad = T.minimum(i_t+ext, B.shape[0]) - ext
+            return T.concatenate([T.zeros((pad,), 'int8'), T.ones((ext,), 'int8'), T.zeros((B.shape[0]-pad-ext+1,), 'int8')], axis=0)
+          idx, _ = theano.map(pick, sequences = [pos/factor], non_sequences = [ext])
+          idx = (idx.dimshuffle(1,0)[:-1].flatten() > 0).nonzero()
+          C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[idx].reshape((ext,C.shape[1],C.shape[2]))
+          z_i = self.distance(C, h_p)
+          I = I.reshape((I.shape[0]*I.shape[1],))[idx].reshape((ext,I.shape[1]))
         if i > 0:
-          pos = T.argmax(z_i,axis=0) * factor
+          pos = T.argmax(self.softmax(z_i,I),axis=0) * factor
           ext = factor
         else:
-          w_i = self.softmax(z_i)
-      proto = T.sum(base * w_i.dimshuffle(0,1,'x').repeat(base.shape[2],axis=2),axis=0)
+          w_i = self.softmax(z_i,I)
+      B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[idx].reshape((ext,B.shape[1],B.shape[2]))
+      proto = T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0)
       for i in xrange(len(self.base)):
         self.glimpses[i].append(proto)
     return T.dot(proto, self.custom_vars['W_att_in_0']), updates
