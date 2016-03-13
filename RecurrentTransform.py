@@ -810,23 +810,35 @@ class AttentionStruct(RecurrentTransformBase):
   def distance(self, C, H):
     dist = self.layer.attrs['attention_distance']
     if dist == 'l2':
-      return T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
+      dst = T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
       #return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
     elif dist == 'dot':
-      return T.mean(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
+      dst = T.mean(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
     else:
       raise NotImplementedError()
+    return dst
 
-  def softmax(self, tbd, I):
-    tbd = tbd * self.layer.attrs['attention_sharpening']
+  def beam(self, X, beam_idx=None):
+    if not beam_idx:
+      beam_idx = X.beam_idx
+    input_shape = [X.shape[0] * X.shape[1]]
+    if X.ndim == 3:
+      input_shape.append(X.shape[2])
+    Y = X.reshape(input_shape)[beam_idx].reshape((self.layer.attrs['attention_beam'],X.shape[1]))
+    Y.beam_idx = beam_idx
+    return Y
+
+  def softmax(self, D, I):
+    D = D * T.constant(self.layer.attrs['attention_sharpening'], 'float32')
     if self.layer.attrs['attention_norm'] == 'exp':
-      tbd = T.exp(-tbd)
+      E = T.exp(-D)
     elif self.layer.attrs['attention_norm'] == 'sigmoid':
-      tbd = T.nnet.sigmoid(tbd)
+      E = T.nnet.sigmoid(D)
     else:
       raise NotImplementedError()
-    tbd = tbd * I
-    return tbd / T.maximum(T.sum(tbd,axis=0,keepdims=True),T.constant(1e-20,'float32'))
+    E = E * I
+    E = E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
+    return E
 
 
 class AttentionList(AttentionStruct):
@@ -840,17 +852,10 @@ class AttentionList(AttentionStruct):
     C = self.custom_vars['C_%d' % i]
     I = self.custom_vars['I_%d' % i]
     if self.layer.attrs['attention_beam'] > 0:
-      pad = self.layer.attrs['attention_beam'] #2*(self.layer.attrs['attention_beam']/2)
-      pad_i = T.zeros((pad,I.shape[1]), 'int8')
-      self.add_input(T.concatenate([pad_i,I,pad_i],axis=0), 'I_%d' % i)
-      pad_c = T.zeros((pad,C.shape[1],C.shape[2]), 'float32')
-      self.add_input(T.concatenate([pad_c,C,pad_c],axis=0), 'C_%d' % i)
-      pad_b = T.zeros((pad,B.shape[1],B.shape[2]), 'float32')
-      self.add_input(T.concatenate([pad_b,B,pad_b],axis=0), 'B_%d' % i)
-      from theano.tensor.signal import downsample
-      img = T.eye(self.custom_vars['C_%d' % i].shape[0],self.custom_vars['C_%d' % i].shape[0],0,dtype='float32')
-      smp = downsample.max_pool_2d(img, ds=(self.layer.attrs['attention_beam'],1), st=(1,1), ignore_border=False, mode='max')
-      self.__setattr__("P_%d" % i, self.add_input(smp, 'P_%d' %i))
+      img = 0
+      for b in xrange(self.layer.attrs['attention_beam']):
+        img += T.eye(self.custom_vars['C_%d' % i].shape[0],self.custom_vars['C_%d' % i].shape[0],b,dtype='float32')
+      self.__setattr__("P_%d" % i, self.add_input(img, 'P_%d' %i))
     self.__setattr__("B_%d" % i, self.custom_vars['B_%d' % i])
     self.__setattr__("C_%d" % i, self.custom_vars['C_%d' % i])
     self.__setattr__("I_%d" % i, self.custom_vars['I_%d' % i])
@@ -866,10 +871,7 @@ class AttentionList(AttentionStruct):
       self.add_input(e.output[::self.layer.attrs['direction']], 'B_%d' % i)
       # mapping from base output to template size
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re) # + self.base[i].attrs['n_out'])
-      if self.layer.attrs['attention_glimpse'] == 0:
-        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
-      else:
-        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'] + n_tmp, n_tmp)), dtype=theano.config.floatX)
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
       self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
       self.add_param(theano.shared(value=values, borrow=True, name="b_att_re_%d" % i))
@@ -891,15 +893,15 @@ class AttentionList(AttentionStruct):
     B = self.custom_vars[('B_%d' % i)]
     C = self.custom_vars[('C_%d' % i)]
     I = self.custom_vars[('I_%d' % i)]
-    loc = T.cast(T.minimum(T.sum(I,axis=0) * self.n / self.bound, T.sum(I,axis=0)-1),'int32')
+    beam_size = T.minimum(numpy.int32(abs(self.layer.attrs['attention_beam'])), C.shape[0])
+    loc = T.cast(T.maximum(T.minimum(T.sum(I,axis=0) * self.n / self.bound - beam_size / 2, T.sum(I,axis=0) - beam_size), 0),'int32')
     if self.layer.attrs['attention_beam'] > 0:
-      beam_size = int(self.layer.attrs['attention_beam'])
-      loc += T.constant(beam_size,'int32') # start in non-padded area
       beam_idx = (self.custom_vars[('P_%d' % i)][loc].dimshuffle(1,0).flatten() > 0).nonzero()
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
     mode = self.layer.attrs['attention_step']
+    h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
         if mode == 'linear-hard':
@@ -913,10 +915,8 @@ class AttentionList(AttentionStruct):
           self.glimpses[i] = [ T.mean(C,axis=0) ]
         elif mode == 'zero':
           self.glimpses[i] = [ T.zeros_like(C[0]) ]
-      c_p = T.concatenate([y_p,self.glimpses[i][g]],axis=1)
-      h_p = T.tanh(T.dot(c_p, W_att_re) + b_att_re)
-    else:
-      h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
+      h_p = sum([h_p] + self.glimpses[i]) / numpy.float32(g+2)
+
     return B, C, I, h_p, self.custom_vars[('W_att_in_%d' % i)]
 
   def default_updates(self):
