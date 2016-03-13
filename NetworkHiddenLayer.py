@@ -695,7 +695,7 @@ class TimeWarpLayer(_NoOpLayer):
 
     findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
     self.output = T.zeros_like(z)
-    weight_sum = T.zeros_like(findex)
+    weight_sum = T.zeros_like(findex)  # time,batch
     for idx, t_offset in enumerate(t_offsets):
       if t_offset < 0:
         z_slice = slice(-t_offset, None)
@@ -706,10 +706,10 @@ class TimeWarpLayer(_NoOpLayer):
       else:  # t_offset > 0
         z_slice = slice(0, -t_offset)
         o_slice = slice(t_offset, None)
-      w = findex[z_slice] * t_weights[idx, z_slice]
-      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w)
+      w = findex[z_slice] * t_weights[idx, z_slice]  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
-    self.output = self.output / weight_sum
+    self.output = self.output / weight_sum.dimshuffle(0, 1, 'x')
 
 
 class ConstantLayer(_NoOpLayer):
