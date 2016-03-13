@@ -55,14 +55,42 @@ class TorchWrapperOp(theano.Op):
   def perform(self, node, inputs, output_storage):
     raise NotImplementedError  # only C code...
 
+  def c_header_dirs(self):
+    # TODO: dont hardcode
+    return ["/Users/az/Programmierung/torch/install/include"]
+
+  def c_lib_dirs(self):
+    # TODO: dont hardcode
+    return ["/Users/az/Programmierung/torch/install/lib"]
+
+  def c_libraries(self):
+    return ["luajit"]
+
   def c_support_code(self):
-    # TODO...
     return """
     #include <lua.h>
+    #include <luaT.h>
+    #include <lualib.h>
+    #include <lauxlib.h>
+    #include <TH/TH.h>
+    static lua_State* L;
+    void init_torch() {
+      if(L) return;
+      L = lua_open();
+      // TODO...
+    }
     """
 
+  def c_init_code(self):
+    return ["init_torch();"]
+
   def c_code(self, node, name, inputs, outputs, sub):
-    pass  # TODO...
+    return """
+    init_torch();
+    // TODO...
+    PyErr_Format(PyExc_ValueError, "not implemented fully yet...");
+    %(fail)s;
+    """ % {'fail' : sub['fail']}
 
   def grad(self, inputs, output_grads):
     if not self.lua_bw_func:
