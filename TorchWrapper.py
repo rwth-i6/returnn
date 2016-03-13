@@ -1,4 +1,5 @@
 
+import sys
 import theano
 import theano.tensor as T
 from TheanoUtil import try_register_gpu_opt
@@ -7,12 +8,17 @@ from Util import make_hashable
 
 
 _initialized = False
+_torch_include_dirs = None
+_torch_lib_dirs = None
 
 def _init():
-  global _initialized
+  global _initialized, _torch_include_dirs, _torch_lib_dirs
   if _initialized: return
   # TODO... find Torch, etc.
-
+  _torch_include_dirs = ["/Users/az/Programmierung/torch/install/include"]
+  _torch_lib_dirs = ["/Users/az/Programmierung/torch/install/lib"]
+  #for l in list(_torch_lib_dirs):
+  #  _torch_lib_dirs += [l + "/lua/5.1"]
 
 class TorchWrapperOp(theano.Op):
   __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func")
@@ -55,14 +61,63 @@ class TorchWrapperOp(theano.Op):
   def perform(self, node, inputs, output_storage):
     raise NotImplementedError  # only C code...
 
+  def c_header_dirs(self):
+    _init()
+    return _torch_include_dirs
+
+  def c_lib_dirs(self):
+    _init()
+    return _torch_lib_dirs
+
+  def c_libraries(self):
+    return ["luaT", "luajit"]
+
+  def c_compile_args(self):
+    args = []
+    if sys.platform == "darwin":
+      # Some libs may use @rpath to reference to the lib. This is needed so that it finds it.
+      args += ["-Wl,-rpath,%s" % l for l in _torch_lib_dirs]
+    return args
+
   def c_support_code(self):
-    # TODO...
     return """
+    extern "C" {
     #include <lua.h>
+    #include <luaT.h>
+    #include <lualib.h>
+    #include <lauxlib.h>
+    #include <TH/TH.h>
+    }
+    static lua_State* L;
+    void init_torch() {
+      if(L) return;
+      // http://www.lua.org/manual/5.1/manual.html
+      L = lua_open();
+      if(!L) {
+        printf("ERROR: TorchWrapper: Cannot create Lua state.\\n");
+        printf("  If you are on MacOSX 64bit, Python must be linked with:\\n");
+        printf("    -pagezero_size 10000 -image_base 100000000\\n");
+        printf("  See here: http://luajit.org/install.html\\n");
+        printf("  And here: https://groups.google.com/forum/#!topic/torch7/dW2rotAgijY\\n");
+        return;
+      }
+      // http://stackoverflow.com/questions/966162/best-way-to-omit-lua-standard-libraries
+      //luaL_openlibs(L);  // all standard Lua libs
+      luaopen_base(L);
+      // TODO...
+    }
     """
 
+  def c_init_code(self):
+    return ["init_torch();"]
+
   def c_code(self, node, name, inputs, outputs, sub):
-    pass  # TODO...
+    return """
+    init_torch();
+    // TODO...
+    PyErr_Format(PyExc_ValueError, "not implemented fully yet...");
+    %(fail)s;
+    """ % {'fail' : sub['fail']}
 
   def grad(self, inputs, output_grads):
     if not self.lua_bw_func:
