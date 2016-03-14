@@ -149,6 +149,41 @@ class TorchWrapperOp(theano.Op):
       }
       printf("\\n");  /* end the listing */
     }
+
+    static bool lua_push_py_array(PyArrayObject* obj) {
+
+
+
+      PyErr_Format(PyExc_RuntimeError,
+        "TorchWrapper: TODO lua_push_py_array...");
+      return false;
+    }
+
+    static bool lua_pop_py_array(PyArrayObject** obj) {
+
+
+      PyErr_Format(PyExc_RuntimeError,
+        "TorchWrapper: TODO lua_pop_py_array...");
+      return false;
+    }
+
+    static bool lua_push_py_array(PyObject* obj) {
+      // support CudaNdarray (Theano CUDA) and PyArrayObject (Numpy)
+
+      if(PyArray_Check(obj))
+        return lua_push_py_array((PyArrayObject*) obj);
+
+      /*
+      if(CudaNdarray_Check(obj)) {
+
+      }
+      */
+
+      PyErr_Format(PyExc_TypeError,
+        "TorchWrapper lua_push_py_array: cannot handle type %%s",
+        obj->ob_type->tp_name);
+      return false;
+    }
     """
 
   def c_support_code_struct(self, node, name):
@@ -209,20 +244,36 @@ class TorchWrapperOp(theano.Op):
     """ % {'name': name}
 
   def c_code(self, node, name, inputs, outputs, sub):
+    assert len(inputs) == len(self.in_info)
+    assert len(outputs) == len(self.out_info)
     return """
+      PyArrayObject* inputs[] = {%(input_var_names_str)s};
+      PyArrayObject** outputs[] = {%(output_var_names_str)s};
       if(!L) {  // should have been initialized via c_init_code_struct()
         PyErr_Format(PyExc_RuntimeError, "Lua not initialized.");
         %(fail)s;
       }
       lua_rawgeti(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
-      if(lua_pcall(L, /*nargs*/0, /*nres*/0, /*error handler*/0) != 0) {
+      for(int i = 0; i < %(n_inputs)i; ++i) {
+        if(!lua_push_py_array(inputs[i]))
+          %(fail)s;
+      }
+      if(lua_pcall(L, %(n_inputs)i, %(n_outputs)i, /*error handler*/0) != 0) {
         PyErr_Format(PyExc_RuntimeError,
           "TorchWrapper: Error calling lua_fw_func: %%s",
           lua_tostring(L, -1));
         %(fail)s;
       }
-      // TODO...
-    """ % {'name': name, 'fail' : sub['fail']}
+      for(int i = %(n_outputs)i - 1; i >= 0; --i) {
+        if(!lua_pop_py_array(outputs[i]))
+          %(fail)s;
+      }
+    """ % {
+      'name': name, 'fail': sub['fail'],
+      'n_inputs': len(inputs), 'n_outputs': len(outputs),
+      'input_var_names_str': ", ".join(["%s" % inp for inp in inputs]),
+      'output_var_names_str': ", ".join(["&%s" % out for out in outputs])
+    }
 
   def grad(self, inputs, output_grads):
     if not self.lua_bw_func:
