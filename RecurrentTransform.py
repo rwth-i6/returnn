@@ -272,11 +272,11 @@ class AttentionBase(RecurrentTransformBase):
       dst = T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
       #return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
     elif dist == 'dot':
-      dst = T.mean(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
+      dst = T.sum(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
     elif dist == 'l1':
       dst = T.sum(abs(C - H.dimshuffle('x',0,1)), axis=2)
     elif dist == 'cos': # use with template size > 32
-      J = H / T.sqrt(T.sum(H**2,axis=2,keepdims=True))
+      J = H / T.sqrt(T.sum(H**2,axis=1,keepdims=True))
       K = C / T.sqrt(T.sum(C**2,axis=2,keepdims=True))
       dst = T.sum(K * J.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
     elif dist == 'rnn':
@@ -284,7 +284,7 @@ class AttentionBase(RecurrentTransformBase):
       dst = inp[-1]
     else:
       raise NotImplementedError()
-    return dst
+    return dst / T.cast(H.shape[1],'float32')
 
   def beam(self, X, beam_idx=None):
     if not beam_idx:
@@ -368,7 +368,7 @@ class AttentionList(AttentionBase):
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
-    mode = self.layer.attrs['attention_step']
+    mode = 'first' #self.layer.attrs['attention_step']
     h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
