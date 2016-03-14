@@ -2149,7 +2149,7 @@ class TorchLayer(_NoOpLayer):
   recurrent = True  # who knows
   layer_class = "torch"
 
-  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, params, **kwargs):
+  def __init__(self, n_out, lua_fw_func, lua_bw_func, params, lua_file=None, **kwargs):
     super(TorchLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
     if isinstance(params, (str, unicode)):

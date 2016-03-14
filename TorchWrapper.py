@@ -4,7 +4,7 @@ import theano
 import theano.tensor as T
 from TheanoUtil import try_register_gpu_opt
 from theano.sandbox.cuda import GpuOp
-from Util import make_hashable, make_dll_name
+from Util import make_hashable, make_dll_name, escape_c_str
 from Log import log
 from pprint import pprint
 
@@ -52,12 +52,12 @@ def _init():
 class TorchWrapperOp(theano.Op):
   __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func")
 
-  def __init__(self, in_info, out_info, lua_file, lua_fw_func, lua_bw_func=None):
+  def __init__(self, in_info, out_info, lua_fw_func, lua_bw_func=None, lua_file=None):
     _init()
     super(TorchWrapperOp, self).__init__()
     self.in_info = make_hashable(in_info)
     self.out_info = make_hashable(out_info)
-    self.lua_file = lua_file
+    self.lua_file = lua_file  # if none, expect inplace definition
     self.lua_fw_func = lua_fw_func
     self.lua_bw_func = lua_bw_func
     for info in self.in_info + self.out_info:
@@ -117,35 +117,99 @@ class TorchWrapperOp(theano.Op):
     #include <lauxlib.h>
     #include <TH/TH.h>
     }
-    static lua_State* L;
-    void init_torch() {
-      if(L) return;
-      // http://www.lua.org/manual/5.1/manual.html
-      L = lua_open();
-      if(!L) {
-        printf("ERROR: TorchWrapper: Cannot create Lua state.\\n");
-        printf("  If you are on MacOSX 64bit, Python must be linked with:\\n");
-        printf("    -pagezero_size 10000 -image_base 100000000\\n");
-        printf("  See here: http://luajit.org/install.html\\n");
-        printf("  And here: https://groups.google.com/forum/#!topic/torch7/dW2rotAgijY\\n");
-        return;
+    // Some Lua versions luaL_dostring ignore the result (http://stackoverflow.com/questions/12528820).
+    #undef luaL_dostring
+    #define luaL_dostring(L,s)  (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
+
+    static lua_State* L = 0;
+    static long L_ref_counter = 0;  // via c_init_code_struct/c_cleanup_code_struct
+
+    // for debugging
+    static void stackDump (lua_State *L) {
+      int i;
+      int top = lua_gettop(L);
+      printf("Lua stack (%i): ", top);
+      for (i = 1; i <= top; i++) {  /* repeat for each level */
+        int t = lua_type(L, i);
+        switch (t) {
+          case LUA_TSTRING:  /* strings */
+            printf("`%s'", lua_tostring(L, i));
+            break;
+          case LUA_TBOOLEAN:  /* booleans */
+            printf(lua_toboolean(L, i) ? "true" : "false");
+            break;
+          case LUA_TNUMBER:  /* numbers */
+            printf("%g", lua_tonumber(L, i));
+            break;
+          default:  /* other values */
+            printf("%s", lua_typename(L, t));
+            break;
+        }
+        printf("  ");  /* put a separator */
       }
-      // http://stackoverflow.com/questions/966162/best-way-to-omit-lua-standard-libraries
-      //luaL_openlibs(L);  // all standard Lua libs
-      luaopen_base(L);
-      // TODO...
+      printf("\\n");  /* end the listing */
     }
     """
 
-  def c_init_code(self):
-    return ["init_torch();"]
+  def c_support_code_struct(self, node, name):
+    return """
+    int lua_user_func_ref_%(name)s;
+    """ % {"name": name}
+
+  def c_init_code_struct(self, node, name, sub):
+    assert not self.lua_file, "not yet implemented..."
+    return """
+      lua_user_func_ref_%(name)s = LUA_REFNIL;
+      L_ref_counter++;
+      if(!L) {
+        // http://www.lua.org/manual/5.1/manual.html
+        L = lua_open();
+        if(!L) {
+          PyErr_Format(PyExc_RuntimeError,
+            "ERROR: TorchWrapper: Cannot create Lua state.\\n"
+            "  If you are on MacOSX 64bit, Python must be linked with:\\n"
+            "    -pagezero_size 10000 -image_base 100000000\\n"
+            "  See here: http://luajit.org/install.html\\n"
+            "  And here: https://groups.google.com/forum/#!topic/torch7/dW2rotAgijY\\n"
+          );
+          %(fail)s;
+        }
+        // If only specific ones: http://stackoverflow.com/questions/966162
+        luaL_openlibs(L);  // all standard Lua libs
+        // TODO: load torch...?
+      }
+      const char* user_func_str = "return (" %(user_func_str)s ")";
+      if((luaL_loadstring(L, user_func_str) || lua_pcall(L, 0, 1, 0)) != 0) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: Error while getting lua_fw_func: %%s\\nCode:\\n%%s\\n",
+          lua_tostring(L, -1),
+          user_func_str);
+        %(fail)s;
+      }
+      if(lua_type(L, -1) != LUA_TFUNCTION) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: lua_fw_func is not a function but a %%s",
+          lua_typename(L, lua_type(L, -1)));
+        %(fail)s;
+      }
+      lua_user_func_ref_%(name)s = luaL_ref(L, LUA_REGISTRYINDEX);
+    """ % {'name': name, 'fail': sub['fail'], "user_func_str": escape_c_str(self.lua_fw_func)}
+
+  def c_cleanup_code_struct(self, node, name):
+    return """
+      if(L) luaL_unref(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
+      L_ref_counter--;
+      if(L_ref_counter == 0 && L) {
+        lua_close(L);
+        L = 0;
+      }
+    """ % {'name': name}
 
   def c_code(self, node, name, inputs, outputs, sub):
     return """
-    init_torch();
-    // TODO...
-    PyErr_Format(PyExc_ValueError, "not implemented fully yet...");
-    %(fail)s;
+      // TODO...
+      PyErr_Format(PyExc_RuntimeError, "not implemented fully yet...");
+      %(fail)s;
     """ % {'fail' : sub['fail']}
 
   def grad(self, inputs, output_grads):

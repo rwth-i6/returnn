@@ -854,3 +854,6 @@ def make_dll_name(basename):
   else:  # Linux, Unix
     return "lib%s.so" % basename
 
+
+def escape_c_str(s):
+  return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n")
