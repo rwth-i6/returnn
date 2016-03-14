@@ -823,7 +823,7 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
 
 class FrozenDict(dict):
   def __setitem__(self, key, value):
-    raise ValueError, "FrozenDict cannot be modified"
+    raise ValueError("FrozenDict cannot be modified")
 
   def __hash__(self):
     return hash(tuple(sorted(self.items())))
