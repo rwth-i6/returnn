@@ -531,6 +531,21 @@ class ChunkingSublayer(_NoOpLayer):
         ts_rev = ts[::-1]
         tri = T.cast(T.minimum(ts, ts_rev), dtype="float32").dimshuffle(0, 'x')  # time,batch
         l_index_f32 = l_index_f32 * tri
+      elif chunk_distribution == "hamming":  # https://en.wikipedia.org/wiki/Window_function#Hamming_window
+        ts = T.arange(0, t_end - t_start)
+        alpha = 0.53836
+        w = alpha - (1.0 - alpha) * T.cos(2.0 * numpy.pi * ts / (ts.shape[0] - 1))  # always >0
+        w_bc = T.cast(w, dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * w_bc
+      elif chunk_distribution.startswith("gauss("):  # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+        modeend = chunk_distribution.find(")")
+        assert modeend >= 0
+        sigma = float(chunk_distribution[len("gauss("):modeend])
+        ts = T.arange(0, t_end - t_start)
+        N = ts.shape[0] - 1
+        w = T.exp(-0.5 * ((ts - N / 2.0) / (sigma * N / 2.0)) ** 2)  # always >0
+        w_bc = T.cast(w, dtype="float32").dimshuffle(0, 'x')  # time,batch
+        l_index_f32 = l_index_f32 * w_bc
       else:
         assert False, "unknown chunk distribution %r" % chunk_distribution
       assert l_index_f32.ndim == 2
@@ -554,6 +569,155 @@ class ChunkingSublayer(_NoOpLayer):
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+
+
+class TimeBlurLayer(_NoOpLayer):
+  layer_class = "time_blur"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, t_start, t_end, t_step, distribution, **kwargs):
+    super(TimeBlurLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('t_start', t_start)
+    self.set_attr('t_end', t_end)
+    self.set_attr('t_step', t_step)
+    self.set_attr('distribution', distribution)
+
+    t_offsets = numpy.arange(start=t_start, stop=t_end, step=t_step)
+    nums = numpy.arange(t_offsets.shape[0])
+    if distribution == "uniform":
+      t_weights = numpy.ones_like(nums, dtype="float32")
+    elif distribution == "triangle":
+      nums_rev = nums[::-1]
+      t_weights = 1 + numpy.minimum(nums, nums_rev)
+    elif distribution == "hamming":  # https://en.wikipedia.org/wiki/Window_function#Hamming_window
+      alpha = 0.53836
+      t_weights = alpha - (1.0 - alpha) * numpy.cos(2.0 * numpy.pi * nums / (nums.shape[0] - 1))  # always >0
+    elif distribution.startswith("gauss("):  # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+      modeend = distribution.find(")")
+      assert modeend >= 0
+      sigma = float(distribution[len("gauss("):modeend])
+      N = nums.shape[0] - 1
+      t_weights = numpy.exp(-0.5 * ((nums - N / 2.0) / (sigma * N / 2.0)) ** 2)  # always >0
+    else:
+      assert False, "unknown distribution %r" % distribution
+
+    findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
+    self.output = T.zeros_like(z)
+    weight_sum = T.zeros_like(findex)  # time,batch
+    assert len(t_weights) == len(t_offsets)
+    for t_offset, w in zip(t_offsets, t_weights):
+      if t_offset < 0:
+        z_slice = slice(-t_offset, None)
+        o_slice = slice(0, t_offset)
+      elif t_offset == 0:
+        z_slice = slice(None, None)
+        o_slice = slice(None, None)
+      else:  # t_offset > 0
+        z_slice = slice(0, -t_offset)
+        o_slice = slice(t_offset, None)
+      w = findex[z_slice] * numpy.float32(w)  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
+      weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
+    self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
+
+
+class GaussianFilter1DLayer(_NoOpLayer):
+  layer_class = "gaussian_filter_1d"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, sigma, axis, window_radius=40, **kwargs):
+    super(GaussianFilter1DLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('sigma', sigma)
+    self.set_attr('axis', axis)
+    self.set_attr('window_radius', window_radius)
+    from TheanoUtil import gaussian_filter_1d
+    self.output = gaussian_filter_1d(z, sigma=sigma, axis=axis, window_radius=window_radius)
+
+
+class TimeWarpLayer(_NoOpLayer):
+  """
+  Like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
+  A bit like simple local feed-forward attention,
+  where the attention is controlled by the input (encoder) and not output (decoder).
+  Maybe similar: A Hybrid Dynamic Time Warping-Deep Neural Network Architecture for Unsupervised Acoustic Modeling, http://ewan.website/interspeech_2015_dnn_dtw.pdf
+  Implementation is very similar to TimeBlurLayer except
+  that the weight distribution is different every time frame
+  and controlled by a NN.
+  """
+  layer_class = "time_warp"
+  recurrent = True  # Force no frame shuffling or so.
+
+  def __init__(self, t_start, t_end, t_step, sigma, input_window, input_proj=None, **kwargs):
+    super(TimeWarpLayer, self).__init__(**kwargs)
+    z, n_in = concat_sources(self.sources)
+    n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('t_start', t_start)
+    self.set_attr('t_end', t_end)
+    self.set_attr('t_step', t_step)
+    self.set_attr('sigma', sigma)
+    self.set_attr('input_window', input_window)
+    if input_proj:
+      self.set_attr('input_proj', input_proj)
+
+    n_batch = z.shape[1]
+    n_warp_in = n_in
+    warp_in = z
+    if input_proj:
+      self.W_warp_in_proj = self.add_param(self.create_forward_weights(n=n_in, m=input_proj, name="W_warp_in_proj"))
+      warp_in = T.dot(z, self.W_warp_in_proj)
+      n_warp_in = input_proj
+    self.W_warp = self.add_param(self.create_random_normal_weights(n=input_window, m=n_warp_in, name="W_warp"))
+
+    conv_input = warp_in.dimshuffle(1, 'x', 0, 2)  # batch,stack,row(time),col(feature)
+    in_win_right = input_window // 2
+    in_win_left = input_window - in_win_right - 1
+    conv_input = T.concatenate([T.zeros((n_batch, 1, in_win_left, n_warp_in), dtype="float32"),
+                                conv_input,
+                                T.zeros((n_batch, 1, in_win_right, n_warp_in), dtype="float32")],
+                               axis=2)
+    filter_W = self.W_warp.dimshuffle('x', 'x', 0, 1)  # filter,stack,row(time_window),col(feature)
+    conv_out = T.nnet.conv2d(conv_input, filter_W, border_mode='valid',
+                             filter_shape=[1, 1, input_window, n_warp_in],
+                             image_shape=[None, 1, None, n_warp_in])
+    # conv_out is 4D (batch size, nb filters=1, output row=time, output col=1).
+    warp = conv_out[:, 0, :, 0].dimshuffle(1, 0)  # time,batch
+    warp_bc = warp.dimshuffle('x', 0, 1)  # offset,time,batch
+
+    t_offsets = numpy.arange(start=t_start, stop=t_end, step=t_step)  # offset
+    t_offsets_bc = T.constant(t_offsets, dtype="float32").dimshuffle(0, 'x', 'x')  # offset,time,batch
+    # https://en.wikipedia.org/wiki/Window_function#Gaussian_window
+    # If warp would be all 0, the weighting would always be highest at t_offset == 0.
+    N = t_end - t_start - 1
+    assert N > 0
+    warp_bc = T.nnet.sigmoid(warp_bc) * numpy.float32(N) + numpy.float32(t_start)  # force in range [t_start,t_end)
+    t_weights = T.exp(numpy.float32(-0.5) *
+                      T.sqr((t_offsets_bc - warp_bc) /
+                            T.cast(sigma * N / 2.0, dtype="float32")))  # offset,time,batch
+
+    findex = T.cast(self.index, dtype="float32")  # to be able to use on GPU
+    self.output = T.zeros_like(z)
+    weight_sum = T.zeros_like(findex)  # time,batch
+    for idx, t_offset in enumerate(t_offsets):
+      if t_offset < 0:
+        z_slice = slice(-t_offset, None)
+        o_slice = slice(0, t_offset)
+      elif t_offset == 0:
+        z_slice = slice(None, None)
+        o_slice = slice(None, None)
+      else:  # t_offset > 0
+        z_slice = slice(0, -t_offset)
+        o_slice = slice(t_offset, None)
+      w = findex[z_slice] * t_weights[idx, z_slice]  # time,batch
+      self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
+      weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
+    self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
 
 
 class ConstantLayer(_NoOpLayer):
@@ -901,7 +1065,7 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
-  def __init__(self, min_len=0.0, max_len=1.0, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, min_len=0.0, max_len=1.0, use_real=0.0, err='ce', oracle=False, pad=0, **kwargs):
     kwargs['n_out'] = 2
     super(LengthLayer, self).__init__(**kwargs)
     self.set_attr('min_len',min_len)
@@ -926,12 +1090,11 @@ class LengthLayer(HiddenLayer):
     else:
       assert False, "invalid error: %s" % err
 
-    if oracle or self.train_flag and T.and_(T.eq(self.index.shape[1], 1), T.le(self.sources[0].target_index[0],3)):
+    if (oracle or self.train_flag) and T.and_(T.eq(self.index.shape[1], 1), T.le(self.sources[0].target_index[0],3)):
       self.length = T.cast(numpy.float32(use_real) * real + numpy.float32(1. - use_real) * hyp,'int32')
     else:
       self.length = T.cast(hyp,'int32')
     #self.length += numpy.int32(pad)
-
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
@@ -946,23 +1109,64 @@ class LengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, **kwargs):
+  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, method="scale", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
     super(LengthProjectionLayer, self).__init__(**kwargs)
     self.params = {}
+    self.set_attr('method',method)
     z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
     dim = sum([s.attrs['n_out'] for s in self.sources])
-    self.W = self.add_param(self.create_forward_weights(1, dim, name='W_%s' % self.name))
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.01, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    #hyp = (T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0))**2 #+ T.sum(self.sources[0].index, axis=0)
-    hyp = T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
+    if method == 'scale':
+      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0))
+    elif method == 'map':
+      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
     self.cost_val = T.sum((hyp - real)**2)
-    if self.train_flag:
+    if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
       self.length = T.ceil(hyp)
+    self.length = T.cast(self.length, 'int32')
+    idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                        sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    self.index = idx.dimshuffle(1,0)[:-1]
+    self.output = z
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class SignalSplittingLayer(HiddenLayer):
+  layer_class = "signal_splitter"
+  def __init__(self, base, p=0.5, oracle=False, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    #kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(SignalSplittingLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output[-1] for s in base], axis=1)
+    dim = sum([s.attrs['n_out'] for s in base])
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.1, name='W_%s' % self.name))
+    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    hyp = (T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1)) + self.b.repeat(z.shape[0],axis=0)) * T.sum(base[0].index, axis=0)
+    self.cost_val = 0.0 #T.sum((hyp - real)**2)
+    self.p = p
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234) + 1)
+    if self.train_flag:
+      self.xflag = T.cast(srng.binomial(n=1, p=1.0 - p, size=(1,)), 'float32')[0]
+    else:
+      self.xflag = T.constant(1., 'float32')
+    if oracle:
+      self.length = real
+    else:
+      self.length = self.xflag * T.ceil(hyp) + (1 - self.xflag) * real
     self.length = T.cast(self.length, 'int32')
 
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
@@ -975,6 +1179,39 @@ class LengthProjectionLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class RoutingLayer(HiddenLayer):
+  layer_class = "signal_router"
+  def __init__(self, base, p=0.5, oracle=False, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    #kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(RoutingLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output[-1] for s in base], axis=1)
+    self.cost_val = 0.0 #T.sum((hyp - real)**2)
+    self.p = p
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234) + 1)
+    if self.train_flag:
+      self.xflag = T.cast(srng.binomial(n=1, p=1.0 - p, size=(1,)), 'float32')[0]
+    else:
+      self.xflag = T.constant(1., 'float32')
+    import theano.ifelse
+    self.output = z #theano.ifelse.ifelse(self.xflag, base[0].output, base[1].output)
+    self.act = [ theano.ifelse.ifelse(self.xflag, base[0].act[i][-1:], base[1].act[i][-1:]) for i in xrange(len(base[0].act))]
+    self.length = real
+    #idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+    #                    sequences = [self.length], non_sequences=[T.max(self.length) + 1])
+    #self.index = idx.dimshuffle(1,0)[:-1]
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
 
 
 class DetectionLayer(HiddenLayer):
@@ -1771,7 +2008,7 @@ class ConvFMP(_NoOpLayer):
       if n_sources != 1:
         # check the number of layer unit
         assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
-        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from inputself.b 
+        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from inputself.b
 
     # calculating the number of input columns
     d_col = dimension/d_row
@@ -1847,13 +2084,13 @@ class ConvFMP(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    
+
     #self.pooled_out = downsample.max_pool_2d(
     #  input=self.conv_out,
     #  ds=pool_size,
     #  ignore_border=ignore_border
     #)
-    
+
     height = self.conv_out.shape[2]
     width = self.conv_out.shape[3]
     batch2 = self.conv_out.shape[0]
@@ -1861,13 +2098,15 @@ class ConvFMP(_NoOpLayer):
     sizes = T.zeros((batch2, 2))
     sizes = T.set_subtensor(sizes[:, 0], height)
     sizes = T.set_subtensor(sizes[:, 1], width)
-    
+
     self.pooled_out, _ = fmp(X, sizes, factor)
-    
+
     self.pooled_out.name = 'conv_layer_pooled_out'
 
     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+    #TODO make activation function configurable
     output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 'x', 'x', 0))  # (time*batch, filter, out-row, out-col)
+    #output = T.nnet.relu(self.pooled_out + self.b.dimshuffle('x', 'x', 'x', 0))  # (time*batch, filter, out-row, out-col)
     output.name = 'conv_layer_output_plus_bias'
 
     # our CRNN only accept 3D tensor (time, batch, dim)
@@ -1904,3 +2143,57 @@ class ConvFMP(_NoOpLayer):
       borrow=True,
       name="b_conv"
     )
+
+
+class TorchLayer(_NoOpLayer):
+  recurrent = True  # who knows
+  layer_class = "torch"
+
+  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, params, **kwargs):
+    super(TorchLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(params, (str, unicode)):
+      params = json.loads(params)
+    self.set_attr("params", params)
+    assert isinstance(params, (tuple, list))  # list[param-init-dict]
+
+    args = []
+    args_info = []  # dict with ndim, shape, n_in
+
+    for s, m in zip(self.sources, self.masks):
+      arg_info = {"ndim": s.output.ndim, "n_out": s.attrs['n_out'], "type": "input_source"}
+      args_info += [arg_info]
+      arg_info["shape"] = [None] * s.output.ndim
+      if not s.attrs['sparse']:
+        arg_info["shape"][-1] = s.attrs['n_out']
+      if s.attrs['sparse'] or m is None:
+        args += [s.output]
+      else:
+        args += [self.mass * m * s.output]
+
+    for param_init_dict in params:
+      assert isinstance(param_init_dict, dict)
+      assert "name" in param_init_dict
+      param_init_dict = param_init_dict.copy()
+      param_init_dict["name"] += "_%s" % self.name
+      func_name = param_init_dict.pop("class", "create_random_uniform_weights")
+      func = getattr(self, func_name)
+      p = func(**param_init_dict)
+      assert isinstance(p, theano.compile.SharedVariable)
+      p = self.add_param(p)
+      p_shape = p.get_value(borrow=True, return_internal_type=True).shape
+      p_ndim = len(p_shape)
+      args += [p]
+      args_info += [{"ndim": p_ndim, "shape": tuple(p_shape), "type": "input_param"}]
+
+    args += [self.index]
+    args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected", "type": "input_index"}]
+
+    from TorchWrapper import TorchWrapperOp
+    op = TorchWrapperOp(
+      in_info=args_info,
+      # Hardcoded output shape for now, only feature dim can be configured.
+      out_info=[{"n_out": n_out, "ndim": 3, "shape": ((0, 0), (0, 1), n_out),
+                 "dtype": "float32", "type": "output"}],
+      lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
+    self.output = op(*args)

@@ -71,7 +71,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
     // std::cout << "LSTMOpGrad called" << std::endl;
     if(!%(inplace)s)
     {
-      std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
+      //std::cout << "warning, inplace optimization failed, not working inplace" << std::endl;
     }
 
     if(%(DZ)s || %(DV_h)s || %(Dc)s)
@@ -133,7 +133,7 @@ class LSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 1, 4
+    return 1, 5
 
 LSTMOpGradNoInplaceInstance = LSTMOpGrad(inplace=False)
 LSTMOpGradInplaceInstance = LSTMOpGrad(inplace=True)

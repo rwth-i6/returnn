@@ -137,3 +137,30 @@ def test_chunked_time_reverse():
   source = T.as_tensor_variable(numpy.array([0, 1, 2, 3, 4, 5, 6]))
   r = chunked_time_reverse(source, 3).eval()
   numpy.testing.assert_allclose(r, numpy.array([2, 1, 0, 5, 4, 3, 0]))
+
+
+def test_indices_in_flatten_array():
+  n_copies, n_cells = 5, 4
+  n_complex_cells = n_cells / 2
+  n_batch = 3
+  static_rng = numpy.random.RandomState(1234)
+  def make_permut():
+    p = numpy.zeros((n_copies, n_cells), dtype="int32")
+    for i in range(n_copies):
+      p[i, :n_complex_cells] = static_rng.permutation(n_complex_cells)
+      # Same permutation for imaginary part.
+      p[i, n_complex_cells:] = p[i, :n_complex_cells] + n_complex_cells
+    return T.constant(p)
+  P = make_permut()  # (n_copies,n_cells) -> list of indices
+
+  meminkey = T.as_tensor_variable(static_rng.rand(n_batch, n_cells).astype("float32"))
+  i_t = T.ones((meminkey.shape[0],))  # (batch,)
+  n_batch = i_t.shape[0]
+  batches = T.arange(0, n_batch).dimshuffle(0, 'x', 'x')  # (batch,n_copies,n_cells)
+  P_bc = P.dimshuffle('x', 0, 1)  # (batch,n_copies,n_cells)
+  meminkeyP1 = meminkey[batches, P_bc]  # (batch,n_copies,n_cells)
+  meminkeyP2 = meminkey.flatten()[indices_in_flatten_array(meminkey.ndim, meminkey.shape, batches, P_bc)]
+  meminkeyP3 = meminkey[:, P]  # (batch,n_copies,n_cells)
+
+  numpy.testing.assert_allclose(meminkeyP1.eval(), meminkeyP2.eval())
+  numpy.testing.assert_allclose(meminkeyP1.eval(), meminkeyP3.eval())

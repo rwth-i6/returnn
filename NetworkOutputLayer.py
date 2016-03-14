@@ -200,7 +200,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m) #(TB)
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape((self.index.shape[0],self.index.shape[1],self.attrs['n_out'])), 1.e-6, 1.e6) # TBD
-      ee = self.index * -T.sum(pcx * T.log(pcx)) # TB
+      ee = -T.sum(pcx[self.i] * T.log(pcx[self.i])) # TB
       #nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat) # TB
       ce = nll.reshape(self.index.shape) * self.index # TB
@@ -334,3 +334,57 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     else:
       return super(SequenceOutputLayer, self).errors()
+
+
+class UnsupervisedOutputLayer(OutputLayer):
+  def __init__(self, base=None, blur=0.0, e_t=1e-5, e_b=0.1, e_d=1.0, use_max=False, **kwargs):
+    kwargs['loss'] = 'ce'
+    super(UnsupervisedOutputLayer, self).__init__(**kwargs)
+    if base:
+      self.set_attr('base', base[0].name)
+    self.set_attr('loss', 'unsupervised')
+    self.xflag = base[0].xflag if base else numpy.float32(1)
+    self.blur = blur
+    self.e_t = e_t
+    self.e_b = e_b
+    self.e_d = e_d
+    self.use_max = use_max
+    self.p = base[0].p if base else numpy.float32(0)
+
+  def cost(self):
+    known_grads = None
+    xd = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    epsilon = numpy.float32(1e-10)
+    # cross-entropy
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=xd[self.i], y_idx=self.y_data_flat[self.i])
+    ce = T.sum(nll)
+    # entropy
+    def entropy(p, axis=None):
+      if self.use_max and axis is not None:
+        q = p.dimshuffle(axis, *(range(axis) + range(axis+1,p.ndim)))
+        #return -T.mean(T.log(T.maximum(T.max(q,axis=0),epsilon)))
+        return -T.mean(T.max(q,axis=0)+epsilon) + T.log(T.cast(p.shape[axis],'float32'))
+      else:
+        return -T.mean(p*T.log(p+epsilon)) + T.log(T.cast(p.shape[axis],'float32'))
+    ez = T.exp(self.z) * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2), 'float32')
+    et = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=0,keepdims=True)),axis=0)
+    eb = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=1,keepdims=True)),axis=1)
+    ed = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=2,keepdims=True)),axis=2)
+    # maximize entropy across T and B and minimize entropy across D
+    e = self.e_d * ed - (self.e_t * et + self.e_b * eb) / numpy.float32(self.e_t + self.e_b)
+
+    import theano.ifelse
+    if self.train_flag:
+      return theano.ifelse.ifelse(T.cast(self.xflag,'int8'),e,ce), known_grads
+    else:
+      return ce, known_grads
+
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    self.y_m = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+    if self.y_data_flat.type == T.ivector().type:
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+    else:
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))

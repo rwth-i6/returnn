@@ -497,7 +497,7 @@ class Lstm2Layer(HiddenLayer):
   recurrent = True
   layer_class = "lstm2"
 
-  def __init__(self, n_out, n_cells=None, direction=1, grad_clip=None, **kwargs):
+  def __init__(self, n_out, n_cells=None, direction=1, grad_clip=None, truncation=None, **kwargs):
     if not n_cells: n_cells = n_out
     # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
     super(Lstm2Layer, self).__init__(n_out=n_cells * 4, **kwargs)
@@ -516,6 +516,372 @@ class Lstm2Layer(HiddenLayer):
     h = lstm(z=z, i=self.index, W_re=self.W_re, W_proj=self.W_proj, grad_clip=grad_clip, direction=direction)
     self.make_output(h)
 
+
+class AssociativeLstmLayer(HiddenLayer):
+  """
+  Associative Long Short-Term Memory
+  http://arxiv.org/abs/1602.03032
+  """
+  recurrent = True
+  layer_class = "associative_lstm"
+
+  def __init__(self, n_out, n_copies, activation="tanh", direction=1, grad_clip=None, **kwargs):
+    n_cells = n_out
+    assert n_cells % 2 == 0  # complex numbers, split real/imag
+    n_complex_cells = n_cells / 2
+    # {input,forget,out}-gate have n_complex_cells dim.
+    # {input,output}-key for holographic memory have n_cells dim.
+    # update u (earlier called net-input) has n_cells dim.
+    n_z = n_complex_cells * 3 + n_cells * 2 + n_cells
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(AssociativeLstmLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_copies', n_copies)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    static_rng = numpy.random.RandomState(1234)
+    def make_permut():
+      p = numpy.zeros((n_copies, n_cells), dtype="int32")
+      for i in range(n_copies):
+        p[i, :n_complex_cells] = static_rng.permutation(n_complex_cells)
+        # Same permutation for imaginary part.
+        p[i, n_complex_cells:] = p[i, :n_complex_cells] + n_complex_cells
+      return T.constant(p)
+    P = make_permut()  # (n_copies,n_cells) -> list of indices
+
+    # Some defaults.
+    CI, CO, RI, RO = [T.tanh] * 4  # original complex_bound, but tanh works better?
+    G = T.nnet.sigmoid
+
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 4:
+        CI, CO, RI, RO = actf
+      elif len(actf) == 5:
+        CI, CO, RI, RO, G = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      CI, CO, RI, RO = [actf] * 4  # Not for the gates.
+
+    def lstm_step(z_t, i_t, s_p, h_p, W_re):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_copies,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      # W_re: recurrent matrix. (n_out,n_z)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, W_re)
+      z_t *= i_t_bc
+      gates = G(z_t[:, 0:n_complex_cells * 3])
+      meminkey = RI(z_t[:, 3 * n_complex_cells:3 * n_complex_cells + n_cells])  # (batch,n_cells)
+      memoutkey = RO(z_t[:, 3 * n_complex_cells + n_cells:3 * n_complex_cells + 2 * n_cells])  # (batch,n_cells)
+      u = CI(z_t[:, 3 * n_complex_cells + 2 * n_cells:])
+      ingate2 = T.tile(gates[:, 0:n_complex_cells], (1, 2))
+      forgetgate2 = T.tile(gates[:, n_complex_cells:2 * n_complex_cells], (1, 2))
+      outgate2 = T.tile(gates[:, 2 * n_complex_cells:], (1, 2))
+      meminkeyP = meminkey[:, P]  # (batch,n_copies,n_cells)
+      memoutkeyP = memoutkey[:, P]  # (batch,n_copies,n_cells)
+      u_gated = u * ingate2  # (batch,n_cells)
+      u_gated_bc = u_gated.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
+      forgetgate2_bc = forgetgate2.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
+      from TheanoUtil import complex_elemwise_mult
+      s_t = complex_elemwise_mult(meminkeyP, u_gated_bc) + s_p * forgetgate2_bc  # (batch,n_copies,n_cells)
+      readout_avg = T.mean(complex_elemwise_mult(memoutkeyP, s_t), axis=1)  # (batch,n_cells)
+      h_t = CO(readout_avg) * outgate2
+      s_t *= i_t.dimshuffle(0, 'x', 'x')
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+
+    s_initial = T.zeros((n_batch, n_copies, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[self.W_re],
+                            outputs_info=[s_initial, h_initial])
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+
+
+class LstmHalfGatesLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "lstm_half_gates"
+
+  def __init__(self, n_out, direction=1, activation='tanh', grad_clip=None, **kwargs):
+    n_cells = n_out
+    assert n_cells % 2 == 0  # complex numbers, split real/imag
+    n_complex_cells = n_cells / 2
+    # {input,forget,out}-gate have n_complex_cells dim.
+    # update u (earlier called net-input) has n_cells dim.
+    n_z = n_complex_cells * 3 + n_cells
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(LstmHalfGatesLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    from TheanoUtil import complex_elemwise_mult, complex_bound
+
+    # Some defaults.
+    CI, CO = [T.tanh] * 2
+    GI, GF, GO = [T.nnet.sigmoid] * 3
+
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 2:
+        CI, CO = actf
+      elif len(actf) == 5:
+        CI, CO, GI, GF, GO = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      CI, CO = [actf] * 2  # Not for the gates.
+
+    def lstm_step(z_t, i_t, s_p, h_p, W_re):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      # W_re: recurrent matrix. (n_out,n_z)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, W_re)
+      z_t *= i_t_bc
+      ingate = GI(z_t[:, 0:n_complex_cells])
+      forgetgate = GF(z_t[:, n_complex_cells:2 * n_complex_cells])
+      outgate = GO(z_t[:, 2 * n_complex_cells:3 * n_complex_cells])
+      u = CI(z_t[:, 3 * n_complex_cells:])
+      ingate2 = T.tile(ingate, (1, 2))
+      forgetgate2 = T.tile(forgetgate, (1, 2))
+      outgate2 = T.tile(outgate, (1, 2))
+      u_gated = u * ingate2  # (batch,n_cells)
+      s_t = u_gated + s_p * forgetgate2  # (batch,n_cells)
+      h_t = CO(s_t) * outgate2
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[self.W_re],
+                            outputs_info=[s_initial, h_initial])
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+
+
+class LstmProjGatesLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "lstm_proj_gates"
+
+  def __init__(self, n_out, n_gate_proj, direction=1, activation='relu', grad_clip=None, **kwargs):
+    n_cells = n_out
+    # {input,forget,out}-gate have n_gate_proj dim.
+    # update u (earlier called net-input) has n_cells dim.
+    n_z = n_gate_proj * 3 + n_cells
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(LstmProjGatesLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_gate_proj', n_gate_proj)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    self.W_igate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_igate_proj_%s" % self.name))
+    self.W_fgate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_fgate_proj_%s" % self.name))
+    self.W_ogate_proj = self.add_param(
+      self.create_random_uniform_weights(n=n_gate_proj, m=n_cells, name="W_ogate_proj_%s" % self.name))
+
+    from ActivationFunctions import relu
+
+    # Some defaults.
+    PG = relu
+    CI, CO = [T.tanh] * 2
+    GI, GF, GO = [T.nnet.sigmoid] * 3
+
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 3:
+        PG, CI, CO = actf
+      elif len(actf) == 6:
+        PG, CI, CO, GI, GF, GO = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      PG = actf  # This is what this layer is about.
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, self.W_re)
+      z_t *= i_t_bc
+
+      igate_in = PG(z_t[:, :n_gate_proj])
+      fgate_in = PG(z_t[:, n_gate_proj:2 * n_gate_proj])
+      ogate_in = PG(z_t[:, 2 * n_gate_proj:3 * n_gate_proj])
+      u = CI(z_t[:, 3 * n_gate_proj:])
+
+      igate = GI(T.dot(igate_in, self.W_igate_proj))
+      fgate = GF(T.dot(fgate_in, self.W_fgate_proj))
+      ogate = GO(T.dot(ogate_in, self.W_ogate_proj))
+
+      s_t = u * igate + s_p * fgate
+      h_t = CO(s_t) * ogate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+
+
+class LstmComplexLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "lstm_complex"
+
+  def __init__(self, n_out, direction=1, activation='tanh', use_complex="1:1:1:1", grad_clip=None, **kwargs):
+    n_cells = n_out
+    assert n_cells % 2 == 0  # complex numbers, split real/imag
+    n_complex_cells = n_cells / 2
+    # {input,forget,out}-gate have n_cells dim.
+    # update u (earlier called net-input) has n_cells dim.
+    n_z = n_cells * 3 + n_cells
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(LstmComplexLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    self.set_attr('use_complex', use_complex)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    use_complex_t = map(int, use_complex.split(":"))
+    assert len(use_complex_t) == 4
+    from TheanoUtil import complex_dot, complex_elemwise_mult
+
+    n_re = n_z
+    rec_dot = T.dot
+    if use_complex_t[0]:  # Complex dot multiplication.
+      n_re /= 2
+      rec_dot = complex_dot
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_re, name="W_re_%s" % self.name))
+
+    # Some defaults.
+    CI, CO = [T.tanh] * 2
+    GI, GF, GO = [T.nnet.sigmoid] * 3
+    igate_mult, fgate_mult, ogate_mult = [T.mul] * 3
+
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 2:
+        CI, CO = actf
+      elif len(actf) == 5:
+        CI, CO, GI, GF, GO = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      CI, CO = [actf] * 2
+
+    if use_complex_t[1]: igate_mult = complex_elemwise_mult
+    if use_complex_t[2]: fgate_mult = complex_elemwise_mult
+    if use_complex_t[3]: ogate_mult = complex_elemwise_mult
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+
+      z_t += rec_dot(h_p, self.W_re)
+      z_t *= i_t_bc
+
+      igate = GI(z_t[:, :n_cells])
+      fgate = GF(z_t[:, n_cells:2 * n_cells])
+      ogate = GO(z_t[:, 2 * n_cells:3 * n_cells])
+      u = CI(z_t[:, 3 * n_cells:])
+
+      s_t = igate_mult(u, igate) + fgate_mult(s_p, fgate)
+      h_t = ogate_mult(CO(s_t), ogate)
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+    assert self.W_re.ndim == 2
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
 
 
 class GRULayer(RecurrentLayer):

@@ -83,7 +83,7 @@ def windowed_batch(source, window):
 
 
 def slice_for_axis(axis, s):
-  return (slice(None),) * (axis - 1) + (s,)
+  return (slice(None),) * axis + (s,)
 
 
 def downsample(source, axis, factor, method="average"):
@@ -167,6 +167,17 @@ def try_register_canonicalize(f):
   except ValueError as e:
     print("try_register_canonicalize warning: %s" % e)
     return f  # just ignore
+
+
+def try_register_gpu_opt(base_op_class):
+  def do_register_gpu_opt(f):
+    from theano.sandbox.cuda import cuda_available, register_opt
+    from theano.gof.opt import local_optimizer
+    f = local_optimizer([base_op_class])(f)
+    if cuda_available:
+      f = register_opt()(f)
+    return f  # just ignore
+  return do_register_gpu_opt
 
 
 class GradDiscardOutOfBound(ViewOp):
@@ -368,3 +379,61 @@ def show_global_softmax_stats(z):
     print("  sum1 min/max/mean/var = %s" % (stats(y_sum1),))
     log_y_sum1 = numpy.log(y_sum1)
     print("  log sum1 min/max/mean/var = %s" % (stats(log_y_sum1),))
+
+
+def complex_elemwise_mult(a, b, axis=-1):
+  assert a.ndim == b.ndim
+  if axis < 0: axis %= a.ndim
+  assert 0 <= axis < a.ndim
+  a_real = a[slice_for_axis(axis=axis, s=slice(0, a.shape[axis] / 2))]
+  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, None))]
+  b_real = b[slice_for_axis(axis=axis, s=slice(0, b.shape[axis] / 2))]
+  b_imag = b[slice_for_axis(axis=axis, s=slice(b.shape[axis] / 2, None))]
+  r_real = a_real * b_real - a_imag * b_imag
+  r_imag = a_real * b_imag + a_imag * b_real
+  return T.concatenate([r_real, r_imag], axis=axis)
+
+def complex_bound(a, axis=-1):
+  # Via Associative LSTMs, http://arxiv.org/abs/1602.03032
+  if axis < 0: axis %= a.ndim
+  assert 0 <= axis < a.ndim
+  a_real = a[slice_for_axis(axis=axis, s=slice(0, a.shape[axis] / 2))]
+  a_imag = a[slice_for_axis(axis=axis, s=slice(a.shape[axis] / 2, None))]
+  d = T.maximum(numpy.float32(1), T.sqrt(a_real * a_real + a_imag * a_imag))
+  r_real = a_real / d
+  r_imag = a_imag / d
+  return T.concatenate([r_real, r_imag], axis=axis)
+
+def complex_dot(a, b):
+  assert a.ndim >= 1
+  assert b.ndim >= 1
+  a_axis = a.ndim - 1
+  a_real = a[slice_for_axis(axis=a_axis, s=slice(0, a.shape[a_axis] / 2))]
+  a_imag = a[slice_for_axis(axis=a_axis, s=slice(a.shape[a_axis] / 2, None))]
+  b_axis = 0
+  b_real = b[slice_for_axis(axis=b_axis, s=slice(0, b.shape[b_axis] / 2))]
+  b_imag = b[slice_for_axis(axis=b_axis, s=slice(b.shape[b_axis] / 2, None))]
+  r_real = T.dot(a_real, b_real) - T.dot(a_imag, b_imag)
+  r_imag = T.dot(a_real, b_imag) + T.dot(a_imag, b_real)
+  r_axis = r_real.ndim - 1
+  return T.concatenate([r_real, r_imag], axis=r_axis)
+
+
+def indices_in_flatten_array(ndim, shape, *args):
+  """
+  We expect that all args can be broadcasted together.
+  So, if we have some array A with ndim&shape as given,
+  A[args] would give us a subtensor.
+  We return the indices so that A[args].flatten()
+  and A.flatten()[indices] are the same.
+  """
+  assert ndim > 0
+  assert len(args) == ndim
+  indices_per_axis = [args[i] for i in range(ndim)]
+  for i in range(ndim):
+    for j in range(i + 1, ndim):
+      indices_per_axis[i] *= shape[j]
+  indices = indices_per_axis[0]
+  for i in range(1, ndim):
+    indices += indices_per_axis[i]
+  return indices

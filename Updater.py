@@ -64,7 +64,8 @@ class Updater:
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
                enforce_triangular_matrix_zero=False,
-               gradient_noise=0.0
+               gradient_noise=0.0,
+               grad_noise_rel_grad_norm=0.0
                ):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = numpy.float32(momentum)
@@ -95,6 +96,7 @@ class Updater:
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.gradient_noise = gradient_noise
+    self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
     self.params = {}
     self.pid = -1
     if self.adadelta or self.adamdelta:
@@ -272,6 +274,11 @@ class Updater:
     beta2=numpy.float32(0.999)
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(self.rng.randint(1234) + 1)
+    total_grad_norm = numpy.float32(0)
+    for grad in grads.values(): total_grad_norm += T.sum(grad * grad)
+    n_total_params = 0
+    for grad in grads.values(): n_total_params += T.prod(grad.shape)
+    avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
     for param in grads.keys():
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
@@ -282,6 +289,18 @@ class Updater:
         gamma = 0.55
         sigma = nu / (1 + i_t)**gamma
         deltas += srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
+      if self.grad_noise_rel_grad_norm > 0.0:
+        # Idea extended from here: RandomOut, http://arxiv.org/pdf/1602.05931v2.pdf
+        # The total gradient norm is a measure how much error there is.
+        # If the relative gradient norm is low, it means that this element
+        # has low impact on the loss function. -> Change that, add noise.
+        elemwise_grad_norm = grads[param] * grads[param]
+        eps = numpy.float32(1e-7)
+        rel_elemwise_grad_norm = elemwise_grad_norm - avg_grad_norm
+        sigma = self.grad_noise_rel_grad_norm
+        noise = srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
+        noise *= T.maximum(-rel_elemwise_grad_norm, numpy.float32(1))
+        deltas += noise
       #print param, param.get_value().shape, numpy.prod(param.get_value().shape)
       if self.gradient_clip > 0:
         # Note that there is also theano.gradient.grad_clip, which would clip it already
@@ -744,6 +763,8 @@ class Updater:
       for param in grads.keys():
         models = [param]
         for i in range(self.update_multiple_models - 1):
+          # TODO: this will copy the param. this means that param must already be loaded.
+          # This is not the case when we call this function, where they are just randomly initialized!
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []

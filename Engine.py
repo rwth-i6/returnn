@@ -76,16 +76,20 @@ class Engine:
     if cls._epoch_model:
       return cls._epoch_model
 
-    load_model_epoch_filename = config.value('load', '')
-    if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename)
-
     start_epoch_mode = config.value('start_epoch', 'auto')
     if start_epoch_mode == 'auto':
       start_epoch = None
     else:
       start_epoch = int(start_epoch_mode)
       assert start_epoch >= 1
+
+    load_model_epoch_filename = config.value('load', '')
+    if load_model_epoch_filename:
+      assert os.path.exists(load_model_epoch_filename)
+
+    import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
+    if import_model_train_epoch1:
+      assert os.path.exists(import_model_train_epoch1)
 
     existing_models = cls.get_existing_models(config)
 
@@ -106,6 +110,9 @@ class Engine:
       epoch_model = existing_models[-1]
       if load_model_epoch_filename:
         print >> log.v4, "note: there is a 'load' which we ignore because of existing model"
+
+    elif config.value('task', 'train') == 'train' and import_model_train_epoch1 and start_epoch in [None, 1]:
+      epoch_model = (0, import_model_train_epoch1)
 
     # Now, consider this also in the case when we train, as an initial model import.
     elif load_model_epoch_filename:
@@ -223,8 +230,8 @@ class Engine:
     # We have the parameters randomly initialized at this point.
     # In training, as an initialization, we can copy over the params of an imported model,
     # where our topology might slightly differ from the imported model.
-    if config.bool('copy_from_initial_loaded_model', False) and self.start_epoch == 1:
-      assert last_model_hdf, "need 'load' in config for copy_from_initial_loaded_model"
+    if config.value('import_model_train_epoch1', '') and self.start_epoch == 1:
+      assert last_model_hdf
       old_network = LayerNetwork.from_hdf_model_topology(last_model_hdf)
       old_network.load_hdf(last_model_hdf)
       last_model_hdf.close()
@@ -317,6 +324,7 @@ class Engine:
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
+      rebatch = self.batch_variance > 0.0 or rebatch
       self.epoch = epoch
 
       for dataset_name,dataset in self.get_eval_datasets().items():
@@ -418,7 +426,7 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    if not 'train' in self.dataset_batches or self.batch_variance > 0.0:
+    if not 'train' in self.dataset_batches:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
