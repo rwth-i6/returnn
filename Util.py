@@ -844,3 +844,13 @@ def make_hashable(obj):
     return obj
   else:
     assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+
+
+def make_dll_name(basename):
+  if sys.platform == "darwin":
+    return "lib%s.dylib" % basename
+  elif sys.platform == "win32":
+    return "%s.dll" % basename
+  else:  # Linux, Unix
+    return "lib%s.so" % basename
+

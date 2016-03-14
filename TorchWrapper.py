@@ -1,10 +1,12 @@
 
-import sys
+import os, sys
 import theano
 import theano.tensor as T
 from TheanoUtil import try_register_gpu_opt
 from theano.sandbox.cuda import GpuOp
-from Util import make_hashable
+from Util import make_hashable, make_dll_name
+from Log import log
+from pprint import pprint
 
 
 _initialized = False
@@ -14,11 +16,38 @@ _torch_lib_dirs = None
 def _init():
   global _initialized, _torch_include_dirs, _torch_lib_dirs
   if _initialized: return
-  # TODO... find Torch, etc.
-  _torch_include_dirs = ["/Users/az/Programmierung/torch/install/include"]
-  _torch_lib_dirs = ["/Users/az/Programmierung/torch/install/lib"]
-  #for l in list(_torch_lib_dirs):
-  #  _torch_lib_dirs += [l + "/lua/5.1"]
+  # Not sure about the best way. Maybe try multiple things.
+  # We could set it in our config. get_global_config().
+  # We could use some env var.
+  # When torch-activate was called before, we should prefer that one.
+  # In that case, and maybe in other cases, we will find the executable th in PATH.
+  paths = []
+  for binpath in os.environ.get("PATH", "").split(":"):
+    if os.path.exists("%s/th" % binpath):  # e.g. "~/torch/install/bin"
+      paths += [os.path.dirname(binpath)]  # parent dir
+      break
+  # Add some standard paths.
+  paths += map(
+    os.path.expanduser,
+    ["~/torch/install", "~/code/torch/install", "~/Programmierung/torch/install",
+     "/usr", "/usr/local"])
+  def is_torch_dir(p):
+    if not os.path.exists("%s/lib/%s" % (p, make_dll_name("luajit"))): return False
+    if not os.path.exists("%s/lib/%s" % (p, make_dll_name("TH"))): return False
+    if not os.path.exists("%s/include/lua.h" % p): return False
+    if not os.path.exists("%s/include/TH" % p): return False
+    return True
+  paths = filter(is_torch_dir, paths)
+  print >>log.v4, "Found Lua & Torch dirs (will use the first one):"
+  pprint(paths, log.v4)
+  if not paths:
+    print >>log.v2, "ERROR: Did not found Lua & Torch."
+    _torch_include_dirs = _torch_lib_dirs = []
+  else:
+    _torch_include_dirs = ["%s/include" % paths[0]]
+    _torch_lib_dirs = ["%s/lib" % paths[0]]
+  _initialized = True
+
 
 class TorchWrapperOp(theano.Op):
   __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func")
@@ -59,7 +88,7 @@ class TorchWrapperOp(theano.Op):
     return out_shapes
 
   def perform(self, node, inputs, output_storage):
-    raise NotImplementedError  # only C code...
+    raise NotImplementedError("TorchWrapper: no pure Python implementation, only C implementation")
 
   def c_header_dirs(self):
     _init()
@@ -74,9 +103,9 @@ class TorchWrapperOp(theano.Op):
 
   def c_compile_args(self):
     args = []
-    if sys.platform == "darwin":
-      # Some libs may use @rpath to reference to the lib. This is needed so that it finds it.
-      args += ["-Wl,-rpath,%s" % l for l in _torch_lib_dirs]
+    # Some libs may use @rpath to reference to the lib. This is needed so that it finds it. (MacOSX)
+    # This will also make the dynamic linker search in these paths. (Linux,Unix)
+    args += ["-Wl,-rpath,%s" % l for l in _torch_lib_dirs]
     return args
 
   def c_support_code(self):
