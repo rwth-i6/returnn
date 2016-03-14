@@ -178,7 +178,7 @@ class TorchWrapperOp(theano.Op):
         luaL_openlibs(L);  // all standard Lua libs
         // TODO: load torch...?
       }
-      const char* user_func_str = "return (" %(user_func_str)s ")";
+      const char* user_func_str = "return " %(user_func_str)s;
       if((luaL_loadstring(L, user_func_str) || lua_pcall(L, 0, 1, 0)) != 0) {
         PyErr_Format(PyExc_RuntimeError,
           "TorchWrapper: Error while getting lua_fw_func: %%s\\nCode:\\n%%s\\n",
@@ -186,7 +186,7 @@ class TorchWrapperOp(theano.Op):
           user_func_str);
         %(fail)s;
       }
-      if(lua_type(L, -1) != LUA_TFUNCTION) {
+      if(!lua_isfunction(L, -1)) {
         PyErr_Format(PyExc_RuntimeError,
           "TorchWrapper: lua_fw_func is not a function but a %%s",
           lua_typename(L, lua_type(L, -1)));
@@ -197,7 +197,10 @@ class TorchWrapperOp(theano.Op):
 
   def c_cleanup_code_struct(self, node, name):
     return """
-      if(L) luaL_unref(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
+      if(L) {
+        luaL_unref(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
+        lua_user_func_ref_%(name)s = LUA_REFNIL;
+      }
       L_ref_counter--;
       if(L_ref_counter == 0 && L) {
         lua_close(L);
@@ -207,10 +210,19 @@ class TorchWrapperOp(theano.Op):
 
   def c_code(self, node, name, inputs, outputs, sub):
     return """
+      if(!L) {  // should have been initialized via c_init_code_struct()
+        PyErr_Format(PyExc_RuntimeError, "Lua not initialized.");
+        %(fail)s;
+      }
+      lua_rawgeti(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
+      if(lua_pcall(L, /*nargs*/0, /*nres*/0, /*error handler*/0) != 0) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: Error calling lua_fw_func: %%s",
+          lua_tostring(L, -1));
+        %(fail)s;
+      }
       // TODO...
-      PyErr_Format(PyExc_RuntimeError, "not implemented fully yet...");
-      %(fail)s;
-    """ % {'fail' : sub['fail']}
+    """ % {'name': name, 'fail' : sub['fail']}
 
   def grad(self, inputs, output_grads):
     if not self.lua_bw_func:
