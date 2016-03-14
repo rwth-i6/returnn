@@ -1566,7 +1566,7 @@ class NewConv(_NoOpLayer):
     super(NewConv, self).__init__(**kwargs)
 
     n_sources = len(self.sources)   # calculate how many input
-    is_conv_layer = all(s.layer_class == 'conv' for s in self.sources)  # check whether all inputs are conv layers
+    is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
 
     # check whether the input is conv layer
     if is_conv_layer:
