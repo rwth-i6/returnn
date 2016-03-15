@@ -10,11 +10,14 @@ from pprint import pprint
 
 
 _initialized = False
-_torch_include_dirs = None
-_torch_lib_dirs = None
+_torch_base_dir = None
+_torch_include = "include"
+_torch_lib = "lib"
+_torch_share_lua = "share/lua/5.1"
+_torch_lib_lua = "lib/lua/5.1"
 
 def _init():
-  global _initialized, _torch_include_dirs, _torch_lib_dirs
+  global _initialized, _torch_base_dir
   if _initialized: return
   # Not sure about the best way. Maybe try multiple things.
   # We could set it in our config. get_global_config().
@@ -42,10 +45,12 @@ def _init():
   pprint(paths, log.v4)
   if not paths:
     print >>log.v2, "ERROR: Did not found Lua & Torch."
-    _torch_include_dirs = _torch_lib_dirs = []
   else:
-    _torch_include_dirs = ["%s/include" % paths[0]]
-    _torch_lib_dirs = ["%s/lib" % paths[0]]
+    _torch_base_dir = paths[0]
+    for p in ["%s/torch/init.lua" % _torch_share_lua, "%s/libtorch.so" % _torch_lib_lua]:
+      fullp = "%s/%s" % (_torch_base_dir, p)
+      if not os.path.exists(fullp):
+        print >>log.v2, "ERROR: Did not found Lua & Torch file:", fullp
   _initialized = True
 
 
@@ -92,11 +97,11 @@ class TorchWrapperOp(theano.Op):
 
   def c_header_dirs(self):
     _init()
-    return _torch_include_dirs
+    return ["%s/%s" % (_torch_base_dir, _torch_include)]
 
   def c_lib_dirs(self):
     _init()
-    return _torch_lib_dirs + ["/usr/lib/atlas-base"]
+    return ["%s/%s" % (_torch_base_dir, _torch_lib), "/usr/lib/atlas-base"]
 
   def c_libraries(self):
     return ["luaT", "luajit", "TH"]
@@ -116,6 +121,7 @@ class TorchWrapperOp(theano.Op):
     #include <lualib.h>
     #include <lauxlib.h>
     #include <TH/TH.h>
+    #include <dlfcn.h>
     }
     #include <vector>
 
@@ -127,7 +133,9 @@ class TorchWrapperOp(theano.Op):
     static long L_ref_counter = 0;  // via c_init_code_struct/c_cleanup_code_struct
 
     // For TH documentation, best see the C code here: https://github.com/torch/torch7/blob/master/lib/TH/generic/
+    // THC: https://github.com/torch/cutorch/tree/master/lib/THC
     // Also some documentation here: http://torch.ch/docs/developer-docs.html
+    // LuaT: https://github.com/torch/torch7/blob/master/lib/luaT/luaT.c
 
     // Note: There is https://github.com/facebook/thpp for templated THTensor. But maybe overkill...
     template<typename T> struct TTH;
@@ -234,7 +242,7 @@ class TorchWrapperOp(theano.Op):
         obj->ob_type->tp_name);
       return false;
     }
-    """
+    """ % {}
 
   def c_support_code_struct(self, node, name):
     return """
@@ -247,6 +255,10 @@ class TorchWrapperOp(theano.Op):
       lua_user_func_ref_%(name)s = LUA_REFNIL;
       L_ref_counter++;
       if(!L) {
+        // workaround via https://groups.google.com/forum/#!topic/torch7/1Nl1OGEHxZw
+        void *hdl = dlopen("libluajit.so", RTLD_NOW | RTLD_GLOBAL);
+        if(hdl == 0) printf("TorchWrapper: dlopen error: %%s\\n", dlerror());  // ignore...?
+
         // http://www.lua.org/manual/5.1/manual.html
         L = lua_open();
         if(!L) {
@@ -261,7 +273,36 @@ class TorchWrapperOp(theano.Op):
         }
         // If only specific ones: http://stackoverflow.com/questions/966162
         luaL_openlibs(L);  // all standard Lua libs
-        // TODO: load torch...?
+
+        // -e 'package.path="/u/zeyer/code/torch/install/share/lua/5.1/?.lua;/u/zeyer/code/torch/install/share/lua/5.1/?/init.lua;"..package.path'
+        // -e 'package.cpath="/u/zeyer/code/torch/install/lib/lua/5.1/?.so;"..package.cpath'
+
+        lua_getglobal(L, "package");
+        lua_pushstring(L,
+          %(_torch_base_dir)s "/" %(_torch_share_lua)s "/?.lua;"
+          %(_torch_base_dir)s "/" %(_torch_share_lua)s "/?/init.lua;"
+          "./?.lua"
+        );
+        lua_setfield(L, -2, "path");
+        lua_pushstring(L,
+          %(_torch_base_dir)s "/" %(_torch_lib_lua)s "/?.so;"
+          %(_torch_base_dir)s "/" %(_torch_lib)s "/?.so;"
+          "./?.so"
+        );
+        lua_setfield(L, -2, "cpath");
+        lua_pop(L, 1);  // pops package
+
+        lua_getglobal(L, "require");
+        lua_pushstring(L, "torch");
+        if(lua_pcall(L, 1, 0, 0) != 0) {
+          PyErr_Format(PyExc_RuntimeError,
+            "TorchWrapper: Error while loading Torch module: %%s",
+            lua_tostring(L, -1));
+          %(fail)s;
+        }
+
+        // -e 'local k,l,_=pcall(require,"luarocks.loader") _=k
+        // /u/zeyer/code/torch/install/lib/luarocks/rocks/trepl/scm-1/bin/th
       }
       const char* user_func_str = "return " %(user_func_str)s;
       if((luaL_loadstring(L, user_func_str) || lua_pcall(L, 0, 1, 0)) != 0) {
@@ -278,7 +319,14 @@ class TorchWrapperOp(theano.Op):
         %(fail)s;
       }
       lua_user_func_ref_%(name)s = luaL_ref(L, LUA_REGISTRYINDEX);
-    """ % {'name': name, 'fail': sub['fail'], "user_func_str": escape_c_str(self.lua_fw_func)}
+    """ % {
+      'name': name, 'fail': sub['fail'],
+      "user_func_str": escape_c_str(self.lua_fw_func),
+      "_torch_base_dir": escape_c_str(_torch_base_dir),
+      "_torch_share_lua": escape_c_str(_torch_share_lua),
+      "_torch_lib_lua": escape_c_str(_torch_lib_lua),
+      "_torch_lib": escape_c_str(_torch_lib)
+    }
 
   def c_cleanup_code_struct(self, node, name):
     return """
