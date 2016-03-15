@@ -122,6 +122,7 @@ class TorchWrapperOp(theano.Op):
     #include <lauxlib.h>
     #include <TH/TH.h>
     #include <dlfcn.h>
+    #include <stdint.h>
     }
     #include <vector>
 
@@ -138,6 +139,7 @@ class TorchWrapperOp(theano.Op):
     // LuaT: https://github.com/torch/torch7/blob/master/lib/luaT/luaT.c
 
     // Note: There is https://github.com/facebook/thpp for templated THTensor. But maybe overkill...
+    // Some Tensor doc: https://github.com/torch/torch7/blob/master/doc/tensor.md
     template<typename T> struct TTH;
     template<> struct TTH<float> {
       typedef float type;
@@ -151,6 +153,19 @@ class TorchWrapperOp(theano.Op):
         return THFloatTensor_newWithStorage(storage, storageOffset, sizes, strides);
       }
       static const char* luaType() { return "torch.FloatTensor"; }
+    };
+    template<> struct TTH<int8_t> {
+      typedef char type;
+      typedef THCharTensor Tensor;
+      typedef THCharStorage Storage;
+      static Storage* Storage_newWithData(type* data, size_t size) { return THCharStorage_newWithData(data, size); }
+      static void Storage_free(Storage* storage) { THCharStorage_free(storage); }
+      static void Storage_clearFlag(Storage* storage, const char flag) { THCharStorage_clearFlag(storage, flag); }
+      static Tensor* Tensor_newWithStorage(
+          Storage* storage, long storageOffset, THLongStorage* sizes, THLongStorage* strides) {
+        return THCharTensor_newWithStorage(storage, storageOffset, sizes, strides);
+      }
+      static const char* luaType() { return "torch.CharTensor"; }
     };
     /*  // TODO?
     template<> struct THCuda {
@@ -207,6 +222,9 @@ class TorchWrapperOp(theano.Op):
       if(PyArray_EquivTypenums(PyArray_TYPE(obj), NPY_FLOAT32))
         return typed_push_py_array<TTH<float> >(obj);
 
+      if(PyArray_EquivTypenums(PyArray_TYPE(obj), NPY_INT8))
+        return typed_push_py_array<TTH<int8_t> >(obj);
+
       PyErr_Format(PyExc_RuntimeError,
         "TorchWrapper: lua_push_py_array, cannot handle Numpy dtype %%s",
         PyArray_DESCR(obj)->typeobj->tp_name);
@@ -214,17 +232,16 @@ class TorchWrapperOp(theano.Op):
     }
 
     static bool lua_pop_py_array(PyArrayObject** obj) {
-      if(!luaT_isudata(L, -1, "torch.FloatTensor")) {
-        PyErr_Format(PyExc_TypeError,
-          "TorchWrapper lua_pop_py_array: expected utype %%s but got type %%s",
-          "torch.FloatTensor", lua_typename(L, lua_type(L, -1)));
-        return false;
+      if(luaT_isudata(L, -1, "torch.FloatTensor")) {
+        // TODO ...
+
       }
 
       // THTensor *values_ = luaT_checkudata(L, 1, torch_Tensor) ...
 
-      PyErr_Format(PyExc_RuntimeError,
-        "TorchWrapper: TODO lua_pop_py_array...");
+      PyErr_Format(PyExc_TypeError,
+        "TorchWrapper lua_pop_py_array: got type %%s",
+        lua_typename(L, lua_type(L, -1)));
       return false;
     }
 
