@@ -96,16 +96,16 @@ class TorchWrapperOp(theano.Op):
 
   def c_lib_dirs(self):
     _init()
-    return _torch_lib_dirs
+    return _torch_lib_dirs + ["/usr/lib/atlas-base"]
 
   def c_libraries(self):
-    return ["luaT", "luajit"]
+    return ["luaT", "luajit", "TH"]
 
   def c_compile_args(self):
     args = []
     # Some libs may use @rpath to reference to the lib. This is needed so that it finds it. (MacOSX)
     # This will also make the dynamic linker search in these paths. (Linux,Unix)
-    args += ["-Wl,-rpath,%s" % l for l in _torch_lib_dirs]
+    args += ["-Wl,-rpath,%s" % l for l in self.c_lib_dirs()]
     return args
 
   def c_support_code(self):
@@ -117,6 +117,8 @@ class TorchWrapperOp(theano.Op):
     #include <lauxlib.h>
     #include <TH/TH.h>
     }
+    #include <vector>
+
     // Some Lua versions luaL_dostring ignore the result (http://stackoverflow.com/questions/12528820).
     #undef luaL_dostring
     #define luaL_dostring(L,s)  (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
@@ -124,43 +126,94 @@ class TorchWrapperOp(theano.Op):
     static lua_State* L = 0;
     static long L_ref_counter = 0;  // via c_init_code_struct/c_cleanup_code_struct
 
-    // for debugging
-    static void stackDump (lua_State *L) {
-      int i;
-      int top = lua_gettop(L);
-      printf("Lua stack (%i): ", top);
-      for (i = 1; i <= top; i++) {  /* repeat for each level */
-        int t = lua_type(L, i);
-        switch (t) {
-          case LUA_TSTRING:  /* strings */
-            printf("`%s'", lua_tostring(L, i));
-            break;
-          case LUA_TBOOLEAN:  /* booleans */
-            printf(lua_toboolean(L, i) ? "true" : "false");
-            break;
-          case LUA_TNUMBER:  /* numbers */
-            printf("%g", lua_tonumber(L, i));
-            break;
-          default:  /* other values */
-            printf("%s", lua_typename(L, t));
-            break;
-        }
-        printf("  ");  /* put a separator */
+    // For TH documentation, best see the C code here: https://github.com/torch/torch7/blob/master/lib/TH/generic/
+    // Also some documentation here: http://torch.ch/docs/developer-docs.html
+
+    // Note: There is https://github.com/facebook/thpp for templated THTensor. But maybe overkill...
+    template<typename T> struct TTH;
+    template<> struct TTH<float> {
+      typedef float type;
+      typedef THFloatTensor Tensor;
+      typedef THFloatStorage Storage;
+      static Storage* Storage_newWithData(type* data, size_t size) { return THFloatStorage_newWithData(data, size); }
+      static void Storage_free(Storage* storage) { THFloatStorage_free(storage); }
+      static void Storage_clearFlag(Storage* storage, const char flag) { THFloatStorage_clearFlag(storage, flag); }
+      static Tensor* Tensor_newWithStorage(
+          Storage* storage, long storageOffset, THLongStorage* sizes, THLongStorage* strides) {
+        return THFloatTensor_newWithStorage(storage, storageOffset, sizes, strides);
       }
-      printf("\\n");  /* end the listing */
+      static const char* luaType() { return "torch.FloatTensor"; }
+    };
+    /*  // TODO?
+    template<> struct THCuda {
+      typedef float type;
+      typedef THCudaTensor Tensor;
+      typedef THCudaStorage Storage;
+      static Storage* Storage_newWithData(type* data, size_t size) { return THCudaStorage_newWithData(data, size); }
+      static void Storage_free(Storage* storage) { THCudaStorage_free(storage); }
+      static void Storage_clearFlag(Storage* storage, const char flag) { THCudaStorage_clearFlag(storage, flag); }
+      static Tensor* Tensor_newWithStorage(
+          Storage* storage, long storageOffset, THLongStorage* sizes, THLongStorage* strides) {
+        return THCudaTensor_newWithStorage(storage, storageOffset, sizes, strides);
+      }
+      static const char* luaType() { return "torch.CudaTensor"; }
+    };
+    */
+
+    template<typename Base>
+    static bool typed_push_py_array(typename Base::type* data, size_t size, int ndim, long* shapes, long* strides) {
+      typename Base::Storage* storage = Base::Storage_newWithData(data, size);
+      Base::Storage_clearFlag(storage, TH_STORAGE_RESIZABLE|TH_STORAGE_FREEMEM);  // mem is owned by Python
+
+      THLongStorage* shapes_storage = THLongStorage_newWithData(shapes, ndim);
+      THLongStorage_clearFlag(shapes_storage, TH_STORAGE_RESIZABLE|TH_STORAGE_FREEMEM);  // mem is owned by Python
+      THLongStorage* strides_storage = THLongStorage_newWithData(strides, ndim);
+      THLongStorage_clearFlag(strides_storage, TH_STORAGE_RESIZABLE|TH_STORAGE_FREEMEM);  // mem is owned by Python
+
+      typename Base::Tensor* tensor = Base::Tensor_newWithStorage(storage, 0, shapes_storage, strides_storage);
+      luaT_pushudata(L, tensor, Base::luaType());
+
+      THLongStorage_free(shapes_storage);
+      THLongStorage_free(strides_storage);
+      Base::Storage_free(storage);
+      return true;
+    }
+
+    template<typename Base>
+    static bool typed_push_py_array(PyArrayObject* obj) {
+      typename Base::type* data = (typename Base::type*) PyArray_DATA(obj);
+      size_t size = PyArray_NBYTES(obj) / sizeof(typename Base::type);
+
+      int ndim = PyArray_NDIM(obj);
+      std::vector<long> shapes(ndim);
+      std::vector<long> strides(ndim);
+      for(int i = 0; i < ndim; ++i) {
+        shapes[i] = PyArray_DIM(obj, i);
+        strides[i] = PyArray_STRIDE(obj, i) / sizeof(typename Base::type);  // Numpy strides are in bytes
+      }
+
+      return typed_push_py_array<Base>(data, size, ndim, &shapes[0], &strides[0]);
     }
 
     static bool lua_push_py_array(PyArrayObject* obj) {
-
-
+      if(PyArray_EquivTypenums(PyArray_TYPE(obj), NPY_FLOAT32))
+        return typed_push_py_array<TTH<float> >(obj);
 
       PyErr_Format(PyExc_RuntimeError,
-        "TorchWrapper: TODO lua_push_py_array...");
+        "TorchWrapper: lua_push_py_array, cannot handle Numpy dtype %%s",
+        PyArray_DESCR(obj)->typeobj->tp_name);
       return false;
     }
 
     static bool lua_pop_py_array(PyArrayObject** obj) {
+      if(!luaT_isudata(L, -1, "torch.FloatTensor")) {
+        PyErr_Format(PyExc_TypeError,
+          "TorchWrapper lua_pop_py_array: expected utype %%s but got type %%s",
+          "torch.FloatTensor", lua_typename(L, lua_type(L, -1)));
+        return false;
+      }
 
+      // THTensor *values_ = luaT_checkudata(L, 1, torch_Tensor) ...
 
       PyErr_Format(PyExc_RuntimeError,
         "TorchWrapper: TODO lua_pop_py_array...");
@@ -173,11 +226,8 @@ class TorchWrapperOp(theano.Op):
       if(PyArray_Check(obj))
         return lua_push_py_array((PyArrayObject*) obj);
 
-      /*
-      if(CudaNdarray_Check(obj)) {
-
-      }
-      */
+      // https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
+      // if(CudaNdarray_Check(obj)) {}
 
       PyErr_Format(PyExc_TypeError,
         "TorchWrapper lua_push_py_array: cannot handle type %%s",
@@ -316,7 +366,11 @@ class TorchWrapperOp(theano.Op):
 
 
 class GpuTorchWrapperOp(GpuOp, TorchWrapperOp):
-  pass  # TODO...
+  # TODO...
+
+  def c_libraries(self):
+    return super(GpuTorchWrapperOp, self).c_libraries() + ["THC"]
+
 
 
 @try_register_gpu_opt(TorchWrapperOp)
