@@ -260,7 +260,7 @@ class TorchWrapperOp(theano.Op):
 
     template<typename Base>
     static bool typed_lua_pop_py_array(PyArrayObject** obj) {
-      typename Base::Tensor* tensor = (typename Base::Tensor*) luaT_checkudata(L, 1, Base::luaType());
+      typename Base::Tensor* tensor = (typename Base::Tensor*) luaT_checkudata(L, -1, Base::luaType());
       if(!tensor) {
         PyErr_Format(PyExc_RuntimeError,
           "TorchWrapper: typed_lua_pop_py_array, luaT_checkudata returned NULL");
@@ -494,11 +494,11 @@ class TorchWrapperOp(theano.Op):
       // Is this another thread?
       {
         lua_getglobal(L, "torch");
-        lua_getfield(L, -1, "updateerrorhandlers");
+        lua_getfield(L, -1, "updatethreadlocals");
         lua_replace(L, -2);
         if(lua_pcall(L, 0, 0, 0) != 0) {
           PyErr_Format(PyExc_RuntimeError,
-            "TorchWrapper: c_code: torch.updateerrorhandlers() error: %%s",
+            "TorchWrapper: torch.updatethreadlocals() error: %%s",
             safe_lua_tostring(L, -1));
           %(fail)s;
         }
