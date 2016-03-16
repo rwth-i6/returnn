@@ -133,6 +133,12 @@ class TorchWrapperOp(theano.Op):
     #undef luaL_dostring
     #define luaL_dostring(L,s)  (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
 
+    static const char* safe_lua_tostring(lua_State* L, int ud) {
+      const char* s = lua_tostring(L, ud);
+      if(!s) s = lua_typename(L, lua_type(L, ud));
+      return s;
+    }
+
     static lua_State* L = 0;
     static long L_ref_counter = 0;  // via c_init_code_struct/c_cleanup_code_struct
 
@@ -372,7 +378,7 @@ class TorchWrapperOp(theano.Op):
       if(!L) {
         // workaround via https://groups.google.com/forum/#!topic/torch7/1Nl1OGEHxZw
         void *hdl = dlopen("libluajit.so", RTLD_NOW | RTLD_GLOBAL);
-        if(hdl == 0) printf("TorchWrapper: dlopen error: %%s\\n", dlerror());  // ignore...?
+        if(hdl == 0) printf("TorchWrapper: dlopen luajit error: %%s\\n", dlerror());  // ignore...?
 
         // http://www.lua.org/manual/5.1/manual.html
         L = lua_open();
@@ -412,18 +418,31 @@ class TorchWrapperOp(theano.Op):
         if(lua_pcall(L, 1, 0, 0) != 0) {
           PyErr_Format(PyExc_RuntimeError,
             "TorchWrapper: Error while loading Torch module: %%s",
-            lua_tostring(L, -1));
+            safe_lua_tostring(L, -1));
           %(fail)s;
         }
 
         // -e 'local k,l,_=pcall(require,"luarocks.loader") _=k
         // /u/zeyer/code/torch/install/lib/luarocks/rocks/trepl/scm-1/bin/th
+
+        lua_getglobal(L, "torch");
+        lua_getfield(L, -1, "updateerrorhandlers");
+        lua_replace(L, -2);
+        if(lua_pcall(L, 0, 0, 0) != 0) {
+          PyErr_Format(PyExc_RuntimeError,
+            "TorchWrapper: torch.updateerrorhandlers() error: %%s",
+            safe_lua_tostring(L, -1));
+          %(fail)s;
+        }
+
+        // torch.setheaptracking(true)  ?
       }
+
       const char* user_func_str = "return " %(user_func_str)s;
       if((luaL_loadstring(L, user_func_str) || lua_pcall(L, 0, 1, 0)) != 0) {
         PyErr_Format(PyExc_RuntimeError,
           "TorchWrapper: Error while getting lua_fw_func: %%s\\nCode:\\n%%s\\n",
-          lua_tostring(L, -1),
+          safe_lua_tostring(L, -1),
           user_func_str);
         %(fail)s;
       }
@@ -465,19 +484,46 @@ class TorchWrapperOp(theano.Op):
       int out_ndims[] = {%(output_ndims_str)s};
       int out_shapes_flat[] = {%(output_shapes_flat_str)s};
       int out_shape_idx = 0;
+      int pcall_ret = 0;
       if(!L) {  // should have been initialized via c_init_code_struct()
         PyErr_Format(PyExc_RuntimeError, "Lua not initialized.");
         %(fail)s;
       }
+
+      // TODO: I don't understand this. We do the same already in c_init_code_struct.
+      // Is this another thread?
+      {
+        lua_getglobal(L, "torch");
+        lua_getfield(L, -1, "updateerrorhandlers");
+        lua_replace(L, -2);
+        if(lua_pcall(L, 0, 0, 0) != 0) {
+          PyErr_Format(PyExc_RuntimeError,
+            "TorchWrapper: c_code: torch.updateerrorhandlers() error: %%s",
+            safe_lua_tostring(L, -1));
+          %(fail)s;
+        }
+      }
+
+      lua_getglobal(L, "debug");
+      lua_getfield(L, -1, "traceback");
+      lua_replace(L, -2);
       lua_rawgeti(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
       for(int i = 0; i < %(n_inputs)i; ++i) {
         if(!lua_push_py_array(inputs[i]))
           %(fail)s;
       }
-      if(lua_pcall(L, %(n_inputs)i, %(n_outputs)i, /*error handler*/0) != 0) {
+      pcall_ret = lua_pcall(L, %(n_inputs)i, %(n_outputs)i, /*error handler*/ - %(n_inputs)i - 2);
+      if(pcall_ret != 0) {
+        const char* errmsg = lua_tostring(L, -1);
+        if(!errmsg) {
+          errmsg = "(No Lua error message.)";
+          printf("Unexpected Lua stack:\\n");
+          luaT_stackdump(L);
+        }
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: Error calling lua_fw_func: %%s",
-          lua_tostring(L, -1));
+          "TorchWrapper: Error calling lua_fw_func, error code %%i:\\n%%s",
+          pcall_ret, errmsg);
+        lua_pop(L, 2);  // remove error and debug.traceback from the stack
         %(fail)s;
       }
       for(int i = %(n_outputs)i - 1; i >= 0; --i) {
@@ -502,6 +548,7 @@ class TorchWrapperOp(theano.Op):
             }
           }
         }
+        lua_pop(L, 1); /* remove debug.traceback from the stack */
       }
     """ % {
       'name': name, 'fail': sub['fail'],

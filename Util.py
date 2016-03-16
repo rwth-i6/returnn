@@ -856,4 +856,4 @@ def make_dll_name(basename):
 
 
 def escape_c_str(s):
-  return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n")
+  return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n").replace("\"", "\\\"").replace("'", "\\'")
