@@ -437,3 +437,7 @@ def indices_in_flatten_array(ndim, shape, *args):
   for i in range(1, ndim):
     indices += indices_per_axis[i]
   return indices
+
+def circular_convolution(a, b):
+  from theano.sandbox.cuda.fftconv import cufft,cifft
+  return cuifft(cufft(a) * cufft(b))
