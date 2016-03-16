@@ -672,9 +672,10 @@ class RecurrentUnitLayer(Layer):
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
     if self.attrs['attention_store']:
-      self.attention = [ aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if self.recurrent_transform.state_vars[i].starts_with('att_') ]
+      self.attention = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('att_') ]
+      z = theano.printing.Print("a", attrs=['shape'])(z)
     if self.attrs['attention_align']:
-      bp = [ aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if self.recurrent_transform.state_vars[i].starts_with('K_') ]
+      bp = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if self.recurrent_transform.state_vars[i].startswith('K_') ]
       def backtrace(k,i_p,k_p):
         return i_p - k[i_p], k
       self.alignment = []
