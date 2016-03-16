@@ -224,12 +224,12 @@ class AttentionBase(RecurrentTransformBase):
     self.base = self.layer.base
     self.n = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'n')
     self.bound = self.add_input(T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'bound')
-    if self.layer.attrs['attention_distance'] == 'rnn':
-      n_tmp = self.layer.attrs['attention_template']
+    if self.attrs['distance'] == 'rnn':
+      n_tmp = self.attrs['template']
       l = sqrt(6.) / sqrt(2 * n_tmp)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
       self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re"))
-    if self.layer.attrs['attention_lm'] != "none":
+    if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
       self.drop_mask = self.add_var(self.layer.lmmask, "drop_mask")
@@ -246,23 +246,23 @@ class AttentionBase(RecurrentTransformBase):
   def default_updates(self):
     self.base = self.layer.base
     self.glimpses = [ [] ] * len(self.base)
-    self.n_glm = max(self.layer.attrs['attention_glimpse'],1)
+    self.n_glm = max(self.attrs['glimpse'],1)
     return { self.n : self.n + T.constant(1,'float32') }
 
   def step(self, y_p):
     result = 0
     self.glimpses = []
     updates = self.default_updates()
-    if self.layer.attrs['attention_lm'] != "none":
+    if self.attrs['lm'] != "none":
       p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in))
       if self.layer.attrs['droplm'] < 1.0:
         mask = self.drop_mask[T.cast(self.n[0],'int32')]
-        if self.layer.attrs['attention_lm'] == "hard":
+        if self.attrs['lm'] == "hard":
           result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
         else:
           result += T.dot(p_re,self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
       else:
-        if self.layer.attrs['attention_lm'] == "hard":
+        if self.attrs['lm'] == "hard":
           result += self.W_lm_out[T.argmax(p_re, axis=1)]
         else:
           result += T.dot(p_re,self.W_lm_out)
@@ -271,7 +271,7 @@ class AttentionBase(RecurrentTransformBase):
     return result + inp, updates
 
   def distance(self, C, H):
-    dist = self.layer.attrs['attention_distance']
+    dist = self.attrs['distance']
     if dist == 'l2':
       dst = T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
       #return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
@@ -288,7 +288,7 @@ class AttentionBase(RecurrentTransformBase):
       dst = inp[-1]
     else:
       raise NotImplementedError()
-    return dst * T.constant(self.layer.attrs['attention_sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
+    return dst * T.constant(self.attrs['sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
 
   def beam(self, X, beam_idx=None):
     if not beam_idx:
@@ -296,21 +296,21 @@ class AttentionBase(RecurrentTransformBase):
     input_shape = [X.shape[0] * X.shape[1]]
     if X.ndim == 3:
       input_shape.append(X.shape[2])
-    Y = X.reshape(input_shape)[beam_idx].reshape((self.layer.attrs['attention_beam'],X.shape[1]))
+    Y = X.reshape(input_shape)[beam_idx].reshape((self.attrs['beam'],X.shape[1]))
     Y.beam_idx = beam_idx
     return Y
 
   def softmax(self, D, I):
     D = D
-    if self.layer.attrs['attention_norm'] == 'exp':
+    if self.attrs['norm'] == 'exp':
       E = T.exp(-D)
-    elif self.layer.attrs['attention_norm'] == 'sigmoid':
+    elif self.attrs['norm'] == 'sigmoid':
       E = T.nnet.sigmoid(D)
     else:
       raise NotImplementedError()
     E = E * I
-    if self.layer.attrs['attention_nbest'] > 0:
-      opt = T.minimum(self.layer.attrs['attention_nbest'], E.shape[0])
+    if self.attrs['nbest'] > 0:
+      opt = T.minimum(self.attrs['nbest'], E.shape[0])
       score = (T.sort(E, axis=0)[-opt]).dimshuffle('x',0).repeat(E.shape[0],axis=0)
       E = T.switch(T.lt(E,score), T.zeros_like(E), E)
     return E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
@@ -401,16 +401,16 @@ class AttentionList(AttentionBase):
       if self.attrs['align']:
         dst = -T.log(w_i)
         inf = T.cast(1e30,'float32')
-        Q = self.custom_vars["Q_%d" % i]
-        K = self.custom_vars["K_%d" % i]
-        def dtw(i,q_p,b_p,Q,K,D):
-          forward = T.constant(0.0, 'float32') + q_p# (t-1,n-1) -> (t,n)
+        Q = self.item("Q", i)
+        K = self.item("K", i)
+        def dtw(i,q_p,b_p,Q,D):
+          forward = T.constant(0.0, 'float32') + q_p # (t-1,n-1) -> (t,n)
           loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],T.zeros_like(Q[0])) # (t-1,n) -> (t,n)
           opt = T.stack([loop,forward])
-          k_out = T.argmin(opt)
-          return opt[k_out], k_out
+          k_out = T.argmin(opt,axis=0)
+          return opt[k_out] + D[i], k_out
         output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],'float32')], non_sequences=[Q,K,-T.log(w_i)],
-                                outputs_info=[T.zeros_like(Q[0])+inf,T.zeros_like(K[0])])
+                                outputs_info=[T.zeros_like(Q[0]),T.zeros_like(K[0])])
         updates[self.custom_vars['Q_%d'%i]] = output[0]
         updates[self.custom_vars['K_%d'%i]] = output[1]
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
