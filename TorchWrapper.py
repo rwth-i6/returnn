@@ -127,6 +127,8 @@ class TorchWrapperOp(theano.Op):
     }
     #include <vector>
 
+    #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
+
     // Some Lua versions luaL_dostring ignore the result (http://stackoverflow.com/questions/12528820).
     #undef luaL_dostring
     #define luaL_dostring(L,s)  (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
@@ -320,7 +322,12 @@ class TorchWrapperOp(theano.Op):
         /*subtype*/&PyArray_Type,
         ndim, &shapes[0], Base::numpyTypenum(), &strides[0], data, /*itemsize*/0,
         flags, /*obj*/NULL);
-      if(*obj) return false;
+      if(!*obj) {
+        if(!PyErr_Occurred())
+          PyErr_Format(PyExc_RuntimeError,
+            "TorchWrapper: typed_lua_pop_py_array, failed to create PyArrayObject");
+        return false;
+      }
 
       lua_pop(L, 1);
       return true;
@@ -455,6 +462,9 @@ class TorchWrapperOp(theano.Op):
     return """
       PyArrayObject* inputs[] = {%(input_var_names_str)s};
       PyArrayObject** outputs[] = {%(output_var_names_str)s};
+      int out_ndims[] = {%(output_ndims_str)s};
+      int out_shapes_flat[] = {%(output_shapes_flat_str)s};
+      int out_shape_idx = 0;
       if(!L) {  // should have been initialized via c_init_code_struct()
         PyErr_Format(PyExc_RuntimeError, "Lua not initialized.");
         %(fail)s;
@@ -473,12 +483,35 @@ class TorchWrapperOp(theano.Op):
       for(int i = %(n_outputs)i - 1; i >= 0; --i) {
         if(!lua_pop_py_array(outputs[i]))
           %(fail)s;
+
+        if(PyArray_NDIM(*outputs[i]) != out_ndims[i]) {
+          PyErr_Format(PyExc_ValueError,
+            "TorchWrapper: lua_fw_func, in output %%i, got wrong ndim = %%i, expected %%i",
+            i, PyArray_NDIM(*outputs[i]), out_ndims[i]);
+          %(fail)s;
+        }
+
+        for(int j = 0; j < out_ndims[i]; ++j, ++out_shape_idx) {
+          assert(out_shape_idx < ARRAY_LEN(out_shapes_flat));
+          if(out_shapes_flat[out_shape_idx] >= 0) {  // otherwise we could infer it via input dim. TODO...
+            if(PyArray_DIM(*outputs[i], j) != out_shapes_flat[out_shape_idx]) {
+              PyErr_Format(PyExc_ValueError,
+                "TorchWrapper: lua_fw_func, in output %%i with ndim %%i, got wrong shape[%%i] = %%i, expected %%i",
+                i, out_ndims[i], j, PyArray_DIM(*outputs[i], j), out_shapes_flat[out_shape_idx]);
+              %(fail)s;
+            }
+          }
+        }
       }
     """ % {
       'name': name, 'fail': sub['fail'],
       'n_inputs': len(inputs), 'n_outputs': len(outputs),
       'input_var_names_str': ", ".join(["%s" % inp for inp in inputs]),
-      'output_var_names_str': ", ".join(["&%s" % out for out in outputs])
+      'output_var_names_str': ", ".join(["&%s" % out for out in outputs]),
+      'output_ndims_str': ', '.join(["%i" % info["ndim"] for info in self.out_info]),
+      'output_shapes_flat_str':
+        ', '.join([(("%i" % s) if isinstance(s, (int, long)) else "-1")
+                   for info in self.out_info for s in info["shape"]])
     }
 
   def grad(self, inputs, output_grads):
