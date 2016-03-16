@@ -1,4 +1,15 @@
 
+# This is a Theano Op which can wrap Lua/Torch code.
+# Some related projects / code:
+# https://github.com/nouiz/theano_torch_bridge
+# http://stackoverflow.com/questions/24712972/interfacing-python-and-torch7lua-via-shared-library
+# https://pypi.python.org/pypi/lupa
+# https://github.com/sermanet/OverFeat/blob/master/API/python/overfeatmodule.cpp
+# https://github.com/albanD/lunatic-python  /  http://labix.org/lunatic-python
+# https://github.com/hughperkins/pytorch
+# https://github.com/facebook/fblualib/blob/master/fblualib/python/README.md
+
+
 import os, sys
 import theano
 import theano.tensor as T
@@ -603,6 +614,13 @@ class TorchWrapperOp(theano.Op):
 
 class GpuTorchWrapperOp(GpuOp, TorchWrapperOp):
   # TODO...
+  # Maybe helpful:
+  # http://pydoc.net/Python/Theano/0.6.0/theano.sandbox.cuda.basic_ops/
+  # http://deeplearning.net/software/theano/tutorial/aliasing.html
+  # http://www.deeplearning.net/software/theano/extending/extending_theano_c.html#extending-theano-c
+  # http://www.deeplearning.net/software/theano/extending/cop.html#Op.c_code
+  # http://docs.scipy.org/doc/numpy/reference/c-api.array.html
+  # https://docs.scipy.org/doc/numpy-1.9.2/reference/c-api.types-and-structures.html
 
   def c_libraries(self):
     return super(GpuTorchWrapperOp, self).c_libraries() + ["THC"]
