@@ -299,9 +299,9 @@ class RecurrentUnitLayer(Layer):
                attention_beam = -1, # soft attention context window
                attention_norm = "exp",
                attention_sharpening = 1.0,
-               attention_mbeam = False,
                attention_nbest = 0,
-               attention_treebase = False,
+               attention_store = False,
+               attention_align = False,
                attention_glimpse = 1,
                attention_lm = 'none',
                base = None,
@@ -361,8 +361,8 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_norm', attention_norm.encode("utf8"))
     self.set_attr('attention_sharpening', attention_sharpening)
     self.set_attr('attention_nbest', attention_nbest)
-    self.set_attr('attention_mbeam', attention_mbeam)
-    self.set_attr('attention_treebase', attention_treebase)
+    self.set_attr('attention_store', attention_store)
+    self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)
     self.set_attr('n_dec', n_dec)
@@ -671,11 +671,6 @@ class RecurrentUnitLayer(Layer):
         self.act = outputs[:unit.n_act]
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
-    #T.set_subtensor(self.act[0][(self.index > 0).nonzero()], T.zeros_like(self.act[0][(self.index > 0).nonzero()]))
-    #T.set_subtensor(self.act[1][(self.index > 0).nonzero()], T.zeros_like(self.act[1][(self.index > 0).nonzero()]))
-    #jindex = self.index.dimshuffle(0,1,'x').repeat(unit.n_out,axis=2)
-    #self.act[0] = T.switch(T.lt(jindex, T.ones_like(jindex)), T.zeros_like(self.act[0]), self.act[0])
-    #self.act[1] = T.switch(T.eq(jindex, T.zeros_like(jindex)), T.zeros_like(self.act[1]), self.act[1])
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)
 

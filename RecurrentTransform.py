@@ -330,6 +330,11 @@ class AttentionList(AttentionBase):
     self.__setattr__("W_att_re_%d" % i, self.custom_vars['W_att_re_%d' % i])
     self.__setattr__("b_att_re_%d" % i, self.custom_vars['b_att_re_%d' % i])
     self.__setattr__("W_att_in_%d" % i, self.custom_vars['W_att_in_%d' % i])
+    if self.layer.attrs['attention_store']:
+      self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(self.layer.index.shape,'float32'), "att_%d" % i))
+    if self.layer.attrs['attention_align']:
+      self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(self.layer.index.shape,'float32'), "Q_%d" % i))
+      self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(self.layer.index.shape,'float32'), "B_%d" % i))
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -382,19 +387,32 @@ class AttentionList(AttentionBase):
         elif mode == 'zero':
           self.glimpses[i] = [ T.zeros_like(C[0]) ]
       h_p = sum([h_p] + self.glimpses[i]) / numpy.float32(g+2)
-
     return B, C, I, h_p, self.custom_vars[('W_att_in_%d' % i)]
 
   def attend(self, y_p):
-    inp = 0
+    inp, updates = 0, {}
     for i in xrange(len(self.base)):
       for g in xrange(self.n_glm):
         B, C, I, H, W_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, H)
         w_i = self.softmax(z_i, I)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
+      if self.layer.attrs['attention_store']:
+        updates[self.custom_vars['att_%d'%i]] = w_i
+      if self.layer.attrs['attention_align']:
+        dst = -T.log(w_i)
+        Q = self.custom_vars["Q_%d" % i]
+        K = self.custom_vars["K_%d" % i]
+        def dtw(i,q_p,b_p,Q,K,D):
+          forward = T.constant(0.0, 'float32') + T.eq(i,0) * q_p + (1-T.eq(i,0)) * T.constant(1e30)# (t-1,n-1) -> (t,n)
+          loop = T.constant(3.0, 'float32') + Q[i-1] # (t-1,n) -> (t,n)
+          T.stack([])
+          q_out = D[i] + T.min(T.stack([]))
+        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],'float32')], non_sequences=[Q,K,-T.log(w_i)],
+                                outputs_info=[T.zeros_like(Q[0]),T.zeros_like(K[0])])
+        updates[self.custom_vars['aln_%d'%i]] = w_i
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
-    return inp, {}
+    return inp, updates
 
 
 class AttentionTime(AttentionList):
@@ -406,7 +424,7 @@ class AttentionTime(AttentionList):
     super(AttentionTime,self).create_vars()
     self.base = [T.concatenate(b.output,axis=2) for b in self.layer.base]
     self.base[0].index = self.layer.base[0].index
-    self.base[0].output = self.layer.base[0]
+    self.base[0].output = self.base[0]
 
   def default_updates(self):
     self.base = [T.concatenate(self.layer.base,axis=2)]
