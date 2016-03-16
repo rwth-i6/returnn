@@ -218,7 +218,7 @@ class AttentionBase(RecurrentTransformBase):
 
   @property
   def attrs(self):
-    return { "_".join(k.split("_")[1:]) for k in self.layer.attrs.keys() if k.startswith("attention_") }
+    return { "_".join(k.split("_")[1:]) : self.layer.attrs[k] for k in self.layer.attrs.keys() if k.startswith("attention_") }
 
   def create_vars(self):
     self.base = self.layer.base
