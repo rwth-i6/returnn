@@ -401,16 +401,19 @@ class AttentionList(AttentionBase):
         updates[self.custom_vars['att_%d'%i]] = w_i
       if self.layer.attrs['attention_align']:
         dst = -T.log(w_i)
+        inf = T.cast(1e30,'float32')
         Q = self.custom_vars["Q_%d" % i]
         K = self.custom_vars["K_%d" % i]
         def dtw(i,q_p,b_p,Q,K,D):
-          forward = T.constant(0.0, 'float32') + T.eq(i,0) * q_p + (1-T.eq(i,0)) * T.constant(1e30)# (t-1,n-1) -> (t,n)
-          loop = T.constant(3.0, 'float32') + Q[i-1] # (t-1,n) -> (t,n)
-          T.stack([])
-          q_out = D[i] + T.min(T.stack([]))
+          forward = T.constant(0.0, 'float32') + q_p# (t-1,n-1) -> (t,n)
+          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],T.zeros_like(Q[0])) # (t-1,n) -> (t,n)
+          opt = T.stack([loop,forward])
+          k_out = T.argmin(opt)
+          return opt[k_out], k_out
         output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],'float32')], non_sequences=[Q,K,-T.log(w_i)],
-                                outputs_info=[T.zeros_like(Q[0]),T.zeros_like(K[0])])
-        updates[self.custom_vars['aln_%d'%i]] = w_i
+                                outputs_info=[T.zeros_like(Q[0])+inf,T.zeros_like(K[0])])
+        updates[self.custom_vars['Q_%d'%i]] = output[0]
+        updates[self.custom_vars['K_%d'%i]] = output[1]
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
     return inp, updates
 
