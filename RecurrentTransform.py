@@ -284,7 +284,7 @@ class AttentionBase(RecurrentTransformBase):
       dst = inp[-1]
     else:
       raise NotImplementedError()
-    return dst / T.cast(H.shape[1],'float32')
+    return dst * T.constant(self.layer.attrs['attention_sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
 
   def beam(self, X, beam_idx=None):
     if not beam_idx:
@@ -297,7 +297,7 @@ class AttentionBase(RecurrentTransformBase):
     return Y
 
   def softmax(self, D, I):
-    D = D * T.constant(self.layer.attrs['attention_sharpening'], 'float32')
+    D = D
     if self.layer.attrs['attention_norm'] == 'exp':
       E = T.exp(-D)
     elif self.layer.attrs['attention_norm'] == 'sigmoid':
@@ -368,7 +368,7 @@ class AttentionList(AttentionBase):
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
-    mode = 'first' #self.layer.attrs['attention_step']
+    mode = 'mean' #self.layer.attrs['attention_step']
     h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re)
     if self.layer.attrs['attention_glimpse'] > 0:
       if not self.glimpses[i]:
@@ -439,7 +439,7 @@ class AttentionBin(AttentionList):
   """
   name = "attention_bin"
 
-  def step(self, y_p):
+  def attend(self, y_p):
     updates = self.default_updates()
     for g in xrange(self.layer.attrs['attention_glimpse']):
       for i in xrange(len(self.base)-1,-1,-1):
