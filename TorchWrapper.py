@@ -123,6 +123,7 @@ class TorchWrapperOp(theano.Op):
     #include <TH/TH.h>
     #include <dlfcn.h>
     #include <stdint.h>
+    #include <assert.h>
     }
     #include <vector>
 
@@ -153,6 +154,7 @@ class TorchWrapperOp(theano.Op):
         return THFloatTensor_newWithStorage(storage, storageOffset, sizes, strides);
       }
       static const char* luaType() { return "torch.FloatTensor"; }
+      static int numpyTypenum() { return NPY_FLOAT32; };
     };
     template<> struct TTH<int8_t> {
       typedef char type;
@@ -166,6 +168,7 @@ class TorchWrapperOp(theano.Op):
         return THCharTensor_newWithStorage(storage, storageOffset, sizes, strides);
       }
       static const char* luaType() { return "torch.CharTensor"; }
+      static int numpyTypenum() { return NPY_INT8; };
     };
     /*  // TODO?
     template<> struct THCuda {
@@ -184,7 +187,7 @@ class TorchWrapperOp(theano.Op):
     */
 
     template<typename Base>
-    static bool typed_push_py_array(typename Base::type* data, size_t size, int ndim, long* shapes, long* strides) {
+    static bool typed_lua_push_py_array(typename Base::type* data, size_t size, int ndim, long* shapes, long* strides) {
       typename Base::Storage* storage = Base::Storage_newWithData(data, size);
       Base::Storage_clearFlag(storage, TH_STORAGE_RESIZABLE|TH_STORAGE_FREEMEM);  // mem is owned by Python
 
@@ -203,7 +206,8 @@ class TorchWrapperOp(theano.Op):
     }
 
     template<typename Base>
-    static bool typed_push_py_array(PyArrayObject* obj) {
+    static bool typed_lua_push_py_array(PyArrayObject* obj) {
+      assert(PyArray_EquivTypenums(PyArray_TYPE(obj), Base::numpyTypenum()));
       typename Base::type* data = (typename Base::type*) PyArray_DATA(obj);
       size_t size = PyArray_NBYTES(obj) / sizeof(typename Base::type);
 
@@ -215,15 +219,15 @@ class TorchWrapperOp(theano.Op):
         strides[i] = PyArray_STRIDE(obj, i) / sizeof(typename Base::type);  // Numpy strides are in bytes
       }
 
-      return typed_push_py_array<Base>(data, size, ndim, &shapes[0], &strides[0]);
+      return typed_lua_push_py_array<Base>(data, size, ndim, &shapes[0], &strides[0]);
     }
 
     static bool lua_push_py_array(PyArrayObject* obj) {
-      if(PyArray_EquivTypenums(PyArray_TYPE(obj), NPY_FLOAT32))
-        return typed_push_py_array<TTH<float> >(obj);
+      if(PyArray_EquivTypenums(PyArray_TYPE(obj), TTH<float>::numpyTypenum()))
+        return typed_lua_push_py_array<TTH<float> >(obj);
 
-      if(PyArray_EquivTypenums(PyArray_TYPE(obj), NPY_INT8))
-        return typed_push_py_array<TTH<int8_t> >(obj);
+      if(PyArray_EquivTypenums(PyArray_TYPE(obj), TTH<int8_t>::numpyTypenum()))
+        return typed_lua_push_py_array<TTH<int8_t> >(obj);
 
       PyErr_Format(PyExc_RuntimeError,
         "TorchWrapper: lua_push_py_array, cannot handle Numpy dtype %%s",
@@ -231,13 +235,100 @@ class TorchWrapperOp(theano.Op):
       return false;
     }
 
-    static bool lua_pop_py_array(PyArrayObject** obj) {
-      if(luaT_isudata(L, -1, "torch.FloatTensor")) {
-        // TODO ...
+    template<typename Tensor>
+    static bool isContiguous(const Tensor* tensor) {
+      long z = 1;
+      int d;
+      for(d = tensor->nDimension - 1; d >= 0; d--) {
+        if(tensor->size[d] != 1) {
+          if(tensor->stride[d] == z)
+            z *= tensor->size[d];
+          else
+            return false;
+        }
+      }
+      return true;
+    }
 
+    template<typename Base>
+    static bool typed_lua_pop_py_array(PyArrayObject** obj) {
+      typename Base::Tensor* tensor = (typename Base::Tensor*) luaT_checkudata(L, 1, Base::luaType());
+      if(!tensor) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, luaT_checkudata returned NULL");
+        return false;
       }
 
-      // THTensor *values_ = luaT_checkudata(L, 1, torch_Tensor) ...
+      // Cases:
+      // 1. *obj == NULL. -> We need a new PyArrayObject.
+      // 2. *obj != NULL. not sure... reuse? overwrite?
+      //   To give Lua the possibility to reuse it, we could pass the old as a param to the Lua func?
+      //   Or Lua could store the last return as a global? -> Then we cannot overtake the mem here.
+      //   To make it possible to reuse it later by Lua, we need to let Lua own the memory.
+      //   To make sure it does not go out of scope, we must use LUA_REGISTRYINDEX.
+
+      // For now, very simple:
+      if(*obj) Py_CLEAR(*obj);  // don't reuse any old one
+
+      if(!tensor->storage) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, tensor->storage == NULL");
+        return false;
+      }
+      if(tensor->storageOffset != 0) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, tensor->storageOffset != 0, cannot handle that case yet");
+        return false;
+      }
+      if(tensor->storage->allocator != &THDefaultAllocator) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, storage uses unknown mem allocator, cannot overtake memory");
+        return false;
+      }
+      if(!(tensor->storage->flag & TH_STORAGE_REFCOUNTED)) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, storage not refcounted, not sure where memory came from");
+        return false;
+      }
+      if(!(tensor->storage->flag & TH_STORAGE_FREEMEM)) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, storage does not own memory, not sure where memory came from");
+        return false;
+      }
+      if(tensor->storage->refcount != 1) {
+        PyErr_Format(PyExc_RuntimeError,
+          "TorchWrapper: typed_lua_pop_py_array, storage refcount is %%i, cannot overtake memory",
+          tensor->storage->refcount);
+        return false;
+      }
+      tensor->storage->flag &= ~(TH_STORAGE_RESIZABLE | TH_STORAGE_FREEMEM);  // we overtake the memory
+      typename Base::type* data = tensor->storage->data;
+
+      int ndim = tensor->nDimension;
+      std::vector<long> shapes(ndim);
+      std::vector<long> strides(ndim);
+      for(int i = 0; i < ndim; ++i) {
+        shapes[i] = tensor->size[i];
+        strides[i] = tensor->stride[i] * sizeof(typename Base::type);  // Numpy strides are in bytes
+      }
+
+      int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_WRITEABLE | NPY_ARRAY_OWNDATA;
+      if(isContiguous(tensor))
+        flags |= NPY_ARRAY_C_CONTIGUOUS;
+
+      *obj = (PyArrayObject*) PyArray_New(
+        /*subtype*/&PyArray_Type,
+        ndim, &shapes[0], Base::numpyTypenum(), &strides[0], data, /*itemsize*/0,
+        flags, /*obj*/NULL);
+      if(*obj) return false;
+
+      lua_pop(L, 1);
+      return true;
+    }
+
+    static bool lua_pop_py_array(PyArrayObject** obj) {
+      if(luaT_isudata(L, -1, "torch.FloatTensor"))
+        return typed_lua_pop_py_array<TTH<float> >(obj);
 
       PyErr_Format(PyExc_TypeError,
         "TorchWrapper lua_pop_py_array: got type %%s",
