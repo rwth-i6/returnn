@@ -338,7 +338,7 @@ class AttentionList(AttentionBase):
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
     if self.attrs['align']:
       self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "Q_%d" % i))
-      self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "B_%d" % i))
+      self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -357,9 +357,7 @@ class AttentionList(AttentionBase):
       W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
       b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
-      C = T.tanh(T.dot(self.base[i].output[::direction], W_att_bs) + b_att_bs)
-      c_i = T.cast(self.base[i].index.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-      self.add_input(C - T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0), 'C_%d' % i)
+      self.add_input(T.tanh(T.dot(self.base[i].output[::direction], W_att_bs) + b_att_bs), 'C_%d' % i)
       self.add_input(T.cast(self.base[i].index[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
@@ -384,7 +382,8 @@ class AttentionList(AttentionBase):
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
-    h_p = T.tanh(T.dot(y_p, W_att_re) + b_att_re) if g == 0 else self.glimpses[-1]
+    c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
+    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[-1]
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
@@ -406,12 +405,12 @@ class AttentionList(AttentionBase):
           forward = T.constant(0.0, 'float32') + q_p # (t-1,n-1) -> (t,n)
           loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],T.zeros_like(Q[0])) # (t-1,n) -> (t,n)
           opt = T.stack([loop,forward])
-          k_out = T.argmin(opt,axis=0)
-          return opt[k_out] + D[i], k_out
-        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],'float32')], non_sequences=[Q,K,-T.log(w_i)],
-                                outputs_info=[T.zeros_like(Q[0]),T.zeros_like(K[0])])
-        updates[self.custom_vars['Q_%d'%i]] = output[0]
-        updates[self.custom_vars['K_%d'%i]] = output[1]
+          k_out = T.cast(T.argmin(opt,axis=0),'int32')
+          return opt[k_out,T.arange(opt.shape[1])] + D[i], k_out
+        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i)],
+                                outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
+        updates[self.state_vars['Q_%d'%i]] = output[0]
+        updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
     return inp, updates
 

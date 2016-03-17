@@ -673,14 +673,16 @@ class RecurrentUnitLayer(Layer):
           self.aux = outputs[unit.n_act:]
     if self.attrs['attention_store']:
       self.attention = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('att_') ]
-      z = theano.printing.Print("a", attrs=['shape'])(z)
+      #z = theano.printing.Print("a", attrs=['shape'])(z)
     if self.attrs['attention_align']:
-      bp = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if self.recurrent_transform.state_vars[i].startswith('K_') ]
-      def backtrace(k,i_p,k_p):
-        return i_p - k[i_p], k
+      bp = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]
+      def backtrace(k,i_p):
+        return i_p - k[i_p,T.arange(k.shape[1])]
       self.alignment = []
       for K in bp:
-        self.alignment.append(theano.scan(backtrace, sequences=[K.dimshuffle(1,0)], outputs_info=[T.zeros_like(K[:,0]),T.zeros((K.shape[0]-1,),'int32')]))
+        aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(2,0,1)],
+                             outputs_info=[T.cast(K.shape[2]-1,'int32') + T.zeros((K.shape[1],),'int32')])
+        self.alignment.append(aln[0])
 
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)
