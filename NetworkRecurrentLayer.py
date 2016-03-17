@@ -672,7 +672,7 @@ class RecurrentUnitLayer(Layer):
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
     if self.attrs['attention_store']:
-      self.attention = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('att_') ]
+      self.attention = [ self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
       #z = theano.printing.Print("a", attrs=['shape'])(z)
     if self.attrs['attention_align']:
       bp = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]

@@ -471,8 +471,10 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         elif extract == 'attention':
           assert param
-          #source.append(tba.reshape((tba.shape[0] * tba.shape[1], tba.shape[2]))) # * T.cast(self.testnet.hidden[param].base[0].index,'float32'))
-          source.append(self.testnet.hidden[param].aux[-1].dimshuffle(0,2,1) * T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].aux[-1].shape[1],axis=2))
+          idx = T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].attention[0].shape[2],axis=2)
+          source.append(self.testnet.hidden[param].attention[0] * idx)
+        elif extract == 'alignment':
+          source.append(self.testnet.hidden[param].alignment[0].dimshuffle(0,2,1) * T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].alignment[0].shape[1],axis=2))
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
