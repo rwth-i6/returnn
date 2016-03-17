@@ -2191,6 +2191,7 @@ class TorchLayer(_NoOpLayer):
 
     from TorchWrapper import TorchWrapperOp
     op = TorchWrapperOp(
+      name=self.name,
       in_info=args_info,
       # Hardcoded output shape for now, only feature dim can be configured.
       out_info=[{"n_out": n_out, "ndim": 3, "shape": ((0, 0), (0, 1), n_out),

@@ -66,9 +66,9 @@ def _init():
 
 
 class TorchWrapperOp(theano.Op):
-  __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func")
+  __props__ = ("in_info", "out_info", "lua_file", "lua_fw_func", "lua_bw_func", "name")
 
-  def __init__(self, in_info, out_info, lua_fw_func, lua_bw_func=None, lua_file=None):
+  def __init__(self, in_info, out_info, lua_fw_func, lua_bw_func=None, lua_file=None, name=None):
     _init()
     super(TorchWrapperOp, self).__init__()
     self.in_info = make_hashable(in_info)
@@ -76,6 +76,7 @@ class TorchWrapperOp(theano.Op):
     self.lua_file = lua_file  # if none, expect inplace definition
     self.lua_fw_func = lua_fw_func
     self.lua_bw_func = lua_bw_func
+    self.name = name or "<anonymous>"
     for info in self.in_info + self.out_info:
       assert "ndim" in info
       assert "shape" in info
@@ -270,7 +271,7 @@ class TorchWrapperOp(theano.Op):
     }
 
     template<typename Base>
-    static bool typed_lua_pop_py_array(PyArrayObject** obj) {
+    static bool typed_lua_pop_py_array(PyArrayObject** obj, const char* errmsg) {
       typename Base::Tensor* tensor = (typename Base::Tensor*) luaT_checkudata(L, -1, Base::luaType());
       if(!tensor) {
         PyErr_Format(PyExc_RuntimeError,
@@ -291,33 +292,33 @@ class TorchWrapperOp(theano.Op):
 
       if(!tensor->storage) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, tensor->storage == NULL");
+          "TorchWrapper: %%s, typed_lua_pop_py_array, tensor->storage == NULL", errmsg);
         return false;
       }
       if(tensor->storageOffset != 0) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, tensor->storageOffset != 0, cannot handle that case yet");
+          "TorchWrapper: %%s, typed_lua_pop_py_array, tensor->storageOffset != 0, cannot handle that case yet", errmsg);
         return false;
       }
       if(tensor->storage->allocator != &THDefaultAllocator) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, storage uses unknown mem allocator, cannot overtake memory");
+          "TorchWrapper: %%s, typed_lua_pop_py_array, storage uses unknown mem allocator, cannot overtake memory", errmsg);
         return false;
       }
       if(!(tensor->storage->flag & TH_STORAGE_REFCOUNTED)) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, storage not refcounted, not sure where memory came from");
+          "TorchWrapper: %%s, typed_lua_pop_py_array, storage not refcounted, not sure where memory came from", errmsg);
         return false;
       }
       if(!(tensor->storage->flag & TH_STORAGE_FREEMEM)) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, storage does not own memory, not sure where memory came from");
+          "TorchWrapper: %%s, typed_lua_pop_py_array, storage does not own memory, not sure where memory came from", errmsg);
         return false;
       }
       if(tensor->storage->refcount != 1) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: typed_lua_pop_py_array, storage refcount is %%i, cannot overtake memory",
-          tensor->storage->refcount);
+          "TorchWrapper: %%s, typed_lua_pop_py_array, storage refcount is %%i, cannot overtake memory",
+          errmsg, tensor->storage->refcount);
         return false;
       }
       tensor->storage->flag &= ~(TH_STORAGE_RESIZABLE | TH_STORAGE_FREEMEM);  // we overtake the memory
@@ -342,7 +343,7 @@ class TorchWrapperOp(theano.Op):
       if(!*obj) {
         if(!PyErr_Occurred())
           PyErr_Format(PyExc_RuntimeError,
-            "TorchWrapper: typed_lua_pop_py_array, failed to create PyArrayObject");
+            "TorchWrapper: %%s, typed_lua_pop_py_array, failed to create PyArrayObject", errmsg);
         return false;
       }
 
@@ -350,13 +351,13 @@ class TorchWrapperOp(theano.Op):
       return true;
     }
 
-    static bool lua_pop_py_array(PyArrayObject** obj) {
+    static bool lua_pop_py_array(PyArrayObject** obj, const char* errmsg) {
       if(luaT_isudata(L, -1, "torch.FloatTensor"))
-        return typed_lua_pop_py_array<TTH<float> >(obj);
+        return typed_lua_pop_py_array<TTH<float> >(obj, errmsg);
 
       PyErr_Format(PyExc_TypeError,
-        "TorchWrapper lua_pop_py_array: got type %%s",
-        lua_typename(L, lua_type(L, -1)));
+        "TorchWrapper: %%s, lua_pop_py_array: got type %%s",
+        errmsg, lua_typename(L, lua_type(L, -1)));
       return false;
     }
 
@@ -370,7 +371,7 @@ class TorchWrapperOp(theano.Op):
       // if(CudaNdarray_Check(obj)) {}
 
       PyErr_Format(PyExc_TypeError,
-        "TorchWrapper lua_push_py_array: cannot handle type %%s",
+        "TorchWrapper: lua_push_py_array: cannot handle type %%s",
         obj->ob_type->tp_name);
       return false;
     }
@@ -462,20 +463,23 @@ class TorchWrapperOp(theano.Op):
       const char* user_func_str = "return " %(user_func_str)s;
       if((luaL_loadstring(L, user_func_str) || lua_pcall(L, 0, 1, 0)) != 0) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: Error while getting lua_fw_func: %%s\\nCode:\\n%%s\\n",
+          "TorchWrapper: Error while getting %%s lua_fw_func: %%s\\nCode:\\n%%s\\n",
+          %(op_name)s,
           safe_lua_tostring(L, -1),
           user_func_str);
         %(fail)s;
       }
       if(!lua_isfunction(L, -1)) {
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: lua_fw_func is not a function but a %%s",
+          "TorchWrapper: %%s lua_fw_func is not a function but a %%s",
+          %(op_name)s,
           lua_typename(L, lua_type(L, -1)));
         %(fail)s;
       }
       lua_user_func_ref_%(name)s = luaL_ref(L, LUA_REGISTRYINDEX);
     """ % {
       'name': name, 'fail': sub['fail'],
+      'op_name': escape_c_str(self.name),
       "user_func_str": escape_c_str(self.lua_fw_func),
       "_torch_base_dir": escape_c_str(_torch_base_dir),
       "_torch_share_lua": escape_c_str(_torch_share_lua),
@@ -546,8 +550,8 @@ class TorchWrapperOp(theano.Op):
           luaT_stackdump(L);
         }
         PyErr_Format(PyExc_RuntimeError,
-          "TorchWrapper: Error calling lua_fw_func, error code %%i:\\n%%s",
-          pcall_ret, errmsg);
+          "TorchWrapper: Error calling %%s lua_fw_func, error code %%i:\\n%%s",
+          %(op_name)s, pcall_ret, errmsg);
         lua_pop(L, 2);  // remove error and debug.traceback from the stack
         %(fail)s;
       }
@@ -556,13 +560,13 @@ class TorchWrapperOp(theano.Op):
       lua_gc(L, LUA_GCCOLLECT, 0);
       // Now collect all the returned objects.
       for(int i = %(n_outputs)i - 1; i >= 0; --i) {
-        if(!lua_pop_py_array(outputs[i]))
+        if(!lua_pop_py_array(outputs[i], %(op_name)s))
           %(fail)s;
 
         if(PyArray_NDIM(*outputs[i]) != out_ndims[i]) {
           PyErr_Format(PyExc_ValueError,
-            "TorchWrapper: lua_fw_func, in output %%i, got wrong ndim = %%i, expected %%i",
-            i, PyArray_NDIM(*outputs[i]), out_ndims[i]);
+            "TorchWrapper: %%s, lua_fw_func, in output %%i, got wrong ndim = %%i, expected %%i",
+            %(op_name)s, i, PyArray_NDIM(*outputs[i]), out_ndims[i]);
           %(fail)s;
         }
 
@@ -571,8 +575,8 @@ class TorchWrapperOp(theano.Op):
           if(out_shapes_flat[out_shape_idx] >= 0) {  // otherwise we could infer it via input dim. TODO...
             if(PyArray_DIM(*outputs[i], j) != out_shapes_flat[out_shape_idx]) {
               PyErr_Format(PyExc_ValueError,
-                "TorchWrapper: lua_fw_func, in output %%i with ndim %%i, got wrong shape[%%i] = %%i, expected %%i",
-                i, out_ndims[i], j, PyArray_DIM(*outputs[i], j), out_shapes_flat[out_shape_idx]);
+                "TorchWrapper: %%s lua_fw_func, in output %%i with ndim %%i, got wrong shape[%%i] = %%i, expected %%i",
+                %(op_name)s, i, out_ndims[i], j, PyArray_DIM(*outputs[i], j), out_shapes_flat[out_shape_idx]);
               %(fail)s;
             }
           }
@@ -581,6 +585,7 @@ class TorchWrapperOp(theano.Op):
       }
     """ % {
       'name': name, 'fail': sub['fail'],
+      'op_name': escape_c_str(self.name),
       'n_inputs': len(inputs), 'n_outputs': len(outputs),
       'input_var_names_str': ", ".join(["%s" % inp for inp in inputs]),
       'output_var_names_str': ", ".join(["&%s" % out for out in outputs]),
@@ -604,6 +609,7 @@ class TorchWrapperOp(theano.Op):
     out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
 
     grad_op = TorchWrapperOp(
+      name="grad-of-%s" % self.name,
       in_info=self.in_info + self.out_info,  # inputs + output_grads
       out_info=out_info,
       lua_file=self.lua_file,
