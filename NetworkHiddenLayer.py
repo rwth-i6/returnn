@@ -875,10 +875,10 @@ class StateToAct(ForwardLayer):
       self.act[0] = T.tanh(self.act[1])
     else:
       self.make_output(self.act[0])
-    if 'target' in self.attrs:
-      self.output = self.output.repeat(self.index.shape[0],axis=0)
-    else:
-      self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
+    #if 'target' in self.attrs:
+    #  self.output = self.output.repeat(self.index.shape[0],axis=0)
+    #else:
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
 class TimeConcatLayer(HiddenLayer):
