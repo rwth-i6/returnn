@@ -1168,7 +1168,7 @@ class Device(object):
     # self.i == self.j["data"]
     gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs + [(network.epoch, self.epoch_var)]
+    return gs #+ [(network.epoch, self.epoch_var)]
   def make_sprint_givens(self, network):
     return self.make_input_givens(network)
   def make_ctc_givens(self, network):
