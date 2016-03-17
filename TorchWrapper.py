@@ -446,7 +446,17 @@ class TorchWrapperOp(theano.Op):
           %(fail)s;
         }
 
-        // torch.setheaptracking(true)  ?
+        // https://github.com/torch/image/issues/107
+        lua_getglobal(L, "torch");
+        lua_getfield(L, -1, "setheaptracking");
+        lua_replace(L, -2);
+        lua_pushboolean(L, 1);
+        if(lua_pcall(L, 1, 0, 0) != 0) {
+          PyErr_Format(PyExc_RuntimeError,
+            "TorchWrapper: torch.setheaptracking(true) error: %%s",
+            safe_lua_tostring(L, -1));
+          %(fail)s;
+        }
       }
 
       const char* user_func_str = "return " %(user_func_str)s;
@@ -515,14 +525,18 @@ class TorchWrapperOp(theano.Op):
         }
       }
 
+      // First push debug.traceback. This will be our pcall error handler.
       lua_getglobal(L, "debug");
       lua_getfield(L, -1, "traceback");
       lua_replace(L, -2);
+      // Now the function itself which we want to call.
       lua_rawgeti(L, LUA_REGISTRYINDEX, lua_user_func_ref_%(name)s);
+      // Now all the arguments.
       for(int i = 0; i < %(n_inputs)i; ++i) {
         if(!lua_push_py_array(inputs[i]))
           %(fail)s;
       }
+      // And the call itself.
       pcall_ret = lua_pcall(L, %(n_inputs)i, %(n_outputs)i, /*error handler*/ - %(n_inputs)i - 2);
       if(pcall_ret != 0) {
         const char* errmsg = lua_tostring(L, -1);
@@ -537,6 +551,10 @@ class TorchWrapperOp(theano.Op):
         lua_pop(L, 2);  // remove error and debug.traceback from the stack
         %(fail)s;
       }
+      // We don't want that there are any references floating around to the returned objects.
+      // We want to overtake the memory of THStorage and we check that refcount == 1.
+      lua_gc(L, LUA_GCCOLLECT, 0);
+      // Now collect all the returned objects.
       for(int i = %(n_outputs)i - 1; i >= 0; --i) {
         if(!lua_pop_py_array(outputs[i]))
           %(fail)s;
@@ -559,7 +577,7 @@ class TorchWrapperOp(theano.Op):
             }
           }
         }
-        lua_pop(L, 1); /* remove debug.traceback from the stack */
+        lua_pop(L, 1); // remove debug.traceback from the stack
       }
     """ % {
       'name': name, 'fail': sub['fail'],
