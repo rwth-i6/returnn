@@ -422,12 +422,12 @@ class AttentionTime(AttentionList):
   name = "attention_time"
   def create_vars(self):
     super(AttentionTime,self).create_vars()
-    self.base = [T.concatenate(b.output,axis=2) for b in self.layer.base]
+    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
     self.base[0].index = self.layer.base[0].index
     self.base[0].output = self.base[0]
 
   def default_updates(self):
-    self.base = [T.concatenate(self.layer.base,axis=2)]
+    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
     self.glimpses = [ [] ] * len(self.base)
     self.n_glm = max(self.attrs['glimpse'],1)
     return { self.n : self.n + T.constant(1,'float32') }
