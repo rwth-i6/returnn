@@ -383,7 +383,7 @@ class AttentionList(AttentionBase):
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
     c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[-1]
+    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[i][-1]
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
