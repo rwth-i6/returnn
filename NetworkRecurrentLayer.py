@@ -677,12 +677,13 @@ class RecurrentUnitLayer(Layer):
     if self.attrs['attention_align']:
       bp = [ self.aux[i] for i,v in enumerate(sorted(self.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]
       def backtrace(k,i_p):
-        return i_p - k[i_p,T.arange(k.shape[1])]
+        return T.maximum(i_p - k[i_p,T.arange(k.shape[1])],0)
       self.alignment = []
-      for K in bp:
-        aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(2,0,1)],
-                             outputs_info=[T.cast(K.shape[2]-1,'int32') + T.zeros((K.shape[1],),'int32')])
-        self.alignment.append(aln[0])
+      for K in bp: # K: NTB
+        aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
+                             outputs_info=[T.cast(K.shape[0]-1,'int32') + T.zeros((K.shape[2],),'int32')])
+        #aln = theano.printing.Print("aln", attrs=['shape'])(aln)
+        self.alignment.append(aln) # TB
 
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)

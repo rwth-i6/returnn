@@ -474,8 +474,8 @@ class Device(object):
           idx = T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].attention[0].shape[2],axis=2)
           source.append(self.testnet.hidden[param].attention[0] * idx)
         elif extract == 'alignment':
-          idx = T.cast(self.testnet.hidden[param].base[0].index,'float32').dimshuffle(0,1)
-          source.append(self.testnet.hidden[param].alignment[0] * idx)
+          idx = T.cast(self.testnet.hidden[param].base[0].index,'float32').dimshuffle(0,1,'x')
+          source.append(self.testnet.hidden[param].alignment[0].dimshuffle(0,1,'x') * idx)
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
