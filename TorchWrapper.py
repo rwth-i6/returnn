@@ -190,21 +190,6 @@ class TorchWrapperOp(theano.Op):
       static const char* luaType() { return "torch.CharTensor"; }
       static int numpyTypenum() { return NPY_INT8; };
     };
-    /*  // TODO?
-    template<> struct THCuda {
-      typedef float type;
-      typedef THCudaTensor Tensor;
-      typedef THCudaStorage Storage;
-      static Storage* Storage_newWithData(type* data, size_t size) { return THCudaStorage_newWithData(data, size); }
-      static void Storage_free(Storage* storage) { THCudaStorage_free(storage); }
-      static void Storage_clearFlag(Storage* storage, const char flag) { THCudaStorage_clearFlag(storage, flag); }
-      static Tensor* Tensor_newWithStorage(
-          Storage* storage, long storageOffset, THLongStorage* sizes, THLongStorage* strides) {
-        return THCudaTensor_newWithStorage(storage, storageOffset, sizes, strides);
-      }
-      static const char* luaType() { return "torch.CudaTensor"; }
-    };
-    */
 
     template<typename Base>
     static bool typed_lua_push_py_array(typename Base::type* data, size_t size, int ndim, long* shapes, long* strides) {
@@ -358,21 +343,6 @@ class TorchWrapperOp(theano.Op):
       PyErr_Format(PyExc_TypeError,
         "TorchWrapper: %%s, lua_pop_py_array: got type %%s",
         errmsg, lua_typename(L, lua_type(L, -1)));
-      return false;
-    }
-
-    static bool lua_push_py_array(PyObject* obj) {
-      // support CudaNdarray (Theano CUDA) and PyArrayObject (Numpy)
-
-      if(PyArray_Check(obj))
-        return lua_push_py_array((PyArrayObject*) obj);
-
-      // https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
-      // if(CudaNdarray_Check(obj)) {}
-
-      PyErr_Format(PyExc_TypeError,
-        "TorchWrapper: lua_push_py_array: cannot handle type %%s",
-        obj->ob_type->tp_name);
       return false;
     }
     """ % {}
@@ -645,6 +615,46 @@ class GpuTorchWrapperOp(GpuOp, TorchWrapperOp):
   # http://www.deeplearning.net/software/theano/extending/cop.html#Op.c_code
   # http://docs.scipy.org/doc/numpy/reference/c-api.array.html
   # https://docs.scipy.org/doc/numpy-1.9.2/reference/c-api.types-and-structures.html
+
+  def c_support_code(self):
+    cpu_code = super(GpuTorchWrapperOp, self).c_support_code()
+    return """
+    extern "C" {
+    #include "THC.h"
+    #include "THCTensor.h"
+    }
+
+    %(cpu_code)s
+
+    // TODO?
+    template<> struct THCuda {
+      typedef float type;
+      typedef THCudaTensor Tensor;
+      typedef THCudaStorage Storage;
+      static Storage* Storage_newWithData(type* data, size_t size) { return THCudaStorage_newWithData(data, size); }
+      static void Storage_free(Storage* storage) { THCudaStorage_free(storage); }
+      static void Storage_clearFlag(Storage* storage, const char flag) { THCudaStorage_clearFlag(storage, flag); }
+      static Tensor* Tensor_newWithStorage(
+          Storage* storage, long storageOffset, THLongStorage* sizes, THLongStorage* strides) {
+        return THCudaTensor_newWithStorage(storage, storageOffset, sizes, strides);
+      }
+      static const char* luaType() { return "torch.CudaTensor"; }
+    };
+
+    // Generic function. support CudaNdarray (Theano CUDA) and PyArrayObject (Numpy).
+    static bool lua_push_py_array(PyObject* obj) {
+      if(PyArray_Check(obj))
+        return lua_push_py_array((PyArrayObject*) obj);
+
+      // https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
+      if(CudaNdarray_Check(obj)) {}  // TODO...
+
+      PyErr_Format(PyExc_TypeError,
+        "TorchWrapper: lua_push_py_array: cannot handle type %%s",
+        obj->ob_type->tp_name);
+      return false;
+    }
+    """ % {"cpu_code": cpu_code}
 
   def c_libraries(self):
     return super(GpuTorchWrapperOp, self).c_libraries() + ["THC"]
