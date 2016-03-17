@@ -819,3 +819,41 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
   co = compile(source, source_filename, "exec")
   user_global_ns["__package__"] = __package__  # important so that imports work when CRNN itself is loaded as a package
   eval(co, user_global_ns, user_ns)
+
+
+class FrozenDict(dict):
+  def __setitem__(self, key, value):
+    raise ValueError("FrozenDict cannot be modified")
+
+  def __hash__(self):
+    return hash(tuple(sorted(self.items())))
+
+
+def make_hashable(obj):
+  """
+  Theano needs hashable objects in some cases, e.g. the properties of Ops.
+  This converts all objects as such, i.e. into immutable frozen types.
+  """
+  if isinstance(obj, dict):
+    return FrozenDict([make_hashable(item) for item in obj.items()])
+  elif isinstance(obj, (list, tuple)):
+    return tuple([make_hashable(item) for item in obj])
+  elif isinstance(obj, (str, unicode, float, int, long)):
+    return obj
+  elif obj is None:
+    return obj
+  else:
+    assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+
+
+def make_dll_name(basename):
+  if sys.platform == "darwin":
+    return "lib%s.dylib" % basename
+  elif sys.platform == "win32":
+    return "%s.dll" % basename
+  else:  # Linux, Unix
+    return "lib%s.so" % basename
+
+
+def escape_c_str(s):
+  return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n").replace("\"", "\\\"").replace("'", "\\'")

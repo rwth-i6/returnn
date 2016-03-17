@@ -169,6 +169,17 @@ def try_register_canonicalize(f):
     return f  # just ignore
 
 
+def try_register_gpu_opt(base_op_class):
+  def do_register_gpu_opt(f):
+    from theano.sandbox.cuda import cuda_available, register_opt
+    from theano.gof.opt import local_optimizer
+    f = local_optimizer([base_op_class])(f)
+    if cuda_available:
+      f = register_opt()(f)
+    return f  # just ignore
+  return do_register_gpu_opt
+
+
 class GradDiscardOutOfBound(ViewOp):
   # See also theano.gradient.GradClip for a similar Op.
   __props__ = ()
@@ -426,3 +437,7 @@ def indices_in_flatten_array(ndim, shape, *args):
   for i in range(1, ndim):
     indices += indices_per_axis[i]
   return indices
+
+def circular_convolution(a, b):
+  from theano.sandbox.cuda.fftconv import cufft,cifft
+  return cuifft(cufft(a) * cufft(b))
