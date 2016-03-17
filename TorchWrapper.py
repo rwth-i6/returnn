@@ -581,8 +581,8 @@ class TorchWrapperOp(theano.Op):
             }
           }
         }
-        lua_pop(L, 1); // remove debug.traceback from the stack
       }
+      lua_pop(L, 1); // remove debug.traceback from the stack
     """ % {
       'name': name, 'fail': sub['fail'],
       'op_name': escape_c_str(self.name),
