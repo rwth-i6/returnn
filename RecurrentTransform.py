@@ -398,16 +398,15 @@ class AttentionList(AttentionBase):
         updates[self.state_vars['att_%d'%i]] = w_i
       if self.attrs['align']:
         dst = -T.log(w_i)
-        inf = T.cast(1e30,'float32')
         Q = self.item("Q", i)
-        K = self.item("K", i)
-        def dtw(i,q_p,b_p,Q,D):
-          forward = T.constant(0.0, 'float32') + q_p # (t-1,n-1) -> (t,n)
-          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],T.zeros_like(Q[0])) # (t-1,n) -> (t,n)
+        inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32')
+        def dtw(i,q_p,b_p,Q,D,inf):
+          forward = T.constant(0.0, 'float32') + T.switch(T.gt(i,0),q_p, inf) # (t-1,n-1) -> (t,n)
+          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],inf) # (t-1,n) -> (t,n)
           opt = T.stack([loop,forward])
           k_out = T.cast(T.argmin(opt,axis=0),'int32')
           return opt[k_out,T.arange(opt.shape[1])] + D[i], k_out
-        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i)],
+        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i),inf],
                                 outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')

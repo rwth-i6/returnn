@@ -177,44 +177,6 @@ class LSTMC(Unit):
     assert len(result) == len(outputs_info)
     return result
 
-
-class LSTMD(Unit):
-  def __init__(self, n_units, depth, **kwargs):
-    super(LSTMD, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
-
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    assert self.parent.recurrent_transform
-    import NetworkTwoDLayers
-    NetworkTwoDLayers.TwoDLSTMConvLayer(x,)
-    op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
-    custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
-    initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
-
-    # See OpLSTMCustom.LSTMCustomOp.
-    # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
-    # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
-    op_res = op(z[::-(2 * go_backwards - 1)],
-                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
-    result = [ op_res[0], op_res[2].dimshuffle('x',0,1) ] + op_res[3:]
-    assert len(result) == len(outputs_info)
-    return result
-
-
-class LSTMQ(Unit):
-  def __init__(self, n_units, depth, **kwargs):
-    super(LSTMQ, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
-
-  def step(self, i_t, x_t, z_t, z_p, h_p, s_p):
-    #result = LSTMOpCellInstance(z_t+z_p,self.W_re,s_p,i_t)
-    #return [ result[0], result[2] ]
-
-    #proxy = LSTMP(self.n_units, self.depth)
-    #res = proxy.scan(self.step, x_t.dimshuffle('x',0,1), z_t.dimshuffle('x',0,1), self.non_sequences, i_t.dimshuffle('x',0), [h_p,s_p], self.W_re, self.W_in, self.b, self.go_backwards, self.truncate_gradient)
-
-    res = LSTMOpInstance((z_t+z_p).dimshuffle('x',0,1), self.W_re, s_p, i_t.dimshuffle('x',0))
-    return [res[0][-1],res[2]]
-
-
 class GRU(Unit):
   def __init__(self, n_units, depth, **kwargs):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
@@ -684,8 +646,9 @@ class RecurrentUnitLayer(Layer):
       for K in bp: # K: NTB
         aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
                              outputs_info=[ T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
-        #aln = theano.printing.Print("aln", attrs=['shape'])(aln)
+        aln = theano.printing.Print("aln")(aln)
         self.alignment.append(aln) # TB
+
 
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)
