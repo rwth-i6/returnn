@@ -383,7 +383,7 @@ class AttentionList(AttentionBase):
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
     c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[-1]
+    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[i][-1]
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
@@ -398,16 +398,15 @@ class AttentionList(AttentionBase):
         updates[self.state_vars['att_%d'%i]] = w_i
       if self.attrs['align']:
         dst = -T.log(w_i)
-        inf = T.cast(1e30,'float32')
         Q = self.item("Q", i)
-        K = self.item("K", i)
-        def dtw(i,q_p,b_p,Q,D):
-          forward = T.constant(0.0, 'float32') + q_p # (t-1,n-1) -> (t,n)
-          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],T.zeros_like(Q[0])) # (t-1,n) -> (t,n)
+        inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32')
+        def dtw(i,q_p,b_p,Q,D,inf):
+          forward = T.constant(0.0, 'float32') + T.switch(T.gt(i,0),q_p, inf) # (t-1,n-1) -> (t,n)
+          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],inf) # (t-1,n) -> (t,n)
           opt = T.stack([loop,forward])
           k_out = T.cast(T.argmin(opt,axis=0),'int32')
           return opt[k_out,T.arange(opt.shape[1])] + D[i], k_out
-        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i)],
+        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i),inf],
                                 outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
