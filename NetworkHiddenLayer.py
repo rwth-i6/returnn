@@ -484,6 +484,7 @@ class ChunkingSublayer(_NoOpLayer):
                chunk_size, chunk_step,
                chunk_distribution="uniform",
                add_left_context=0,
+               add_right_context=0,
                normalize_output=True,
                trainable=False,
                **kwargs):
@@ -496,6 +497,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
+    self.set_attr('add_right_context', add_right_context)
     self.set_attr('normalize_output', normalize_output)
     self.set_attr('trainable', trainable)
 
@@ -534,14 +536,21 @@ class ChunkingSublayer(_NoOpLayer):
         t_start_c = T.maximum(t_start - add_left_context, 0)
       else:
         t_start_c = t_start
-      chunk = source[t_start_c:t_end]
-      chunk_index = index[t_start_c:t_end]
+      if add_right_context > 0:
+        t_end_c = T.minimum(t_end + add_right_context, source.shape[0])
+      else:
+        t_end_c = t_end
+      chunk = source[t_start_c:t_end_c]
+      chunk_index = index[t_start_c:t_end_c]
       layer = make_sublayer(source=chunk, index=chunk_index, name="%s_sublayer" % self.name)
       l_output = layer.output
       l_index_f32 = T.cast(layer.index, dtype="float32")
       if add_left_context > 0:
         l_output = l_output[t_start - t_start_c:]
         l_index_f32 = l_index_f32[t_start - t_start_c:]
+      if add_right_context > 0:
+        l_output = l_output[:l_output.shape[0] + t_end - t_end_c]
+        l_index_f32 = l_index_f32[:l_index_f32.shape[0] + t_end - t_end_c]
       if chunk_distribution == "uniform": pass  # just leave it as it is
       elif chunk_distribution == "triangle":
         ts = T.arange(1, t_end - t_start + 1)
