@@ -186,7 +186,7 @@ class LearningRateControl(object):
 
   def load(self):
     s = open(self.filename).read()
-    self.epochData = eval(s, {}, ObjAsDict(self))
+    self.epochData = eval(s, {"nan": float("nan")}, ObjAsDict(self))
 
 
 class ConstantLearningRate(LearningRateControl):
