@@ -617,6 +617,10 @@ class GenericLstmLayer(_NoOpLayer):
     h = h[::direction]
     self.make_output(h)
 
+    self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+    if self.out_sublayer:
+      self.params.update({"out_sublayer." + name: param for (name, param) in self.out_sublayer.params.items()})
+
 
 class AssociativeLstmLayer(HiddenLayer):
   """
