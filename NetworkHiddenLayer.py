@@ -571,6 +571,32 @@ class ChunkingSublayer(_NoOpLayer):
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
 
 
+class RBFLayer(_NoOpLayer):
+  """
+  Use radial basis function.
+  """
+  layer_class = "rbf"
+
+  def __init__(self, n_out, **kwargs):
+    super(RBFLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out, name="W_in"))
+    self.b = self.add_param(self.create_bias(n_out, name="b"))
+
+    # Note: The naive squared distance (x - W)**2 would take too much memory (time*batch*n_in*n_out).
+    # d = self.W_in.dimshuffle('x', 'x', 0, 1) - x.dimshuffle(0, 1, 2, 'x')  # time,batch,n_in,n_out
+    # ds = T.sum(d, axis=2)
+    # Thus, we need to avoid that.
+    # Another form of the same is sum(x**2 + W**2 - 2*W*x, axis=<n_in>).
+    x_sqr = T.sum(T.sqr(x), axis=2)  # time,batch
+    W_sqr = T.sum(T.sqr(self.W_in), axis=0)  # n_out
+    xW = T.dot(x, self.W_in)  # time,batch,n_out
+    ds = x_sqr.dimshuffle(0, 1, 'x') + W_sqr.dimshuffle('x', 'x', 0) - numpy.float32(2) * xW  # time,batch,n_out
+    w = T.nnet.sigmoid(self.b).dimshuffle('x', 'x', 0)  # time,batch,n_out
+    self.output = T.exp(- w * ds)
+
+
 class TimeBlurLayer(_NoOpLayer):
   layer_class = "time_blur"
   recurrent = True  # Force no frame shuffling or so.
