@@ -550,6 +550,11 @@ class GenericLstmLayer(_NoOpLayer):
       assert isinstance(out_sublayer, dict)
       self.set_attr('out_sublayer', out_sublayer.copy())
 
+    from NetworkHiddenLayer import concat_sources
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)  # (n_time,n_batch,n_in)
+    n_time = x.shape[0]
+    n_batch = x.shape[1]
+
     from NetworkBaseLayer import SourceLayer
     from NetworkLayer import get_layer_class
     def make_sublayer(x_in, x_re, index, name):
@@ -558,7 +563,7 @@ class GenericLstmLayer(_NoOpLayer):
       layer_class = get_layer_class(cl)
       s1_layer = SourceLayer(name="%s_source_in" % name, n_out=n_in, x_out=x_in, index=index)
       s2_layer = SourceLayer(name="%s_source_re" % name, n_out=n_out, x_out=x_re, index=index)
-      layer = layer_class(sources=[s1_layer, s2_layer], index=index, name=name, n_out=n_out,
+      layer = layer_class(sources=[s1_layer, s2_layer], index=index, name=name, n_out=n_cells * 4,
                           network=self.network, **layer_opts)
       self.sublayer = layer
       return layer.output
@@ -568,7 +573,7 @@ class GenericLstmLayer(_NoOpLayer):
       layer_opts = out_sublayer.copy()
       cl = layer_opts.pop("class")
       layer_class = get_layer_class(cl)
-      s_layer = SourceLayer(name="%s_source_h" % name, n_out=n_in, x_out=h, index=index)
+      s_layer = SourceLayer(name="%s_source_h" % name, n_out=n_cells, x_out=h, index=index)
       layer = layer_class(sources=[s_layer], index=index, name=name, n_out=n_out,
                           network=self.network, **layer_opts)
       self.out_sublayer = layer
@@ -576,19 +581,20 @@ class GenericLstmLayer(_NoOpLayer):
     self.out_sublayer = None
 
     def lstm_step(x_t, i_t, s_p, h_p):
-      # x_t: current input. (dummy,batch,n_z)
+      # x_t: current input. (dummy,batch,n_in)
       # i_t: 0 or 1 (via index). (dummy,batch,)
-      # s_p: previous cell state. (dummy,batch,n_cells)
-      # h_p: previous hidden out. (dummy,batch,n_out)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous out. (dummy,batch,n_out)
       z_t = make_sublayer(x_in=x_t, x_re=h_p, index=i_t, name="%s_sublayer" % self.name)
-      z_t = z_t[0]  # remove dummy dimension
+      z_t = z_t[0]  # remove dummy dimension. (batch,n_cells*4)
       igate = z_t[:, :n_cells]
       fgate = z_t[:, n_cells:2 * n_cells]
       ogate = z_t[:, 2 * n_cells:3 * n_cells]
       u = z_t[:, 3 * n_cells:]
       s_t = u * igate + s_p * fgate
       h_t = s_t * ogate
-      h_t = h_t.dimshuffle('x', 0, 1)  # dummy,batch,n_cells
+      h_t = h_t.reshape((1, n_batch, n_cells))  # dummy,batch,n_cells
+      h_t = T.patternbroadcast(h_t, (False, False, False))  # might a be Theano bug
       h_t = make_out_sublayer(h_t, index=i_t, name="%s_out_sublayer" % self.name)
       s_t *= i_t[0].dimshuffle(0, 'x')  # batch,n_cells
       h_t *= i_t.dimshuffle(0, 1, 'x')  # dummy,batch,n_out
@@ -597,16 +603,16 @@ class GenericLstmLayer(_NoOpLayer):
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
 
-    from NetworkHiddenLayer import concat_sources
-    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)  # (n_time,n_batch,n_in)
-    n_batch = x.shape[1]
     # i: (n_time,n_batch)
     i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
     # Add extra dummy dimension. Used for sublayer.
-    x = x.dimshuffle(0, 'x', 1, 2)
-    i = i.dimshuffle(0, 'x', 1)
+    x = x.reshape((n_time, 1, n_batch, n_in))
+    x = T.patternbroadcast(x, (False, False, False, False))  # might be a Theano bug
+    i = i.reshape((n_time, 1, n_batch))
+    i = T.patternbroadcast(i, (False, False, False))  # might be a Theano bug
     s_initial = T.zeros((n_batch, n_cells), dtype="float32")
     h_initial = T.zeros((1, n_batch, n_out), dtype="float32")
+    h_initial = T.patternbroadcast(h_initial, (False, False, False))
     go_backwards = {1:False, -1:True}[direction]
     (s, h), _ = theano.scan(lstm_step,
                             sequences=[x, i], go_backwards=go_backwards,
