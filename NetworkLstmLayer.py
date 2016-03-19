@@ -1,8 +1,10 @@
 
 import numpy
+import json
 from theano import tensor as T
 import theano
-from NetworkRecurrentLayer import RecurrentLayer, HiddenLayer
+from NetworkRecurrentLayer import RecurrentLayer
+from NetworkHiddenLayer import HiddenLayer, _NoOpLayer
 from ActivationFunctions import strtoact
 from FastLSTM import LSTMOp2Instance
 
@@ -514,6 +516,105 @@ class Lstm2Layer(HiddenLayer):
 
     z = self.get_linear_forward_output()
     h = lstm(z=z, i=self.index, W_re=self.W_re, W_proj=self.W_proj, grad_clip=grad_clip, direction=direction)
+    self.make_output(h)
+
+
+class GenericLstmLayer(_NoOpLayer):
+  """
+  LSTM implementation which allows a custom input+recurrent function (n_in + n_out -> n_cells * 4)
+  and a custom output function (n_cells -> n_out) which is identity by default.
+  You specify it as a sub layer.
+  """
+  recurrent = True
+  layer_class = "generic_lstm"
+
+  def __init__(self, n_out, sublayer, out_sublayer=None, n_cells=None,
+               direction=1, grad_clip=None, truncation=None, **kwargs):
+    super(GenericLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    if n_cells:
+      self.set_attr('n_cells', n_cells)
+    else:
+      n_cells = n_out
+    self.set_attr('direction', direction)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    if isinstance(sublayer, (str, unicode)):
+      sublayer = json.loads(sublayer)
+    if isinstance(out_sublayer, (str, unicode)):
+      out_sublayer = json.loads(out_sublayer)
+    assert isinstance(sublayer, dict)
+    self.set_attr('sublayer', sublayer.copy())
+    if out_sublayer:
+      assert isinstance(out_sublayer, dict)
+      self.set_attr('out_sublayer', out_sublayer.copy())
+
+    from NetworkBaseLayer import SourceLayer
+    from NetworkLayer import get_layer_class
+    def make_sublayer(x_in, x_re, index, name):
+      layer_opts = sublayer.copy()
+      cl = layer_opts.pop("class")
+      layer_class = get_layer_class(cl)
+      s1_layer = SourceLayer(name="%s_source_in" % name, n_out=n_in, x_out=x_in, index=index)
+      s2_layer = SourceLayer(name="%s_source_re" % name, n_out=n_out, x_out=x_re, index=index)
+      layer = layer_class(sources=[s1_layer, s2_layer], index=index, name=name, n_out=n_out,
+                          network=self.network, **layer_opts)
+      self.sublayer = layer
+      return layer.output
+    self.sublayer = None
+    def make_out_sublayer(h, index, name):
+      if not out_sublayer: return h
+      layer_opts = out_sublayer.copy()
+      cl = layer_opts.pop("class")
+      layer_class = get_layer_class(cl)
+      s_layer = SourceLayer(name="%s_source_h" % name, n_out=n_in, x_out=h, index=index)
+      layer = layer_class(sources=[s_layer], index=index, name=name, n_out=n_out,
+                          network=self.network, **layer_opts)
+      self.out_sublayer = layer
+      return layer.output
+    self.out_sublayer = None
+
+    def lstm_step(x_t, i_t, s_p, h_p):
+      # x_t: current input. (dummy,batch,n_z)
+      # i_t: 0 or 1 (via index). (dummy,batch,)
+      # s_p: previous cell state. (dummy,batch,n_cells)
+      # h_p: previous hidden out. (dummy,batch,n_out)
+      z_t = make_sublayer(x_in=x_t, x_re=h_p, index=i_t, name="%s_sublayer" % self.name)
+      z_t = z_t[0]  # remove dummy dimension
+      igate = z_t[:, :n_cells]
+      fgate = z_t[:, n_cells:2 * n_cells]
+      ogate = z_t[:, 2 * n_cells:3 * n_cells]
+      u = z_t[:, 3 * n_cells:]
+      s_t = u * igate + s_p * fgate
+      h_t = s_t * ogate
+      h_t = h_t.dimshuffle('x', 0, 1)  # dummy,batch,n_cells
+      h_t = make_out_sublayer(h_t, index=i_t, name="%s_out_sublayer" % self.name)
+      s_t *= i_t[0].dimshuffle(0, 'x')  # batch,n_cells
+      h_t *= i_t.dimshuffle(0, 1, 'x')  # dummy,batch,n_out
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    from NetworkHiddenLayer import concat_sources
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)  # (n_time,n_batch,n_in)
+    n_batch = x.shape[1]
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    # Add extra dummy dimension. Used for sublayer.
+    x = x.dimshuffle(0, 'x', 1, 2)
+    i = i.dimshuffle(0, 'x', 1)
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((1, n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[x, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    h = h[:, 0]  # remove dummy dimension
+    self.act = [h, s]
+    h = h[::direction]
     self.make_output(h)
 
 
