@@ -286,6 +286,8 @@ class ObjAsDict:
     self.__obj = obj
 
   def __getitem__(self, item):
+    if not isinstance(item, (str, unicode)):
+      raise KeyError(e)
     try:
       return getattr(self.__obj, item)
     except AttributeError as e:
