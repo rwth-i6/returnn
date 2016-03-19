@@ -285,6 +285,11 @@ class SourceLayer(Container):
       x_out = network.x
     assert not sources, 'specify `"from": "null"` in json'  # or just ignore?
     assert dropout == 0
+    if getattr(x_out.tag, "test_value", None) is None:
+      if not sparse:
+        x_out.tag.test_value = numpy.random.rand(3,2,n_out).astype('float32')
+    if index and getattr(index.tag, "test_value", None) is None:
+      index.tag.test_value = numpy.ones((3,2), dtype='int8')
     if not delay:
       self.output = x_out
     else:
