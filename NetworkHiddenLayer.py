@@ -644,11 +644,12 @@ class LinearCombLayer(_NoOpLayer):
 class PolynomialExpansionLayer(_NoOpLayer):
   layer_class = "polynomial_expansion"
 
-  def __init__(self, n_out, n_degree, **kwargs):
+  def __init__(self, n_degree, n_out=None, **kwargs):
     super(PolynomialExpansionLayer, self).__init__(**kwargs)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    if not n_out: n_out = n_degree * n_in
     self.set_attr("n_out", n_out)
     self.set_attr("n_degree", n_degree)
-    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     assert n_out == n_in * n_degree
     static_rng = numpy.random.RandomState(1234)
     def make_permut():
@@ -669,7 +670,7 @@ class RandomSelectionLayer(_NoOpLayer):
     super(RandomSelectionLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
-    assert n_in <= n_out
+    assert n_in >= n_out
     static_rng = numpy.random.RandomState(1234)
     P = T.constant(static_rng.permutation(n_in)[:n_out])
     self.output = x[:, :, P]
