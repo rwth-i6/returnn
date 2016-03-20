@@ -641,6 +641,27 @@ class LinearCombLayer(_NoOpLayer):
       self.output = z
 
 
+class PolynomialExpansionLayer(_NoOpLayer):
+  layer_class = "polynomial_expansion"
+
+  def __init__(self, n_out, n_degree, **kwargs):
+    super(PolynomialExpansionLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("n_degree", n_degree)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    assert n_out == n_in * n_degree
+    static_rng = numpy.random.RandomState(1234)
+    def make_permut():
+      return T.constant(static_rng.permutation(n_in))
+    xs = [x]
+    for i in range(2, n_degree + 1):
+      xl = xs[-1][:, :, make_permut()]
+      xs += [xl * x]
+    assert len(xs) == n_degree
+    z = T.concatenate(xs, axis=2)
+    self.output = z
+
+
 class TimeBlurLayer(_NoOpLayer):
   layer_class = "time_blur"
   recurrent = True  # Force no frame shuffling or so.
