@@ -529,6 +529,7 @@ class GenericLstmLayer(_NoOpLayer):
   layer_class = "generic_lstm"
 
   def __init__(self, n_out, sublayer, out_sublayer=None, n_cells=None,
+               activation=None,
                direction=1, grad_clip=None, truncation=None, **kwargs):
     super(GenericLstmLayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
@@ -549,6 +550,8 @@ class GenericLstmLayer(_NoOpLayer):
     if out_sublayer:
       assert isinstance(out_sublayer, dict)
       self.set_attr('out_sublayer', out_sublayer.copy())
+    if activation:
+      self.set_attr('activation', activation)
 
     from NetworkHiddenLayer import concat_sources
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)  # (n_time,n_batch,n_in)
@@ -580,6 +583,19 @@ class GenericLstmLayer(_NoOpLayer):
       return layer.output
     self.out_sublayer = None
 
+    CI, CO, GF = [T.tanh, T.tanh, T.nnet.sigmoid]
+    if activation:
+      act_f = strtoact(activation)
+      if isinstance(act_f, list):
+        if len(act_f) == 2:
+          CI, CO = act_f
+        elif len(act_f) == 3:
+          CI, CO, GF = act_f
+        else:
+          assert False, "invalid number of activation funcs: %r" % act_f
+      else:
+        CI = CO = act_f
+
     def lstm_step(x_t, i_t, s_p, h_p):
       # x_t: current input. (dummy,batch,n_in)
       # i_t: 0 or 1 (via index). (dummy,batch,)
@@ -587,15 +603,17 @@ class GenericLstmLayer(_NoOpLayer):
       # h_p: previous out. (dummy,batch,n_out)
       z_t = make_sublayer(x_in=x_t, x_re=h_p, index=i_t, name="%s_sublayer" % self.name)
       z_t = z_t[0]  # remove dummy dimension. (batch,n_cells*4)
-      igate = z_t[:, :n_cells]
-      fgate = z_t[:, n_cells:2 * n_cells]
-      ogate = z_t[:, 2 * n_cells:3 * n_cells]
-      u = z_t[:, 3 * n_cells:]
+      gates = GF(z_t[:, :3 * n_cells])
+      u = CI(z_t[:, 3 * n_cells:])
+      igate = gates[:, :n_cells]
+      fgate = gates[:, n_cells:2 * n_cells]
+      ogate = gates[:, 2 * n_cells:]
       s_t = u * igate + s_p * fgate
-      h_t = s_t * ogate
+      h_t = s_t
       h_t = h_t.reshape((1, n_batch, n_cells))  # dummy,batch,n_cells
       h_t = T.patternbroadcast(h_t, (False, False, False))  # might a be Theano bug
       h_t = make_out_sublayer(h_t, index=i_t, name="%s_out_sublayer" % self.name)
+      h_t = CO(h_t) * ogate.dimshuffle('x', 0, 1)  # dummy,batch,n_out
       s_t *= i_t[0].dimshuffle(0, 'x')  # batch,n_cells
       h_t *= i_t.dimshuffle(0, 1, 'x')  # dummy,batch,n_out
       if grad_clip:
