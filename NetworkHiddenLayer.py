@@ -662,6 +662,19 @@ class PolynomialExpansionLayer(_NoOpLayer):
     self.output = z
 
 
+class RandomSelectionLayer(_NoOpLayer):
+  layer_class = "random_selection"
+
+  def __init__(self, n_out, **kwargs):
+    super(RandomSelectionLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    assert n_in <= n_out
+    static_rng = numpy.random.RandomState(1234)
+    P = T.constant(static_rng.permutation(n_in)[:n_out])
+    self.output = x[:, :, P]
+
+
 class TimeBlurLayer(_NoOpLayer):
   layer_class = "time_blur"
   recurrent = True  # Force no frame shuffling or so.
