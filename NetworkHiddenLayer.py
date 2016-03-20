@@ -63,6 +63,7 @@ class EmbeddingLayer(ForwardLayer):
     self.z -= self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+
 class _NoOpLayer(Layer):
   """
   Use this as a base class if you want to remove all params by the Layer base class.
@@ -131,6 +132,7 @@ def concat_sources(sources, masks=None, mass=None, unsparse=False, expect_source
     if expect_source:
       raise Exception("We expected at least one source but did not get any.")
     return None, 0
+_concat_sources = concat_sources
 
 
 class CopyLayer(_NoOpLayer):
@@ -406,7 +408,9 @@ class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, n_out, subnetwork, load, data_map=None, trainable=False, **kwargs):
+  def __init__(self, n_out, subnetwork, load="<random>", data_map=None, trainable=True,
+               concat_sources=True,
+               **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
@@ -426,21 +430,34 @@ class SubnetworkLayer(_NoOpLayer):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
+    self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
-    if not data_map:
-      data_map = ["data"]
-    assert isinstance(data_map, list)
-    assert len(data_map) == len(self.sources)
-    sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
-    data_map_d = {}
-    data_map_di = {"classes": self.index}
-    for k, s in zip(data_map, self.sources):
-      sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
-      data_map_d[k] = s.output
-      data_map_di[k] = s.index
+    if concat_sources:
+      assert not data_map, "We expect the implicit canonical data_map with concat_sources."
+      assert self.sources
+      data, n_in = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
+      s0 = self.sources[0]
+      sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
+                   "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {"data": data}
+      data_map_di = {"data": s0.index, "classes": self.index}
+      data_map = []
+    else:  # not concat_sources
+      if not data_map:
+        data_map = ["data"]
+      assert isinstance(data_map, list)
+      assert len(data_map) == len(self.sources)
+      sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {}
+      data_map_di = {"classes": self.index}
+      for k, s in zip(data_map, self.sources):
+        sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+        data_map_d[k] = s.output
+        data_map_di[k] = s.index
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    assert self.subnetwork.output["output"].attrs['n_out'] == n_out
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
@@ -581,8 +598,8 @@ class RBFLayer(_NoOpLayer):
     super(RBFLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
-    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out, name="W_in"))
-    self.b = self.add_param(self.create_bias(n_out, name="b"))
+    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out, name="W_in_%s" % self.name))
+    self.b = self.add_param(self.create_bias(n_out, name="w_%s" % self.name))
 
     # Note: The naive squared distance (x - W)**2 would take too much memory (time*batch*n_in*n_out).
     # d = self.W_in.dimshuffle('x', 'x', 0, 1) - x.dimshuffle(0, 1, 2, 'x')  # time,batch,n_in,n_out
@@ -595,6 +612,33 @@ class RBFLayer(_NoOpLayer):
     ds = x_sqr.dimshuffle(0, 1, 'x') + W_sqr.dimshuffle('x', 'x', 0) - numpy.float32(2) * xW  # time,batch,n_out
     w = T.nnet.sigmoid(self.b).dimshuffle('x', 'x', 0)  # time,batch,n_out
     self.output = T.exp(- w * ds)
+
+
+class LinearCombLayer(_NoOpLayer):
+  """
+  Linear combination of each `n_comb` elements with bias.
+  """
+  layer_class = "linear_comb"
+
+  def __init__(self, n_out, n_comb, activation=None, **kwargs):
+    super(LinearCombLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("n_comb", n_comb)
+    if activation:
+      self.set_attr("activation", activation)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    assert n_in % n_comb == 0
+    assert n_out == n_in / n_comb
+    self.W = self.add_param(self.create_forward_weights(n_out, n_comb, name="W_in_%s" % self.name))
+    self.b = self.add_param(self.create_bias(n_out, name="b_%s" % self.name))
+    assert x.ndim == 3
+    x_c = x.reshape((x.shape[0], x.shape[1], n_out, n_comb))
+    z = T.sum(self.W.dimshuffle('x', 'x', 0, 1) * x_c, axis=3) + self.b.dimshuffle('x', 'x', 0)
+    if activation:
+      act_f = strtoact_single_joined(activation)
+      self.output = act_f(z)
+    else:
+      self.output = z
 
 
 class TimeBlurLayer(_NoOpLayer):
