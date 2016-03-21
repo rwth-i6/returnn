@@ -54,6 +54,7 @@ def get_gpu_names():
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = {
+                 "default" : (1000, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
@@ -162,7 +163,10 @@ class Device(object):
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
 
-      self.attributes = get_device_attributes()[self.device_name]
+      if self.device_name in get_device_attributes().keys():
+        self.attributes = get_device_attributes()[self.device_name]
+      else:
+        self.attributes = get_device_attributes()['default']
       self.name = device[0:3] + str(self.id)
       self.initialize(config)
       self.num_train_params = len(self.trainnet.train_params_vars)
