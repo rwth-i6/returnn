@@ -16,6 +16,10 @@ class Config:
     self.network_topology_json = None; """ :type: str | None """
 
   def load_file(self, f):
+    """
+    Reads the configuration parameters from a file and adds them to the inner set of parameters
+    :type f: string
+    """
     if isinstance(f, str):
       filename = f
       content = open(filename).read()
@@ -52,6 +56,11 @@ class Config:
       self.add_line(key=line[0], value=line[1])
 
   def add_line(self, key, value):
+    """
+    Adds one specific configuration (key,value) pair to the inner set of parameters
+    :type key: string
+    :type value: object
+    """
     if value.find(',') > 0:
       value = value.split(',')
     else:
@@ -61,11 +70,22 @@ class Config:
     self.dict[key] = value
 
   def has(self, key):
+    """
+    Returns whether the given key is present in the inner set of parameters
+    :type key: string
+    :rtype: boolean
+    :returns True if and only if the given key is in the inner set of parameters
+    """
     if key in self.typed_dict:
       return True
     return key in self.dict
 
   def is_typed(self, key):
+    """
+    :type key: string
+    :rtype: boolean
+    :returns True if and only if the value of the given key has a specified data type
+    """
     return key in self.typed_dict
 
   def set(self, key, value):
@@ -107,6 +127,12 @@ class Config:
     return default
 
   def typed_value(self, key, default=None, index=None):
+    """
+    :type key: str
+    :type default: T
+    :type index: int | None
+    :rtype: str | T
+    """
     value = self.typed_dict.get(key, default)
     if index is not None:
       assert isinstance(index, int)
@@ -117,6 +143,13 @@ class Config:
     return value
 
   def int(self, key, default, index=0):
+    """
+    Parses the value of the given key as integer, returning default if not existent
+    :type key: str
+    :type default: T
+    :type index: int
+    :rtype: int | T
+    """
     if key in self.typed_dict:
       value = self.typed_value(key, default=default, index=index)
       if value is not None:
@@ -125,6 +158,13 @@ class Config:
     return int(self.value(key, default, index))
 
   def bool(self, key, default, index=0):
+    """
+    Parses the value of the given key as boolean, returning default if not existent
+    :type key: str
+    :type default: T
+    :type index: bool
+    :rtype: bool | T
+    """
     if key in self.typed_dict:
       value = self.typed_value(key, default=default, index=index)
       if isinstance(value, int):
@@ -143,6 +183,13 @@ class Config:
     return default
 
   def float(self, key, default, index=0):
+    """
+    Parses the value of the given key as float, returning default if not existent
+    :type key: str
+    :type default: T
+    :type index: int
+    :rtype: float | T
+    """
     if key in self.typed_dict:
       value = self.typed_value(key, default=default, index=index)
       if value is not None:
@@ -172,6 +219,11 @@ class Config:
     return self.dict[key]
 
   def int_list(self, key, default=None):
+    """
+    :type key: str
+    :type default: T
+    :rtype: list[int] | T
+    """
     if default is None:
       default = []
     if key in self.typed_dict:
@@ -184,6 +236,11 @@ class Config:
     return [int(x) for x in self.list(key, default)]
 
   def float_list(self, key, default=None):
+    """
+    :type key: str
+    :type default: T
+    :rtype: list[float] | T
+    """
     if default is None:
       default = []
     if key in self.typed_dict:
