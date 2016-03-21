@@ -1,0 +1,5 @@
+/_build
+
+# auto generated at the moment
+/api/*.rst
+
