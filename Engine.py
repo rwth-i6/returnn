@@ -179,6 +179,7 @@ class Engine:
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
+    self.shuffle_batches = config.bool('shuffle_batches', True)
     self.update_batch_size = config.int('update_batch_size', 0)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
@@ -431,7 +432,8 @@ class Engine:
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
                                                                        max_seq_length=int(self.max_seq_length),
-                                                                       batch_variance=self.batch_variance)
+                                                                       batch_variance=self.batch_variance,
+                                                                       shuffle_batches=self.shuffle_batches)
     else:
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']

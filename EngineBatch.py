@@ -127,13 +127,14 @@ class BatchSetGenerator:
   you call self.advance() explicitly to go forward to next batches.
   """
 
-  def __init__(self, dataset, generator):
+  def __init__(self, dataset, generator, shuffle_batches=True):
     """
     :type dataset: Dataset.Dataset
     :type generator: iter[Batch]
     """
     self.dataset = dataset
     self.generator = generator
+    self.shuffle_batches = shuffle_batches
     self.cache = []; " :type: list[Batch] "
     self.reached_end = False
     random.seed(1234)
@@ -141,7 +142,8 @@ class BatchSetGenerator:
 
   def reset(self):
     self.buffer = self.cache[:]
-    random.shuffle(self.buffer)
+    if self.shuffle_batches:
+      random.shuffle(self.buffer)
     self.cache_active = self.reached_end
     self.reached_end = False
     self.last_batch = None; " :type: Batch "
