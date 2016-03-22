@@ -11,64 +11,19 @@ from FastLSTM import LSTMOp2Instance
 import RecurrentTransform
 import json
 
-
-class RecurrentLayer(HiddenLayer):
-  recurrent = True
-  layer_class = "recurrent"
-
-  def __init__(self, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
-    kwargs.setdefault("activation", "tanh")
-    super(RecurrentLayer, self).__init__(**kwargs)
-    self.set_attr('reverse', reverse)
-    self.set_attr('truncation', truncation)
-    self.set_attr('sampling', sampling)
-    self.set_attr('projection', projection)
-    n_in = sum([s.attrs['n_out'] for s in self.sources])
-    n_out = self.attrs['n_out']
-    self.act = self.create_bias(n_out)
-    if projection:
-      n_re_in = projection
-    else:
-      n_re_in = n_out
-    self.W_re = self.add_param(self.create_random_normal_weights(n=n_re_in, m=n_out, scale=n_in,
-                                                                 name="W_re_%s" % self.name))
-    if projection:
-      self.W_proj = self.add_param(self.create_forward_weights(n_out, projection, name='W_proj_%s' % self.name))
-    else:
-      self.W_proj = None
-    #for s, W in zip(self.sources, self.W_in):
-    #  W.set_value(self.create_random_normal_weights(n=s.attrs['n_out'], m=n_out, scale=n_in,
-    #                                                name=W.name).get_value())
-    self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
-    if compile: self.compile()
-
-  def compile(self):
-    def step(x_t, i_t, h_p):
-      h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
-      i = T.outer(i_t, self.o)
-      z = T.dot(h_pp, self.W_re) + self.b
-      for i in range(len(self.sources)):
-        z += T.dot(self.mass * self.masks[i] * x_t[i], self.W_in[i])
-      #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
-      h_t = (z if self.activation is None else self.activation(z))
-      return h_t * i
-    self.output, _ = theano.scan(step,
-                                 name="scan_%s" % self.name,
-                                 go_backwards=self.attrs['reverse'],
-                                 truncate_gradient=self.attrs['truncation'],
-                                 sequences = [T.stack(self.sources), self.index],
-                                 outputs_info = [T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'])])
-    self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
-
-  def create_recurrent_weights(self, n, m):
-    nin = n + m + m + m
-    return self.create_random_normal_weights(n, m, nin), self.create_random_normal_weights(m, m, nin)
-
-
 class Unit(Container):
-  def __init__(self, n_units, depth, n_in, n_out, n_re, n_act):
-    # number of cells, depth, cell fan in, cell fan out, recurrent fan in, number of outputs
-    self.n_units, self.depth, self.n_in, self.n_out, self.n_re, self.n_act = n_units, depth, n_in, n_out, n_re, n_act
+  """
+  Abstract descriptor class for all kinds of recurrent units.
+  """
+  def __init__(self, n_units, n_in, n_out, n_re, n_act):
+    """
+    :param n_units: number of cells
+    :param n_in: cell fan in
+    :param n_out: cell fan out
+    :param n_re: recurrent fan in
+    :param n_act: number of outputs
+    """
+    self.n_units, self.n_in, self.n_out, self.n_re, self.n_act = n_units, n_in, n_out, n_re, n_act
     self.slice = T.constant(self.n_units, dtype='int32')
     self.params = {}
 
@@ -79,6 +34,21 @@ class Unit(Container):
     self.parent = parent
 
   def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards=False, truncate_gradient=-1):
+    """
+    Executes the iteration over the time axis (usually with theano.scan)
+    :param step: python function to be executed
+    :param x: unmapped input tensor in (time,batch,dim) shape
+    :param z: same as x but already transformed to self.n_in
+    :param non_sequences: see theano.scan
+    :param i: index vector in (time, batch) shape
+    :param outputs_info: see theano.scan
+    :param W_re: recurrent weight matrix
+    :param W_in: input weight matrix
+    :param b: input bias
+    :param go_backwards: whether to scan the sequence from 0 to T or from T to 0
+    :param truncate_gradient: see theano.scan
+    :return:
+    """
     self.outputs_info = outputs_info
     self.non_sequences = non_sequences
     self.W_re = W_re
@@ -86,7 +56,6 @@ class Unit(Container):
     self.b = b
     self.go_backwards = go_backwards
     self.truncate_gradient = truncate_gradient
-    #z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     try:
       self.xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
     except Exception:
@@ -103,14 +72,29 @@ class Unit(Container):
 
 
 class VANILLA(Unit):
+  """
+  A simple tanh unit
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(VANILLA, self).__init__(n_units, depth, n_units, n_units, n_units, 1)
 
   def step(self, i_t, x_t, z_t, z_p, h_p):
+    """
+    performs one iteration of the recursion
+    :param i_t: index at time step t
+    :param x_t: raw input at time step t
+    :param z_t: mapped input at time step t
+    :param z_p: previous input from time step t-1
+    :param h_p: previous hidden activation from time step t-1
+    :return:
+    """
     return [ T.tanh(z_t + z_p) ]
 
 
 class LSTME(Unit):
+  """
+  A theano based LSTM implementation
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(LSTME, self).__init__(
       n_units=n_units,
@@ -130,11 +114,13 @@ class LSTME(Unit):
     a_t = CI(z[:,3 * self.slice:4 * self.slice]) # net input
     s_t = a_t * u_t + s_p * r_t
     h_t = CO(s_t) * b_t
-    #return [ h_t, theano.gradient.grad_clip(s_t, -50, 50) ]
     return [ h_t, s_t ]
 
 
 class LSTM(Unit):
+  """
+  Very fast custom LSTM implementation
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(LSTM, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
@@ -148,6 +134,9 @@ class LSTM(Unit):
 
 
 class LSTMP(Unit):
+  """
+  Very fast custom LSTM implementation
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(LSTMP, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
@@ -158,6 +147,10 @@ class LSTMP(Unit):
 
 
 class LSTMC(Unit):
+  """
+  The same implementation as above, but it executes a theano function (recurrent transform)
+  in each iteration. This allows for additional dependencies in the recursion of the LSTM.
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(LSTMC, self).__init__(n_units, depth, n_units * 4, n_units, n_units * 4, 2)
 
@@ -167,7 +160,6 @@ class LSTMC(Unit):
     op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
-
     # See OpLSTMCustom.LSTMCustomOp.
     # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
@@ -177,7 +169,11 @@ class LSTMC(Unit):
     assert len(result) == len(outputs_info)
     return result
 
+
 class GRU(Unit):
+  """
+  Gated recurrent unit as described in http://arxiv.org/abs/1502.02367
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(GRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 2, 1)
     l = sqrt(6.) / sqrt(n_units * 3)
@@ -196,6 +192,9 @@ class GRU(Unit):
 
 
 class SRU(Unit):
+  """
+  Same as GRU but without reset weights, which allows for a faster computation on GPUs
+  """
   def __init__(self, n_units, depth, **kwargs):
     super(SRU, self).__init__(n_units, depth, n_units * 3, n_units, n_units * 3, 1)
 
@@ -206,35 +205,6 @@ class SRU(Unit):
     h_c = CI(z_t[:,2*self.slice:3*self.slice] + r_t * z_p[:,2*self.slice:3*self.slice])
     return  u_t * h_p + (1 - u_t) * h_c
 
-
-class RecurrentComponent(Container):
-  def __init__(self):
-    self.params = {}
-
-  def init_state(self):
-    return []
-
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    self.outputs_info = outputs_info
-    self.non_sequences = non_sequences
-    self.W_re = W_re
-    self.W_in = W_in
-    self.b = b
-    self.go_backwards = go_backwards
-    self.truncate_gradient = truncate_gradient
-    try:
-      xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
-    except Exception:
-      xc = z if not x else T.concatenate(x, axis = -1)
-
-    outputs, _ = theano.scan(step,
-                             #strict = True,
-                             truncate_gradient = truncate_gradient,
-                             go_backwards = go_backwards,
-                             sequences = [xc,z,i],
-                             non_sequences = non_sequences,
-                             outputs_info = outputs_info)
-    return outputs
 
 class RecurrentUnitLayer(Layer):
   recurrent = True
