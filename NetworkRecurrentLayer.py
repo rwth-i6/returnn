@@ -64,7 +64,7 @@ class Unit(Container):
                              #strict = True,
                              truncate_gradient = truncate_gradient,
                              go_backwards = go_backwards,
-                             sequences = [self.xc,z,i],
+                             sequences = [i,self.xc,z],
                              non_sequences = non_sequences,
                              outputs_info = outputs_info)
     return outputs
@@ -137,7 +137,7 @@ class LSTMP(Unit):
   def __init__(self, n_units, **kwargs):
     super(LSTMP, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
 
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+  def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
     return [ result[0], result[2].dimshuffle('x',0,1) ]
@@ -151,7 +151,7 @@ class LSTMC(Unit):
   def __init__(self, n_units, **kwargs):
     super(LSTMC, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
 
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+  def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
     import OpLSTMCustom
     op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
