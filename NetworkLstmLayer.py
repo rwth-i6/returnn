@@ -1,11 +1,62 @@
 
 import numpy
+import json
 from theano import tensor as T
 import theano
-from NetworkRecurrentLayer import RecurrentLayer, HiddenLayer
+from NetworkHiddenLayer import HiddenLayer, _NoOpLayer
 from ActivationFunctions import strtoact
-from FastLSTM import LSTMOp2Instance
 
+class RecurrentLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "recurrent"
+
+  def __init__(self, reverse=False, truncation=-1, compile=True, projection=0, sampling=1, **kwargs):
+    kwargs.setdefault("activation", "tanh")
+    super(RecurrentLayer, self).__init__(**kwargs)
+    self.set_attr('reverse', reverse)
+    self.set_attr('truncation', truncation)
+    self.set_attr('sampling', sampling)
+    self.set_attr('projection', projection)
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    n_out = self.attrs['n_out']
+    self.act = self.create_bias(n_out)
+    if projection:
+      n_re_in = projection
+    else:
+      n_re_in = n_out
+    self.W_re = self.add_param(self.create_random_normal_weights(n=n_re_in, m=n_out, scale=n_in,
+                                                                 name="W_re_%s" % self.name))
+    if projection:
+      self.W_proj = self.add_param(self.create_forward_weights(n_out, projection, name='W_proj_%s' % self.name))
+    else:
+      self.W_proj = None
+    #for s, W in zip(self.sources, self.W_in):
+    #  W.set_value(self.create_random_normal_weights(n=s.attrs['n_out'], m=n_out, scale=n_in,
+    #                                                name=W.name).get_value())
+    self.o = theano.shared(value = numpy.ones((n_out,), dtype='int8'), borrow=True)
+    if compile: self.compile()
+
+  def compile(self):
+    def step(x_t, i_t, h_p):
+      h_pp = T.dot(h_p, self.W_re) if self.W_proj else h_p
+      i = T.outer(i_t, self.o)
+      z = T.dot(h_pp, self.W_re) + self.b
+      for i in range(len(self.sources)):
+        z += T.dot(self.mass * self.masks[i] * x_t[i], self.W_in[i])
+      #z = (T.dot(x_t, self.mass * self.mask * self.W_in) + self.b) * T.nnet.sigmoid(T.dot(h_p, self.W_re))
+      h_t = (z if self.activation is None else self.activation(z))
+      return h_t * i
+    self.output, _ = theano.scan(step,
+                                 name="scan_%s" % self.name,
+                                 go_backwards=self.attrs['reverse'],
+                                 truncate_gradient=self.attrs['truncation'],
+                                 sequences = [T.stack(self.sources), self.index],
+                                 outputs_info = [T.alloc(self.act, self.sources[0].output.shape[1], self.attrs['n_out'])])
+    self.output = self.output[::-(2 * self.attrs['reverse'] - 1)]
+
+  def create_recurrent_weights(self, n, m):
+    nin = n + m + m + m
+    return self.create_random_normal_weights(n, m, nin), self.create_random_normal_weights(m, m, nin)
 
 class LstmLayer(RecurrentLayer):
   layer_class = "lstm"
@@ -349,43 +400,6 @@ class OptimizedLstmLayer(RecurrentLayer):
     return super(OptimizedLstmLayer, self).make_constraints()
 
 
-#warning: highly experimental (not recommended for productive use yet)
-#showed a speedup from 81 sec/epoch to 11 sec/epoch on demo dataset
-#TODO:
-# 1) !! use index vector for different sequence lengths
-# 2) make sure implementations are compatible
-# 3) support multiple sources, dropout, sharpgates, ...
-# 4) use two CUDA streams for concurrent bidirectional execution
-class FastLstmLayer(RecurrentLayer):
-  layer_class = "lstm_fast"
-
-  def __init__(self, n_out, sharpgates='none', encoder = None, n_dec = 0, **kwargs):
-    kwargs.setdefault("activation", "sigmoid")
-    kwargs["compile"] = False
-    kwargs["n_out"] = n_out * 4
-    super(FastLstmLayer, self).__init__(**kwargs)
-    self.set_attr('n_out', n_out)
-    value = numpy.zeros((n_out * 4, ), dtype = theano.config.floatX)
-    self.b.set_value(value)
-    n_re = n_out
-    n_in = sum([s.attrs['n_out'] for s in self.sources])
-    assert len(self.sources) == 1
-    W_re = self.create_random_uniform_weights(n_re, n_out * 4, n_in + n_out * 4,
-                                              name="W_re_%s" % self.name)
-    self.W_re.set_value(W_re.get_value())
-    for s, W in zip(self.sources, self.W_in):
-      W.set_value(self.create_random_uniform_weights(s.attrs['n_out'], n_out * 4,
-                                                     s.attrs['n_out'] + n_out + n_out * 4,
-                                                     name="W_in_%s_%s" % (s.name, self.name)).get_value(), borrow = True)
-
-    initial_state = T.alloc(numpy.cast[theano.config.floatX](0), self.sources[0].output.shape[1], n_out)
-    XS = [S.output[::-(2 * self.attrs['reverse'] - 1)] for S in self.sources]
-    Z, _, d = LSTMOp2Instance(*([self.W_re, initial_state, self.b, self.index] + XS + self.W_in))
-    self.act = [Z, [d]]
-    self.state = [d]
-    self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
-
-
 class SimpleLstmLayer(RecurrentLayer):
   layer_class = "lstm_simple"
 
@@ -515,6 +529,133 @@ class Lstm2Layer(HiddenLayer):
     z = self.get_linear_forward_output()
     h = lstm(z=z, i=self.index, W_re=self.W_re, W_proj=self.W_proj, grad_clip=grad_clip, direction=direction)
     self.make_output(h)
+
+
+class GenericLstmLayer(_NoOpLayer):
+  """
+  LSTM implementation which allows a custom input+recurrent function (n_in + n_out -> n_cells * 4)
+  and a custom output function (n_cells -> n_out) which is identity by default.
+  You specify it as a sub layer.
+  """
+  recurrent = True
+  layer_class = "generic_lstm"
+
+  def __init__(self, n_out, sublayer, out_sublayer=None, n_cells=None,
+               activation=None,
+               direction=1, grad_clip=None, truncation=None, **kwargs):
+    super(GenericLstmLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+    if n_cells:
+      self.set_attr('n_cells', n_cells)
+    else:
+      n_cells = n_out
+    self.set_attr('direction', direction)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    if isinstance(sublayer, (str, unicode)):
+      sublayer = json.loads(sublayer)
+    if isinstance(out_sublayer, (str, unicode)):
+      out_sublayer = json.loads(out_sublayer)
+    assert isinstance(sublayer, dict)
+    self.set_attr('sublayer', sublayer.copy())
+    if out_sublayer:
+      assert isinstance(out_sublayer, dict)
+      self.set_attr('out_sublayer', out_sublayer.copy())
+    if activation:
+      self.set_attr('activation', activation)
+
+    from NetworkHiddenLayer import concat_sources
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)  # (n_time,n_batch,n_in)
+    n_time = x.shape[0]
+    n_batch = x.shape[1]
+
+    from NetworkBaseLayer import SourceLayer
+    from NetworkLayer import get_layer_class
+    def make_sublayer(x_in, x_re, index, name):
+      layer_opts = sublayer.copy()
+      cl = layer_opts.pop("class")
+      layer_class = get_layer_class(cl)
+      s1_layer = SourceLayer(name="%s_source_in" % name, n_out=n_in, x_out=x_in, index=index)
+      s2_layer = SourceLayer(name="%s_source_re" % name, n_out=n_out, x_out=x_re, index=index)
+      layer = layer_class(sources=[s1_layer, s2_layer], index=index, name=name, n_out=n_cells * 4,
+                          network=self.network, **layer_opts)
+      self.sublayer = layer
+      return layer.output
+    self.sublayer = None
+    def make_out_sublayer(h, index, name):
+      if not out_sublayer: return h
+      layer_opts = out_sublayer.copy()
+      cl = layer_opts.pop("class")
+      layer_class = get_layer_class(cl)
+      s_layer = SourceLayer(name="%s_source_h" % name, n_out=n_cells, x_out=h, index=index)
+      layer = layer_class(sources=[s_layer], index=index, name=name, n_out=n_out,
+                          network=self.network, **layer_opts)
+      self.out_sublayer = layer
+      return layer.output
+    self.out_sublayer = None
+
+    CI, CO, GF = [T.tanh, T.tanh, T.nnet.sigmoid]
+    if activation:
+      act_f = strtoact(activation)
+      if isinstance(act_f, list):
+        if len(act_f) == 2:
+          CI, CO = act_f
+        elif len(act_f) == 3:
+          CI, CO, GF = act_f
+        else:
+          assert False, "invalid number of activation funcs: %r" % act_f
+      else:
+        CI = CO = act_f
+
+    def lstm_step(x_t, i_t, s_p, h_p):
+      # x_t: current input. (dummy,batch,n_in)
+      # i_t: 0 or 1 (via index). (dummy,batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous out. (dummy,batch,n_out)
+      z_t = make_sublayer(x_in=x_t, x_re=h_p, index=i_t, name="%s_sublayer" % self.name)
+      z_t = z_t[0]  # remove dummy dimension. (batch,n_cells*4)
+      gates = GF(z_t[:, :3 * n_cells])
+      u = CI(z_t[:, 3 * n_cells:])
+      igate = gates[:, :n_cells]
+      fgate = gates[:, n_cells:2 * n_cells]
+      ogate = gates[:, 2 * n_cells:]
+      s_t = u * igate + s_p * fgate
+      h_t = s_t
+      h_t = h_t.reshape((1, n_batch, n_cells))  # dummy,batch,n_cells
+      h_t = T.patternbroadcast(h_t, (False, False, False))  # might a be Theano bug
+      h_t = make_out_sublayer(h_t, index=i_t, name="%s_out_sublayer" % self.name)
+      h_t = CO(h_t) * ogate.dimshuffle('x', 0, 1)  # dummy,batch,n_out
+      s_t *= i_t[0].dimshuffle(0, 'x')  # batch,n_cells
+      h_t *= i_t.dimshuffle(0, 1, 'x')  # dummy,batch,n_out
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    # Add extra dummy dimension. Used for sublayer.
+    x = x.reshape((n_time, 1, n_batch, n_in))
+    x = T.patternbroadcast(x, (False, False, False, False))  # might be a Theano bug
+    i = i.reshape((n_time, 1, n_batch))
+    i = T.patternbroadcast(i, (False, False, False))  # might be a Theano bug
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((1, n_batch, n_out), dtype="float32")
+    h_initial = T.patternbroadcast(h_initial, (False, False, False))
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[x, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    h = h[:, 0]  # remove dummy dimension
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+
+    self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+    if self.out_sublayer:
+      self.params.update({"out_sublayer." + name: param for (name, param) in self.out_sublayer.params.items()})
 
 
 class AssociativeLstmLayer(HiddenLayer):

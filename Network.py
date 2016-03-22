@@ -539,6 +539,13 @@ class LayerNetwork(object):
     self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
     self.y[target].n_out = self.n_out[target][0]
     self.j.setdefault(target, T.bmatrix('j_%s' % target))
+    if getattr(self.y[target].tag, "test_value", None) is None:
+      if ndim == 2:
+        self.y[target].tag.test_value = numpy.zeros((3,2), dtype='int32')
+      elif ndim == 3:
+        self.y[target].tag.test_value = numpy.random.rand(3,2,self.n_out[target][0]).astype('float32')
+    if getattr(self.j[target].tag, "test_value", None) is None:
+      self.j[target].tag.test_value = numpy.ones((3,2), dtype="int8")
 
   def get_layer(self, layer_name):
     if layer_name in self.hidden:

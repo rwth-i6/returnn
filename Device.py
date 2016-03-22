@@ -54,6 +54,7 @@ def get_gpu_names():
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
   attributes = {
+                 "default" : (1000, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
                  "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
@@ -162,7 +163,10 @@ class Device(object):
         self.id = 0
         self.device_name = 'cpu' + str(self.id)
 
-      self.attributes = get_device_attributes()[self.device_name]
+      if self.device_name in get_device_attributes().keys():
+        self.attributes = get_device_attributes()[self.device_name]
+      else:
+        self.attributes = get_device_attributes()['default']
       self.name = device[0:3] + str(self.id)
       self.initialize(config)
       self.num_train_params = len(self.trainnet.train_params_vars)
@@ -471,8 +475,11 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         elif extract == 'attention':
           assert param
-          #source.append(tba.reshape((tba.shape[0] * tba.shape[1], tba.shape[2]))) # * T.cast(self.testnet.hidden[param].base[0].index,'float32'))
-          source.append(self.testnet.hidden[param].aux[-1].dimshuffle(0,2,1) * T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].aux[-1].shape[1],axis=2))
+          idx = T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].attention[0].shape[2],axis=2)
+          source.append(self.testnet.hidden[param].attention[0] * idx)
+        elif extract == 'alignment':
+          idx = T.cast(self.testnet.hidden[param].base[0].index,'float32').dimshuffle(0,1,'x')
+          source.append(self.testnet.hidden[param].alignment[0].dimshuffle(0,1,'x') * idx)
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
@@ -1165,7 +1172,7 @@ class Device(object):
     # self.i == self.j["data"]
     gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs + [(network.epoch, self.epoch_var)]
+    return gs #+ [(network.epoch, self.epoch_var)]
   def make_sprint_givens(self, network):
     return self.make_input_givens(network)
   def make_ctc_givens(self, network):

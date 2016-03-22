@@ -286,6 +286,8 @@ class ObjAsDict:
     self.__obj = obj
 
   def __getitem__(self, item):
+    if not isinstance(item, (str, unicode)):
+      raise KeyError(e)
     try:
       return getattr(self.__obj, item)
     except AttributeError as e:
@@ -823,7 +825,7 @@ def custom_exec(source, source_filename, user_ns, user_global_ns):
 
 class FrozenDict(dict):
   def __setitem__(self, key, value):
-    raise ValueError, "FrozenDict cannot be modified"
+    raise ValueError("FrozenDict cannot be modified")
 
   def __hash__(self):
     return hash(tuple(sorted(self.items())))
@@ -854,3 +856,6 @@ def make_dll_name(basename):
   else:  # Linux, Unix
     return "lib%s.so" % basename
 
+
+def escape_c_str(s):
+  return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n").replace("\"", "\\\"").replace("'", "\\'")

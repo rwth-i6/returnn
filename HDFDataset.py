@@ -54,9 +54,9 @@ class HDFDataset(CachedDataset):
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in xrange(len(self.target_keys)+1)]))
 
-    seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
+    seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
     if not self._seq_start:
-      self._seq_start = [numpy.zeros((seq_lengths.shape[1],),'int32')]
+      self._seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
     for l in seq_lengths:
       self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)

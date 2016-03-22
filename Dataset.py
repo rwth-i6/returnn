@@ -490,14 +490,15 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint, shuffle_batches=False):
     """
     :type recurrent_net: bool
     :type batch_size: int
     :type max_seqs: int
+    :type shuffle_batches: bool
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance, max_seq_length))
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance, max_seq_length), shuffle_batches)
 
   def shapes_for_batches(self, batches, data_keys):
     """

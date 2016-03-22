@@ -63,6 +63,7 @@ class EmbeddingLayer(ForwardLayer):
     self.z -= self.b
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+
 class _NoOpLayer(Layer):
   """
   Use this as a base class if you want to remove all params by the Layer base class.
@@ -131,6 +132,7 @@ def concat_sources(sources, masks=None, mass=None, unsparse=False, expect_source
     if expect_source:
       raise Exception("We expected at least one source but did not get any.")
     return None, 0
+_concat_sources = concat_sources
 
 
 class CopyLayer(_NoOpLayer):
@@ -406,7 +408,9 @@ class SubnetworkLayer(_NoOpLayer):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, n_out, subnetwork, load, data_map=None, trainable=False, **kwargs):
+  def __init__(self, n_out, subnetwork, load="<random>", data_map=None, trainable=True,
+               concat_sources=True,
+               **kwargs):
     """
     :param int n_out: output dimension of output layer
     :param dict[str,dict] network: subnetwork as dict (JSON content)
@@ -426,21 +430,34 @@ class SubnetworkLayer(_NoOpLayer):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
+    self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
-    if not data_map:
-      data_map = ["data"]
-    assert isinstance(data_map, list)
-    assert len(data_map) == len(self.sources)
-    sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
-    data_map_d = {}
-    data_map_di = {"classes": self.index}
-    for k, s in zip(data_map, self.sources):
-      sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
-      data_map_d[k] = s.output
-      data_map_di[k] = s.index
+    if concat_sources:
+      assert not data_map, "We expect the implicit canonical data_map with concat_sources."
+      assert self.sources
+      data, n_in = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
+      s0 = self.sources[0]
+      sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
+                   "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {"data": data}
+      data_map_di = {"data": s0.index, "classes": self.index}
+      data_map = []
+    else:  # not concat_sources
+      if not data_map:
+        data_map = ["data"]
+      assert isinstance(data_map, list)
+      assert len(data_map) == len(self.sources)
+      sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {}
+      data_map_di = {"classes": self.index}
+      for k, s in zip(data_map, self.sources):
+        sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+        data_map_d[k] = s.output
+        data_map_di[k] = s.index
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    assert self.subnetwork.output["output"].attrs['n_out'] == n_out
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
@@ -467,6 +484,7 @@ class ChunkingSublayer(_NoOpLayer):
                chunk_size, chunk_step,
                chunk_distribution="uniform",
                add_left_context=0,
+               add_right_context=0,
                normalize_output=True,
                trainable=False,
                **kwargs):
@@ -479,6 +497,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
     self.set_attr('add_left_context', add_left_context)
+    self.set_attr('add_right_context', add_right_context)
     self.set_attr('normalize_output', normalize_output)
     self.set_attr('trainable', trainable)
 
@@ -517,14 +536,21 @@ class ChunkingSublayer(_NoOpLayer):
         t_start_c = T.maximum(t_start - add_left_context, 0)
       else:
         t_start_c = t_start
-      chunk = source[t_start_c:t_end]
-      chunk_index = index[t_start_c:t_end]
+      if add_right_context > 0:
+        t_end_c = T.minimum(t_end + add_right_context, source.shape[0])
+      else:
+        t_end_c = t_end
+      chunk = source[t_start_c:t_end_c]
+      chunk_index = index[t_start_c:t_end_c]
       layer = make_sublayer(source=chunk, index=chunk_index, name="%s_sublayer" % self.name)
       l_output = layer.output
       l_index_f32 = T.cast(layer.index, dtype="float32")
       if add_left_context > 0:
         l_output = l_output[t_start - t_start_c:]
         l_index_f32 = l_index_f32[t_start - t_start_c:]
+      if add_right_context > 0:
+        l_output = l_output[:l_output.shape[0] + t_end - t_end_c]
+        l_index_f32 = l_index_f32[:l_index_f32.shape[0] + t_end - t_end_c]
       if chunk_distribution == "uniform": pass  # just leave it as it is
       elif chunk_distribution == "triangle":
         ts = T.arange(1, t_end - t_start + 1)
@@ -569,6 +595,94 @@ class ChunkingSublayer(_NoOpLayer):
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+
+
+class RBFLayer(_NoOpLayer):
+  """
+  Use radial basis function.
+  """
+  layer_class = "rbf"
+
+  def __init__(self, n_out, **kwargs):
+    super(RBFLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.W_in = self.add_param(self.create_forward_weights(n_in, n_out, name="W_in_%s" % self.name))
+    self.b = self.add_param(self.create_bias(n_out, name="w_%s" % self.name))
+
+    # Note: The naive squared distance (x - W)**2 would take too much memory (time*batch*n_in*n_out).
+    # d = self.W_in.dimshuffle('x', 'x', 0, 1) - x.dimshuffle(0, 1, 2, 'x')  # time,batch,n_in,n_out
+    # ds = T.sum(d, axis=2)
+    # Thus, we need to avoid that.
+    # Another form of the same is sum(x**2 + W**2 - 2*W*x, axis=<n_in>).
+    x_sqr = T.sum(T.sqr(x), axis=2)  # time,batch
+    W_sqr = T.sum(T.sqr(self.W_in), axis=0)  # n_out
+    xW = T.dot(x, self.W_in)  # time,batch,n_out
+    ds = x_sqr.dimshuffle(0, 1, 'x') + W_sqr.dimshuffle('x', 'x', 0) - numpy.float32(2) * xW  # time,batch,n_out
+    w = T.nnet.sigmoid(self.b).dimshuffle('x', 'x', 0)  # time,batch,n_out
+    self.output = T.exp(- w * ds)
+
+
+class LinearCombLayer(_NoOpLayer):
+  """
+  Linear combination of each `n_comb` elements with bias.
+  """
+  layer_class = "linear_comb"
+
+  def __init__(self, n_out, n_comb, activation=None, **kwargs):
+    super(LinearCombLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("n_comb", n_comb)
+    if activation:
+      self.set_attr("activation", activation)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    assert n_in % n_comb == 0
+    assert n_out == n_in / n_comb
+    self.W = self.add_param(self.create_forward_weights(n_out, n_comb, name="W_in_%s" % self.name))
+    self.b = self.add_param(self.create_bias(n_out, name="b_%s" % self.name))
+    assert x.ndim == 3
+    x_c = x.reshape((x.shape[0], x.shape[1], n_out, n_comb))
+    z = T.sum(self.W.dimshuffle('x', 'x', 0, 1) * x_c, axis=3) + self.b.dimshuffle('x', 'x', 0)
+    if activation:
+      act_f = strtoact_single_joined(activation)
+      self.output = act_f(z)
+    else:
+      self.output = z
+
+
+class PolynomialExpansionLayer(_NoOpLayer):
+  layer_class = "polynomial_expansion"
+
+  def __init__(self, n_degree, n_out=None, **kwargs):
+    super(PolynomialExpansionLayer, self).__init__(**kwargs)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    if not n_out: n_out = n_degree * n_in
+    self.set_attr("n_out", n_out)
+    self.set_attr("n_degree", n_degree)
+    assert n_out == n_in * n_degree
+    static_rng = numpy.random.RandomState(1234)
+    def make_permut():
+      return T.constant(static_rng.permutation(n_in))
+    xs = [x]
+    for i in range(2, n_degree + 1):
+      xl = xs[-1][:, :, make_permut()]
+      xs += [xl * x]
+    assert len(xs) == n_degree
+    z = T.concatenate(xs, axis=2)
+    self.output = z
+
+
+class RandomSelectionLayer(_NoOpLayer):
+  layer_class = "random_selection"
+
+  def __init__(self, n_out, **kwargs):
+    super(RandomSelectionLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    assert n_in >= n_out
+    static_rng = numpy.random.RandomState(1234)
+    P = T.constant(static_rng.permutation(n_in)[:n_out])
+    self.output = x[:, :, P]
 
 
 class TimeBlurLayer(_NoOpLayer):
@@ -875,10 +989,10 @@ class StateToAct(ForwardLayer):
       self.act[0] = T.tanh(self.act[1])
     else:
       self.make_output(self.act[0])
-    if 'target' in self.attrs:
-      self.output = self.output.repeat(self.index.shape[0],axis=0)
-    else:
-      self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
+    #if 'target' in self.attrs:
+    #  self.output = self.output.repeat(self.index.shape[0],axis=0)
+    #else:
+    self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
 class TimeConcatLayer(HiddenLayer):
@@ -2149,7 +2263,7 @@ class TorchLayer(_NoOpLayer):
   recurrent = True  # who knows
   layer_class = "torch"
 
-  def __init__(self, n_out, lua_file, lua_fw_func, lua_bw_func, params, **kwargs):
+  def __init__(self, n_out, lua_fw_func, lua_bw_func, params, lua_file=None, **kwargs):
     super(TorchLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
     if isinstance(params, (str, unicode)):
@@ -2191,6 +2305,7 @@ class TorchLayer(_NoOpLayer):
 
     from TorchWrapper import TorchWrapperOp
     op = TorchWrapperOp(
+      name=self.name,
       in_info=args_info,
       # Hardcoded output shape for now, only feature dim can be configured.
       out_info=[{"n_out": n_out, "ndim": 3, "shape": ((0, 0), (0, 1), n_out),
