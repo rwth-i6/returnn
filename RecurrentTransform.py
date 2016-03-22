@@ -337,7 +337,7 @@ class AttentionList(AttentionBase):
     if self.attrs['store']:
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
     if self.attrs['align']:
-      self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "Q_%d" % i))
+      self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32') + numpy.float32(1e10), "Q_%d" % i))
       self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
 
   def create_vars(self):
@@ -399,15 +399,21 @@ class AttentionList(AttentionBase):
       if self.attrs['align']:
         dst = -T.log(w_i)
         Q = self.item("Q", i)
-        inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32')
+        inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32') * T.gt(self.n,0)
+        big = T.cast(1e20,'float32')
+        #D = T.inc_subtensor(-T.log(w_i)[:,1:], T.switch(T.eq(T.max(self.n),0), big, 0)) # t>=1 cannot be aligned to n=0
+        n0 = T.eq(T.max(self.n),0)
+        D=-T.log(w_i)
         def dtw(i,q_p,b_p,Q,D,inf):
-          forward = T.constant(0.0, 'float32') + T.switch(T.gt(i,0),q_p, inf) # (t-1,n-1) -> (t,n)
-          loop = T.constant(3.0, 'float32') + T.switch(T.gt(i,0),Q[i-1],inf) # (t-1,n) -> (t,n)
+          #inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
+          penalty = T.switch(T.and_(numpy.int8(1)-n0,T.eq(i,0)), big, T.constant(0.0,'float32'))
+          loop = T.constant(0.0, 'float32') + q_p
+          forward = T.constant(0.0, 'float32') + T.switch(T.eq(self.n*i,0), 0, Q[i-1])
           opt = T.stack([loop,forward])
           k_out = T.cast(T.argmin(opt,axis=0),'int32')
-          return opt[k_out,T.arange(opt.shape[1])] + D[i], k_out
-        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,-T.log(w_i),inf],
-                                outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
+          return opt[k_out,T.arange(opt.shape[1])] + D[i] + penalty, k_out
+        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,D,inf],
+                                outputs_info=[big+T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)

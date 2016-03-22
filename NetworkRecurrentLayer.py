@@ -645,7 +645,7 @@ class RecurrentUnitLayer(Layer):
       self.alignment = []
       for K in bp: # K: NTB
         aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
-                             outputs_info=[ T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
+                             outputs_info=[T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
         aln = theano.printing.Print("aln")(aln)
         self.alignment.append(aln) # TB
 
