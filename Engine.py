@@ -7,7 +7,7 @@ from collections import OrderedDict
 import h5py
 import json
 from Network import LayerNetwork
-from EngineTask import TrainTaskThread, EvalTaskThread, SprintCacheForwardTaskThread, HDFForwardTaskThread, ClassificationTaskThread
+from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, ClassificationTaskThread
 import SprintCache
 from Log import log
 from Updater import Updater
@@ -513,33 +513,6 @@ class Engine:
           time.sleep(try_again_wait_time)
           continue
         raise
-
-  def forward_to_sprint(self, data, cache_file, combine_labels=''):
-    """
-    :type data: Dataset.Dataset
-    :type cache_file: str
-    :type combine_labels: str
-    """
-    cache = SprintCache.FileArchive(cache_file)
-    batches = data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=data.get_num_timesteps(),
-                                    max_seqs=1)
-    merge = {}
-    if combine_labels != '':
-      for index, label in enumerate(data.labels["classes"]):
-        merged = combine_labels.join(label.split(combine_labels)[:-1])
-        if merged == '': merged = label
-        if not merged in merge.keys():
-          merge[merged] = []
-        merge[merged].append(index)
-      import codecs
-      label_file = codecs.open(cache_file + ".labels", encoding = 'utf-8', mode = 'w')
-      for key in merge.keys():
-        label_file.write(key + "\n")
-      label_file.close()
-    forwarder = SprintCacheForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
-    forwarder.join()
-    cache.finalize()
 
   def forward_to_hdf(self, data, output_file, combine_labels=''):
     """
