@@ -6,7 +6,6 @@ from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import SprintErrorSigOp
-from NetworkRecurrentLayer import RecurrentLayer
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 
 

@@ -616,49 +616,6 @@ class EvalTaskThread(TaskThread):
       for device in self.devices:
         device.set_net_params(self.network)
 
-
-class SprintCacheForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge={}):
-      """
-      :type network: Network.LayerNetwork
-      :type devices: list[Device.Device]
-      :type data: Dataset.Dataset
-      :type batches: EngineBatch.BatchSetGenerator
-      :type cache: SprintCache.FileArchive
-      :type merge: dict
-      :type start_batch: int
-      """
-      super(SprintCacheForwardTaskThread, self).__init__('extract', network, devices, data, batches)
-      self.cache = cache
-      self.merge = merge
-
-    def initialize(self):
-      self.toffset = 0
-
-    def evaluate(self, batchess, results, result_format, num_frames):
-      features = numpy.concatenate(results, axis = 1) #reduce(operator.add, device.result())
-      if self.merge.keys():
-        merged = numpy.zeros((len(features), len(self.merge.keys())), dtype = theano.config.floatX)
-        for i in xrange(len(features)):
-          for j, label in enumerate(self.merge.keys()):
-            for k in self.merge[label]:
-              merged[i, j] += numpy.exp(features[i, k])
-          z = max(numpy.sum(merged[i]), 0.000001)
-          merged[i] = numpy.log(merged[i] / z)
-        features = merged
-      # Currently we support just a single seq -> i.e. a single dev with a single batch.
-      assert len(batchess) == 1
-      assert len(batchess[0]) == 1
-      batch = batchess[0][0]
-      assert batch.get_num_seqs() == 1
-      seq_idx = batch.start_seq
-      print >> log.v5, "extracting", len(features[0]), "features over", len(features), "time steps for sequence", self.data.get_tag(seq_idx)
-      times = zip(range(0, len(features)), range(1, len(features) + 1)) if not self.data.timestamps else self.data.timestamps[self.toffset : self.toffset + len(features)]
-      #times = zip(range(0, len(features)), range(1, len(features) + 1))
-      self.toffset += len(features)
-      self.cache.addFeatureCache(self.data.get_tag(seq_idx), numpy.asarray(features), numpy.asarray(times))
-
-
 class HDFForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, merge={}):
       super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
