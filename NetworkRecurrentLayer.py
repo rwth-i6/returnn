@@ -494,3 +494,29 @@ class RecurrentUnitLayer(Layer):
     if self.unit.recurrent_transform:
       return self.unit.recurrent_transform.cost(), None
     return None, None
+
+
+class LinearRecurrentLayer(HiddenLayer):
+  """
+  Inspired from: http://arxiv.org/abs/1510.02693
+  Basically a very simple LSTM.
+  """
+  recurrent = True
+  layer_class = "linear_recurrent"
+
+  def __init__(self, n_out, direction=1, **kwargs):
+    super(LinearRecurrentLayer, self).__init__(n_out=n_out, **kwargs)
+    self.set_attr('direction', direction)
+    a = T.nnet.sigmoid(self.add_param(self.create_bias(n_out, "a")))
+    x = self.get_linear_forward_output()  # time,batch,n_out
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu. (time,batch)
+    def step(x_t, i_t, h_p):
+      i_t_bc = i_t.dimshuffle(0, 'x')  # batch,n_out
+      return (a * h_p + x_t) * i_t_bc + h_p * (numpy.float32(1) - i_t_bc)
+    n_batch = x.shape[1]
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    h, _ = theano.scan(step, sequences=[x, i], outputs_info=[h_initial], go_backwards=go_backwards)
+    h = h[::direction]
+    self.output = self.activation(h)
+
