@@ -64,7 +64,7 @@ class Unit(Container):
                              #strict = True,
                              truncate_gradient = truncate_gradient,
                              go_backwards = go_backwards,
-                             sequences = [self.xc,z,i],
+                             sequences = [i,self.xc,z],
                              non_sequences = non_sequences,
                              outputs_info = outputs_info)
     return outputs
@@ -137,7 +137,7 @@ class LSTMP(Unit):
   def __init__(self, n_units, **kwargs):
     super(LSTMP, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
 
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+  def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
     return [ result[0], result[2].dimshuffle('x',0,1) ]
@@ -151,7 +151,7 @@ class LSTMC(Unit):
   def __init__(self, n_units, **kwargs):
     super(LSTMC, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
 
-  def scan(self, step, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+  def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
     import OpLSTMCustom
     op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
@@ -479,7 +479,7 @@ class RecurrentUnitLayer(Layer):
       self.alignment = []
       for K in bp: # K: NTB
         aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
-                             outputs_info=[ T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
+                             outputs_info=[T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
         aln = theano.printing.Print("aln")(aln)
         self.alignment.append(aln) # TB
 
@@ -494,3 +494,29 @@ class RecurrentUnitLayer(Layer):
     if self.unit.recurrent_transform:
       return self.unit.recurrent_transform.cost(), None
     return None, None
+
+
+class LinearRecurrentLayer(HiddenLayer):
+  """
+  Inspired from: http://arxiv.org/abs/1510.02693
+  Basically a very simple LSTM.
+  """
+  recurrent = True
+  layer_class = "linear_recurrent"
+
+  def __init__(self, n_out, direction=1, **kwargs):
+    super(LinearRecurrentLayer, self).__init__(n_out=n_out, **kwargs)
+    self.set_attr('direction', direction)
+    a = T.nnet.sigmoid(self.add_param(self.create_bias(n_out, "a")))
+    x = self.get_linear_forward_output()  # time,batch,n_out
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu. (time,batch)
+    def step(x_t, i_t, h_p):
+      i_t_bc = i_t.dimshuffle(0, 'x')  # batch,n_out
+      return (a * h_p + x_t) * i_t_bc + h_p * (numpy.float32(1) - i_t_bc)
+    n_batch = x.shape[1]
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    h, _ = theano.scan(step, sequences=[x, i], outputs_info=[h_initial], go_backwards=go_backwards)
+    h = h[::direction]
+    self.output = self.activation(h)
+
