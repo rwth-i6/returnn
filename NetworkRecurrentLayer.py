@@ -416,6 +416,7 @@ class RecurrentUnitLayer(Layer):
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
+    self.recurrent_transform = recurrent_transform_inst
 
     # scan over sequence
     for s in xrange(self.attrs['sampling']):
