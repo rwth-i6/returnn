@@ -151,7 +151,7 @@ class Updater:
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
-    self.i = self.var(numpy.float32(network.update_step), name="updater_i")
+    self.i = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_i")
 
     if self.momentum > 0:
       self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
