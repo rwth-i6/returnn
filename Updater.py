@@ -65,7 +65,8 @@ class Updater:
                update_multiple_models_param_is_cur_model=False,
                enforce_triangular_matrix_zero=False,
                gradient_noise=0.0,
-               grad_noise_rel_grad_norm=0.0
+               grad_noise_rel_grad_norm=0.0,
+               reset_update_params=False
                ):
     self.rng = numpy.random.RandomState(0101)
     self.momentum = numpy.float32(momentum)
@@ -97,6 +98,7 @@ class Updater:
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.gradient_noise = gradient_noise
     self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
+    self.reset_update_params = reset_update_params
     self.params = {}
     self.pid = -1
     if self.adadelta or self.adamdelta:
@@ -198,9 +200,7 @@ class Updater:
 
     return constrained_output
 
-  def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
-    if broadcastable is None and isinstance(value, theano.compile.SharedVariable):
-      broadcastable = value.broadcastable
+  def _var_get_value(self, value, zero=False, dtype="float32"):
     if zero:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value(borrow=True, return_internal_type=True)
@@ -210,22 +210,43 @@ class Updater:
       if isinstance(value, theano.compile.SharedVariable):
         value = value.get_value()
       value = numpy.asarray(value).astype(dtype)
+    return value
+
+  def var(self, value, name="", broadcastable=None, dtype="float32", zero=False):
+    orig_value = value
+    if broadcastable is None and isinstance(value, theano.compile.SharedVariable):
+      broadcastable = value.broadcastable
+    value = self._var_get_value(value, zero=zero, dtype=dtype)
     kwargs = {"value": value}
     if name: kwargs["name"] = name
     if broadcastable: kwargs["broadcastable"] = broadcastable
     param = theano.shared(**kwargs)
-    self.params[param] = value
+    self.params[param] = {
+      "value": orig_value, "zero": zero,
+      "broadcastable": broadcastable, "name": name, "dtype": dtype}
     return param
 
   def reset(self):
-    if self.adasecant:
-      #print self.adasecant_step.get_value()
-      #self.adasecant_step.set_value(numpy.asarray(0).astype('float32'))
-      pass
-    #self.i.set_value(numpy.float32(0))
-    return # this needs to be done smarter
-    for param in self.params:
-      param.set_value(self.params[param])
+    for param, info in self.params.items():
+      if info["zero"]: continue
+      value = info["value"]
+      if isinstance(value, theano.compile.SharedVariable):
+        # We copied from this shared var. This should be done here in all cases.
+        # The first copy might even be invalid because networks params
+        # are not loaded in the beginning, so this is important.
+        value = value.get_value()
+        value = numpy.asarray(value).astype(info["dtype"])
+        param.set_value(value)
+    if self.reset_update_params:
+      # Also reset all remaining params.
+      for param, info in self.params.items():
+        value = info["value"]
+        if info["zero"]:
+          value = self._var_get_value(value, zero=True, dtype=info["dtype"])
+        if isinstance(value, theano.compile.SharedVariable):
+          continue  # this is handled above
+        value = numpy.asarray(value).astype(info["dtype"])
+        param.set_value(value)
 
   def getUpdateList(self):
     assert self.pid == os.getpid()
@@ -763,8 +784,8 @@ class Updater:
       for param in grads.keys():
         models = [param]
         for i in range(self.update_multiple_models - 1):
-          # TODO: this will copy the param. this means that param must already be loaded.
-          # This is not the case when we call this function, where they are just randomly initialized!
+          # Note that when we call this function, where they are just randomly initialized,
+          # so it's important that reset() updates the var properly later.
           models += [self.var(param, name="%s_model_%i" % (param.name, i))]
 
         models_new = []
