@@ -857,7 +857,7 @@ class TimeWarpGlobalLayer(_NoOpLayer):
     n_time_f32 = T.cast(n_time, dtype="float32")
     i = T.cast(self.index, dtype="float32")  # so that it can run on gpu. time,batch
     f32 = numpy.float32
-    m = 2  # warp values: idx delta and gauss sigma
+    m = 1  # warp values: compression at idx
     self.W_warp = self.add_var_random_mat(n_in, m, name="W_warp")
     self.b_warp = self.add_param(self.create_bias(m, name="b_warp")).dimshuffle('x', 0)  # batch,m
     from ActivationFunctions import relu
