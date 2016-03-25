@@ -763,6 +763,7 @@ class TimeWarpLayer(_NoOpLayer):
   Implementation is very similar to TimeBlurLayer except
   that the weight distribution is different every time frame
   and controlled by a NN.
+  Note that this warp is applied locally. See also :class:`TimeWarpGlobalLayer`.
   """
   layer_class = "time_warp"
   recurrent = True  # Force no frame shuffling or so.
@@ -832,6 +833,70 @@ class TimeWarpLayer(_NoOpLayer):
       self.output = T.inc_subtensor(self.output[o_slice], z[z_slice] * w.dimshuffle(0, 1, 'x'))
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
     self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
+
+
+class TimeWarpGlobalLayer(_NoOpLayer):
+  """
+  Similar to :class:`TimeWarpLayer` but different.
+  This warp is cumulative and applied globally.
+  """
+  def __init__(self, n_out=None, renorm_time=True, window_size=30, sigma2=0.5, **kwargs):
+    super(TimeWarpGlobalLayer, self).__init__(**kwargs)
+    x, n_in = concat_sources(self.sources)
+    if n_out: assert n_out == n_in
+    else: n_out = n_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('renorm_time', renorm_time)
+    self.set_attr('window_size', window_size)
+    self.set_attr('sigma2', sigma2)
+    n_time = x.shape[0]
+    n_batch = x.shape[1]
+    n_time_f32 = T.cast(n_time, dtype="float32")
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu. time,batch
+    f32 = numpy.float32
+    m = 2  # warp values: idx delta and gauss sigma
+    self.W_warp = self.add_var_random_mat(n_in, m, name="W_warp")
+    self.b_warp = self.add_param(self.create_bias(m, name="b_warp")).dimshuffle('x', 0)  # batch,m
+    from ActivationFunctions import relu
+    warp = T.dot(x, self.W_warp) + self.b_warp  # time,batch,m
+    # Right now, we can only shrink the time.
+    idxs = T.cumsum(i / (f32(1) + relu(warp[:, :, 0])), axis=0) - f32(1)  # time,batch
+    if renorm_time:
+      # Normalize so that the last idx is always n_time - 1.
+      idxs *= ((n_time_f32 - f32(1)) / idxs[-1, :].dimshuffle('x', 0))
+      new_time = n_time  # old time
+    else:
+      new_time = T.cast(T.max(idxs[-1]), dtype="int64")
+
+    tgt_idxs = T.arange(new_time)  # new_time
+    # Windows, so that the first aligns left and the last aligns right in [0,n_time-1],
+    # for all 0..new_time-1.
+    w_start_idx_fac = (n_time - window_size + f32(1)) / (new_time - f32(1))
+    src_w_start_idxs = T.cast(tgt_idxs * w_start_idx_fac, dtype="int64")  # new_time
+    src_w_end_idxs = T.min(src_w_start_idxs + window_size, n_time)
+    def step(tgt_idx, src_w_start, src_w_end, y_p, x, tgt_idxs):
+      tgt_idxs_w = tgt_idxs[src_w_start:src_w_end]  # window,batch
+      x_w = x[src_w_start:src_w_end]  # window,batch
+      tgt_idx_bc = tgt_idx.dimshuffle('x', 'x')  # window,batch
+      # gauss window
+      f_e = T.exp(-T.sqr(T.cast(tgt_idx_bc - tgt_idxs_w, dtype="float32"))
+                  / (f32(2) * sigma2))  # window,batch
+      norm = T.sum(f_e, axis=0, keepdims=True)  # window,batch
+      y_t = T.sum(x_w * f_e * norm, axis=0)
+      return y_t
+    y_init = T.zeros((n_batch, n_out), dtype="float32")
+    y, _ = theano.scan(step,
+                       sequences=[tgt_idxs, src_w_start_idxs, src_w_end_idxs],
+                       outputs_info=[y_init],
+                       non_sequences=[x, idxs])
+    self.output = y
+
+  def add_var_random_mat(self, n, m, name):
+    l = numpy.sqrt(1.0 / n)
+    values = self.rng.uniform(size=(n, m), low=-l, high=l)
+    values = numpy.asarray(values, dtype=theano.config.floatX)
+    var = theano.shared(value=values, borrow=True, name=name)
+    return self.add_param(var)
 
 
 class ConstantLayer(_NoOpLayer):
