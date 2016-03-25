@@ -840,6 +840,9 @@ class TimeWarpGlobalLayer(_NoOpLayer):
   Similar to :class:`TimeWarpLayer` but different.
   This warp is cumulative and applied globally.
   """
+  layer_class = "time_warp_global"
+  recurrent = True  # Force no frame shuffling or so.
+
   def __init__(self, n_out=None, renorm_time=True, window_size=30, sigma2=0.5, **kwargs):
     super(TimeWarpGlobalLayer, self).__init__(**kwargs)
     x, n_in = concat_sources(self.sources)
