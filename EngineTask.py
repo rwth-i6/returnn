@@ -555,7 +555,6 @@ class TrainTaskThread(TaskThread):
     def copy_from_device(self):
       return self._copy(False)
 
-
   def reduce(self, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
@@ -622,6 +621,7 @@ class HDFForwardTaskThread(TaskThread):
       self.tags = []
       self.merge = merge
       self.cache = cache
+      self.network = network
       target = network.get_layer('output').attrs['target']
       cache.attrs['numTimesteps'] = 0
       cache.attrs['inputPattSize'] = data.num_inputs
@@ -661,10 +661,13 @@ class HDFForwardTaskThread(TaskThread):
       tt = 0
       feats = []
       for seq_idx in range(batch.start_seq,batch.end_seq):
-        seqfeats = features[:,seq_idx - batch.start_seq,:]
-        seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
-        if seqfeats.shape[0] == 0:
+        if self.network.recurrent:
           seqfeats = features[:,seq_idx - batch.start_seq,:]
+          seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
+          if seqfeats.shape[0] == 0:
+            seqfeats = features[:,seq_idx - batch.start_seq,:]
+        else:
+          seqfeats = features[seq_idx - batch.start_seq]
         print >> log.v5, "extracting", seqfeats.shape[-1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         tt += seqfeats.shape[0]
