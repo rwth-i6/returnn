@@ -160,10 +160,9 @@ class Container(object):
     self.attrs[name] = value
 
   def shared(self, value, name, borrow=True):
-    try:
-      return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
-    except Exception:
+    if self.device is None:
       return theano.shared(value=value, borrow=borrow, name=name)
+    return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
 
   def create_bias(self, n, prefix='b', name=""):
     """
@@ -357,7 +356,7 @@ class Layer(Container):
     self.set_attr('L2', L2)
     if L2_eye:
       self.set_attr('L2_eye', L2_eye)
-    self.device = device if device else str(theano.config.device)
+    self.device = device # if device else str(theano.config.device)
     for s in self.sources:
       s.transfer_output(self.device)
     self.set_attr('varreg', varreg)

@@ -380,10 +380,10 @@ class RecurrentUnitLayer(Layer):
         self.attrs['target'] = 'classes'
       l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
+      self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = self.add_param(theano.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
+      self.W_lm_out = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
         if recurrent_transform != 'none':
@@ -407,9 +407,9 @@ class RecurrentUnitLayer(Layer):
       self.xc = T.concatenate(src, axis=2)
       l = sqrt(6.) / sqrt(self.attrs['n_out'] + n_in)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, 1)), dtype=theano.config.floatX)
-      self.W_att_xc = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_xc"))
+      self.W_att_xc = self.add_param(self.shared(value=values, borrow=True, name = "W_att_xc"))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_in, self.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.W_att_in = self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in"))
+      self.W_att_in = self.add_param(self.shared(value=values, borrow=True, name = "W_att_in"))
       zz = T.exp(T.tanh(T.dot(self.xc, self.W_att_xc))) # TB1
       self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
       recurrent_transform = 'none'
