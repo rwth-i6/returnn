@@ -438,6 +438,10 @@ class Device(object):
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
         elif extract == "posteriors":
           source.append(self.testnet.get_layer('output').p_y_given_x)
+        elif extract == "filters":
+          for hidden in self.testnet.hidden:
+            if self.testnet.hidden[hidden].layer_class == "conv":
+              source.append(self.testnet.hidden[hidden].output)
         elif extract == "ctc-sil":
           feat = self.testnet.get_layer('output').p_y_given_x
           feat = feat[:,:-1] #remove blank
