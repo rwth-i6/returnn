@@ -116,9 +116,8 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
-    #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
-    self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
+    self.make_output(self.z)
 
   def create_bias(self, n, prefix='b', name=""):
     if not name:
@@ -147,12 +146,6 @@ class OutputLayer(Layer):
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
     elif self.y_data_flat.dtype.startswith('float'):
       return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
-      #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
-      #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
-      #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
-      #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i])
-      #return T.sum(T.sqr(self.y_m[self.i] - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]]).reshape(self.y_m.shape)[self.i]))
-      #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
     else:
       raise NotImplementedError()
 
