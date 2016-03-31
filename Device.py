@@ -486,7 +486,7 @@ class Device(object):
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
-                                       outputs = source if len(source) == 1 else [T.concatenate(source, axis=1)],
+                                       outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
                                        givens = givens,
                                        on_unused_input='warn',
                                        name = "extractor")
