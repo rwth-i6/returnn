@@ -301,7 +301,8 @@ class Updater:
     for grad in grads.values(): n_total_params += T.prod(grad.shape)
     avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
     for param in grads.keys():
-      if param.layer.device != self.device:
+      if param.layer.device != self.device and param.layer.device is not None:
+        assert False
         grads[param] = grads[param].transfer(self.device)
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
