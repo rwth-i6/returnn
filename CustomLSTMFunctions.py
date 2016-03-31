@@ -15,10 +15,10 @@ def make_fwd_fun(recurrent_transform):
   custom_vars = recurrent_transform.get_sorted_custom_vars()
   state_vars = recurrent_transform.get_sorted_state_vars()
 
-  z_re_shared = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
+  z_re_shared = recurrent_transform.layer.shared(value=numpy.zeros((1,1),dtype="float32"), name="fwd_fun_z_re_shared")
   updates = [(z_re_shared, z_re)]
   custom_out = []
-  state_shared_vars = {v: theano.shared(value=numpy.zeros((1,) * v.ndim, dtype="float32"), name=v.name) for v in state_vars}
+  state_shared_vars = {v: recurrent_transform.layer.shared(value=numpy.zeros((1,) * v.ndim, dtype="float32"), name=v.name) for v in state_vars}
   for v in state_vars:
     v_upd = state_updates[v]
     updates += [(state_shared_vars[v], v_upd)]
@@ -56,9 +56,9 @@ def make_bwd_fun(recurrent_transform):
   custom_grads = all_grads[1:len(custom_vars)+1]
   state_var_prev_grads = all_grads[len(custom_vars)+1:]
 
-  out_Dy_p = theano.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
-  out_custom_grads = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in custom_vars]
-  out_state_var_prev_grads = [theano.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in state_vars_prev]
+  out_Dy_p = recurrent_transform.layer.shared(value=numpy.zeros((1,1),dtype="float32"), name="out_Dy_p")
+  out_custom_grads = [recurrent_transform.layer.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in custom_vars]
+  out_state_var_prev_grads = [recurrent_transform.layer.shared(value=numpy.zeros([1] * var.ndim, dtype="float32"), name="out_D_" + var.name) for var in state_vars_prev]
 
   updates = [(out_Dy_p, Dy_p)]
   updates += [(out, out + grad) for out, grad in zip(out_custom_grads, custom_grads)]  # we accumulate the custom input grads

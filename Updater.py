@@ -99,6 +99,7 @@ class Updater:
     self.gradient_noise = gradient_noise
     self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
     self.reset_update_params = reset_update_params
+    self.device = str(theano.config.device)
     self.params = {}
     self.pid = -1
     if self.adadelta or self.adamdelta:
@@ -253,8 +254,7 @@ class Updater:
     updates = []
     " :type: list[(theano.SharedVariable, theano.Variable)] "
     upd = { p: 0 for p in self.net_train_param_deltas.keys() }
-    grads = self.net_train_param_deltas
-    grads = {p: T.switch(T.or_(T.isinf(g), T.isnan(g)), numpy.float32(0), g) for (p, g) in grads.items()}
+    grads = {p: T.switch(T.or_(T.isinf(g), T.isnan(g)), numpy.float32(0), g) for (p, g) in self.net_train_param_deltas.items()}
 
     if self.mean_normalized_sgd:
       # https://www-i6.informatik.rwth-aachen.de/publications/download/903/WieslerSimonRichardAlexerSchl%7Bu%7DterRalfNeyHermann--Mean-normalizedstochasticgradientforlarge-scaledeeplearning--2014.pdf
@@ -301,6 +301,8 @@ class Updater:
     for grad in grads.values(): n_total_params += T.prod(grad.shape)
     avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
     for param in grads.keys():
+      if param.layer.device != self.device and param.layer.device is not None:
+        grads[param] = grads[param].transfer(self.device)
       deltas = grads[param] * param.layer.gradient_scale
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
