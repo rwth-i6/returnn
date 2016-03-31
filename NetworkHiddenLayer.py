@@ -206,9 +206,9 @@ class DownsampleLayer(_NoOpLayer):
       from ActivationFunctions import elu
       l = sqrt(6.) / sqrt(6 * n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
-      self.A_in = self.add_param(theano.shared(value=values, borrow=True, name = "A_in_" + self.name))
+      self.A_in = self.add_param(self.shared(value=values, borrow=True, name = "A_in_" + self.name))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
-      self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re_" + self.name))
+      self.A_re = self.add_param(self.shared(value=values, borrow=True, name = "A_re_" + self.name))
       def lstmk(z_t, y_p, c_p):
         z_t += T.dot(y_p, self.A_re)
         partition = z_t.shape[1] / 4
@@ -382,7 +382,7 @@ class CalcStepLayer(_NoOpLayer):
           self.output = T.zeros(shape, dtype="float32")
         elif initial == "param":
           values = numpy.asarray(self.rng.normal(loc=0.0, scale=numpy.sqrt(12. / n_out), size=(n_out,)), dtype="float32")
-          initial_param = self.add_param(theano.shared(value=values, borrow=True, name="output_initial"))
+          initial_param = self.add_param(self.shared(value=values, borrow=True, name="output_initial"))
           self.output = initial_param.dimshuffle('x', 'x', 0)
         else:
           raise Exception("CalcStepLayer: initial %s invalid" % initial)
@@ -907,7 +907,7 @@ class TimeWarpGlobalLayer(_NoOpLayer):
     l = numpy.sqrt(1.0 / n)
     values = self.rng.uniform(size=(n, m), low=-l, high=l)
     values = numpy.asarray(values, dtype=theano.config.floatX)
-    var = theano.shared(value=values, borrow=True, name=name)
+    var = self.shared(value=values, borrow=True, name=name)
     return self.add_param(var)
 
 
@@ -1094,7 +1094,7 @@ class HDF5DataLayer(Layer):
     import h5py
     h5 = h5py.File(filename, "r")
     data = h5[dset][...]
-    self.z = theano.shared(value=data.astype('float32'), borrow=True, name=self.name)
+    self.z = self.shared(value=data.astype('float32'), borrow=True, name=self.name)
     self.make_output(self.z) # QD
     self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
     h5.close()
@@ -1481,13 +1481,13 @@ class ConvPoolLayer(ForwardLayer):
     assert n_in == dx * dy
     x_in  = T.concatenate([s.output for s in self.sources], axis = -1).dimshuffle(0,1,2,'x').reshape(self.sources[0].shape[0], self.sources[0].shape[1],dx, dy)
     range = 1.0 / numpy.sqrt(dx*dy)
-    self.W = self.add_param(theano.shared( numpy.asarray(self.rng.uniform(low=-range,high=range,size=(2,1,fx,fy)), dtype = theano.config.floatX), name = "W_%s" % self.name), name = "W_%s" % self.name)
+    self.W = self.add_param(self.shared( numpy.asarray(self.rng.uniform(low=-range,high=range,size=(2,1,fx,fy)), dtype = theano.config.floatX), name = "W_%s" % self.name), name = "W_%s" % self.name)
     conv_out = conv.conv2d(x_in, self.W)
 
     # initialize shared variable for weights.
     w_shp = (2, 3, 9, 9)
     w_bound = numpy.sqrt(3 * 9 * 9)
-    W = theano.shared( numpy.asarray(
+    W = self.shared( numpy.asarray(
                 rng.uniform(
                     low=-1.0 / w_bound,
                     high=1.0 / w_bound,
@@ -1500,7 +1500,7 @@ class ConvPoolLayer(ForwardLayer):
     # an image without learning the parameters. We therefore initialize
     # them to random values to "simulate" learning.
     b_shp = (2,)
-    b = theano.shared(numpy.asarray(
+    b = self.shared(numpy.asarray(
                 rng.uniform(low=-.5, high=.5, size=b_shp),
                 dtype=input.dtype), name ='b')
 
@@ -1763,7 +1763,7 @@ class ConvLayer(_NoOpLayer):
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return theano.shared(
+    return self.shared(
       numpy.asarray(
         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
         dtype=theano.config.floatX
@@ -1774,7 +1774,7 @@ class ConvLayer(_NoOpLayer):
 
   # function for calculating the bias parameter of this class
   def _create_bias(self, n_features):
-    return theano.shared(
+    return self.shared(
       numpy.zeros(
         (n_features,),
         dtype=theano.config.floatX
@@ -1923,7 +1923,7 @@ class NewConvLayer(_NoOpLayer):
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return theano.shared(
+    return self.shared(
       numpy.asarray(
         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
         dtype=theano.config.floatX
@@ -1934,7 +1934,7 @@ class NewConvLayer(_NoOpLayer):
 
   # function for calculating the bias parameter of this class
   def _create_bias(self, n_features):
-    return theano.shared(
+    return self.shared(
       numpy.zeros(
         (n_features,),
         dtype=theano.config.floatX
@@ -2118,7 +2118,7 @@ class NewConv(_NoOpLayer):
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return theano.shared(
+    return self.shared(
       numpy.asarray(
         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
         dtype=theano.config.floatX
@@ -2129,7 +2129,7 @@ class NewConv(_NoOpLayer):
 
   # function for calculating the bias parameter of this class
   def _create_bias(self, n_features):
-    return theano.shared(
+    return self.shared(
       numpy.zeros(
         (n_features,),
         dtype=theano.config.floatX
@@ -2315,7 +2315,7 @@ class ConvFMP(_NoOpLayer):
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return theano.shared(
+    return self.shared(
       numpy.asarray(
         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
         dtype=theano.config.floatX
@@ -2326,7 +2326,7 @@ class ConvFMP(_NoOpLayer):
 
   # function for calculating the bias parameter of this class
   def _create_bias(self, n_features):
-    return theano.shared(
+    return self.shared(
       numpy.zeros(
         (n_features,),
         dtype=theano.config.floatX

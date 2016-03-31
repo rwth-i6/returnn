@@ -194,6 +194,9 @@ class Device(object):
     # First set some sane default for compile dir.
     theano_flags.setdefault("compiledir_format",
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
+    theano_flags.setdefault("contexts",
+                            ";".join(["gpu%d->cuda%d" % (i,i) for i in xrange(4)]))
+    print theano_flags
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
     if self.name[-1] == 'X':
