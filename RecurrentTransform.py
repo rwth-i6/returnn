@@ -228,7 +228,7 @@ class AttentionBase(RecurrentTransformBase):
       n_tmp = self.attrs['template']
       l = sqrt(6.) / sqrt(2 * n_tmp)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
-      self.A_re = self.add_param(theano.shared(value=values, borrow=True, name = "A_re"))
+      self.A_re = self.add_param(self.layer.shared(value=values, borrow=True, name = "A_re"))
     if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
@@ -350,19 +350,19 @@ class AttentionList(AttentionBase):
       # mapping from base output to template size
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re) # + self.base[i].attrs['n_out'])
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
-      self.add_param(theano.shared(value=values, borrow=True, name = "W_att_re_%d" % i))
+      self.add_param(self.layer.shared(values, "W_att_re_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
-      self.add_param(theano.shared(value=values, borrow=True, name="b_att_re_%d" % i))
+      self.add_param(self.layer.shared(value=values, borrow=True, name="b_att_re_%d" % i))
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
-      W_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
+      W_att_bs = self.layer.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
       values = numpy.zeros((n_tmp,),dtype='float32')
-      b_att_bs = self.layer.add_param(theano.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
+      b_att_bs = self.layer.add_param(self.layer.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
       self.add_input(T.tanh(T.dot(self.base[i].output[::direction], W_att_bs) + b_att_bs), 'C_%d' % i)
       self.add_input(T.cast(self.base[i].index[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.add_param(theano.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
+      self.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
       self.init(i)
 
   def item(self, name, i):
@@ -598,8 +598,8 @@ def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2
   from NetworkBaseLayer import SourceLayer
   if getattr(RecurrentUnitLayer, "rng", None) is None:
     RecurrentUnitLayer.initialize_rng()
-  index = theano.shared(numpy.array([[1] * n_batches] * n_input_t, dtype="int8"), name="i")
-  x_out = theano.shared(numpy.array([[[1.0] * n_input_dim] * n_batches] * n_input_t, dtype="float32"), name="x")
+  index = self.layer.shared(numpy.array([[1] * n_batches] * n_input_t, dtype="int8"), name="i")
+  x_out = self.layer.shared(numpy.array([[[1.0] * n_input_dim] * n_batches] * n_input_t, dtype="float32"), name="x")
   layer = RecurrentUnitLayer(n_out=n_out, index=index, sources=[],
                              base=[SourceLayer(n_out=x_out.get_value().shape[2], x_out=x_out, index=index)],
                              attention=recurrent_transform_name)

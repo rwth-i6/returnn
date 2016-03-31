@@ -159,6 +159,12 @@ class Container(object):
     """
     self.attrs[name] = value
 
+  def shared(self, value, name, borrow=True):
+    try:
+      return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
+    except:
+      return theano.shared(value=value, borrow=borrow, name=name)
+
   def create_bias(self, n, prefix='b', name=""):
     """
     :param int n: output dimension
@@ -184,7 +190,7 @@ class Container(object):
     }
     values = eval(self.bias_init, eval_locals)
     values = numpy.asarray(values, dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name)
+    return self.shared(values, name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
     if name is None: name = self.name
@@ -196,7 +202,7 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=theano.config.floatX)
     else:
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name) # broadcastable=(True, True, False))
+    return self.shared(values, name)
 
   def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth=None):
     if not depth: depth = self.depth
@@ -208,7 +214,7 @@ class Container(object):
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=theano.config.floatX)
     else:
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
+    return self.shared(values, name)
 
   def create_random_uniform_weights1(self, n, m, p=None, l=None, name=None):
     if name is None: name = 'W_' + self.name
@@ -216,7 +222,7 @@ class Container(object):
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
-    return theano.shared(value=values, borrow=True, name=name) #, broadcastable=(True, True, False))
+    return self.shared(values, name)
 
   def create_forward_weights(self, n, m, name=None):
     """
@@ -298,6 +304,7 @@ class SourceLayer(Container):
     self.set_attr('sparse', sparse)
     self.set_attr('delay', delay)
     self.index = index
+    self.device = 'cpu'
 
   def make_constraints(self):
     return 0
@@ -311,6 +318,9 @@ class SourceLayer(Container):
     """
     return None
 
+  def transfer_output(self, device):
+    pass
+
 
 class Layer(Container):
   recurrent = False
@@ -320,7 +330,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, carry=False,
-               sparse_filtering=False, gradient_scale=1.0,
+               sparse_filtering=False, gradient_scale=1.0, device=None,
                **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
@@ -347,6 +357,9 @@ class Layer(Container):
     self.set_attr('L2', L2)
     if L2_eye:
       self.set_attr('L2_eye', L2_eye)
+    self.device = device if device else str(theano.config.device)
+    for s in self.sources:
+      s.transfer_output(self.device)
     self.set_attr('varreg', varreg)
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
@@ -482,7 +495,7 @@ class Layer(Container):
       W = self.params[name]
       name = "b_T_%s"%self.name
       if not name in self.params:
-        self.add_param(theano.shared(value=numpy.asarray(self.rng.uniform(low=-3, high=-1, size=(self.attrs['n_out'],)), dtype=theano.config.floatX), borrow=True, name=name), name=name)
+        self.add_param(self.shared(value=numpy.asarray(self.rng.uniform(low=-3, high=-1, size=(self.attrs['n_out'],)), dtype=theano.config.floatX), name=name), name=name)
       b = self.params[name]
       x = T.concatenate([s.output for s in self.sources], axis = -1)
       Tr = T.nnet.sigmoid(self.dot(x, W) + b)
@@ -498,6 +511,13 @@ class Layer(Container):
       l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
       self.output = nfs / l2fn.dimshuffle('x', 0)   # normalize columns
     self.output.name = "%s.output" % self.name
+    self._output = output
+
+  def transfer_output(self, device):
+    if device != self.device:
+      self.output = self._output.transfer(device) # requires Theano 0.8
+    else:
+      self.output = self._output
 
   def to_json(self):
     attrs = super(Layer, self).to_json()
