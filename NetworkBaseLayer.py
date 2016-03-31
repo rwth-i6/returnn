@@ -513,6 +513,8 @@ class Layer(Container):
     self._output = output
 
   def transfer_output(self, device):
+    if device == None:
+      device = str(theano.config.device)
     if device != self.device:
       self.output = self._output.transfer(device) # requires Theano 0.8
     else:
