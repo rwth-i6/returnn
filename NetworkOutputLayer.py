@@ -115,7 +115,7 @@ class OutputLayer(Layer):
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
-      self.priori = theano.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
+      self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
     #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
@@ -126,7 +126,7 @@ class OutputLayer(Layer):
     assert n > 0
     bias = numpy.log(1.0 / n)  # More numerical stable.
     value = numpy.zeros((n,), dtype=theano.config.floatX) + bias
-    return theano.shared(value=value, borrow=True, name=name)
+    return self.shared(value=value, borrow=True, name=name)
 
   def entropy(self):
     """
