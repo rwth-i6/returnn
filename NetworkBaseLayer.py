@@ -162,7 +162,7 @@ class Container(object):
   def shared(self, value, name, borrow=True):
     try:
       return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
-    except:
+    except Exception:
       return theano.shared(value=value, borrow=borrow, name=name)
 
   def create_bias(self, n, prefix='b', name=""):
