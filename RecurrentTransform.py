@@ -346,7 +346,10 @@ class AttentionList(AttentionBase):
     direction = self.layer.attrs['direction']
     for i,e in enumerate(self.base):
       # base output
-      self.add_input(e.output[::direction], 'B_%d' % i)
+      B = e.output[::direction]
+      if self.attrs['bn']:
+        B = self.layer.batch_norm(B, e.attrs['n_out'])
+      self.add_input(B, 'B_%d' % i)
       # mapping from base output to template size
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re) # + self.base[i].attrs['n_out'])
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
@@ -400,7 +403,7 @@ class AttentionList(AttentionBase):
         dst = -T.log(w_i)
         Q = self.item("Q", i)
         inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32') * T.gt(self.n,0)
-        big = T.cast(1e20,'float32')
+        big = T.cast(1e10,'float32')
         #D = T.inc_subtensor(-T.log(w_i)[:,1:], T.switch(T.eq(T.max(self.n),0), big, 0)) # t>=1 cannot be aligned to n=0
         n0 = T.eq(T.max(self.n),0)
         D = 1. - w_i #-T.log(w_i)

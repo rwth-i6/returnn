@@ -480,6 +480,16 @@ class Layer(Container):
     else:
       assert False, "consensus method unknown: " + cns
 
+  def batch_norm(self, h, dim, use_shift=True, use_std=True):
+    beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_beta" % h.name))
+    gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_gamma" % h.name))
+    bn = (h - T.mean(h,axis=1,keepdims=True)) / T.sqrt(T.std(h,axis=1,keepdims=True))
+    if use_std:
+      bn *= gamma
+    if use_shift:
+      bn += beta
+    return bn
+
   def make_output(self, output, collapse = True):
     self.output = output
     if collapse and self.depth > 1:
@@ -500,7 +510,7 @@ class Layer(Container):
       Tr = T.nnet.sigmoid(self.dot(x, W) + b)
       self.output = Tr * self.output + (1 - Tr) * x
     if self.attrs['batch_norm']:
-      self.output = (self.output - T.mean(self.output,axis=1,keepdims=True)) / T.std(self.output,axis=1,keepdims=True)
+      self.output = self.batch_norm(self.output, self.attrs['n_out'])
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
     if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
