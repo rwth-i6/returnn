@@ -231,6 +231,7 @@ class RecurrentUnitLayer(Layer):
                attention_store = False,
                attention_align = False,
                attention_glimpse = 1,
+               attention_bn = 1,
                attention_lm = 'none',
                base = None,
                lm = False,
@@ -313,6 +314,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)
+    self.set_attr('attention_bn', attention_bn)
     self.set_attr('n_dec', n_dec)
     if encoder:
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
