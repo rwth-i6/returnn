@@ -450,12 +450,9 @@ class Device(object):
         elif extract == "posteriors":
           source.append(self.testnet.get_layer('output').p_y_given_x)
         elif extract == "filters":
-          f = open('temp/list.txt', 'w')
           for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
             if self.testnet.hidden[hidden].layer_class == "conv":
-              f.write(hidden+'\n')
               source.append(self.testnet.hidden[hidden].output)
-          f.close()
         elif extract == "ctc-sil":
           feat = self.testnet.get_layer('output').p_y_given_x
           feat = feat[:,:-1] #remove blank
