@@ -481,7 +481,7 @@ class Layer(Container):
       assert False, "consensus method unknown: " + cns
 
   def batch_norm(self, h, dim, use_shift=True, use_std=True):
-    bn = (h - T.mean(h,axis=1,keepdims=True)) / T.std(h,axis=1,keepdims=True)
+    bn = (h - T.mean(h,axis=1,keepdims=True)) / (T.std(h,axis=1,keepdims=True) + numpy.float32(1e-10))
     if use_std:
       gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_gamma" % h.name))
       bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)

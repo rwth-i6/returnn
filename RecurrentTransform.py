@@ -397,6 +397,8 @@ class AttentionList(AttentionBase):
         z_i = self.distance(C, H)
         w_i = self.softmax(z_i, I)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
+      if self.attrs['store']:
+        updates[self.state_vars['att_%d' % i]] = w_i
       if self.attrs['align']:
         dst = -T.log(w_i)
         Q = self.item("Q", i)
@@ -428,8 +430,6 @@ class AttentionList(AttentionBase):
                                 outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
-      if self.attrs['store']:
-        updates[self.state_vars['att_%d' % i]] = w_i
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
     return inp, updates
 
