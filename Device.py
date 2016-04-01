@@ -12,6 +12,7 @@ import time
 import pickle
 from thread import start_new_thread
 import Debug
+import re
 
 
 
@@ -99,6 +100,16 @@ asyncChildGlobalDevice = None
 
 # Any Device instance.
 deviceInstance = None
+
+def str2int(txt):
+  try:
+    return int(txt)
+  except:
+    return txt
+
+def sort_strint(txt):
+  # http://nedbatchelder.com/blog/200712/human_sorting.html
+  return [ str2int(i) for i in re.split('(\d+)', txt) ]
 
 
 class Device(object):
@@ -242,7 +253,7 @@ class Device(object):
         print 'Inputs : %s' % [input[0] for input in fn.inputs]
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
-
+  
   def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config
@@ -439,9 +450,12 @@ class Device(object):
         elif extract == "posteriors":
           source.append(self.testnet.get_layer('output').p_y_given_x)
         elif extract == "filters":
-          for hidden in self.testnet.hidden:
+          f = open('temp/list.txt', 'w')
+          for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
             if self.testnet.hidden[hidden].layer_class == "conv":
+              f.write(hidden+'\n')
               source.append(self.testnet.hidden[hidden].output)
+          f.close()
         elif extract == "ctc-sil":
           feat = self.testnet.get_layer('output').p_y_given_x
           feat = feat[:,:-1] #remove blank
