@@ -663,7 +663,8 @@ class HDFForwardTaskThread(TaskThread):
       for seq_idx in range(batch.start_seq,batch.end_seq):
         if self.network.recurrent:
           seqfeats = features[:,seq_idx - batch.start_seq,:]
-          seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
+          if batch.end_seq - batch.start_seq > 1:
+            seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
           if seqfeats.shape[0] == 0:
             seqfeats = features[:,seq_idx - batch.start_seq,:]
         else:

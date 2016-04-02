@@ -398,7 +398,7 @@ class AttentionList(AttentionBase):
         w_i = self.softmax(z_i, I)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
-        updates[self.state_vars['att_%d'%i]] = w_i
+        updates[self.state_vars['att_%d' % i]] = w_i
       if self.attrs['align']:
         dst = -T.log(w_i)
         Q = self.item("Q", i)
@@ -406,17 +406,28 @@ class AttentionList(AttentionBase):
         big = T.cast(1e10,'float32')
         #D = T.inc_subtensor(-T.log(w_i)[:,1:], T.switch(T.eq(T.max(self.n),0), big, 0)) # t>=1 cannot be aligned to n=0
         n0 = T.eq(T.max(self.n),0)
-        D=-T.log(w_i)
-        def dtw(i,q_p,b_p,Q,D,inf):
+        D = 1. - w_i #-T.log(w_i)
+        def dtw2(i,q_p,b_p,Q,D,inf):
           #inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
           penalty = T.switch(T.and_(numpy.int8(1)-n0,T.eq(i,0)), big, T.constant(0.0,'float32'))
-          loop = T.constant(0.0, 'float32') + q_p
+          loop = T.constant(1.0, 'float32') + q_p
           forward = T.constant(0.0, 'float32') + T.switch(T.eq(self.n*i,0), 0, Q[i-1])
           opt = T.stack([loop,forward])
           k_out = T.cast(T.argmin(opt,axis=0),'int32')
           return opt[k_out,T.arange(opt.shape[1])] + D[i] + penalty, k_out
+
+        def dtw(i, q_p, b_p, Q, D, inf):
+          i0 = T.eq(i, 0)
+          # inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
+          penalty = T.switch(T.and_(T.neg(n0), i0), big, T.constant(0.0, 'float32'))
+          loop = T.constant(0.0, 'float32') + q_p
+          forward = T.constant(0.0, 'float32') + T.switch(T.or_(n0, i0), 0, Q[i - 1])
+          opt = T.stack([loop, forward])
+          k_out = T.cast(T.argmin(opt, axis=0), 'int32')
+          return opt[k_out, T.arange(opt.shape[1])] + D[i] + penalty, k_out
+
         output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,D,inf],
-                                outputs_info=[big+T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
+                                outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
