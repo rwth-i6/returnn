@@ -482,7 +482,7 @@ class Layer(Container):
 
   def batch_norm(self, h, dim, use_shift=True, use_std=True):
     beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_beta" % h.name))
-    gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_gamma" % h.name))
+    gamma = self.add_param(self.shared(numpy.float32(0.1) + numpy.zeros((dim,), 'float32'), "%s_gamma" % h.name))
     bn = (h - T.mean(h,axis=1,keepdims=True)) / T.sqrt(T.std(h,axis=1,keepdims=True))
     if use_std:
       bn *= gamma

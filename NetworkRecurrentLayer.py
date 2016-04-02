@@ -231,7 +231,7 @@ class RecurrentUnitLayer(Layer):
                attention_store = False,
                attention_align = False,
                attention_glimpse = 1,
-               attention_bn = 1,
+               attention_bn = 0,
                attention_lm = 'none',
                base = None,
                lm = False,
