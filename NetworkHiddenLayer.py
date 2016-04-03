@@ -1404,7 +1404,6 @@ class RoutingLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
-
 class DetectionLayer(HiddenLayer):
   layer_class = "detection"
   def __init__(self, label_idx, **kwargs):

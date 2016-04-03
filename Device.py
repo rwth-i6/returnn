@@ -205,8 +205,8 @@ class Device(object):
     # First set some sane default for compile dir.
     theano_flags.setdefault("compiledir_format",
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
-    theano_flags.setdefault("contexts",
-                            ";".join(["gpu%d->cuda%d" % (i,i) for i in xrange(4)]))
+    #theano_flags.setdefault("contexts",
+    #                        ";".join(["gpu%d->cuda%d" % (i,i) for i in xrange(4)]))
     # print theano_flags
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
@@ -253,7 +253,7 @@ class Device(object):
         print 'Inputs : %s' % [input[0] for input in fn.inputs]
         print 'Outputs: %s' % [output[0] for output in fn.outputs]
         assert False, '*** NaN detected ***'
-  
+
   def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
     :type config: Config.Config

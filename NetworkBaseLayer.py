@@ -29,6 +29,7 @@ class Container(object):
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool|dict] """
+    self.device = None
     if layer_class:
       self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
@@ -328,7 +329,7 @@ class Layer(Container):
                sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
-               mask="unity", dropout=0.0, batch_norm=False, carry=False,
+               mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0,
                sparse_filtering=False, gradient_scale=1.0, device=None,
                **kwargs):
     """
@@ -349,8 +350,8 @@ class Layer(Container):
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
     self.set_attr('sparse_filtering', sparse_filtering)
-    self.set_attr('carry', carry)
     self.set_attr('gradient_scale', gradient_scale)
+    self.set_attr('layer_drop', layer_drop)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
@@ -496,21 +497,34 @@ class Layer(Container):
       self.output = self.make_consensus(self.output)
       if self.attrs['consensus'] == 'flat':
         self.attrs['n_out'] *= self.depth
-    if self.attrs['carry']:
-      assert sum([s.attrs['n_out'] for s in self.sources]) == self.attrs['n_out'], "input / output dimensions do not match in %s. input %d, output %d" % (self.name, sum([s.attrs['n_out'] for s in self.sources]), self.attrs['n_out'])
-      name = 'W_T_%s'%self.name
-      if not name in self.params:
-        self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'], name=name), name=name)
-      W = self.params[name]
-      name = "b_T_%s"%self.name
-      if not name in self.params:
-        self.add_param(self.shared(value=numpy.asarray(self.rng.uniform(low=-3, high=-1, size=(self.attrs['n_out'],)), dtype=theano.config.floatX), name=name), name=name)
-      b = self.params[name]
-      x = T.concatenate([s.output for s in self.sources], axis = -1)
-      Tr = T.nnet.sigmoid(self.dot(x, W) + b)
-      self.output = Tr * self.output + (1 - Tr) * x
     if self.attrs['batch_norm']:
       self.output = self.batch_norm(self.output, self.attrs['n_out'])
+    if self.attrs['layer_drop'] > 0.0:
+      self.W_drop = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
+                                                              self.attrs['n_out'],
+                                                              name="W_drop_%s_%s" % (s.name, self.name)))
+                   for s in self.sources]
+      if self.train_flag:
+        z = 0
+        for s, W_in in zip(self.sources, self.W_drop):
+          if s.attrs['sparse']:
+            if s.output.ndim == 3:
+              out_dim = s.output.shape[2]
+            elif s.output.ndim == 2:
+              out_dim = 1
+            else:
+              assert False, s.output.ndim
+            z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0], s.output.shape[1], out_dim * W_in.shape[1]))
+          else:
+            z += self.dot(s.output, W_in)
+        from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+        rng = RandomStreams(self.rng.randint(1234) + 1)
+        import theano.ifelse
+        drop = rng.binomial(n=1, p=self.attrs['layer_drop'], size=(1,), dtype='int8')[0]
+        # drop = theano.printing.Print("drop")(drop)
+        self.output = theano.ifelse.ifelse(drop, z, self.output)
+        # self.output = T.switch(drop, z, self.output)
+        #self.output = drop * z + (1-drop) * self.output
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
     if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
@@ -523,9 +537,9 @@ class Layer(Container):
     self._output = output
 
   def transfer_output(self, device):
-    if device == None:
+    if device is None:
       device = str(theano.config.device)
-      if self.device == None:
+      if self.device is None:
         return self.output
     if device != self.device:
       self.output = self._output.transfer(device) # requires Theano 0.8
