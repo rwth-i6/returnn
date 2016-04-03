@@ -29,6 +29,7 @@ class Container(object):
     """
     self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
     self.attrs = {}; """ :type: dict[str,str|float|int|bool|dict] """
+    self.device = None
     if layer_class:
       self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
@@ -523,9 +524,9 @@ class Layer(Container):
     self._output = output
 
   def transfer_output(self, device):
-    if device == None:
+    if device is None:
       device = str(theano.config.device)
-      if self.device == None:
+      if self.device is None:
         return self.output
     if device != self.device:
       self.output = self._output.transfer(device) # requires Theano 0.8
