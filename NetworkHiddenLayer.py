@@ -1404,24 +1404,38 @@ class RoutingLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
-class RandomRouteLayer(HiddenLayer):
+class RandomRouteLayer(_NoOpLayer):
   layer_class = "random_route"
-  def __init__(self, p=None, **kwargs):
-    self.params = {}
-    if p == None:
-      p = [1./len(kwargs['sources'])] * len(kwargs['sources'])
-    assert len(p) == len(kwargs['sources'])
-    assert all([s.attrs['n_out'] == kwargs['sources'][0].attrs['n_out'] for s in kwargs['sources'][1:]])
-    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-    rng = RandomStreams(self.rng.randint(1234) + 1)
-    import theano.ifelse
-    sel = rng.multinomial(self, size=(1,), n=1, pvals=p)[0]
-    sel = theano.printing.Print("sel")(sel)
-    #self.make_output(T.stack([s.output for s in kwargs['sources']])[sel]) # this destroys the speed improvement
-    output = 0
-    for i in xrange(len(kwargs['sources'])):
-      output = theano.ifelse.ifelse(T.eq(sel,i), output, kwargs['sources'][i].output)
-    self.make_output(output)
+
+  def __init__(self, p=None, test_route=0, n_out=None, **kwargs):
+    super(RandomRouteLayer, self).__init__(**kwargs)
+    assert len(kwargs['sources']) > 1, "There is no route to select."
+    if p is None:
+      p = [1. / len(kwargs['sources'])] * len(kwargs['sources'])
+    if isinstance(p, (int, long, float)):
+      assert len(kwargs['sources']) == 2
+      p = [p, 1.0 - p]
+    assert isinstance(p, (list, tuple))
+    assert len(p) == len(self.sources)
+    if not n_out:
+      n_out = self.sources[0].attrs['n_out']
+    assert all([n_out == s.attrs['n_out'] for s in self.sources])
+    self.set_attr('n_out', n_out)
+    self.set_attr('p', p)
+    self.set_attr('test_route', test_route)
+    if test_route >= 0 and not self.train_flag:
+      self.output = self.sources[test_route].output
+    else:
+      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+      rng = RandomStreams(self.rng.randint(1234) + 1)
+      rv = rng.uniform((1,), low=0.0, high=1.0, dtype="float32")[0]
+      import theano.ifelse
+      output = self.sources[0].output
+      p0 = 0.0
+      for s, pc in zip(self.sources, p):
+        output = theano.ifelse.ifelse(T.ge(rv, numpy.float32(p0)), s.output, output)
+        p0 += pc
+      self.output = output
 
 
 class DetectionLayer(HiddenLayer):
