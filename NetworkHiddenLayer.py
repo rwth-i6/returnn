@@ -1417,10 +1417,11 @@ class RandomRouteLayer(HiddenLayer):
     import theano.ifelse
     sel = rng.multinomial(self, size=(1,), n=1, pvals=p)[0]
     sel = theano.printing.Print("sel")(sel)
-    self.make_output(T.stack([s.output for s in kwargs['sources']])[sel]) # this destroys the speed improvement
+    #self.make_output(T.stack([s.output for s in kwargs['sources']])[sel]) # this destroys the speed improvement
     output = 0
     for i in xrange(len(kwargs['sources'])):
-      output = theano.ifelse.ifelse(T.eq(sel,i), z, self.output)
+      output = theano.ifelse.ifelse(T.eq(sel,i), output, kwargs['sources'][i].output)
+    self.make_output(output)
 
 
 class DetectionLayer(HiddenLayer):
