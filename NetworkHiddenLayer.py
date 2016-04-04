@@ -1404,6 +1404,25 @@ class RoutingLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class RandomRouteLayer(HiddenLayer):
+  layer_class = "random_route"
+  def __init__(self, p=None, **kwargs):
+    self.params = {}
+    if p == None:
+      p = [1./len(kwargs['sources'])] * len(kwargs['sources'])
+    assert len(p) == len(kwargs['sources'])
+    assert all([s.attrs['n_out'] == kwargs['sources'][0].attrs['n_out'] for s in kwargs['sources'][1:]])
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    rng = RandomStreams(self.rng.randint(1234) + 1)
+    import theano.ifelse
+    sel = rng.multinomial(self, size=(1,), n=1, pvals=p)[0]
+    sel = theano.printing.Print("sel")(sel)
+    self.make_output(T.stack([s.output for s in kwargs['sources']])[sel]) # this destroys the speed improvement
+    output = 0
+    for i in xrange(len(kwargs['sources'])):
+      output = theano.ifelse.ifelse(T.eq(sel,i), z, self.output)
+
+
 class DetectionLayer(HiddenLayer):
   layer_class = "detection"
   def __init__(self, label_idx, **kwargs):
