@@ -1413,9 +1413,11 @@ class RandomRouteLayer(_NoOpLayer):
     if p is None:
       p = [1. / len(kwargs['sources'])] * len(kwargs['sources'])
     if isinstance(p, (int, long, float)):
-      assert len(kwargs['sources']) == 2
-      p = [p, 1.0 - p]
+      p = [p]
     assert isinstance(p, (list, tuple))
+    if len(p) == len(self.sources) - 1:
+      p.append(1.-sum(p))
+    assert sum(p) == 1. and all([x>=0. for x in p])
     assert len(p) == len(self.sources)
     if not n_out:
       n_out = self.sources[0].attrs['n_out']
@@ -1424,7 +1426,7 @@ class RandomRouteLayer(_NoOpLayer):
     self.set_attr('p', p)
     self.set_attr('test_route', test_route)
     if test_route >= 0 and not self.train_flag:
-      self.output = self.sources[test_route].output
+      self.output = self.sources[test_route].output * T.constant(p[test_route],'float32')
     else:
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
       rng = RandomStreams(self.rng.randint(1234) + 1)

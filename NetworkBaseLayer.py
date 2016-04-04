@@ -329,7 +329,7 @@ class Layer(Container):
                sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
-               mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0,
+               mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
                sparse_filtering=False, gradient_scale=1.0, device=None,
                **kwargs):
     """
@@ -352,6 +352,7 @@ class Layer(Container):
     self.set_attr('sparse_filtering', sparse_filtering)
     self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('layer_drop', layer_drop)
+    self.set_attr('residual', residual)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
     self.set_attr('L2', L2)
@@ -516,7 +517,14 @@ class Layer(Container):
         import theano.ifelse
         drop = rng.binomial(n=1, p=self.attrs['layer_drop'], size=(1,), dtype='int8')[0]
         # drop = theano.printing.Print("drop")(drop)
-        self.output = theano.ifelse.ifelse(drop, z, self.output)
+        self.output = theano.ifelse.ifelse(drop, z,self.output)
+      else:
+        self.output = T.constant(self.attrs['layer_drop'], 'float32') * self.output
+    if self.attrs['residual']:
+      from NetworkHiddenLayer import concat_sources
+      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
+      assert n_in == self.attrs['n_out']
+      self.output += z
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
     if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
