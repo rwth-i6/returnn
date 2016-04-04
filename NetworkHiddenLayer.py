@@ -1431,9 +1431,9 @@ class RandomRouteLayer(_NoOpLayer):
       rv = rng.uniform((1,), low=0.0, high=1.0, dtype="float32")[0]
       import theano.ifelse
       output = self.sources[0].output
-      p0 = 0.0
-      for s, pc in zip(self.sources, p):
-        output = theano.ifelse.ifelse(T.ge(rv, numpy.float32(p0)), s.output, output)
+      p0 = p[0]
+      for s, pc in zip(self.sources[1:], p[1:]):
+        output = theano.ifelse.ifelse(T.gt(rv, numpy.float32(p0)), s.output, output)
         p0 += pc
       self.output = output
 
