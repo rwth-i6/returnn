@@ -500,31 +500,23 @@ class Layer(Container):
     if self.attrs['batch_norm']:
       self.output = self.batch_norm(self.output, self.attrs['n_out'])
     if self.attrs['layer_drop'] > 0.0:
-      self.W_drop = [self.add_param(self.create_forward_weights(s.attrs['n_out'],
-                                                              self.attrs['n_out'],
-                                                              name="W_drop_%s_%s" % (s.name, self.name)))
-                   for s in self.sources]
+      from NetworkHiddenLayer import concat_sources
+      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
+      n_out = self.attrs['n_out']
+      if n_in != n_out:
+        print >>log.v4, "Layer drop with additional projection %i -> %i" % (n_in, n_out)
+        if n_in > 0:
+          self.W_drop = self.add_param(self.create_forward_weights(n_in, n_out, name="W_drop_%s" % self.name))
+          z = T.dot(z, self.W_drop)
+        else:
+          z = 0
       if self.train_flag:
-        z = 0
-        for s, W_in in zip(self.sources, self.W_drop):
-          if s.attrs['sparse']:
-            if s.output.ndim == 3:
-              out_dim = s.output.shape[2]
-            elif s.output.ndim == 2:
-              out_dim = 1
-            else:
-              assert False, s.output.ndim
-            z += W_in[T.cast(s.output, 'int32')].reshape((s.output.shape[0], s.output.shape[1], out_dim * W_in.shape[1]))
-          else:
-            z += self.dot(s.output, W_in)
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
         rng = RandomStreams(self.rng.randint(1234) + 1)
         import theano.ifelse
         drop = rng.binomial(n=1, p=self.attrs['layer_drop'], size=(1,), dtype='int8')[0]
         # drop = theano.printing.Print("drop")(drop)
         self.output = theano.ifelse.ifelse(drop, z, self.output)
-        # self.output = T.switch(drop, z, self.output)
-        #self.output = drop * z + (1-drop) * self.output
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
     if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
