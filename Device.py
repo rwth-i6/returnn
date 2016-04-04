@@ -104,7 +104,7 @@ deviceInstance = None
 def str2int(txt):
   try:
     return int(txt)
-  except:
+  except Exception:
     return txt
 
 def sort_strint(txt):
