@@ -500,6 +500,11 @@ class Layer(Container):
         self.attrs['n_out'] *= self.depth
     if self.attrs['batch_norm']:
       self.output = self.batch_norm(self.output, self.attrs['n_out'])
+    if self.attrs['residual']:
+      from NetworkHiddenLayer import concat_sources
+      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
+      assert n_in == self.attrs['n_out']
+      self.output += z
     if self.attrs['layer_drop'] > 0.0:
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
@@ -521,11 +526,6 @@ class Layer(Container):
       else:
         drop = self.attrs['layer_drop']
         self.output = numpy.float32(drop) * z + numpy.float32(1.0 - drop) * self.output
-    if self.attrs['residual']:
-      from NetworkHiddenLayer import concat_sources
-      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
-      assert n_in == self.attrs['n_out']
-      self.output += z
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
     if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
