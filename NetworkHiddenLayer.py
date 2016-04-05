@@ -1430,9 +1430,9 @@ class RandomRouteLayer(_NoOpLayer):
       if test_route >= 0:
         self.output = self.sources[test_route].output
       else:
-        output = T.constant(p[0],'float32') * self.sources[0].output
+        output = numpy.float32(p[0]) * self.sources[0].output
         for s, pc in zip(self.sources[1:], p[1:]):
-          output += T.constant(pc,'float32') * s.output
+          output += numpy.float32(pc) * s.output
         self.output = output
     else:
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
