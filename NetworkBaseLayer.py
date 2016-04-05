@@ -506,6 +506,7 @@ class Layer(Container):
       assert n_in == self.attrs['n_out']
       self.output += z
     if self.attrs['layer_drop'] > 0.0:
+      # Stochastic Depth, http://arxiv.org/abs/1603.09382
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
       n_out = self.attrs['n_out']
@@ -528,8 +529,9 @@ class Layer(Container):
         self.output = numpy.float32(drop) * z + numpy.float32(1.0 - drop) * self.output
     if self.attrs['sparse']:
       self.output = T.argmax(self.output, axis=-1, keepdims=True)
-    if self.attrs['sparse_filtering']: # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
-      fs = T.sqrt(self.output ** 2 + 1e-8)              # numerical stability
+    if self.attrs['sparse_filtering']:
+      # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
+      fs = T.sqrt(self.output ** 2 + 1e-8)    # numerical stability
       l2fs = T.sqrt(T.sum(fs ** 2, axis=1))   # l2 norm of row
       nfs = fs / l2fs.dimshuffle(0, 'x')      # normalize rows
       l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
