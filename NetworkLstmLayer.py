@@ -444,34 +444,34 @@ class SimpleLstmLayer(RecurrentLayer):
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
-def make_lstm_step(n_cells, grad_clip, CI=None, GI=None, GF=None, GO=None, CO=None):
+def make_lstm_step(n_cells, W_re, W_out_proj=None, W_re_proj=None,
+                   grad_clip=None, CI=None, G=None, CO=None):
+  # W_re: recurrent matrix. (n_out,n_cells*4)
+  # W_out_proj: (n_cells,n_out) or None
+  # W_re_proj: (n_out,n_proj) or None
   if not CI: CI = T.tanh
   if not CO: CO = T.tanh
-  if not GI: GI = T.nnet.sigmoid
-  if not GF: GF = T.nnet.sigmoid
-  if not GO: GO = T.nnet.sigmoid
+  if not G: G = T.nnet.sigmoid
 
-  def lstm_step(z_t, i_t, s_p, h_p, W_re, *non_seq_args):
+  def lstm_step(z_t, i_t, s_p, h_p):
     # z_t: current input. (batch,n_cells*4)
     # i_t: 0 or 1 (via index). (batch,)
     # s_p: previous cell state. (batch,n_cells)
     # h_p: previous hidden out. (batch,n_out)
-    # W_re: recurrent matrix. (n_out,n_cells*4)
-    # non_seq_args: if set, is (W_proj,)
-    # W_proj: (n_cells,n_out) or None
-    if non_seq_args: W_proj = non_seq_args[0]
-    else: W_proj = None
     i_t_bc = i_t.dimshuffle(0, 'x')
+    if W_re_proj:
+      h_p = T.dot(h_p, W_re_proj)
     z_t += T.dot(h_p, W_re)
     z_t *= i_t_bc
-    ingate = GI(z_t[:,n_cells: 2 * n_cells])
-    forgetgate = GF(z_t[:,2 * n_cells:3 * n_cells])
-    outgate = GO(z_t[:,3 * n_cells:])
     input = CI(z_t[:,:n_cells])
+    gates = G(z_t[:,n_cells:])
+    ingate = gates[:,:n_cells]
+    forgetgate = gates[:,n_cells:2 * n_cells]
+    outgate = gates[:,2 * n_cells:]
     s_t = input * ingate + s_p * forgetgate
     h_t = CO(s_t) * outgate
-    if W_proj:
-      h_t = T.dot(h_t, W_proj)
+    if W_out_proj:
+      h_t = T.dot(h_t, W_out_proj)
     s_t *= i_t_bc
     h_t *= i_t_bc
     if grad_clip:
@@ -482,11 +482,12 @@ def make_lstm_step(n_cells, grad_clip, CI=None, GI=None, GF=None, GO=None, CO=No
   return lstm_step
 
 
-def lstm(z, i, W_re, W_proj=None, grad_clip=None, direction=1):
+def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, grad_clip=None, direction=1):
   # z: (n_time,n_batch,n_cells*4)
   # i: (n_time,n_batch)
   # W_re: (n_out,n_cells*4)
-  # W_proj: (n_cells,n_out) or None
+  # W_out_proj: (n_cells,n_out) or None
+  # W_re_proj: (n_out,n_proj) or None
   n_batch = z.shape[1]
   assert W_re.ndim == 2
   n_cells = W_re.shape[1] / 4
@@ -494,14 +495,13 @@ def lstm(z, i, W_re, W_proj=None, grad_clip=None, direction=1):
   i = T.cast(i, dtype="float32")  # so that it can run on gpu
   if grad_clip:
     grad_clip = numpy.float32(grad_clip)
-  lstm_step = make_lstm_step(n_cells=n_cells, grad_clip=grad_clip)
+  lstm_step = make_lstm_step(n_cells=n_cells, W_re=W_re, W_out_proj=W_out_proj, W_re_proj=W_re_proj, grad_clip=grad_clip)
 
   s_initial = T.zeros((n_batch, n_cells), dtype="float32")
   h_initial = T.zeros((n_batch, n_out), dtype="float32")
   go_backwards = {1:False, -1:True}[direction]
   (s, h), _ = theano.scan(lstm_step,
                           sequences=[z, i], go_backwards=go_backwards,
-                          non_sequences=[W_re] + ([W_proj] if W_proj else []),
                           outputs_info=[s_initial, h_initial])
   h = h[::direction]
   return h
@@ -511,23 +511,34 @@ class Lstm2Layer(HiddenLayer):
   recurrent = True
   layer_class = "lstm2"
 
-  def __init__(self, n_out, n_cells=None, direction=1, grad_clip=None, truncation=None, **kwargs):
+  def __init__(self, n_out, n_cells=None, n_proj=None, direction=1, grad_clip=None, truncation=None, **kwargs):
     if not n_cells: n_cells = n_out
     # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
     super(Lstm2Layer, self).__init__(n_out=n_cells * 4, **kwargs)
     self.set_attr('n_out', n_out)
     self.set_attr('n_cells', n_cells)
+    if n_proj: self.set_attr('n_proj', n_proj)
     self.set_attr('direction', direction)
     if grad_clip: self.set_attr('grad_clip', grad_clip)
 
-    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_cells * 4, name="W_re_%s" % self.name))
-    if n_out != n_cells:
-      self.W_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
+    n_re_in = n_out
+    if n_proj:
+      # Applied before recurrent matrix.
+      self.W_re_proj = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
+      n_re_in = n_proj
     else:
-      self.W_proj = None
+      self.W_re_proj = None
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+    if n_out != n_cells:
+      # Applied before output.
+      self.W_out_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
+    else:
+      self.W_out_proj = None
 
     z = self.get_linear_forward_output()
-    h = lstm(z=z, i=self.index, W_re=self.W_re, W_proj=self.W_proj, grad_clip=grad_clip, direction=direction)
+    h = lstm(z=z, i=self.index, W_re=self.W_re,
+             W_out_proj=self.W_out_proj, W_re_proj=self.W_re_proj,
+             grad_clip=grad_clip, direction=direction)
     self.make_output(h)
 
 
