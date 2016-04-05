@@ -1428,7 +1428,7 @@ class RandomRouteLayer(_NoOpLayer):
     import theano.ifelse
     if not self.train_flag:
       if test_route >= 0:
-        self.output = self.sources[test_route].output * T.constant(p[test_route],'float32')
+        self.output = self.sources[test_route].output
       else:
         output = T.constant(p[0],'float32') * self.sources[0].output
         for s, pc in zip(self.sources[1:], p[1:]):
