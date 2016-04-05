@@ -184,7 +184,7 @@ class Engine:
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
-    self.learning_rate = self.learning_rate_control.initialLearningRate
+    self.learning_rate = self.learning_rate_control.defaultLearningRate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
@@ -404,11 +404,11 @@ class Engine:
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
       self.learning_rate = self.pretrain_learning_rate
-      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
       self.learning_rate = self.initial_learning_rate
-      self.learning_rate_control.setLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
     else:
       self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
 
