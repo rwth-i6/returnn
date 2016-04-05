@@ -519,7 +519,7 @@ class Layer(Container):
         # drop = theano.printing.Print("drop")(drop)
         self.output = theano.ifelse.ifelse(drop, z, self.output)
       else:
-        self.output = T.constant(self.attrs['layer_drop'], 'float32') * self.output
+        self.output = numpy.float32(self.attrs['layer_drop']) * self.output
     if self.attrs['residual']:
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
