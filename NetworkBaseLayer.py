@@ -517,7 +517,7 @@ class Layer(Container):
         import theano.ifelse
         drop = rng.binomial(n=1, p=self.attrs['layer_drop'], size=(1,), dtype='int8')[0]
         # drop = theano.printing.Print("drop")(drop)
-        self.output = theano.ifelse.ifelse(drop, z,self.output)
+        self.output = theano.ifelse.ifelse(drop, z, self.output)
       else:
         self.output = T.constant(self.attrs['layer_drop'], 'float32') * self.output
     if self.attrs['residual']:
