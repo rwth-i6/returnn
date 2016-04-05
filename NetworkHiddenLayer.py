@@ -1425,8 +1425,13 @@ class RandomRouteLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('p', p)
     self.set_attr('test_route', test_route)
-    if test_route >= 0 and not self.train_flag:
-      self.output = self.sources[test_route].output * numpy.float32(p[test_route])
+    if not self.train_flag:
+      if test_route >= 0:
+        self.output = self.sources[test_route].output
+      else:
+        self.output = numpy.float32(p[0]) * self.sources[0].output
+        for s, pc in zip(self.sources[1:], p[1:]):
+          self.output += numpy.float32(pc) * s.output
     else:
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
       rng = RandomStreams(self.rng.randint(1234) + 1)
