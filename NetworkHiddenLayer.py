@@ -1407,7 +1407,7 @@ class RoutingLayer(HiddenLayer):
 class RandomRouteLayer(_NoOpLayer):
   layer_class = "random_route"
 
-  def __init__(self, p=None, test_route=0, n_out=None, **kwargs):
+  def __init__(self, p=None, test_route=-1, n_out=None, **kwargs):
     super(RandomRouteLayer, self).__init__(**kwargs)
     assert len(kwargs['sources']) > 1, "There is no route to select."
     if p is None:
@@ -1425,13 +1425,19 @@ class RandomRouteLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('p', p)
     self.set_attr('test_route', test_route)
-    if test_route >= 0 and not self.train_flag:
-      self.output = self.sources[test_route].output * T.constant(p[test_route],'float32')
+    import theano.ifelse
+    if not self.train_flag:
+      if test_route >= 0:
+        self.output = self.sources[test_route].output * T.constant(p[test_route],'float32')
+      else:
+        output = T.constant(p[0],'float32') * self.sources[0].output
+        for s, pc in zip(self.sources[1:], p[1:]):
+          output += T.constant(pc,'float32') * s.output
+        self.output = output
     else:
       from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
       rng = RandomStreams(self.rng.randint(1234) + 1)
       rv = rng.uniform((1,), low=0.0, high=1.0, dtype="float32")[0]
-      import theano.ifelse
       output = self.sources[0].output
       p0 = p[0]
       for s, pc in zip(self.sources[1:], p[1:]):
