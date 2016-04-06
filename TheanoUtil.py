@@ -443,7 +443,7 @@ def circular_convolution(a, b):
   return cuifft(cufft(a) * cufft(b))
 
 
-def unroll_scan(fn, sequences, outputs_info, non_sequences, n_steps,
+def unroll_scan(fn, sequences=(), outputs_info=(), non_sequences=(), n_steps=None,
                 go_backwards=False):
   """
   Helper function to unroll for loops. Can be used to unroll theano.scan.
@@ -482,12 +482,16 @@ def unroll_scan(fn, sequences, outputs_info, non_sequences, n_steps,
 
   Returns
   -------
-  List of TensorVariables. Each element in the list gives the recurrent
+  Tuple of the form (outputs, updates).
+  outputs is a list of TensorVariables. Each element in the list gives the recurrent
   values at each time step.
-
+  updates is an empty dict for now.
   """
   if not isinstance(sequences, (list, tuple)):
     sequences = [sequences]
+  sequences = list(sequences)
+  outputs_info = list(outputs_info)
+  non_sequences = list(non_sequences)
 
   # When backwards reverse the recursion direction
   counter = range(n_steps)
@@ -496,6 +500,7 @@ def unroll_scan(fn, sequences, outputs_info, non_sequences, n_steps,
 
   output = []
   prev_vals = outputs_info
+  until = []
   for i in counter:
     step_input = [s[i] for s in sequences] + prev_vals + non_sequences
     out_ = fn(*step_input)
@@ -504,7 +509,15 @@ def unroll_scan(fn, sequences, outputs_info, non_sequences, n_steps,
     if isinstance(out_, T.TensorVariable):
       out_ = [out_]
     if isinstance(out_, tuple):
-      out_ = list(out_)
+      if len(out_) >= 1 and isinstance(out_[0], (list, tuple)):
+        if len(out_) >= 2:
+          assert not out_[1], "shared var updates not supported"
+        if len(out_) >= 3:
+          assert isinstance(out_[2], theano.scan_module.until)
+          until.append(T.neq(out_[2].condition, 0))
+        out_ = list(out_[0])
+      else:
+        out_ = list(out_)
     output.append(out_)
 
     prev_vals = output[-1]
@@ -517,4 +530,15 @@ def unroll_scan(fn, sequences, outputs_info, non_sequences, n_steps,
     l = map(lambda x: x[i], output)
     output_scan.append(T.stack(*l))
 
-  return output_scan
+  if until:
+    assert len(until) == n_steps
+    until_conds = T.stack(*until)
+    new_len = T.switch(T.any(until_conds),
+                       T.minimum(T.argmax(until_conds) + 1, n_steps),
+                       n_steps)
+    output_scan = [out[:new_len] for out in output_scan]
+
+  if len(output_scan) == 1:
+    output_scan = output_scan[0]
+  updates = {}
+  return output_scan, updates
