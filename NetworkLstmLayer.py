@@ -1115,8 +1115,8 @@ class ActLstmLayer(HiddenLayer):
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
 
-    def inner_step(s_p, h_p, hs_p, p_p, tpi_p, delay_p, z_t, i_t):
-      z_t += T.dot(delay_p.dimshuffle(0, 'x'), self.W_delay)  # (n_batch,n_z)
+    def inner_step(s_p, h_p, hs_p, delay_p, z_t, i_t):
+      z_t += T.dot(delay_p.dimshuffle('x', 'x'), self.W_delay)  # (n_batch,n_z)
       s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
       hp_t = T.nnet.sigmoid(h_t[:, -1])  # halting unit, (n_batch)
       hs_t = hs_p + hp_t  # (n_batch)
@@ -1138,14 +1138,14 @@ class ActLstmLayer(HiddenLayer):
         tpi_t = T.sqrt(delay_t) * hp_t
       else:
         assert False, "invalid time_penalty_type %r" % time_penalty_type
-      return [s_t, h_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
+      return [s_t, h_t, hs_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
 
-    def outer_step(z_t, i_t, s_p, h_p, tp_p):
+    def outer_step(z_t, i_t, s_p, h_p):
       n_batch = z_t.shape[0]
       delay_initial = T.zeros((), dtype="float32")  # counter
       hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t), the halting units summed up
-      p_initial = T.zeros((n_batch,), dtype="float32")  # halting probability. hp_t or R or 0
-      tpi_initial = T.zeros((n_batch,), dtype="float32")  # inner time penalty
+      p_initial = None  # halting probability. hp_t or R or 0
+      tpi_initial = None  # inner time penalty
       inner_scan = theano.scan
       if unroll_inner_scan:
         import TheanoUtil
@@ -1164,7 +1164,7 @@ class ActLstmLayer(HiddenLayer):
     i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
     s_initial = T.zeros((n_batch, n_cells), dtype="float32")  # lstm cell state
     h_initial = T.zeros((n_batch, n_out), dtype="float32")  # lstm hidden out
-    tp_initial = T.zeros((), dtype="float32")  # time penalty
+    tp_initial = None  # time penalty
     go_backwards = {1:False, -1:True}[direction]
     (s, h, tp), _ = theano.scan(outer_step,
                                 sequences=[z, i], go_backwards=go_backwards,
