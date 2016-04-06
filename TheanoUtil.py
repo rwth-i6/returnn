@@ -502,6 +502,8 @@ def unroll_scan(fn, sequences=(), outputs_info=(), non_sequences=(), n_steps=Non
   prev_vals = outputs_info
   until = []
   for i in counter:
+    assert len(prev_vals) == len(outputs_info)
+    prev_vals = [prev for prev, out_info in zip(prev_vals, outputs_info) if out_info is not None]
     step_input = [s[i] for s in sequences] + prev_vals + non_sequences
     out_ = fn(*step_input)
     # The returned values from step can be either a TensorVariable,
