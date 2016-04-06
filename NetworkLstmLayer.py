@@ -1045,7 +1045,8 @@ class ActLstmLayer(HiddenLayer):
   recurrent = True
   layer_class = "act_lstm"
 
-  def __init__(self, n_out, n_max_calc_steps=10, direction=1, activation='tanh', eps=0.01, grad_clip=None, **kwargs):
+  def __init__(self, n_out, n_max_calc_steps=10, time_penalty=0.1, time_penalty_type="sqrt",
+               direction=1, activation='tanh', eps=0.01, grad_clip=None, **kwargs):
     n_out_orig = n_out
     n_out += 1  # the halting unit
     n_cells = n_out
@@ -1055,6 +1056,8 @@ class ActLstmLayer(HiddenLayer):
     super(ActLstmLayer, self).__init__(n_out=n_z, **kwargs)
     self.set_attr('n_out', n_out_orig)
     self.set_attr('n_max_calc_steps', n_max_calc_steps)
+    self.set_attr('time_penalty', time_penalty)
+    self.set_attr('time_penalty_type', time_penalty_type)
     self.set_attr('direction', direction)
     self.set_attr('activation', activation)
     if grad_clip:
@@ -1090,7 +1093,7 @@ class ActLstmLayer(HiddenLayer):
       # i_t: 0 or 1 (via index). (batch,)
       # s_p: previous cell state. (batch,n_cells)
       # h_p: previous hidden out. (batch,n_out)
-      i_t_bc = i_t.dimshuffle(0, 'x')
+      i_t_bc = i_t.dimshuffle(0, 'x')  # batch,x
       z_t += T.dot(h_p, self.W_re)
       z_t *= i_t_bc
 
@@ -1109,7 +1112,7 @@ class ActLstmLayer(HiddenLayer):
         h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
       return s_t, h_t
 
-    def inner_step(s_p, h_p, hs_p, p_p, delay_p, z_t, i_t):
+    def inner_step(s_p, h_p, hs_p, p_p, tpi_p, delay_p, z_t, i_t):
       z_t += T.dot(delay_p.dimshuffle(0, 'x'), self.W_delay)  # (n_batch,n_z)
       s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
       hp_t = T.nnet.sigmoid(h_t[:, -1])  # halting unit, (n_batch)
@@ -1123,41 +1126,48 @@ class ActLstmLayer(HiddenLayer):
                      T.switch(hs_p < hs_limit,
                               numpy.float32(1) - hs_p,
                               numpy.float32(0)))
-      stop_cond = T.min(hs_p >= hs_limit)
+      stop_cond = T.min((hs_p >= hs_limit) * i_t)
       delay_t = delay_p + numpy.float32(1)
-      return [s_t, h_t, p_t, delay_t], {}, theano.scan_module.until(stop_cond)
+      if time_penalty_type == "sqrt":
+        # Note: This is not the time penalty as in the paper.
+        # However, I think the one in the paper is not smooth.
+        # This one is even simpler and should be differentiable.
+        tpi_t = T.sqrt(delay_t) * hp_t
+      else:
+        assert False, "invalid time_penalty_type %r" % time_penalty_type
+      return [s_t, h_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
 
-    def outer_step(z_t, i_t, s_p, h_p):
+    def outer_step(z_t, i_t, s_p, h_p, tp_p):
       n_batch = z_t.shape[0]
       delay_initial = T.zeros((), dtype="float32")  # counter
-      hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t)
-      p_initial = T.zeros((n_batch,), dtype="float32")  # hp_t or R or 0
-      (s, h, p, _), _ = theano.scan(
+      hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t), the halting units summed up
+      p_initial = T.zeros((n_batch,), dtype="float32")  # halting probability. hp_t or R or 0
+      tpi_initial = T.zeros((n_batch,), dtype="float32")  # inner time penalty
+      (s, h, hs, p, tpi, _), _ = theano.scan(
         inner_step,
         n_steps=n_max_calc_steps,
-        outputs_info=[s_p, h_p, hs_initial, p_initial, delay_initial],
+        outputs_info=[s_p, h_p, hs_initial, p_initial, tpi_initial, delay_initial],
         non_sequences=[z_t, i_t])
       p_bc = p.dimshuffle(0, 1, 'x')  # (calcstep,n_batch,x)
       s_t = T.sum(s * p_bc, axis=0)
       h_t = T.sum(h * p_bc, axis=0)
-      return s_t, h_t
+      return s_t, h_t, T.sum(tpi)
 
     # i: (n_time,n_batch)
     i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
-    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
-    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")  # lstm cell state
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")  # lstm hidden out
+    tp_initial = T.zeros((), dtype="float32")  # time penalty
     go_backwards = {1:False, -1:True}[direction]
-    (s, h), _ = theano.scan(lstm_step,
-                            sequences=[z, i], go_backwards=go_backwards,
-                            non_sequences=[],
-                            outputs_info=[s_initial, h_initial])
+    (s, h, tp), _ = theano.scan(outer_step,
+                                sequences=[z, i], go_backwards=go_backwards,
+                                non_sequences=[],
+                                outputs_info=[s_initial, h_initial, tp_initial])
     h = h[:, :, :-1]  # remove halting unit
     self.act = [h, s]
     h = h[::direction]
     self.make_output(h)
-
-  def make_constraints(self):
-    pass
+    self.constraints += T.sum(tp) * numpy.float32(time_penalty)
 
 
 class GRULayer(RecurrentLayer):
