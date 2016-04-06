@@ -224,6 +224,12 @@ class Container(object):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
     return self.shared(values, name)
 
+  def create_random_uniform_weights2(self, n, m, name=None):
+    if name is None: name = 'W_' + self.name
+    l = sqrt(1. / n)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    return self.shared(values, name)
+
   def create_forward_weights(self, n, m, name=None):
     """
     :param int n: input dimension
