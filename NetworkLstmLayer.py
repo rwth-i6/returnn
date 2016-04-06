@@ -1046,7 +1046,8 @@ class ActLstmLayer(HiddenLayer):
   layer_class = "act_lstm"
 
   def __init__(self, n_out, n_max_calc_steps=10, time_penalty=0.1, time_penalty_type="sqrt",
-               direction=1, activation='tanh', eps=0.01, grad_clip=None, **kwargs):
+               direction=1, activation='tanh', eps=0.01, grad_clip=None,
+               unroll_inner_scan=False, **kwargs):
     n_out_orig = n_out
     n_out += 1  # the halting unit
     n_cells = n_out
@@ -1064,6 +1065,8 @@ class ActLstmLayer(HiddenLayer):
       self.set_attr('grad_clip', grad_clip)
       grad_clip = numpy.float32(grad_clip)
     self.set_attr('eps', eps)
+    if unroll_inner_scan:
+      self.set_attr('unroll_inner_scan', unroll_inner_scan)
     self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
     self.W_delay = self.add_param(self.create_random_uniform_weights(n=1, m=n_z, p=n_out + n_z + 1, name="W_delay_%s" % self.name))
 
@@ -1143,7 +1146,11 @@ class ActLstmLayer(HiddenLayer):
       hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t), the halting units summed up
       p_initial = T.zeros((n_batch,), dtype="float32")  # halting probability. hp_t or R or 0
       tpi_initial = T.zeros((n_batch,), dtype="float32")  # inner time penalty
-      (s, h, hs, p, tpi, _), _ = theano.scan(
+      inner_scan = theano.scan
+      if unroll_inner_scan:
+        import TheanoUtil
+        inner_scan = TheanoUtil.unroll_scan
+      (s, h, hs, p, tpi, _), _ = inner_scan(
         inner_step,
         n_steps=n_max_calc_steps,
         outputs_info=[s_p, h_p, hs_initial, p_initial, tpi_initial, delay_initial],
