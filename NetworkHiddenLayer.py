@@ -500,6 +500,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('add_right_context', add_right_context)
     self.set_attr('normalize_output', normalize_output)
     self.set_attr('trainable', trainable)
+    self.trainable = trainable
 
     sub_n_out = sublayer.pop("n_out", None)
     if sub_n_out: assert sub_n_out == n_out
@@ -595,6 +596,19 @@ class ChunkingSublayer(_NoOpLayer):
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+
+  def cost(self):
+    if not self.trainable:
+      return super(ChunkingSublayer, self).cost()
+    cost, known_grads = self.sublayer.cost()
+    if cost is None:
+      return None, None
+    return cost * self.sublayer.cost_scale(), known_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(ChunkingSublayer, self).make_constraints()
+    return self.sublayer.make_constraints()
 
 
 class RBFLayer(_NoOpLayer):
