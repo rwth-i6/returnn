@@ -432,6 +432,7 @@ class SubnetworkLayer(_NoOpLayer):
       self.set_attr("data_map", data_map)
     self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
+    self.trainable = trainable
     if concat_sources:
       assert not data_map, "We expect the implicit canonical data_map with concat_sources."
       assert self.sources
@@ -474,6 +475,22 @@ class SubnetworkLayer(_NoOpLayer):
       self.subnetwork.load_hdf(model_hdf)
       print >>log.v2, "done loading subnetwork weights for", self.name
     self.output = self.subnetwork.output["output"].output
+
+  def cost(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).cost()
+    try:
+      const_cost = T.get_scalar_constant_value(self.subnetwork.total_cost)
+      if const_cost == 0:
+        return None, None
+    except T.NotScalarConstantError:
+      pass
+    return self.subnetwork.total_cost, self.subnetwork.known_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).make_constraints()
+    return self.subnetwork.constraints
 
 
 class ChunkingSublayer(_NoOpLayer):

@@ -1156,6 +1156,9 @@ class ActLstmLayer(HiddenLayer):
     h = h[::direction]
     self.make_output(h)
 
+  def make_constraints(self):
+    pass
+
 
 class GRULayer(RecurrentLayer):
   layer_class = "gru"
