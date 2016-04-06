@@ -1477,6 +1477,30 @@ class RandomRouteLayer(_NoOpLayer):
       self.output = output
 
 
+class AdaptiveDepthLayer(HiddenLayer):
+  layer_class = "adaptive_depth"
+
+  def __init__(self, eps=0.01, tau=0.01, **kwargs):
+    kwargs['n_out'] = 1
+    super(AdaptiveDepthLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = kwargs['sources'][0].attrs['n_out']
+    assert all([l.attrs['n_out'] == self.attrs['n_out'] for l in kwargs['sources']])
+    pl, hl = [T.constant(0,'float32')], []
+    for layer,W in zip(self.W_in,kwargs['sources']):
+      out = layer.act[1][::layer.attrs['direction']] if layer.layer_class=='rec' else layer.output
+      h = T.nnet.sigmoid(T.dot(out,W) + self.b).reshape((self.index.shape[0],self.index.shape[1]))
+      pl.append(pl[-1] + h)
+      hl.append(h)
+    bound = T.constant(1. - eps,'float32')
+    H = T.stack(hl)
+    P = T.stack(pl[1:]).dimshuffle(1,2,0) # (time,batch,layer)
+    N = T.sum(T.ge(T.stack(pl[1:]).dimshuffle(1,2,0),bound),axis=2)
+    R = numpy.float32(1.) - P[T.arange(self.index.shape[0]),T.arange(self.index.shape[1]),N-1]
+    self.cost = lambda:N+R,None
+    self.cost_scale = lambda:T.constant(tau,'float32')
+    self.make_output(H[N])
+
+
 class DetectionLayer(HiddenLayer):
   layer_class = "detection"
   def __init__(self, label_idx, **kwargs):
