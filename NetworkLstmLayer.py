@@ -1038,6 +1038,125 @@ class LstmComplexLayer(HiddenLayer):
     self.make_output(h)
 
 
+class ActLstmLayer(HiddenLayer):
+  """
+  Adaptive Computation Time for Recurrent Neural Networks, Graves
+  """
+  recurrent = True
+  layer_class = "act_lstm"
+
+  def __init__(self, n_out, n_max_calc_steps=10, direction=1, activation='tanh', eps=0.01, grad_clip=None, **kwargs):
+    n_out_orig = n_out
+    n_out += 1  # the halting unit
+    n_cells = n_out
+    # {input,forget,out}-gate + update
+    n_z = n_cells * 4
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(ActLstmLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out_orig)
+    self.set_attr('n_max_calc_steps', n_max_calc_steps)
+    self.set_attr('direction', direction)
+    self.set_attr('activation', activation)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    self.set_attr('eps', eps)
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    self.W_delay = self.add_param(self.create_random_uniform_weights(n=1, m=n_z, p=n_out + n_z + 1, name="W_delay_%s" % self.name))
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+
+    # Some defaults.
+    CI, CO = [T.tanh] * 2
+    G = T.nnet.sigmoid
+    actf = strtoact(activation)
+    if isinstance(actf, list):
+      if len(actf) == 3:
+        CI, CO, G = actf
+      elif len(actf) == 2:
+        CI, CO = actf
+      else:
+        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
+    else:
+      CI = CO = actf
+
+    assert 0 < eps < 1
+    hs_limit = numpy.float32(1.0 - eps)
+    assert 0 < hs_limit < 1
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, self.W_re)
+      z_t *= i_t_bc
+
+      gates = G(z_t[:, :n_cells * 3])
+      u = CI(z_t[:, 3 * n_cells:])
+      igate = gates[:, :n_cells]
+      fgate = gates[:, n_cells:2 * n_cells]
+      ogate = gates[:, 2 * n_cells:]
+
+      s_t = u * igate + s_p * fgate
+      h_t = CO(s_t) * ogate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    def inner_step(s_p, h_p, hs_p, p_p, delay_p, z_t, i_t):
+      z_t += T.dot(delay_p.dimshuffle(0, 'x'), self.W_delay)  # (n_batch,n_z)
+      s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
+      hp_t = T.nnet.sigmoid(h_t[:, -1])  # halting unit, (n_batch)
+      hs_t = hs_p + hp_t  # (n_batch)
+      # p_t can have 3 states:
+      #   1) = hp_t,      if hs_t < 1 - eps
+      #   2) = 1 - hs_p,  if hs_t >= 1 - eps and hs_p < 1 - eps  (R, remainder)
+      #   3) = 0,         otherwise
+      p_t = T.switch(hs_t < hs_limit,
+                     hp_t,
+                     T.switch(hs_p < hs_limit,
+                              numpy.float32(1) - hs_p,
+                              numpy.float32(0)))
+      stop_cond = T.min(hs_p >= hs_limit)
+      delay_t = delay_p + numpy.float32(1)
+      return [s_t, h_t, p_t, delay_t], {}, theano.scan_module.until(stop_cond)
+
+    def outer_step(z_t, i_t, s_p, h_p):
+      n_batch = z_t.shape[0]
+      delay_initial = T.zeros((), dtype="float32")  # counter
+      hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t)
+      p_initial = T.zeros((n_batch,), dtype="float32")  # hp_t or R or 0
+      (s, h, p, _), _ = theano.scan(
+        inner_step,
+        n_steps=n_max_calc_steps,
+        outputs_info=[s_p, h_p, hs_initial, p_initial, delay_initial],
+        non_sequences=[z_t, i_t])
+      p_bc = p.dimshuffle(0, 1, 'x')  # (calcstep,n_batch,x)
+      s_t = T.sum(s * p_bc, axis=0)
+      h_t = T.sum(h * p_bc, axis=0)
+      return s_t, h_t
+
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            non_sequences=[],
+                            outputs_info=[s_initial, h_initial])
+    h = h[:, :, :-1]  # remove halting unit
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+
+
 class GRULayer(RecurrentLayer):
   layer_class = "gru"
 
