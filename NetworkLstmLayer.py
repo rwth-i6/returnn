@@ -1048,7 +1048,7 @@ class ActLstmLayer(HiddenLayer):
   def __init__(self, n_out, n_max_calc_steps=10,
                time_penalty=0.1, time_penalty_type="linear",
                total_halt_penalty=1.0, total_halt_penalty_type="inv",
-               direction=1, activation='tanh', eps=0.01, grad_clip=None,
+               direction=1, eps=0.01, grad_clip=None,
                unroll_inner_scan=False, **kwargs):
     n_out_orig = n_out
     n_out += 1  # the halting unit
@@ -1064,7 +1064,6 @@ class ActLstmLayer(HiddenLayer):
     self.set_attr('total_halt_penalty', total_halt_penalty)
     self.set_attr('total_halt_penalty_type', total_halt_penalty_type)
     self.set_attr('direction', direction)
-    self.set_attr('activation', activation)
     if grad_clip:
       self.set_attr('grad_clip', grad_clip)
       grad_clip = numpy.float32(grad_clip)
@@ -1077,19 +1076,8 @@ class ActLstmLayer(HiddenLayer):
     z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
     n_batch = z.shape[1]
 
-    # Some defaults.
     CI, CO = [T.tanh] * 2
     G = T.nnet.sigmoid
-    actf = strtoact(activation)
-    if isinstance(actf, list):
-      if len(actf) == 3:
-        CI, CO, G = actf
-      elif len(actf) == 2:
-        CI, CO = actf
-      else:
-        assert False, "invalid number of activation functions: %s, %s, %s" % (len(actf), activation, actf)
-    else:
-      CI = CO = actf
 
     assert 0 < eps < 1
     hs_limit = numpy.float32(1.0 - eps)
@@ -1122,7 +1110,8 @@ class ActLstmLayer(HiddenLayer):
     def inner_step(s_p, h_p, hs_p, delay_p, z_t, i_t):
       z_t += T.dot(delay_p.dimshuffle('x', 'x'), self.W_delay)  # (n_batch,n_z)
       s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
-      hp_t = T.nnet.sigmoid(h_t[:, -1])  # halting unit, (n_batch)
+      # We assume that tanh was applied to h_t.
+      hp_t = (h_t[:, -1] + numpy.float32(1)) / numpy.float32(2)  # halting unit, (n_batch)
       hs_t = hs_p + hp_t  # (n_batch)
       # p_t can have 3 states:
       #   1) = hp_t,      if hs_t < 1 - eps
