@@ -1139,12 +1139,13 @@ class ActLstmLayer(HiddenLayer):
         tpi_t = T.sqrt(delay_t) * hp_t
       else:
         assert False, "invalid time_penalty_type %r" % time_penalty_type
-      if total_halt_penalty_type == "inv":
-        tpi_t += T.inv(hp_t) * numpy.float32(total_halt_penalty)
-      elif total_halt_penalty_type == "linear":
-        tpi_t -= hp_t * numpy.float32(total_halt_penalty)
-      else:
-        assert False, "invalid total_halt_penalty_type %r" % total_halt_penalty_type
+      if total_halt_penalty:
+        if total_halt_penalty_type == "inv":
+          tpi_t += T.inv(hp_t) * numpy.float32(total_halt_penalty)
+        elif total_halt_penalty_type == "linear":
+          tpi_t -= hp_t * numpy.float32(total_halt_penalty)
+        else:
+          assert False, "invalid total_halt_penalty_type %r" % total_halt_penalty_type
       return [s_t, h_t, hs_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
 
     def outer_step(z_t, i_t, s_p, h_p):
