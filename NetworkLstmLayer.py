@@ -1046,7 +1046,7 @@ class ActLstmLayer(HiddenLayer):
   layer_class = "act_lstm"
 
   def __init__(self, n_out, n_max_calc_steps=10,
-               time_penalty=0.1, time_penalty_type="linear_p",
+               time_penalty=0.01, time_penalty_type="linear_p",
                total_halt_penalty=0.0, total_halt_penalty_type="inv",
                direction=1, eps=0.01, grad_clip=None,
                unroll_inner_scan=False, **kwargs):
