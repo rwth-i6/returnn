@@ -336,6 +336,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
+               carry=False,
                sparse_filtering=False, gradient_scale=1.0, device=None,
                **kwargs):
     """
@@ -358,6 +359,7 @@ class Layer(Container):
     self.set_attr('sparse_filtering', sparse_filtering)
     self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('layer_drop', layer_drop)
+    assert not carry, "not supported anymore"
     self.set_attr('residual', residual)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
