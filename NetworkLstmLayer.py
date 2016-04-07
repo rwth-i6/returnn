@@ -444,11 +444,14 @@ class SimpleLstmLayer(RecurrentLayer):
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
-def make_lstm_step(n_cells, W_re, W_out_proj=None, W_re_proj=None,
-                   grad_clip=None, CI=None, G=None, CO=None):
+def make_lstm_step(n_cells, W_re,
+                   W_out_proj=None, W_re_proj=None,
+                   W_peep_i=None, W_peep_f=None, W_peep_o=None,
+                   grad_clip=None, CI=None, CO=None, G=None):
   # W_re: recurrent matrix. (n_out,n_cells*4)
   # W_out_proj: (n_cells,n_out) or None
   # W_re_proj: (n_out,n_proj) or None
+  # W_peep_*: (n_cells,) or None
   if not CI: CI = T.tanh
   if not CO: CO = T.tanh
   if not G: G = T.nnet.sigmoid
@@ -464,12 +467,22 @@ def make_lstm_step(n_cells, W_re, W_out_proj=None, W_re_proj=None,
     z_t += T.dot(h_p, W_re)
     z_t *= i_t_bc
     input = CI(z_t[:,:n_cells])
-    gates = G(z_t[:,n_cells:])
-    ingate = gates[:,:n_cells]
-    forgetgate = gates[:,n_cells:2 * n_cells]
-    outgate = gates[:,2 * n_cells:]
-    s_t = input * ingate + s_p * forgetgate
-    h_t = CO(s_t) * outgate
+    if W_peep_i or W_peep_f or W_peep_o:
+      ingate = z_t[:,n_cells:2 * n_cells]
+      forgetgate = z_t[:,2 * n_cells:3 * n_cells]
+      if W_peep_i: ingate += s_p * W_peep_i.dimshuffle('x', 0) * i_t_bc
+      if W_peep_f: forgetgate += s_p * W_peep_f.dimshuffle('x', 0) * i_t_bc
+      s_t = input * G(ingate) + s_p * G(forgetgate)
+      outgate = z_t[:,3 * n_cells:]
+      if W_peep_o: outgate += s_t * W_peep_o.dimshuffle('x', 0) * i_t_bc
+      h_t = CO(s_t) * G(outgate)
+    else:  # no peepholes. simplified and faster
+      gates = G(z_t[:,n_cells:])
+      ingate = gates[:,:n_cells]
+      forgetgate = gates[:,n_cells:2 * n_cells]
+      outgate = gates[:,2 * n_cells:]
+      s_t = input * ingate + s_p * forgetgate
+      h_t = CO(s_t) * outgate
     if W_out_proj:
       h_t = T.dot(h_t, W_out_proj)
     s_t *= i_t_bc
@@ -482,12 +495,13 @@ def make_lstm_step(n_cells, W_re, W_out_proj=None, W_re_proj=None,
   return lstm_step
 
 
-def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, grad_clip=None, direction=1):
+def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=None, W_peep_o=None, grad_clip=None, direction=1):
   # z: (n_time,n_batch,n_cells*4)
   # i: (n_time,n_batch)
   # W_re: (n_out,n_cells*4)
   # W_out_proj: (n_cells,n_out) or None
   # W_re_proj: (n_out,n_proj) or None
+  # W_peep_*: (n_cells,) or None
   n_batch = z.shape[1]
   assert W_re.ndim == 2
   n_cells = W_re.shape[1] / 4
@@ -497,7 +511,7 @@ def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, grad_clip=None, direction=
   i = T.cast(i, dtype="float32")  # so that it can run on gpu
   if grad_clip:
     grad_clip = numpy.float32(grad_clip)
-  lstm_step = make_lstm_step(n_cells=n_cells, W_re=W_re, W_out_proj=W_out_proj, W_re_proj=W_re_proj, grad_clip=grad_clip)
+  lstm_step = make_lstm_step(n_cells=n_cells, W_re=W_re, W_out_proj=W_out_proj, W_re_proj=W_re_proj, W_peep_i=W_peep_i, W_peep_f=W_peep_f, W_peep_o=W_peep_o, grad_clip=grad_clip)
 
   s_initial = T.zeros((n_batch, n_cells), dtype="float32")
   h_initial = T.zeros((n_batch, n_out), dtype="float32")
@@ -513,13 +527,14 @@ class Lstm2Layer(HiddenLayer):
   recurrent = True
   layer_class = "lstm2"
 
-  def __init__(self, n_out, n_cells=None, n_proj=None, direction=1, grad_clip=None, truncation=None, **kwargs):
+  def __init__(self, n_out, n_cells=None, n_proj=None, peepholes=False, direction=1, grad_clip=None, truncation=None, **kwargs):
     if not n_cells: n_cells = n_out
     # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
     super(Lstm2Layer, self).__init__(n_out=n_cells * 4, **kwargs)
     self.set_attr('n_out', n_out)
     self.set_attr('n_cells', n_cells)
     if n_proj: self.set_attr('n_proj', n_proj)
+    self.set_attr('peepholes', peepholes)
     self.set_attr('direction', direction)
     if grad_clip: self.set_attr('grad_clip', grad_clip)
 
@@ -536,10 +551,17 @@ class Lstm2Layer(HiddenLayer):
       self.W_out_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
     else:
       self.W_out_proj = None
+    if peepholes:
+      self.W_peepholes = [
+        self.add_param(self.create_random_uniform_weights2(n_cells, name="W_peep_%s_%s" % (g, self.name)))
+        for g in "ifo"]
+    else:
+      self.W_peepholes = [None] * 3
 
     z = self.get_linear_forward_output()
     h = lstm(z=z, i=self.index, W_re=self.W_re,
              W_out_proj=self.W_out_proj, W_re_proj=self.W_re_proj,
+             W_peep_i=self.W_peepholes[0], W_peep_f=self.W_peepholes[1], W_peep_o=self.W_peepholes[2],
              grad_clip=grad_clip, direction=direction)
     self.make_output(h)
 
