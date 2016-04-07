@@ -1045,7 +1045,9 @@ class ActLstmLayer(HiddenLayer):
   recurrent = True
   layer_class = "act_lstm"
 
-  def __init__(self, n_out, n_max_calc_steps=10, time_penalty=0.1, time_penalty_type="sqrt",
+  def __init__(self, n_out, n_max_calc_steps=10,
+               time_penalty=0.1, time_penalty_type="linear",
+               total_halt_penalty=1.0, total_halt_penalty_type="inv",
                direction=1, activation='tanh', eps=0.01, grad_clip=None,
                unroll_inner_scan=False, **kwargs):
     n_out_orig = n_out
@@ -1059,6 +1061,8 @@ class ActLstmLayer(HiddenLayer):
     self.set_attr('n_max_calc_steps', n_max_calc_steps)
     self.set_attr('time_penalty', time_penalty)
     self.set_attr('time_penalty_type', time_penalty_type)
+    self.set_attr('total_halt_penalty', total_halt_penalty)
+    self.set_attr('total_halt_penalty_type', total_halt_penalty_type)
     self.set_attr('direction', direction)
     self.set_attr('activation', activation)
     if grad_clip:
@@ -1131,13 +1135,21 @@ class ActLstmLayer(HiddenLayer):
                               numpy.float32(0)))
       stop_cond = T.min((hs_p >= hs_limit) * i_t)
       delay_t = delay_p + numpy.float32(1)
-      if time_penalty_type == "sqrt":
+      if time_penalty_type == "linear":
         # Note: This is not the time penalty as in the paper.
         # However, I think the one in the paper is not smooth.
         # This one is even simpler and should be differentiable.
+        tpi_t = delay_t * hp_t
+      elif time_penalty_type == "sqrt":
         tpi_t = T.sqrt(delay_t) * hp_t
       else:
         assert False, "invalid time_penalty_type %r" % time_penalty_type
+      if total_halt_penalty_type == "inv":
+        tpi_t += T.inv(hp_t) * numpy.float32(total_halt_penalty)
+      elif total_halt_penalty_type == "linear":
+        tpi_t -= hp_t * numpy.float32(total_halt_penalty)
+      else:
+        assert False, "invalid total_halt_penalty_type %r" % total_halt_penalty_type
       return [s_t, h_t, hs_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
 
     def outer_step(z_t, i_t, s_p, h_p):
