@@ -1046,8 +1046,8 @@ class ActLstmLayer(HiddenLayer):
   layer_class = "act_lstm"
 
   def __init__(self, n_out, n_max_calc_steps=10,
-               time_penalty=0.1, time_penalty_type="linear",
-               total_halt_penalty=1.0, total_halt_penalty_type="inv",
+               time_penalty=0.1, time_penalty_type="linear_p",
+               total_halt_penalty=0.0, total_halt_penalty_type="inv",
                direction=1, eps=0.01, grad_clip=None,
                unroll_inner_scan=False, **kwargs):
     n_out_orig = n_out
@@ -1108,27 +1108,33 @@ class ActLstmLayer(HiddenLayer):
       return s_t, h_t
 
     def inner_step(s_p, h_p, hs_p, delay_p, z_t, i_t):
+      delay_t = delay_p + numpy.float32(1)
+      not_last_state = T.lt(delay_t, numpy.float32(n_max_calc_steps - 0.1))
       z_t += T.dot(delay_p.dimshuffle('x', 'x'), self.W_delay)  # (n_batch,n_z)
       s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
       # We assume that tanh was applied to h_t.
       hp_t = (h_t[:, -1] + numpy.float32(1)) / numpy.float32(2)  # halting unit, (n_batch)
       hs_t = hs_p + hp_t  # (n_batch)
-      # p_t can have 3 states:
-      #   1) = hp_t,      if hs_t < 1 - eps
-      #   2) = 1 - hs_p,  if hs_t >= 1 - eps and hs_p < 1 - eps  (R, remainder)
-      #   3) = 0,         otherwise
+      # p_t can have 4 states:
+      #   1) = hp_t,      if hs_t < 1 - eps and not last state
+      #   2) = 1 - hs_p,  if hs_t < 1 - eps and last state
+      #   3) = 1 - hs_p,  if hs_t >= 1 - eps and hs_p < 1 - eps  (R, remainder)
+      #   4) = 0,         otherwise
       p_t = T.switch(hs_t < hs_limit,
-                     hp_t,
+                     T.switch(not_last_state,
+                              hp_t,
+                              numpy.float32(1) - hs_p),
                      T.switch(hs_p < hs_limit,
                               numpy.float32(1) - hs_p,
                               numpy.float32(0)))
       stop_cond = T.min((hs_p >= hs_limit) * i_t)
-      delay_t = delay_p + numpy.float32(1)
       if time_penalty_type == "linear":
         # Note: This is not the time penalty as in the paper.
         # However, I think the one in the paper is not smooth.
         # This one is even simpler and should be differentiable.
         tpi_t = delay_t * hp_t
+      elif time_penalty_type == "linear_p":
+        tpi_t = delay_t * p_t  # this yields actually the expected value of N(t)
       elif time_penalty_type == "sqrt":
         tpi_t = T.sqrt(delay_t) * hp_t
       else:
