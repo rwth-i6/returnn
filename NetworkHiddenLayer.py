@@ -1480,27 +1480,48 @@ class RandomRouteLayer(_NoOpLayer):
 class AdaptiveDepthLayer(HiddenLayer):
   layer_class = "adaptive_depth"
 
-  def __init__(self, eps=0.01, tau=0.01, **kwargs):
+  def __init__(self, eps=0.01, tau=0.01, bias=-1.0, damping='graves', **kwargs):
     kwargs['n_out'] = 1
     super(AdaptiveDepthLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = kwargs['sources'][0].attrs['n_out']
     self.attrs['tau'] = tau
     self.attrs['eps'] = eps
+    self.attrs['bias'] = bias
+    self.attrs['damping'] = damping
     assert all([l.attrs['n_out'] == self.attrs['n_out'] for l in kwargs['sources']])
-    pl, hl = [T.constant(0,'float32')], []
-    for W,layer in zip(self.W_in,kwargs['sources']):
-      out = layer.act[1][::layer.attrs['direction']] if layer.layer_class=='rec' else layer.output
-      h = T.nnet.sigmoid(T.dot(out,W) + self.b).reshape((self.index.shape[0],self.index.shape[1]))
-      pl.append(pl[-1] + h)
-      hl.append(h)
-    H = T.stack(hl)
-    P = T.stack(pl[1:]).dimshuffle(1,2,0) # (time,batch,layer)
-    self.N = T.sum(T.ge(T.stack(pl[1:]).dimshuffle(1,2,0),T.constant(1. - eps,'float32')),axis=2)
-    self.R = numpy.float32(1.) - P[T.arange(self.index.shape[0]),T.arange(self.index.shape[1]),self.N-1]
-    self.make_output(H[self.N])
+    shape = self.index.shape
+    P = T.zeros((shape[0],shape[1]),'float32')
+    M = T.zeros((shape[0],shape[1]),'int8')
+    H = T.zeros((shape[0],shape[1],self.attrs['n_out']),'float32')
+    threshold = T.constant(1. - eps,'float32')
+    self.cost_val = T.constant(0,'float32')
+    for W,layer,i in zip(self.W_in,kwargs['sources'],range(len(self.W_in))):
+      h = layer.act[1][::layer.attrs['direction']] if layer.layer_class=='rec' else layer.output
+      if damping == 'random':
+        p = self.rng.uniform(size=shape)
+        del self.params[W.name]
+      else:
+        p = T.nnet.sigmoid(T.dot(h,W) + self.b + T.constant(bias,'float32'))[:,:,0]
+      N = T.ge(P + p, threshold) * T.lt(P, threshold)
+      M += N
+      Q = N.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2)
+      H = Q * layer.output + (numpy.float32(1.) - Q) * H
+      if damping == 'graves':
+        self.cost_val += T.cast(T.sum((numpy.float32(1.) - P) * N + N * numpy.float32(i+1)), 'float32')
+      elif damping == 'expected':
+        self.cost_val += T.sum(T.cast(N,'float32') * p * numpy.float32(i+1))
+      P += p
+    # target probability not reached
+    M = numpy.float32(1.) - M
+    H += M.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2) * layer.output
+    if damping == 'graves':
+      self.cost_val += T.cast(T.sum((numpy.float32(1.) - P) * M + M * numpy.float32(len(self.W_in))), 'float32')
+    elif damping == 'expected':
+      self.cost_val += T.sum(T.cast(M, 'float32') * P * numpy.float32(len(self.W_in)))
+    self.make_output(H)
 
   def cost(self):
-    return T.sum(self.N+self.R),None
+    return self.cost_val,None
   def cost_scale(self):
     return T.constant(self.attrs['tau'],'float32')
 
