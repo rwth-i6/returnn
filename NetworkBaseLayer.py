@@ -239,14 +239,24 @@ class Container(object):
     :param str|None name: layer name
     :rtype: theano.shared
     """
+    if not name: name = "W_%s_%i" % (self.name, len(self.params))
     eval_locals = {
+      "numpy": numpy,
+      "theano": theano,
       "n": n,
       "m": m,
       "sqrt": numpy.sqrt,
+      "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=theano.config.floatX)),
       "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
       "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
     }
-    return eval(self.forward_weights_init, eval_locals)
+    v = eval(self.forward_weights_init, eval_locals)
+    if isinstance(v, numpy.ndarray):
+      v = numpy.asarray(v, dtype=theano.config.floatX)
+      v = self.shared(v, name)
+    assert isinstance(v, theano.compile.SharedVariable)
+    assert v.ndim == 2
+    return v
 
   @classmethod
   def guess_source_layer_name(cls, layer_name):
