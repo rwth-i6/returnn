@@ -162,37 +162,39 @@ class CachedDataset(Dataset):
   def _load_seqs(self, start, end):
     raise NotImplementedError
 
-  def _load_seqs_with_cache(self, start, end):
-    num_needed_cache_frames = self.get_seq_start(end)[0] - self.get_seq_start(start)[0]
-    if self.cache_num_frames_free < num_needed_cache_frames:
-      self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
-      gc.collect()
-
-    self.cache_num_frames_free -= num_needed_cache_frames
-
-    # First, delete everything.
-    self.cache_num_frames_free += self.delete(None)
-    gc.collect()
-    # Load as much as we can so that we fill up the cache.
-    while end < self.num_seqs:
-      num_needed_cache_frames = self.get_seq_length_2d(end)[0]
-      if self.cache_num_frames_free - num_needed_cache_frames < 0:
-        break
+  def _load_seqs_with_cache(self, start, end, clear=True):
+    if not clear:
+      # only remove as many frames as required
+      num_needed_cache_frames = self.get_seq_start(end)[0] - self.get_seq_start(start)[0]
+      if self.cache_num_frames_free < num_needed_cache_frames:
+        self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
+        gc.collect()
       self.cache_num_frames_free -= num_needed_cache_frames
-      end += 1
-    self.load_seqs(start, end, with_cache=False)
-    if end == self.num_seqs:
-      # Preload from the start for the next epoch.
-      start = self.num_seqs_cached_at_start
-      end = start
-      while end < start:
+      self.load_seqs(start, end, with_cache=False)
+    else:
+      # First, delete everything.
+      self.cache_num_frames_free += self.delete(None)
+      gc.collect()
+      # Load as much as we can so that we fill up the cache.
+      while end < self.num_seqs:
         num_needed_cache_frames = self.get_seq_length_2d(end)[0]
         if self.cache_num_frames_free - num_needed_cache_frames < 0:
           break
         self.cache_num_frames_free -= num_needed_cache_frames
         end += 1
-      if end != start:
-        self.load_seqs(start, end, with_cache=False)
+      self.load_seqs(start, end, with_cache=False)
+      if end == self.num_seqs:
+        # Preload from the start for the next epoch.
+        start = self.num_seqs_cached_at_start
+        end = start
+        while end < start:
+          num_needed_cache_frames = self.get_seq_length_2d(end)[0]
+          if self.cache_num_frames_free - num_needed_cache_frames < 0:
+            break
+          self.cache_num_frames_free -= num_needed_cache_frames
+          end += 1
+        if end != start:
+          self.load_seqs(start, end, with_cache=False)
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
