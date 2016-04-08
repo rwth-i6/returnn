@@ -1498,7 +1498,7 @@ class AdaptiveDepthLayer(HiddenLayer):
     for W,layer,i in zip(self.W_in,kwargs['sources'],range(len(self.W_in))):
       h = layer.act[1][::layer.attrs['direction']] if layer.layer_class=='rec' else layer.output
       if damping == 'random':
-        p = self.rng.uniform(size=shape)
+        p = T.cast(self.rng.uniform(size=shape),'float32')
         del self.params[W.name]
       else:
         p = T.nnet.sigmoid(T.dot(h,W) + self.b + T.constant(bias,'float32'))[:,:,0]
@@ -1507,17 +1507,17 @@ class AdaptiveDepthLayer(HiddenLayer):
       Q = N.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2)
       H = Q * layer.output + (numpy.float32(1.) - Q) * H
       if damping == 'graves':
-        self.cost_val += T.cast(T.sum((numpy.float32(1.) - P) * N + N * numpy.float32(i+1)), 'float32')
+        self.cost_val += T.sum((numpy.float32(i+2) - P) * T.cast(N,'float32')) # ((1-P) + (i+1))*N
       elif damping == 'expected':
         self.cost_val += T.sum(T.cast(N,'float32') * p * numpy.float32(i+1))
       P += p
     # target probability not reached
-    M = numpy.float32(1.) - M
+    M = numpy.float32(1.) - T.cast(M,'float32')
     H += M.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2) * layer.output
     if damping == 'graves':
-      self.cost_val += T.cast(T.sum((numpy.float32(1.) - P) * M + M * numpy.float32(len(self.W_in))), 'float32')
+      self.cost_val += T.sum((numpy.float32(len(self.W_in)+1) - P) * M)
     elif damping == 'expected':
-      self.cost_val += T.sum(T.cast(M, 'float32') * P * numpy.float32(len(self.W_in)))
+      self.cost_val += T.sum(M * P * numpy.float32(len(self.W_in)))
     self.make_output(H)
 
   def cost(self):
