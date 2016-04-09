@@ -15,8 +15,7 @@ class CachedDataset(Dataset):
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      temp_cache_amount = 0.5
-      self.cache_byte_size_limit_at_start = int((1.0 - temp_cache_amount) * cache_byte_size)
+      self.cache_byte_size_limit_at_start = 0
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
@@ -186,7 +185,7 @@ class CachedDataset(Dataset):
       if end == self.num_seqs:
         # Preload from the start for the next epoch.
         start = self.num_seqs_cached_at_start
-        end = start
+        end = 0
         while end < start:
           num_needed_cache_frames = self.get_seq_length_2d(end)[0]
           if self.cache_num_frames_free - num_needed_cache_frames < 0:
