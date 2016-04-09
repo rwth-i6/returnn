@@ -15,7 +15,7 @@ class CachedDataset(Dataset):
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = 0
+      self.cache_byte_size_limit_at_start = cache_byte_size
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
@@ -63,38 +63,9 @@ class CachedDataset(Dataset):
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
-
-    if True or not self.alloc_intervals:
-      self._init_alloc_intervals()
-      self._seq_index = seq_index
-      self._init_seq_starts()
-    else: # TODO: win the index fight
-      old_index = self._seq_index[:]
-      old_start = self._seq_start[:]
-      self._seq_index = seq_index
-      self._init_seq_starts()
-
-      for i in xrange(self.num_seqs):
-        ids = old_index[i]
-
-        jds = seq_index[ids]
-        #jds = old_index[seq_index[i]] # old_index[old_index.index(seq_index[i])] #seq_index.index(ids) #[i]
-        idi = self.alloc_interval_index(ids)
-        alloc_start_seq, alloc_end_seq, source_alloc_data = self.alloc_intervals[idi]
-        o = old_start[ids][0] - old_start[alloc_start_seq][0]
-        l = self._seq_lengths[ids][0]
-        source_seq = source_alloc_data[o:o + l][:]
-
-        jdi = self.alloc_interval_index(jds)
-        alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[jdi]
-        q = self._seq_start[ids][0] - self._seq_start[seq_index[alloc_start_seq]][0]
-        #target_seq = alloc_data[q:q + l]
-
-        print ids,jds,o,q,self.alloc_intervals[jdi][2].shape, self._seq_lengths[ids][0], self._seq_lengths[i][0]
-        self.alloc_intervals[jdi][2][o:o + l] = source_alloc_data[q:q + l]
-        self.alloc_intervals[jdi][2][q:q + l] = source_seq
-        self.alloc_intervals[jdi][0] = seq_index[alloc_start_seq]
-        self.alloc_intervals[jdi][1] = seq_index[alloc_end_seq]
+    self._init_alloc_intervals()
+    self._seq_index = seq_index
+    self._init_seq_starts()
     self._init_start_cache()
     return True
 
@@ -184,7 +155,6 @@ class CachedDataset(Dataset):
       self.load_seqs(start, end, with_cache=False)
       if end == self.num_seqs:
         # Preload from the start for the next epoch.
-        start = self.num_seqs_cached_at_start
         end = 0
         while end < start:
           num_needed_cache_frames = self.get_seq_length_2d(end)[0]
@@ -193,7 +163,7 @@ class CachedDataset(Dataset):
           self.cache_num_frames_free -= num_needed_cache_frames
           end += 1
         if end != start:
-          self.load_seqs(start, end, with_cache=False)
+          self.load_seqs(0, end, with_cache=False)
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
@@ -387,10 +357,9 @@ class CachedDataset(Dataset):
     i = 0
     while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
-      if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
-        s = max(ai[0], self.num_seqs_cached_at_start)
+      if ai[0] < ai[1]:
         deleted += sum([self._seq_lengths[self._seq_index[i]][0]
-                        for i in self.remove_alloc_interval(s, ai[1])])
+                        for i in self.remove_alloc_interval(ai[0], ai[1])])
       i += 1
     return deleted
 
