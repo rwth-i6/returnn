@@ -15,7 +15,7 @@ class CachedDataset(Dataset):
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size
+      self.cache_byte_size_limit_at_start = cache_byte_size / 10
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
@@ -155,15 +155,15 @@ class CachedDataset(Dataset):
       self.load_seqs(start, end, with_cache=False)
       if end == self.num_seqs:
         # Preload from the start for the next epoch.
-        end = 0
+        end = self.num_seqs_cached_at_start
         while end < start:
           num_needed_cache_frames = self.get_seq_length_2d(end)[0]
           if self.cache_num_frames_free - num_needed_cache_frames < 0:
             break
           self.cache_num_frames_free -= num_needed_cache_frames
           end += 1
-        if end != start:
-          self.load_seqs(0, end, with_cache=False)
+        if end != self.num_seqs_cached_at_start:
+          self.load_seqs(self.num_seqs_cached_at_start, end, with_cache=False)
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
@@ -357,9 +357,10 @@ class CachedDataset(Dataset):
     i = 0
     while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
-      if ai[0] < ai[1]:
+      if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
+        s = max(ai[0], self.num_seqs_cached_at_start)
         deleted += sum([self._seq_lengths[self._seq_index[i]][0]
-                        for i in self.remove_alloc_interval(ai[0], ai[1])])
+                        for i in self.remove_alloc_interval(s, ai[1])])
       i += 1
     return deleted
 
