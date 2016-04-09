@@ -215,13 +215,15 @@ class LM(RecurrentTransformBase):
 
 
 class AttentionBase(RecurrentTransformBase):
+  base=None
 
   @property
   def attrs(self):
     return { "_".join(k.split("_")[1:]) : self.layer.attrs[k] for k in self.layer.attrs.keys() if k.startswith("attention_") }
 
   def create_vars(self):
-    self.base = self.layer.base
+    if self.base is None:
+      self.base = self.layer.base
     self.n = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'n')
     self.bound = self.add_input(T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'bound')
     if self.attrs['distance'] == 'rnn':
@@ -439,14 +441,18 @@ class AttentionTime(AttentionList):
   Concatenate time-aligned base element into single list element
   """
   name = "attention_time"
-  def create_vars(self):
-    super(AttentionTime,self).create_vars()
-    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
+  def make_base(self):
+    self.base = [T.concatenate([b.output for b in self.layer.base], axis=2)]
     self.base[0].index = self.layer.base[0].index
     self.base[0].output = self.base[0]
+    self.base[0].attrs = { 'n_out' : sum([b.attrs['n_out'] for b in self.layer.base]), 'direction' : 1 }
+
+  def create_vars(self):
+    self.make_base()
+    super(AttentionTime, self).create_vars()
 
   def default_updates(self):
-    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
+    self.make_base()
     self.glimpses = [ [] ] * len(self.base)
     self.n_glm = max(self.attrs['glimpse'],1)
     return { self.n : self.n + T.constant(1,'float32') }
