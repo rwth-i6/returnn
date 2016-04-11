@@ -74,11 +74,10 @@ class OutputLayer(Layer):
       self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
     if not copy_output:
       self.y = y
-      self.y_data_flat = time_batch_make_flat(y)
     else:
       self.index = copy_output.index
-      self.y_data_flat = copy_output.y_out
-      self.y = self.y_data_flat.reshape((self.y_data_flat.shape[0]/self.index.shape[1],self.index.shape[1]))
+      self.y = copy_output.y_out
+    self.y_data_flat = time_batch_make_flat(y)
 
     self.norm = 1.0
     self.target_index = self.index

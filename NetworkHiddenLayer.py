@@ -1533,11 +1533,12 @@ class AttentionReshapeLayer(_NoOpLayer):
     super(AttentionReshapeLayer, self).__init__(**kwargs)
     assert cap >= pad
     target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    x_in, n_in = concat_sources(self.sources)
+    x_in = x_in.reshape((self.index.shape[0] * self.index.shape[1], n_in))
+    self.set_attr('n_out', n_in)
     self.set_attr('conf', conf)
     self.set_attr('pad', pad)
     self.set_attr('cap',cap)
-    x_in, n_in = concat_sources(self.sources)
-    x_in = x_in.reshape((self.index.shape[0]*self.index.shape[1],n_in))
     conf = T.constant(conf,'float32')
     pad = T.constant(pad,'int32')
     cap = T.constant(cap, 'int32')
@@ -1570,9 +1571,9 @@ class AttentionReshapeLayer(_NoOpLayer):
       return x, y, i
     outputs, _ = theano.map(cut, sequences=[length_x,offset_x,length_y,offset_y],
                             non_sequences=[x_in,self.y_in[target],max_len_x,max_len_y])
-    self.y_out = outputs[1].dimshuffle(1, 0)[:-1]
-    self.index = outputs[2].dimshuffle(1, 0)[:-1]
-    self.make_output(outputs[0].dimshuffle(2,1,0)[:,:-1])
+    self.y_out = outputs[1].dimshuffle(1,0)[:-1]
+    self.index = outputs[2].dimshuffle(1,0)[:-1]
+    self.make_output(outputs[0].dimshuffle(1,0,2)[:-1])
 
 
 class DetectionLayer(HiddenLayer):
