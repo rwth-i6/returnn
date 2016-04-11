@@ -23,7 +23,7 @@ from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, time_limit=0,
+  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                grad_clip_z=None, grad_discard_out_of_bound_z=None,
                **kwargs):
     """
@@ -31,8 +31,6 @@ class OutputLayer(Layer):
     :param str loss: e.g. 'ce'
     """
     super(OutputLayer, self).__init__(**kwargs)
-    self.y = y
-    self.y_data_flat = time_batch_make_flat(y)
     if dtype:
       self.set_attr('dtype', dtype)
     if copy_input:
@@ -74,6 +72,14 @@ class OutputLayer(Layer):
     if grad_discard_out_of_bound_z is not None:
       grad_discard_out_of_bound_z = numpy.float32(grad_discard_out_of_bound_z)
       self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
+    if not copy_output:
+      self.y = y
+      self.y_data_flat = time_batch_make_flat(y)
+    else:
+      self.index = copy_output.index
+      self.y_data_flat = copy_output.y_out
+      self.y = self.y_data_flat.reshape((self.y_data_flat.shape[0]/self.index.shape[1],self.index.shape[1]))
+
     self.norm = 1.0
     self.target_index = self.index
     if time_limit == 'inf':

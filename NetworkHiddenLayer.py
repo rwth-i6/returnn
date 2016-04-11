@@ -1526,6 +1526,55 @@ class AdaptiveDepthLayer(HiddenLayer):
     return T.constant(self.attrs['tau'],'float32')
 
 
+class AttentionReshapeLayer(_NoOpLayer):
+  layer_class = 'attention_reshape'
+
+  def __init__(self, conf=0.3, pad=1, cap=1, **kwargs):
+    super(AttentionReshapeLayer, self).__init__(**kwargs)
+    assert cap >= pad
+    target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    self.set_attr('conf', conf)
+    self.set_attr('pad', pad)
+    self.set_attr('cap',cap)
+    x_in, n_in = concat_sources(self.sources)
+    x_in = x_in.reshape((self.index.shape[0]*self.index.shape[1],n_in))
+    conf = T.constant(conf,'float32')
+    pad = T.constant(pad,'int32')
+    cap = T.constant(cap, 'int32')
+    attention = T.constant(0,'float32')
+    for src in kwargs['sources']:
+      for att in src.attention:
+        attention += att
+    attention = attention / attention.sum(axis=2,keepdims=True)
+    B = (T.argmax(attention, axis=2) + T.arange(attention.shape[1],dtype='float32') * T.cast(attention.shape[2],'float32')).flatten()
+    H = T.cast(T.max(T.ge(attention,conf),axis=2),'float32') * T.cast(self.index,'float32') # NB
+    Q = T.switch(T.le(H.shape[0], cap), H, H[:-self.attrs['cap']])
+    def smooth(h, h_p, c_p):
+      c_t = (c_p + numpy.float32(1.))
+      h_t = T.cast(T.and_(T.cast(h,'int32'),T.ge(c_t,cap)),'float32')
+      return h_t, c_t * T.cast(1-h_t,'float32')
+    outputs, _ = theano.scan(smooth, sequences=[Q], outputs_info=[T.zeros_like(Q[0]),T.zeros((self.index.shape[1],),'float32')])
+    marker = T.switch(T.le(H.shape[0],cap), outputs[0], T.concatenate([outputs[0],H[-self.attrs['cap']:]],axis=0))
+    marker = T.inc_subtensor(marker[-1],numpy.float32(1.)).flatten()
+    idx = (marker > 0).nonzero()
+    length_y = T.arange(marker.shape[0],dtype='int32')[idx[1:]] - T.arange(marker.shape[0],dtype='int32')[idx[:-1]]
+    offset_y = T.extra_ops.cumsum(length_y)
+    max_len_y = T.max(length_y)+numpy.int32(1)
+    length_x = T.cast(B[idx[1:]] - B[idx[:-1]],'int32')
+    offset_x = T.extra_ops.cumsum(length_x)
+    max_len_x = T.max(length_x)+numpy.int32(1)
+    def cut(l_x, o_x, l_y, o_y, X, Y, maxx, maxy):
+      x = T.concatenate([X[o_x:o_x + l_x], T.zeros((maxx-l_x,n_in),'float32')], axis=0)
+      i = T.concatenate([T.zeros((l_x,),'int8'), T.zeros((maxx - l_x,),'int8')], axis=0)
+      y = T.concatenate([Y[o_y:o_y + l_y], T.zeros((maxy-l_y,),'int32')], axis=0)
+      return x, y, i
+    outputs, _ = theano.map(cut, sequences=[length_x,offset_x,length_y,offset_y],
+                            non_sequences=[x_in,self.y_in[target],max_len_x,max_len_y])
+    self.y_out = outputs[1].dimshuffle(1, 0)[:-1]
+    self.index = outputs[2].dimshuffle(1, 0)[:-1]
+    self.make_output(outputs[0].dimshuffle(2,1,0)[:,:-1])
+
+
 class DetectionLayer(HiddenLayer):
   layer_class = "detection"
   def __init__(self, label_idx, **kwargs):

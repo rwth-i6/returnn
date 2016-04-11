@@ -15,8 +15,8 @@ class CachedDataset(Dataset):
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size / 2
-      self.cache_byte_size_total_limit = cache_byte_size / 2
+      self.cache_byte_size_limit_at_start = cache_byte_size * 2 / 3
+      self.cache_byte_size_total_limit = max(cache_byte_size / 3, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
