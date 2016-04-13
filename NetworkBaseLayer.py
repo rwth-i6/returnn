@@ -36,12 +36,22 @@ class Container(object):
     self.name = name.encode("utf8")
     self.train_flag = train_flag
     self.depth = depth
-    self.set_attr('depth', depth)
-    self.set_attr('consensus', consensus)
+    if depth != 1:
+      self.set_attr('depth', depth)
+    if consensus != "flat":
+      self.set_attr('consensus', consensus)
     self.network = network
+    if forward_weights_init:
+      self.set_attr("forward_weights_init", forward_weights_init)
     self.forward_weights_init = forward_weights_init or "random_normal()"
+    if recurrent_weights_init:
+      self.set_attr("recurrent_weights_init", recurrent_weights_init)
     self.recurrent_weights_init = recurrent_weights_init or "random_uniform()"
+    if bias_init:
+      self.set_attr("bias_init", bias_init)
     self.bias_init = bias_init or "zeros()"
+    if substitute_param_expr:
+      self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
 
   def dot(self, vec, mat):
