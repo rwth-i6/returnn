@@ -432,6 +432,7 @@ class SubnetworkLayer(_NoOpLayer):
       self.set_attr("data_map", data_map)
     self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
+    self.trainable = trainable
     if concat_sources:
       assert not data_map, "We expect the implicit canonical data_map with concat_sources."
       assert self.sources
@@ -475,6 +476,22 @@ class SubnetworkLayer(_NoOpLayer):
       print >>log.v2, "done loading subnetwork weights for", self.name
     self.output = self.subnetwork.output["output"].output
 
+  def cost(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).cost()
+    try:
+      const_cost = T.get_scalar_constant_value(self.subnetwork.total_cost)
+      if const_cost == 0:
+        return None, None
+    except T.NotScalarConstantError:
+      pass
+    return self.subnetwork.total_cost, self.subnetwork.known_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).make_constraints()
+    return self.subnetwork.constraints
+
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
@@ -500,6 +517,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('add_right_context', add_right_context)
     self.set_attr('normalize_output', normalize_output)
     self.set_attr('trainable', trainable)
+    self.trainable = trainable
 
     sub_n_out = sublayer.pop("n_out", None)
     if sub_n_out: assert sub_n_out == n_out
@@ -595,6 +613,19 @@ class ChunkingSublayer(_NoOpLayer):
     assert self.sublayer
     if trainable:
       self.params.update({"sublayer." + name: param for (name, param) in self.sublayer.params.items()})
+
+  def cost(self):
+    if not self.trainable:
+      return super(ChunkingSublayer, self).cost()
+    cost, known_grads = self.sublayer.cost()
+    if cost is None:
+      return None, None
+    return cost * self.sublayer.cost_scale(), known_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(ChunkingSublayer, self).make_constraints()
+    return self.sublayer.make_constraints()
 
 
 class RBFLayer(_NoOpLayer):
@@ -1403,6 +1434,146 @@ class RoutingLayer(HiddenLayer):
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
+
+class RandomRouteLayer(_NoOpLayer):
+  layer_class = "random_route"
+
+  def __init__(self, p=None, test_route=-1, n_out=None, **kwargs):
+    super(RandomRouteLayer, self).__init__(**kwargs)
+    assert len(kwargs['sources']) > 1, "There is no route to select."
+    if p is None:
+      p = [1. / len(kwargs['sources'])] * len(kwargs['sources'])
+    if isinstance(p, (int, long, float)):
+      p = [p]
+    assert isinstance(p, (list, tuple))
+    if len(p) == len(self.sources) - 1:
+      p.append(1.-sum(p))
+    assert sum(p) == 1. and all([x>=0. for x in p])
+    assert len(p) == len(self.sources)
+    if not n_out:
+      n_out = self.sources[0].attrs['n_out']
+    assert all([n_out == s.attrs['n_out'] for s in self.sources])
+    self.set_attr('n_out', n_out)
+    self.set_attr('p', p)
+    self.set_attr('test_route', test_route)
+    import theano.ifelse
+    if not self.train_flag:
+      if test_route >= 0:
+        self.output = self.sources[test_route].output
+      else:
+        output = numpy.float32(p[0]) * self.sources[0].output
+        for s, pc in zip(self.sources[1:], p[1:]):
+          output += numpy.float32(pc) * s.output
+        self.output = output
+    else:
+      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+      rng = RandomStreams(self.rng.randint(1234) + 1)
+      rv = rng.uniform((1,), low=0.0, high=1.0, dtype="float32")[0]
+      output = self.sources[0].output
+      p0 = p[0]
+      for s, pc in zip(self.sources[1:], p[1:]):
+        output = theano.ifelse.ifelse(T.gt(rv, numpy.float32(p0)), s.output, output)
+        p0 += pc
+      self.output = output
+
+
+class AdaptiveDepthLayer(HiddenLayer):
+  layer_class = "adaptive_depth"
+
+  def __init__(self, eps=0.01, tau=0.01, bias=-1.0, damping='graves', **kwargs):
+    kwargs['n_out'] = 1
+    super(AdaptiveDepthLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = kwargs['sources'][0].attrs['n_out']
+    self.attrs['tau'] = tau
+    self.attrs['eps'] = eps
+    self.attrs['bias'] = bias
+    self.attrs['damping'] = damping
+    assert all([l.attrs['n_out'] == self.attrs['n_out'] for l in kwargs['sources']])
+    shape = self.index.shape
+    P = T.zeros((shape[0],shape[1]),'float32')
+    M = T.zeros((shape[0],shape[1]),'int8')
+    H = T.zeros((shape[0],shape[1],self.attrs['n_out']),'float32')
+    threshold = T.constant(1. - eps,'float32')
+    self.cost_val = T.constant(0,'float32')
+    for W,layer,i in zip(self.W_in,kwargs['sources'],range(len(self.W_in))):
+      h = layer.act[1][::layer.attrs['direction']] if layer.layer_class=='rec' else layer.output
+      if damping == 'random':
+        p = T.cast(self.rng.uniform(size=shape),'float32')
+        del self.params[W.name]
+      else:
+        p = T.nnet.sigmoid(T.dot(h,W) + self.b + T.constant(bias,'float32'))[:,:,0]
+      N = T.ge(P + p, threshold) * T.lt(P, threshold)
+      M += N
+      Q = N.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2)
+      H = Q * layer.output + (numpy.float32(1.) - Q) * H
+      if damping == 'graves':
+        self.cost_val += T.sum((numpy.float32(i+2) - P) * T.cast(N,'float32')) # ((1-P) + (i+1))*N
+      elif damping == 'expected':
+        self.cost_val += T.sum(T.cast(N,'float32') * p * numpy.float32(i+1))
+      P += p
+    # target probability not reached
+    M = numpy.float32(1.) - T.cast(M,'float32')
+    H += M.dimshuffle(0,1,'x').repeat(layer.attrs['n_out'],axis=2) * layer.output
+    if damping == 'graves':
+      self.cost_val += T.sum((numpy.float32(len(self.W_in)+1) - P) * M)
+    elif damping == 'expected':
+      self.cost_val += T.sum(M * P * numpy.float32(len(self.W_in)))
+    self.make_output(H)
+
+  def cost(self):
+    return self.cost_val,None
+  def cost_scale(self):
+    return T.constant(self.attrs['tau'],'float32')
+
+
+class AttentionReshapeLayer(_NoOpLayer):
+  layer_class = 'attention_reshape'
+
+  def __init__(self, conf=0.3, pad=1, cap=1, **kwargs):
+    super(AttentionReshapeLayer, self).__init__(**kwargs)
+    assert cap >= pad
+    target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    x_in, n_in = concat_sources(self.sources)
+    x_in = x_in.reshape((self.index.shape[0] * self.index.shape[1], n_in))
+    self.set_attr('n_out', n_in)
+    self.set_attr('conf', conf)
+    self.set_attr('pad', pad)
+    self.set_attr('cap',cap)
+    conf = T.constant(conf,'float32')
+    pad = T.constant(pad,'int32')
+    cap = T.constant(cap, 'int32')
+    attention = T.constant(0,'float32')
+    for src in kwargs['sources']:
+      for att in src.attention:
+        attention += att
+    attention = attention / attention.sum(axis=2,keepdims=True)
+    B = (T.argmax(attention, axis=2) + T.arange(attention.shape[1],dtype='float32') * T.cast(attention.shape[2],'float32')).flatten()
+    H = T.cast(T.max(T.ge(attention,conf),axis=2),'float32') * T.cast(self.index,'float32') # NB
+    Q = T.switch(T.le(H.shape[0], cap), H, H[:-self.attrs['cap']])
+    def smooth(h, h_p, c_p):
+      c_t = (c_p + numpy.float32(1.))
+      h_t = T.cast(T.and_(T.cast(h,'int32'),T.ge(c_t,cap)),'float32')
+      return h_t, c_t * T.cast(1-h_t,'float32')
+    outputs, _ = theano.scan(smooth, sequences=[Q], outputs_info=[T.zeros_like(Q[0]),T.zeros((self.index.shape[1],),'float32')])
+    marker = T.switch(T.le(H.shape[0],cap), outputs[0], T.concatenate([outputs[0],H[-self.attrs['cap']:]],axis=0))
+    marker = T.inc_subtensor(marker[-1],numpy.float32(1.)).flatten()
+    idx = (marker > 0).nonzero()
+    length_y = T.arange(marker.shape[0],dtype='int32')[idx[1:]] - T.arange(marker.shape[0],dtype='int32')[idx[:-1]]
+    offset_y = T.extra_ops.cumsum(length_y)
+    max_len_y = T.max(length_y)+numpy.int32(1)
+    length_x = T.cast(B[idx[1:]] - B[idx[:-1]],'int32')
+    offset_x = T.extra_ops.cumsum(length_x)
+    max_len_x = T.max(length_x)+numpy.int32(1)
+    def cut(l_x, o_x, l_y, o_y, X, Y, maxx, maxy):
+      x = T.concatenate([X[o_x:o_x + l_x], T.zeros((maxx-l_x,n_in),'float32')], axis=0)
+      i = T.concatenate([T.zeros((l_x,),'int8'), T.zeros((maxx - l_x,),'int8')], axis=0)
+      y = T.concatenate([Y[o_y:o_y + l_y], T.zeros((maxy-l_y,),'int32')], axis=0)
+      return x, y, i
+    outputs, _ = theano.map(cut, sequences=[length_x,offset_x,length_y,offset_y],
+                            non_sequences=[x_in,self.y_in[target],max_len_x,max_len_y])
+    self.y_out = outputs[1].dimshuffle(1,0)[:-1]
+    self.index = outputs[2].dimshuffle(1,0)[:-1]
+    self.make_output(outputs[0].dimshuffle(1,0,2)[:-1])
 
 
 class DetectionLayer(HiddenLayer):

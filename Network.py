@@ -313,12 +313,10 @@ class LayerNetwork(object):
             traverse(content, prev, target, index)
             base.append(network.get_layer(prev))
         obj['base'] = base
-      if 'copy_input' in obj:
-        index = traverse(content, obj['copy_input'], target, index)
-        obj['copy_input'] = network.get_layer(obj['copy_input'])
-      if 'centroids' in obj:
-        index = traverse(content, obj['centroids'], target, index)
-        obj['centroids'] = network.get_layer(obj['centroids'])
+      for key in [ 'copy_input', 'copy_output' ]:
+        if key in obj:
+          index = traverse(content, obj[key], target, index)
+          obj[key] = network.get_layer(obj[key])
       if 'encoder' in obj and not source:
         index = output_index
       if 'target' in obj:
@@ -442,12 +440,13 @@ class LayerNetwork(object):
             if not network.hidden.has_key(s):
               traverse(model, s, index)
             base.append(network.hidden[s])
-      if 'copy_input' in model[layer_name].attrs:
-        index = traverse(model, model[layer_name].attrs['copy_input'], index)
-        copy_input = network.hidden[model[layer_name].attrs['copy_input']]
-      if 'centroids' in model[layer_name].attrs:
-        index = traverse(model, model[layer_name].attrs['centroids'], index)
-        centroids = network.hidden[model[layer_name].attrs['centroids']]
+      for key in ['copy_input', 'copy_output']:
+        if key in model[layer_name].attrs:
+          index = traverse(model, model[layer_name].attrs[key], index)
+          if key == 'copy_input':
+            copy_input = network.hidden[model[layer_name].attrs[key]]
+          if key == 'copy_output':
+            copy_output = network.hidden[model[layer_name].attrs[key]]
       if 'encoder' in model[layer_name].attrs and not x_in:
         index = output_index
       if 'target' in model[layer_name].attrs:
@@ -466,10 +465,10 @@ class LayerNetwork(object):
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         if 'base' in model[layer_name].attrs:
           params['base'] = base
-        if 'centroids' in model[layer_name].attrs:
-          params['centroids'] = centroids
         if 'copy_input' in model[layer_name].attrs:
           params['copy_input'] = copy_input
+        if 'copy_output' in model[layer_name].attrs:
+          params['copy_output'] = copy_output
         #if not 'target' in params:
         #  params['target'] = target
         params['index'] = index #output_index
@@ -502,8 +501,7 @@ class LayerNetwork(object):
           params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
         if 'base' in model[layer_name].attrs:
           params['base'] = base
-        if 'centroids' in model[layer_name].attrs:
-          params['centroids'] = centroids
+
         if 'target' in model[layer_name].attrs:
           params['target'] = model[layer_name].attrs['target']
         if layer_class.recurrent:

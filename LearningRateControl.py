@@ -30,8 +30,8 @@ class LearningRateControl(object):
     :rtype: dict[str]
     """
     return {
-      "initialLearningRate": config.float('learning_rate', 1.0),
-      "initialLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
+      "defaultLearningRate": config.float('learning_rate', 1.0),
+      "defaultLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
       "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
       "filename": config.value('learning_rate_file', None)}
 
@@ -44,24 +44,24 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, initialLearningRate, initialLearningRates=None, errorMeasureKey=None, filename=None):
+  def __init__(self, defaultLearningRate, defaultLearningRates=None, errorMeasureKey=None, filename=None):
     """
-    :param float initialLearningRate: learning rate for epoch 1
-    :param list[float] | dict[int,float] initialLearningRates: learning rates
+    :param float defaultLearningRate: default learning rate. usually for epoch 1
+    :param list[float] | dict[int,float] defaultLearningRates: learning rates
     :param str errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
     :param str filename: load from and save to file
     """
-    self.epochData = {1: self.EpochData(initialLearningRate)}
-    if initialLearningRates:
-      if isinstance(initialLearningRates, list):
-        initialLearningRates = {i + 1: v for (i, v) in enumerate(initialLearningRates)}
-      if isinstance(initialLearningRates, (str, unicode)):
-        initialLearningRates = eval(initialLearningRates)
-      assert isinstance(initialLearningRates, dict)
-      for epoch, v in initialLearningRates.items():
-        self.setLearningRateForEpoch(epoch, v)
-    self.initialLearningRates = initialLearningRates
-    self.initialLearningRate = initialLearningRate
+    self.epochData = {}
+    self.defaultLearningRate = defaultLearningRate
+    if defaultLearningRates:
+      if isinstance(defaultLearningRates, list):
+        defaultLearningRates = {i + 1: v for (i, v) in enumerate(defaultLearningRates)}
+      if isinstance(defaultLearningRates, (str, unicode)):
+        defaultLearningRates = eval(defaultLearningRates)
+      assert isinstance(defaultLearningRates, dict)
+      for epoch, v in defaultLearningRates.items():
+        self.setDefaultLearningRateForEpoch(epoch, v)
+    self.defaultLearningRates = defaultLearningRates
     self.errorMeasureKey = errorMeasureKey
     self.filename = filename
     if filename:
@@ -96,16 +96,17 @@ class LearningRateControl(object):
     assert epoch >= 1
     if epoch in self.epochData: return self.epochData[epoch].learningRate
     learningRate = self.calcLearningRateForEpoch(epoch)
-    self.setLearningRateForEpoch(epoch, learningRate)
+    self.setDefaultLearningRateForEpoch(epoch, learningRate)
     return learningRate
 
-  def setLearningRateForEpoch(self, epoch, learningRate):
+  def setDefaultLearningRateForEpoch(self, epoch, learningRate):
     """
     :type epoch: int
     :type learningRate: float
     """
     if epoch in self.epochData:
-      self.epochData[epoch].learningRate = learningRate
+      if not self.epochData[epoch].learningRate:
+        self.epochData[epoch].learningRate = learningRate
     else:
       self.epochData[epoch] = self.EpochData(learningRate)
 
@@ -203,7 +204,7 @@ class ConstantLearningRate(LearningRateControl):
     while True:
       lastEpoch = self.getLastEpoch(epoch)
       if lastEpoch is None:
-        return self.initialLearningRate
+        return self.defaultLearningRate
       learningRate = self.epochData[lastEpoch].learningRate
       if learningRate is None:
         epoch = lastEpoch
@@ -227,7 +228,7 @@ class NewbobRelative(LearningRateControl):
 
   def __init__(self, relativeErrorThreshold, learningRateDecayFactor, **kwargs):
     """
-    :param float initialLearningRate: learning rate for epoch 1+2
+    :param float defaultLearningRate: learning rate for epoch 1+2
     :type relativeErrorThreshold: float
     :type learningRateDecayFactor: float
     :type filename: str
@@ -245,10 +246,10 @@ class NewbobRelative(LearningRateControl):
     """
     lastEpoch = self.getLastEpoch(epoch)
     if lastEpoch is None:
-      return self.initialLearningRate
+      return self.defaultLearningRate
     learningRate = self.epochData[lastEpoch].learningRate
     if learningRate is None:
-      return self.initialLearningRate
+      return self.defaultLearningRate
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
@@ -294,10 +295,10 @@ class NewbobAbs(LearningRateControl):
     """
     lastEpoch = self.getLastEpoch(epoch)
     if lastEpoch is None:
-      return self.initialLearningRate
+      return self.defaultLearningRate
     learningRate = self.epochData[lastEpoch].learningRate
     if learningRate is None:
-      return self.initialLearningRate
+      return self.defaultLearningRate
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate

@@ -444,34 +444,47 @@ class SimpleLstmLayer(RecurrentLayer):
     self.make_output(self.act[::-(2 * self.attrs['reverse'] - 1)])
 
 
-def make_lstm_step(n_cells, grad_clip, CI=None, GI=None, GF=None, GO=None, CO=None):
+def make_lstm_step(n_cells, W_re,
+                   W_out_proj=None, W_re_proj=None,
+                   W_peep_i=None, W_peep_f=None, W_peep_o=None,
+                   grad_clip=None, CI=None, CO=None, G=None):
+  # W_re: recurrent matrix. (n_out,n_cells*4)
+  # W_out_proj: (n_cells,n_out) or None
+  # W_re_proj: (n_out,n_proj) or None
+  # W_peep_*: (n_cells,) or None
   if not CI: CI = T.tanh
   if not CO: CO = T.tanh
-  if not GI: GI = T.nnet.sigmoid
-  if not GF: GF = T.nnet.sigmoid
-  if not GO: GO = T.nnet.sigmoid
+  if not G: G = T.nnet.sigmoid
 
-  def lstm_step(z_t, i_t, s_p, h_p, W_re, *non_seq_args):
+  def lstm_step(z_t, i_t, s_p, h_p):
     # z_t: current input. (batch,n_cells*4)
     # i_t: 0 or 1 (via index). (batch,)
     # s_p: previous cell state. (batch,n_cells)
     # h_p: previous hidden out. (batch,n_out)
-    # W_re: recurrent matrix. (n_out,n_cells*4)
-    # non_seq_args: if set, is (W_proj,)
-    # W_proj: (n_cells,n_out) or None
-    if non_seq_args: W_proj = non_seq_args[0]
-    else: W_proj = None
     i_t_bc = i_t.dimshuffle(0, 'x')
+    if W_re_proj:
+      h_p = T.dot(h_p, W_re_proj)
     z_t += T.dot(h_p, W_re)
     z_t *= i_t_bc
-    ingate = GI(z_t[:,n_cells: 2 * n_cells])
-    forgetgate = GF(z_t[:,2 * n_cells:3 * n_cells])
-    outgate = GO(z_t[:,3 * n_cells:])
     input = CI(z_t[:,:n_cells])
-    s_t = input * ingate + s_p * forgetgate
-    h_t = CO(s_t) * outgate
-    if W_proj:
-      h_t = T.dot(h_t, W_proj)
+    if W_peep_i or W_peep_f or W_peep_o:
+      ingate = z_t[:,n_cells:2 * n_cells]
+      forgetgate = z_t[:,2 * n_cells:3 * n_cells]
+      if W_peep_i: ingate += s_p * W_peep_i.dimshuffle('x', 0) * i_t_bc
+      if W_peep_f: forgetgate += s_p * W_peep_f.dimshuffle('x', 0) * i_t_bc
+      s_t = input * G(ingate) + s_p * G(forgetgate)
+      outgate = z_t[:,3 * n_cells:]
+      if W_peep_o: outgate += s_t * W_peep_o.dimshuffle('x', 0) * i_t_bc
+      h_t = CO(s_t) * G(outgate)
+    else:  # no peepholes. simplified and faster
+      gates = G(z_t[:,n_cells:])
+      ingate = gates[:,:n_cells]
+      forgetgate = gates[:,n_cells:2 * n_cells]
+      outgate = gates[:,2 * n_cells:]
+      s_t = input * ingate + s_p * forgetgate
+      h_t = CO(s_t) * outgate
+    if W_out_proj:
+      h_t = T.dot(h_t, W_out_proj)
     s_t *= i_t_bc
     h_t *= i_t_bc
     if grad_clip:
@@ -482,26 +495,29 @@ def make_lstm_step(n_cells, grad_clip, CI=None, GI=None, GF=None, GO=None, CO=No
   return lstm_step
 
 
-def lstm(z, i, W_re, W_proj=None, grad_clip=None, direction=1):
+def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=None, W_peep_o=None, grad_clip=None, direction=1):
   # z: (n_time,n_batch,n_cells*4)
   # i: (n_time,n_batch)
   # W_re: (n_out,n_cells*4)
-  # W_proj: (n_cells,n_out) or None
+  # W_out_proj: (n_cells,n_out) or None
+  # W_re_proj: (n_out,n_proj) or None
+  # W_peep_*: (n_cells,) or None
   n_batch = z.shape[1]
   assert W_re.ndim == 2
   n_cells = W_re.shape[1] / 4
   n_out = W_re.shape[0]  # normally the same as n_cells, but with W_proj, can be different
+  if W_re_proj:
+    n_out = W_re_proj.shape[0]
   i = T.cast(i, dtype="float32")  # so that it can run on gpu
   if grad_clip:
     grad_clip = numpy.float32(grad_clip)
-  lstm_step = make_lstm_step(n_cells=n_cells, grad_clip=grad_clip)
+  lstm_step = make_lstm_step(n_cells=n_cells, W_re=W_re, W_out_proj=W_out_proj, W_re_proj=W_re_proj, W_peep_i=W_peep_i, W_peep_f=W_peep_f, W_peep_o=W_peep_o, grad_clip=grad_clip)
 
   s_initial = T.zeros((n_batch, n_cells), dtype="float32")
   h_initial = T.zeros((n_batch, n_out), dtype="float32")
   go_backwards = {1:False, -1:True}[direction]
   (s, h), _ = theano.scan(lstm_step,
                           sequences=[z, i], go_backwards=go_backwards,
-                          non_sequences=[W_re] + ([W_proj] if W_proj else []),
                           outputs_info=[s_initial, h_initial])
   h = h[::direction]
   return h
@@ -511,23 +527,42 @@ class Lstm2Layer(HiddenLayer):
   recurrent = True
   layer_class = "lstm2"
 
-  def __init__(self, n_out, n_cells=None, direction=1, grad_clip=None, truncation=None, **kwargs):
+  def __init__(self, n_out, n_cells=None, n_proj=None, peepholes=False, direction=1, grad_clip=None, truncation=None, **kwargs):
     if not n_cells: n_cells = n_out
     # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
     super(Lstm2Layer, self).__init__(n_out=n_cells * 4, **kwargs)
     self.set_attr('n_out', n_out)
     self.set_attr('n_cells', n_cells)
+    if n_proj: self.set_attr('n_proj', n_proj)
+    self.set_attr('peepholes', peepholes)
     self.set_attr('direction', direction)
     if grad_clip: self.set_attr('grad_clip', grad_clip)
 
-    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_cells * 4, name="W_re_%s" % self.name))
-    if n_out != n_cells:
-      self.W_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
+    n_re_in = n_out
+    if n_proj:
+      # Applied before recurrent matrix.
+      self.W_re_proj = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
+      n_re_in = n_proj
     else:
-      self.W_proj = None
+      self.W_re_proj = None
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+    if n_out != n_cells:
+      # Applied before output.
+      self.W_out_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
+    else:
+      self.W_out_proj = None
+    if peepholes:
+      self.W_peepholes = [
+        self.add_param(self.create_random_uniform_weights2(n_cells, name="W_peep_%s_%s" % (g, self.name)))
+        for g in "ifo"]
+    else:
+      self.W_peepholes = [None] * 3
 
     z = self.get_linear_forward_output()
-    h = lstm(z=z, i=self.index, W_re=self.W_re, W_proj=self.W_proj, grad_clip=grad_clip, direction=direction)
+    h = lstm(z=z, i=self.index, W_re=self.W_re,
+             W_out_proj=self.W_out_proj, W_re_proj=self.W_re_proj,
+             W_peep_i=self.W_peepholes[0], W_peep_f=self.W_peepholes[1], W_peep_o=self.W_peepholes[2],
+             grad_clip=grad_clip, direction=direction)
     self.make_output(h)
 
 
@@ -1023,6 +1058,153 @@ class LstmComplexLayer(HiddenLayer):
     self.act = [h, s]
     h = h[::direction]
     self.make_output(h)
+
+
+class ActLstmLayer(HiddenLayer):
+  """
+  Adaptive Computation Time for Recurrent Neural Networks, Graves
+  """
+  recurrent = True
+  layer_class = "act_lstm"
+
+  def __init__(self, n_out, n_max_calc_steps=10,
+               time_penalty=0.01, time_penalty_type="linear_p",
+               total_halt_penalty=0.0, total_halt_penalty_type="inv",
+               direction=1, eps=0.01, grad_clip=None,
+               unroll_inner_scan=False, **kwargs):
+    n_out_orig = n_out
+    n_out += 1  # the halting unit
+    n_cells = n_out
+    # {input,forget,out}-gate + update
+    n_z = n_cells * 4
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(ActLstmLayer, self).__init__(n_out=n_z, **kwargs)
+    self.set_attr('n_out', n_out_orig)
+    self.set_attr('n_max_calc_steps', n_max_calc_steps)
+    self.set_attr('time_penalty', time_penalty)
+    self.set_attr('time_penalty_type', time_penalty_type)
+    self.set_attr('total_halt_penalty', total_halt_penalty)
+    self.set_attr('total_halt_penalty_type', total_halt_penalty_type)
+    self.set_attr('direction', direction)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    self.set_attr('eps', eps)
+    if unroll_inner_scan:
+      self.set_attr('unroll_inner_scan', unroll_inner_scan)
+    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
+    self.W_delay = self.add_param(self.create_random_uniform_weights(n=1, m=n_z, p=n_out + n_z + 1, name="W_delay_%s" % self.name))
+
+    z = self.get_linear_forward_output()  # (n_time,n_batch,n_z)
+    n_batch = z.shape[1]
+
+    CI, CO = [T.tanh] * 2
+    G = T.nnet.sigmoid
+
+    assert 0 < eps < 1
+    hs_limit = numpy.float32(1.0 - eps)
+    assert 0 < hs_limit < 1
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_z)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')  # batch,x
+      z_t += T.dot(h_p, self.W_re)
+      z_t *= i_t_bc
+
+      gates = G(z_t[:, :n_cells * 3])
+      u = CI(z_t[:, 3 * n_cells:])
+      igate = gates[:, :n_cells]
+      fgate = gates[:, n_cells:2 * n_cells]
+      ogate = gates[:, 2 * n_cells:]
+
+      s_t = u * igate + s_p * fgate
+      h_t = CO(s_t) * ogate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    def inner_step(s_p, h_p, hs_p, delay_p, z_t, i_t):
+      delay_t = delay_p + numpy.float32(1)
+      not_last_state = T.lt(delay_t, numpy.float32(n_max_calc_steps - 0.1))
+      z_t += T.dot(delay_p.dimshuffle('x', 'x'), self.W_delay)  # (n_batch,n_z)
+      s_t, h_t = lstm_step(z_t, i_t, s_p, h_p)
+      # We assume that tanh was applied to h_t.
+      hp_t = (h_t[:, -1] + numpy.float32(1)) / numpy.float32(2)  # halting unit, (n_batch)
+      hs_t = hs_p + hp_t  # (n_batch)
+      # p_t can have 4 states:
+      #   1) = hp_t,      if hs_t < 1 - eps and not last state
+      #   2) = 1 - hs_p,  if hs_t < 1 - eps and last state
+      #   3) = 1 - hs_p,  if hs_t >= 1 - eps and hs_p < 1 - eps  (R, remainder)
+      #   4) = 0,         otherwise
+      p_t = T.switch(hs_t < hs_limit,
+                     T.switch(not_last_state,
+                              hp_t,
+                              numpy.float32(1) - hs_p),
+                     T.switch(hs_p < hs_limit,
+                              numpy.float32(1) - hs_p,
+                              numpy.float32(0)))
+      stop_cond = T.min((hs_p >= hs_limit) * i_t)
+      if time_penalty_type == "linear":
+        # Note: This is not the time penalty as in the paper.
+        # However, I think the one in the paper is not smooth.
+        # This one is even simpler and should be differentiable.
+        tpi_t = delay_t * hp_t
+      elif time_penalty_type == "linear_p":
+        tpi_t = delay_t * p_t  # this yields actually the expected value of N(t)
+      elif time_penalty_type == "sqrt":
+        tpi_t = T.sqrt(delay_t) * hp_t
+      else:
+        assert False, "invalid time_penalty_type %r" % time_penalty_type
+      if total_halt_penalty:
+        if total_halt_penalty_type == "inv":
+          tpi_t += T.inv(hp_t) * numpy.float32(total_halt_penalty)
+        elif total_halt_penalty_type == "linear":
+          tpi_t -= hp_t * numpy.float32(total_halt_penalty)
+        else:
+          assert False, "invalid total_halt_penalty_type %r" % total_halt_penalty_type
+      return [s_t, h_t, hs_t, p_t, tpi_t, delay_t], {}, theano.scan_module.until(stop_cond)
+
+    def outer_step(z_t, i_t, s_p, h_p):
+      n_batch = z_t.shape[0]
+      delay_initial = T.zeros((), dtype="float32")  # counter
+      hs_initial = T.zeros((n_batch,), dtype="float32")  # sum(hp_t), the halting units summed up
+      p_initial = None  # halting probability. hp_t or R or 0
+      tpi_initial = None  # inner time penalty
+      inner_scan = theano.scan
+      if unroll_inner_scan:
+        import TheanoUtil
+        inner_scan = TheanoUtil.unroll_scan
+      (s, h, hs, p, tpi, _), _ = inner_scan(
+        inner_step,
+        n_steps=n_max_calc_steps,
+        outputs_info=[s_p, h_p, hs_initial, p_initial, tpi_initial, delay_initial],
+        non_sequences=[z_t, i_t])
+      p_bc = p.dimshuffle(0, 1, 'x')  # (calcstep,n_batch,x)
+      s_t = T.sum(s * p_bc, axis=0)
+      h_t = T.sum(h * p_bc, axis=0)
+      return s_t, h_t, T.sum(tpi)
+
+    # i: (n_time,n_batch)
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")  # lstm cell state
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")  # lstm hidden out
+    tp_initial = None  # time penalty
+    go_backwards = {1:False, -1:True}[direction]
+    (s, h, tp), _ = theano.scan(outer_step,
+                                sequences=[z, i], go_backwards=go_backwards,
+                                non_sequences=[],
+                                outputs_info=[s_initial, h_initial, tp_initial])
+    h = h[:, :, :-1]  # remove halting unit
+    self.act = [h, s]
+    h = h[::direction]
+    self.make_output(h)
+    self.constraints += T.sum(tp) * numpy.float32(time_penalty)
 
 
 class GRULayer(RecurrentLayer):

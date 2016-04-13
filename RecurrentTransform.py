@@ -215,13 +215,15 @@ class LM(RecurrentTransformBase):
 
 
 class AttentionBase(RecurrentTransformBase):
+  base=None
 
   @property
   def attrs(self):
     return { "_".join(k.split("_")[1:]) : self.layer.attrs[k] for k in self.layer.attrs.keys() if k.startswith("attention_") }
 
   def create_vars(self):
-    self.base = self.layer.base
+    if self.base is None:
+      self.base = self.layer.base
     self.n = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'n')
     self.bound = self.add_input(T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'bound')
     if self.attrs['distance'] == 'rnn':
@@ -229,6 +231,11 @@ class AttentionBase(RecurrentTransformBase):
       l = sqrt(6.) / sqrt(2 * n_tmp)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
       self.A_re = self.add_param(self.layer.shared(value=values, borrow=True, name = "A_re"))
+    if self.attrs['distance'] == 'transpose':
+      n_tmp = self.attrs['template']
+      l = sqrt(6.) / sqrt(2 * n_tmp)
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp,)), dtype=theano.config.floatX)
+      self.W_T = self.add_param(self.layer.shared(values=values))
     if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
@@ -286,6 +293,8 @@ class AttentionBase(RecurrentTransformBase):
     elif dist == 'rnn':
       inp, _ = theano.scan(lambda x,p,W:elu(x+T.dot(p,W)), sequences = C, outputs_info = [H[0]], non_sequences=[self.A_re])
       dst = inp[-1]
+    elif dist == 'transpose':
+      dst = T.sum(self.W_T.dimshuffle('x','x',0).repeat(C.shape[0],axis=0).repeat(C.shape[1],axis=1) * T.tanh((C + H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0))),axis=2)
     else:
       raise NotImplementedError()
     return dst * T.constant(self.attrs['sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
@@ -398,25 +407,25 @@ class AttentionList(AttentionBase):
         w_i = self.softmax(z_i, I)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
-        updates[self.state_vars['att_%d'%i]] = w_i
+        updates[self.state_vars['att_%d' % i]] = w_i
       if self.attrs['align']:
         dst = -T.log(w_i)
         Q = self.item("Q", i)
         inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32') * T.gt(self.n,0)
         big = T.cast(1e10,'float32')
-        #D = T.inc_subtensor(-T.log(w_i)[:,1:], T.switch(T.eq(T.max(self.n),0), big, 0)) # t>=1 cannot be aligned to n=0
         n0 = T.eq(T.max(self.n),0)
-        D=-T.log(w_i)
-        def dtw(i,q_p,b_p,Q,D,inf):
-          #inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
-          penalty = T.switch(T.and_(numpy.int8(1)-n0,T.eq(i,0)), big, T.constant(0.0,'float32'))
+        D = -T.log(w_i)
+        def dtw(i, q_p, b_p, Q, D, inf):
+          i0 = T.eq(i, 0)
+          # inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
+          penalty = T.switch(T.and_(T.neg(n0), i0), big, T.constant(0.0, 'float32'))
           loop = T.constant(0.0, 'float32') + q_p
-          forward = T.constant(0.0, 'float32') + T.switch(T.eq(self.n*i,0), 0, Q[i-1])
-          opt = T.stack([loop,forward])
-          k_out = T.cast(T.argmin(opt,axis=0),'int32')
-          return opt[k_out,T.arange(opt.shape[1])] + D[i] + penalty, k_out
+          forward = T.constant(0.0, 'float32') + T.switch(T.or_(n0, i0), 0, Q[i - 1])
+          opt = T.stack([loop, forward])
+          k_out = T.cast(T.argmin(opt, axis=0), 'int32')
+          return opt[k_out, T.arange(opt.shape[1])] + D[i] + penalty, k_out
         output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,D,inf],
-                                outputs_info=[big+T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
+                                outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
         updates[self.state_vars['Q_%d'%i]] = output[0]
         updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
@@ -428,14 +437,18 @@ class AttentionTime(AttentionList):
   Concatenate time-aligned base element into single list element
   """
   name = "attention_time"
-  def create_vars(self):
-    super(AttentionTime,self).create_vars()
-    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
+  def make_base(self):
+    self.base = [T.concatenate([b.output[::b.attrs['direction']] for b in self.layer.base], axis=2)]
     self.base[0].index = self.layer.base[0].index
     self.base[0].output = self.base[0]
+    self.base[0].attrs = { 'n_out' : sum([b.attrs['n_out'] for b in self.layer.base]), 'direction' : 1 }
+
+  def create_vars(self):
+    self.make_base()
+    super(AttentionTime, self).create_vars()
 
   def default_updates(self):
-    self.base = [T.concatenate([b.output for b in self.layer.base],axis=2)]
+    self.make_base()
     self.glimpses = [ [] ] * len(self.base)
     self.n_glm = max(self.attrs['glimpse'],1)
     return { self.n : self.n + T.constant(1,'float32') }

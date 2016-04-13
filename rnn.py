@@ -209,6 +209,8 @@ def getCacheByteSizes():
   if len(cache_sizes_user) == 1:
     cache_sizes_user *= 3
     cache_factor /= float(num_datasets)
+  elif len(cache_sizes_user) == 2:
+    cache_sizes_user.append('0')
   assert len(cache_sizes_user) == 3, "invalid amount of cache sizes specified"
   cache_sizes = []
   for cache_size_user in cache_sizes_user:

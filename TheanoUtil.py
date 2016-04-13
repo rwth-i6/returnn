@@ -441,3 +441,106 @@ def indices_in_flatten_array(ndim, shape, *args):
 def circular_convolution(a, b):
   from theano.sandbox.cuda.fftconv import cufft,cifft
   return cuifft(cufft(a) * cufft(b))
+
+
+def unroll_scan(fn, sequences=(), outputs_info=(), non_sequences=(), n_steps=None,
+                go_backwards=False):
+  """
+  Helper function to unroll for loops. Can be used to unroll theano.scan.
+  The parameter names are identical to theano.scan, please refer to here
+  for more information.
+
+  Note that this function does not support the truncate_gradient
+  setting from theano.scan.
+
+  Code adapted from https://github.com/Lasagne/Lasagne.
+  Thank you!
+
+  Parameters
+  ----------
+
+  fn : function
+      Function that defines calculations at each step.
+
+  sequences : TensorVariable or list of TensorVariables
+      List of TensorVariable with sequence data. The function iterates
+      over the first dimension of each TensorVariable.
+
+  outputs_info : list of TensorVariables
+      List of tensors specifying the initial values for each recurrent
+      value.
+
+  non_sequences: list of TensorVariables
+      List of theano.shared variables that are used in the step function.
+
+  n_steps: int
+      Number of steps to unroll.
+
+  go_backwards: bool
+      If true the recursion starts at sequences[-1] and iterates
+      backwards.
+
+  Returns
+  -------
+  Tuple of the form (outputs, updates).
+  outputs is a list of TensorVariables. Each element in the list gives the recurrent
+  values at each time step.
+  updates is an empty dict for now.
+  """
+  if not isinstance(sequences, (list, tuple)):
+    sequences = [sequences]
+  sequences = list(sequences)
+  outputs_info = list(outputs_info)
+  non_sequences = list(non_sequences)
+
+  # When backwards reverse the recursion direction
+  counter = range(n_steps)
+  if go_backwards:
+    counter = counter[::-1]
+
+  output = []
+  prev_vals = outputs_info
+  until = []
+  for i in counter:
+    assert len(prev_vals) == len(outputs_info)
+    prev_vals = [prev for prev, out_info in zip(prev_vals, outputs_info) if out_info is not None]
+    step_input = [s[i] for s in sequences] + prev_vals + non_sequences
+    out_ = fn(*step_input)
+    # The returned values from step can be either a TensorVariable,
+    # a list, or a tuple.  Below, we force it to always be a list.
+    if isinstance(out_, T.TensorVariable):
+      out_ = [out_]
+    if isinstance(out_, tuple):
+      if len(out_) >= 1 and isinstance(out_[0], (list, tuple)):
+        if len(out_) >= 2:
+          assert not out_[1], "shared var updates not supported"
+        if len(out_) >= 3:
+          assert isinstance(out_[2], theano.scan_module.until)
+          until.append(T.neq(out_[2].condition, 0))
+        out_ = list(out_[0])
+      else:
+        out_ = list(out_)
+    output.append(out_)
+
+    prev_vals = output[-1]
+
+  # iterate over each scan output and convert it to same format as scan:
+  # [[output11, output12,...output1n],
+  # [output21, output22,...output2n],...]
+  output_scan = []
+  for i in range(len(output[0])):
+    l = map(lambda x: x[i], output)
+    output_scan.append(T.stack(*l))
+
+  if until:
+    assert len(until) == n_steps
+    until_conds = T.stack(*until)
+    new_len = T.switch(T.any(until_conds),
+                       T.minimum(T.argmax(until_conds) + 1, n_steps),
+                       n_steps)
+    output_scan = [out[:new_len] for out in output_scan]
+
+  if len(output_scan) == 1:
+    output_scan = output_scan[0]
+  updates = {}
+  return output_scan, updates
