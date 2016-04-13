@@ -347,7 +347,7 @@ class RecurrentUnitLayer(Layer):
     # initialize recurrent weights
     W_re = None
     if unit.n_re > 0:
-      W_re = self.add_param(self.create_random_uniform_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
+      W_re = self.add_param(self.create_recurrent_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
     bias_init_value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
     if bias_random_init_forget_shift:
