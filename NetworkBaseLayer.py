@@ -19,6 +19,7 @@ class Container(object):
   def __init__(self, layer_class=None, name="", network=None,
                train_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
+               recurrent_weights_init=None,
                substitute_param_expr=None):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
@@ -35,11 +36,22 @@ class Container(object):
     self.name = name.encode("utf8")
     self.train_flag = train_flag
     self.depth = depth
-    self.set_attr('depth', depth)
-    self.set_attr('consensus', consensus)
+    if depth != 1:
+      self.set_attr('depth', depth)
+    if consensus != "flat":
+      self.set_attr('consensus', consensus)
     self.network = network
+    if forward_weights_init:
+      self.set_attr("forward_weights_init", forward_weights_init)
     self.forward_weights_init = forward_weights_init or "random_normal()"
+    if recurrent_weights_init:
+      self.set_attr("recurrent_weights_init", recurrent_weights_init)
+    self.recurrent_weights_init = recurrent_weights_init or "random_uniform()"
+    if bias_init:
+      self.set_attr("bias_init", bias_init)
     self.bias_init = bias_init or "zeros()"
+    if substitute_param_expr:
+      self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
 
   def dot(self, vec, mat):
@@ -204,11 +216,12 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return self.shared(values, name)
 
-  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth=None):
+  def create_random_uniform_weights(self, n, m, p=None, p_add=None, l=None, name=None, depth=None):
     if not depth: depth = self.depth
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
+    if p_add: p += p_add
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
     if depth > 1:
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=theano.config.floatX)
@@ -232,14 +245,25 @@ class Container(object):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=shape), dtype=theano.config.floatX)
     return self.shared(values, name)
 
-  def create_forward_weights(self, n, m, name=None):
+  def create_random_unitary_weights(self, n, m, name=None):
+    x = numpy.random.randn(n, m)
+    u, s, v = numpy.linalg.svd(x, full_matrices=0)
+    if u.shape == (n, m):
+      x = u
+    else:
+      x = v
+    assert x.shape == (n, m)
+    x = x.astype(theano.config.floatX)
+    return self.shared(x, name)
+
+  def _create_eval_weights(self, n, m, name, default_name_prefix, init_eval_str):
     """
     :param int n: input dimension
     :param int m: output dimension
     :param str|None name: layer name
     :rtype: theano.shared
     """
-    if not name: name = "W_%s_%i" % (self.name, len(self.params))
+    if not name: name = "%s_%s_%i" % (default_name_prefix, self.name, len(self.params))
     eval_locals = {
       "numpy": numpy,
       "theano": theano,
@@ -247,16 +271,37 @@ class Container(object):
       "m": m,
       "sqrt": numpy.sqrt,
       "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=theano.config.floatX)),
-      "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
-      "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
+      "random_normal": (
+      lambda scale=None, **kwargs: self.create_random_normal_weights(n, m, scale=scale, name=name, **kwargs)),
+      "random_uniform": (
+      lambda l=None, p=None, **kwargs: self.create_random_uniform_weights(n, m, p=p, l=l, name=name, **kwargs)),
+      "random_unitary": (lambda **kwargs: self.create_random_unitary_weights(n, m, name=name, **kwargs))
     }
-    v = eval(self.forward_weights_init, eval_locals)
+    v = eval(init_eval_str, eval_locals)
     if isinstance(v, numpy.ndarray):
       v = numpy.asarray(v, dtype=theano.config.floatX)
       v = self.shared(v, name)
     assert isinstance(v, theano.compile.SharedVariable)
     assert v.ndim == 2
     return v
+
+  def create_forward_weights(self, n, m, name=None):
+    """
+    :param int n: input dimension
+    :param int m: output dimension
+    :param str|None name: layer name
+    :rtype: theano.shared
+    """
+    return self._create_eval_weights(n=n, m=m, name=name, default_name_prefix="W", init_eval_str=self.forward_weights_init)
+
+  def create_recurrent_weights(self, n, m, name=None):
+    """
+    :param int n: input dimension
+    :param int m: output dimension
+    :param str|None name: layer name
+    :rtype: theano.shared
+    """
+    return self._create_eval_weights(n=n, m=m, name=name, default_name_prefix="W_re", init_eval_str=self.recurrent_weights_init)
 
   @classmethod
   def guess_source_layer_name(cls, layer_name):
