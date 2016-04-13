@@ -229,6 +229,7 @@ class RecurrentUnitLayer(Layer):
                attention_sharpening = 1.0,
                attention_nbest = 0,
                attention_store = False,
+               attention_smooth=False,
                attention_align = False,
                attention_glimpse = 1,
                attention_bn = 0,
@@ -310,7 +311,9 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_norm', attention_norm.encode("utf8"))
     self.set_attr('attention_sharpening', attention_sharpening)
     self.set_attr('attention_nbest', attention_nbest)
+    attention_store = attention_store or attention_smooth
     self.set_attr('attention_store', attention_store)
+    self.set_attr('attention_smooth', attention_smooth)
     self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)

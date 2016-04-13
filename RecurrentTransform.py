@@ -302,6 +302,27 @@ class AttentionBase(RecurrentTransformBase):
     Y.beam_idx = beam_idx
     return Y
 
+  def align(self, w_i, Q):
+    dst = -T.log(w_i)
+    inf = T.zeros_like(Q[0, 0]) + T.cast(1e10, 'float32') * T.gt(self.n, 0)
+    big = T.cast(1e10, 'float32')
+    n0 = T.eq(T.max(self.n), 0)
+    D = -T.log(w_i)
+
+    def dtw(i, q_p, b_p, Q, D, inf):
+      i0 = T.eq(i, 0)
+      # inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
+      penalty = T.switch(T.and_(T.neg(n0), i0), big, T.constant(0.0, 'float32'))
+      loop = T.constant(0.0, 'float32') + q_p
+      forward = T.constant(0.0, 'float32') + T.switch(T.or_(n0, i0), 0, Q[i - 1])
+      opt = T.stack([loop, forward])
+      k_out = T.cast(T.argmin(opt, axis=0), 'int32')
+      return opt[k_out, T.arange(opt.shape[1])] + D[i] + penalty, k_out
+
+    output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0], dtype='int32')], non_sequences=[Q, D, inf],
+                            outputs_info=[T.zeros((dst.shape[1],), 'float32'), T.zeros((dst.shape[1],), 'int32')])
+    return output[0], T.cast(output[1],'float32')
+
   def softmax(self, D, I):
     D = D
     if self.attrs['norm'] == 'exp':
@@ -397,30 +418,21 @@ class AttentionList(AttentionBase):
       for g in xrange(self.n_glm):
         B, C, I, H, W_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, H)
+        if self.attrs['smooth']:
+          z_i *= self.state_vars['att_%d' % i] #T.extra_ops.cumsum(self.state_vars['att_%d' % i], axis=0)
         w_i = self.softmax(z_i, I)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
         updates[self.state_vars['att_%d' % i]] = w_i
+        #if self.attrs['smooth']:
+        #  #old = T.extra_ops.cumsum(self.state_vars['att_%d' % i], axis=0)
+        #  #w_i *= (old + (numpy.float32(1.) - old[-1])) # case for t = 0
+        #  w_i += T.extra_ops.cumsum(self.state_vars['att_%d' % i], axis=0)
+        #  w_i = w_i / (T.sum(w_i,axis=0,keepdims=True) + T.constant(1e-20,'float32'))
       if self.attrs['align']:
-        dst = -T.log(w_i)
-        Q = self.item("Q", i)
-        inf = T.zeros_like(Q[0,0]) + T.cast(1e10,'float32') * T.gt(self.n,0)
-        big = T.cast(1e10,'float32')
-        n0 = T.eq(T.max(self.n),0)
-        D = -T.log(w_i)
-        def dtw(i, q_p, b_p, Q, D, inf):
-          i0 = T.eq(i, 0)
-          # inf = T.cast(1e10,'float32') * T.cast(T.switch(T.eq(self.n,0), T.switch(T.eq(i,0), 0, 1), 1), 'float32')
-          penalty = T.switch(T.and_(T.neg(n0), i0), big, T.constant(0.0, 'float32'))
-          loop = T.constant(0.0, 'float32') + q_p
-          forward = T.constant(0.0, 'float32') + T.switch(T.or_(n0, i0), 0, Q[i - 1])
-          opt = T.stack([loop, forward])
-          k_out = T.cast(T.argmin(opt, axis=0), 'int32')
-          return opt[k_out, T.arange(opt.shape[1])] + D[i] + penalty, k_out
-        output, _ = theano.scan(dtw, sequences=[T.arange(dst.shape[0],dtype='int32')], non_sequences=[Q,D,inf],
-                                outputs_info=[T.zeros((dst.shape[1],),'float32'),T.zeros((dst.shape[1],),'int32')])
-        updates[self.state_vars['Q_%d'%i]] = output[0]
-        updates[self.state_vars['K_%d'%i]] = T.cast(output[1],'float32')
+        Q,K = self.align(w_i,self.item("Q", i))
+        updates[self.state_vars['Q_%d' % i]] = Q
+        updates[self.state_vars['K_%d' % i]] = K
       inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
     return inp, updates
 
