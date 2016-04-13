@@ -204,11 +204,12 @@ class Container(object):
       values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
     return self.shared(values, name)
 
-  def create_random_uniform_weights(self, n, m, p=None, l=None, name=None, depth=None):
+  def create_random_uniform_weights(self, n, m, p=None, p_add=None, l=None, name=None, depth=None):
     if not depth: depth = self.depth
     if name is None: name = 'W_' + self.name
     assert not (p and l)
     if not p: p = n + m
+    if p_add: p += p_add
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
     if depth > 1:
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=theano.config.floatX)
@@ -247,8 +248,8 @@ class Container(object):
       "m": m,
       "sqrt": numpy.sqrt,
       "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=theano.config.floatX)),
-      "random_normal": (lambda scale=None: self.create_random_normal_weights(n, m, scale=scale, name=name)),
-      "random_uniform": (lambda l=None, p=None: self.create_random_uniform_weights(n, m, p=p, l=l, name=name))
+      "random_normal": (lambda scale=None, **kwargs: self.create_random_normal_weights(n, m, scale=scale, name=name, **kwargs)),
+      "random_uniform": (lambda l=None, p=None, **kwargs: self.create_random_uniform_weights(n, m, p=p, l=l, name=name, **kwargs))
     }
     v = eval(self.forward_weights_init, eval_locals)
     if isinstance(v, numpy.ndarray):

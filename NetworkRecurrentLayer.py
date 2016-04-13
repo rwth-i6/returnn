@@ -238,6 +238,7 @@ class RecurrentUnitLayer(Layer):
                lm = False,
                force_lm = False,
                droplm = 1.0,
+               forward_weights_init=None,
                bias_random_init_forget_shift=0.0,
                **kwargs):
     """
@@ -353,11 +354,14 @@ class RecurrentUnitLayer(Layer):
       assert unit.n_units * 4 == unit.n_in  # (input gate, forget gate, output gate, net input)
       bias_init_value[unit.n_units:2 * unit.n_units] += bias_random_init_forget_shift
     self.b.set_value(bias_init_value)
+    if not forward_weights_init:
+      forward_weights_init = "random_uniform(p_add=%i)" % unit.n_re
+    else:
+      self.set_attr('forward_weights_init', forward_weights_init)
+    self.forward_weights_init = forward_weights_init
     self.W_in = []
     for s in self.sources:
-      W = self.create_random_uniform_weights(s.attrs['n_out'], unit.n_in,
-                                             s.attrs['n_out'] + unit.n_in + unit.n_re,
-                                             name="W_in_%s_%s" % (s.name, self.name))
+      W = self.create_forward_weights(s.attrs['n_out'], unit.n_in, name="W_in_%s_%s" % (s.name, self.name))
       self.W_in.append(self.add_param(W))
     # make input
     z = self.b
