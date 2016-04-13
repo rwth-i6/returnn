@@ -245,6 +245,17 @@ class Container(object):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=shape), dtype=theano.config.floatX)
     return self.shared(values, name)
 
+  def create_random_unitary_weights(self, n, m, name=None):
+    x = numpy.random.randn(n, m)
+    u, s, v = numpy.linalg.svd(x, full_matrices=0)
+    if u.shape == (n, m):
+      x = u
+    else:
+      x = v
+    assert x.shape == (n, m)
+    x = x.astype(theano.config.floatX)
+    return self.shared(x, name)
+
   def _create_eval_weights(self, n, m, name, default_name_prefix, init_eval_str):
     """
     :param int n: input dimension
@@ -263,7 +274,8 @@ class Container(object):
       "random_normal": (
       lambda scale=None, **kwargs: self.create_random_normal_weights(n, m, scale=scale, name=name, **kwargs)),
       "random_uniform": (
-      lambda l=None, p=None, **kwargs: self.create_random_uniform_weights(n, m, p=p, l=l, name=name, **kwargs))
+      lambda l=None, p=None, **kwargs: self.create_random_uniform_weights(n, m, p=p, l=l, name=name, **kwargs)),
+      "random_unitary": (lambda **kwargs: self.create_random_unitary_weights(n, m, name=name, **kwargs))
     }
     v = eval(init_eval_str, eval_locals)
     if isinstance(v, numpy.ndarray):
