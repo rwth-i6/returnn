@@ -231,6 +231,11 @@ class AttentionBase(RecurrentTransformBase):
       l = sqrt(6.) / sqrt(2 * n_tmp)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
       self.A_re = self.add_param(self.layer.shared(value=values, borrow=True, name = "A_re"))
+    if self.attrs['distance'] == 'transpose':
+      n_tmp = self.attrs['template']
+      l = sqrt(6.) / sqrt(2 * n_tmp)
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp,)), dtype=theano.config.floatX)
+      self.W_T = self.add_param(self.layer.shared(values=values))
     if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
@@ -288,6 +293,8 @@ class AttentionBase(RecurrentTransformBase):
     elif dist == 'rnn':
       inp, _ = theano.scan(lambda x,p,W:elu(x+T.dot(p,W)), sequences = C, outputs_info = [H[0]], non_sequences=[self.A_re])
       dst = inp[-1]
+    elif dist == 'transpose':
+      dst = T.sum(self.W_T.dimshuffle('x','x',0).repeat(C.shape[0],axis=0).repeat(C.shape[1],axis=1) * T.tanh((C + H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0))),axis=2)
     else:
       raise NotImplementedError()
     return dst * T.constant(self.attrs['sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
