@@ -235,7 +235,7 @@ class AttentionBase(RecurrentTransformBase):
       n_tmp = self.attrs['template']
       l = sqrt(6.) / sqrt(2 * n_tmp)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp,)), dtype=theano.config.floatX)
-      self.W_T = self.add_param(self.layer.shared(values=values))
+      self.W_T = self.add_param(self.layer.shared(value=values, name="W_T"))
     if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
