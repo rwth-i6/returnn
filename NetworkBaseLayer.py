@@ -192,13 +192,16 @@ class Container(object):
       return self.rng.normal(loc=loc, scale=scale, size=size)
     def random_uniform(l, loc=0.0):
       return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
-    import Config
+    import Config, Util
     config = Config.get_global_config()
-    if config: config = config.typed_dict
+    if config: config = Util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
+      "rng": self.rng,
       "config": config,
+      "self": self,
       "n": n,
+      "name": name,
       "sqrt": numpy.sqrt,
       "log": numpy.log,
       "zeros": (lambda: numpy.zeros(size, dtype=theano.config.floatX)),
@@ -291,15 +294,18 @@ class Container(object):
     :rtype: theano.shared
     """
     if not name: name = "%s_%s_%i" % (default_name_prefix, self.name, len(self.params))
-    import Config
+    import Config, Util
     config = Config.get_global_config()
-    if config: config = config.typed_dict
+    if config: config = Util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
       "theano": theano,
+      "rng": self.rng,
       "config": config,
+      "self": self,
       "n": n,
       "m": m,
+      "name": name,
       "sqrt": numpy.sqrt,
       "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=theano.config.floatX)),
       "random_normal": (
