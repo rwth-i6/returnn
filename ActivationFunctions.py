@@ -1,6 +1,7 @@
 
 import theano.tensor as T
 from TheanoUtil import complex_bound
+import numpy
 
 
 def relu(z):
@@ -9,6 +10,23 @@ def relu(z):
   # https://github.com/Lasagne/Lasagne/pull/163#issuecomment-81806482
   return (z + abs(z)) / 2.0
 
+def clipped01lu(z):
+  """
+  0 for x <= 0
+  x for 0 <= x <= 1
+  1 for 1 <= x
+  """
+  # Not sure about the fastest implementation...
+  return relu(z) - relu(z - numpy.float32(1))
+
+def clippedlu(z):
+  """
+  -1 for  x <= -1
+   x for -1 <=  x <= 1
+   1 for  1 <=  x
+  """
+  # Not sure about the fastest implementation...
+  return relu(z + numpy.float32(1)) - relu(z - numpy.float32(1)) - numpy.float32(1)
 
 def elu(z): # http://arxiv.org/pdf/1511.07289v1.pdf
   return T.switch(T.ge(z,0), z, T.exp(z) - 1)
@@ -37,6 +55,8 @@ ActivationFunctions = {
   'sigmoid': T.nnet.sigmoid,  # alias
   'tanh': T.tanh,
   'relu': relu,
+  'clipped01lu': clipped01lu,
+  'clippedlu': clippedlu,
   'elu': elu,
   'identity': identity,
   'one': constant_one,

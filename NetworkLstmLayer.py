@@ -495,7 +495,9 @@ def make_lstm_step(n_cells, W_re,
   return lstm_step
 
 
-def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=None, W_peep_o=None, grad_clip=None, direction=1):
+def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=None, W_peep_o=None,
+         CI=None, CO=None, G=None,
+         grad_clip=None, direction=1):
   # z: (n_time,n_batch,n_cells*4)
   # i: (n_time,n_batch)
   # W_re: (n_out,n_cells*4)
@@ -511,7 +513,11 @@ def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=No
   i = T.cast(i, dtype="float32")  # so that it can run on gpu
   if grad_clip:
     grad_clip = numpy.float32(grad_clip)
-  lstm_step = make_lstm_step(n_cells=n_cells, W_re=W_re, W_out_proj=W_out_proj, W_re_proj=W_re_proj, W_peep_i=W_peep_i, W_peep_f=W_peep_f, W_peep_o=W_peep_o, grad_clip=grad_clip)
+  lstm_step = make_lstm_step(
+    n_cells=n_cells, W_re=W_re,
+    W_out_proj=W_out_proj, W_re_proj=W_re_proj, W_peep_i=W_peep_i, W_peep_f=W_peep_f, W_peep_o=W_peep_o,
+    CI=CI, CO=CO, G=G,
+    grad_clip=grad_clip)
 
   s_initial = T.zeros((n_batch, n_cells), dtype="float32")
   h_initial = T.zeros((n_batch, n_out), dtype="float32")
@@ -527,7 +533,7 @@ class Lstm2Layer(HiddenLayer):
   recurrent = True
   layer_class = "lstm2"
 
-  def __init__(self, n_out, n_cells=None, n_proj=None, peepholes=False, direction=1, grad_clip=None, truncation=None, **kwargs):
+  def __init__(self, n_out, n_cells=None, n_proj=None, peepholes=False, direction=1, activation=None, grad_clip=None, truncation=None, **kwargs):
     if not n_cells: n_cells = n_out
     # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
     super(Lstm2Layer, self).__init__(n_out=n_cells * 4, **kwargs)
@@ -537,15 +543,16 @@ class Lstm2Layer(HiddenLayer):
     self.set_attr('peepholes', peepholes)
     self.set_attr('direction', direction)
     if grad_clip: self.set_attr('grad_clip', grad_clip)
+    if activation: self.set_attr('activation', activation)
 
     n_re_in = n_out
     if n_proj:
       # Applied before recurrent matrix.
-      self.W_re_proj = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
+      self.W_re_proj = self.add_param(self.create_recurrent_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
       n_re_in = n_proj
     else:
       self.W_re_proj = None
-    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+    self.W_re = self.add_param(self.create_recurrent_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
     if n_out != n_cells:
       # Applied before output.
       self.W_out_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
@@ -558,10 +565,24 @@ class Lstm2Layer(HiddenLayer):
     else:
       self.W_peepholes = [None] * 3
 
+    CI, CO, G = [T.tanh, T.tanh, T.nnet.sigmoid]
+    if activation:
+      act_f = strtoact(activation)
+      if isinstance(act_f, list):
+        if len(act_f) == 2:
+          CI, CO = act_f
+        elif len(act_f) == 3:
+          CI, CO, G = act_f
+        else:
+          assert False, "invalid number of activation funcs: %r" % act_f
+      else:
+        CI = CO = act_f
+
     z = self.get_linear_forward_output()
     h = lstm(z=z, i=self.index, W_re=self.W_re,
              W_out_proj=self.W_out_proj, W_re_proj=self.W_re_proj,
              W_peep_i=self.W_peepholes[0], W_peep_f=self.W_peepholes[1], W_peep_o=self.W_peepholes[2],
+             CI=CI, CO=CO, G=G,
              grad_clip=grad_clip, direction=direction)
     self.make_output(h)
 

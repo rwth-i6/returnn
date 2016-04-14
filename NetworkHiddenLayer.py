@@ -12,6 +12,7 @@ from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
 from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 
 class HiddenLayer(Layer):
@@ -2128,7 +2129,8 @@ class NewConv(_NoOpLayer):
     Get the reference from deeplearning.net/tutorial/lenet.html
   """
 
-  def __init__(self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid', ignore_border=True, **kwargs):
+  def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid', 
+                ignore_border=True, dropout=0.0, **kwargs):
 
     """
 
@@ -2213,6 +2215,7 @@ class NewConv(_NoOpLayer):
     self.set_attr('ignore_border', ignore_border)
     self.set_attr('d_row', d_row_new)   # number of output row
     self.set_attr('n_out', n_out)   # number of output dimension
+    self.set_attr('dropout', dropout)
 
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
@@ -2240,6 +2243,18 @@ class NewConv(_NoOpLayer):
     self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size))
     # bias parameter
     self.b = self.add_param(self._create_bias(n_features=n_features))
+    
+        
+    if dropout > 0.0:
+      assert dropout < 1.0, 'Dropout have to be less than 1.0'
+      mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
+      srng = RandomStreams(self.rng.randint(1234) + 1)
+  
+      if self.train_flag == True:
+        self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=(self.input.shape)), theano.config.floatX)
+      else:
+        self.input = self.input * mass
+    
 
     # when convolutional layer 1x1, it gave the same size even full or valid border mode
     if filter == 1:
