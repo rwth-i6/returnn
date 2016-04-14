@@ -246,7 +246,7 @@ class Container(object):
     return self.shared(values, name)
 
   def create_random_unitary_weights(self, n, m, name=None):
-    x = numpy.random.randn(n, m)
+    x = self.rng.randn(n, m)
     u, s, v = numpy.linalg.svd(x, full_matrices=0)
     if u.shape == (n, m):
       x = u
@@ -264,7 +264,7 @@ class Container(object):
       transpose = False
     fac = ((m - 1) // n) + 1
     def make_tile():
-      x = numpy.random.randn(n, n)
+      x = self.rng.randn(n, n)
       u, s, v = numpy.linalg.svd(x)
       assert u.shape == (n, n)
       return u
