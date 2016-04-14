@@ -305,6 +305,8 @@ class Container(object):
       v = self.shared(v, name)
     assert isinstance(v, theano.compile.SharedVariable)
     assert v.ndim == 2
+    vshape = v.get_value(borrow=True, return_internal_type=True).shape
+    assert vshape == (n, m)
     return v
 
   def create_forward_weights(self, n, m, name=None):
