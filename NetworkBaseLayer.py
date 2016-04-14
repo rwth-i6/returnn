@@ -192,7 +192,12 @@ class Container(object):
       return self.rng.normal(loc=loc, scale=scale, size=size)
     def random_uniform(l, loc=0.0):
       return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
+    import Config
+    config = Config.get_global_config()
+    if config: config = config.typed_dict
     eval_locals = {
+      "numpy": numpy,
+      "config": config,
       "n": n,
       "sqrt": numpy.sqrt,
       "log": numpy.log,
@@ -202,6 +207,7 @@ class Container(object):
     }
     values = eval(self.bias_init, eval_locals)
     values = numpy.asarray(values, dtype=theano.config.floatX)
+    assert values.shape == (n,)
     return self.shared(values, name)
 
   def create_random_normal_weights(self, n, m, scale=None, name=None):
