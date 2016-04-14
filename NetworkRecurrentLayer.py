@@ -349,7 +349,7 @@ class RecurrentUnitLayer(Layer):
     if unit.n_re > 0:
       W_re = self.add_param(self.create_recurrent_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
-    bias_init_value = numpy.zeros((unit.n_in, ), dtype = theano.config.floatX)
+    bias_init_value = self.create_bias(unit.n_in).get_value()
     if bias_random_init_forget_shift:
       assert unit.n_units * 4 == unit.n_in  # (input gate, forget gate, output gate, net input)
       bias_init_value[unit.n_units:2 * unit.n_units] += bias_random_init_forget_shift
