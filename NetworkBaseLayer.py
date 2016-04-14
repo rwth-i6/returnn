@@ -256,6 +256,27 @@ class Container(object):
     x = x.astype(theano.config.floatX)
     return self.shared(x, name)
 
+  def create_random_unitary_tiled_weights(self, n, m, name=None):
+    if n > m:
+      transpose = True
+      n, m = m, n  # n < m
+    else:  # n <= m
+      transpose = False
+    fac = ((m - 1) // n) + 1
+    def make_tile():
+      x = numpy.random.randn(n, n)
+      u, s, v = numpy.linalg.svd(x)
+      assert u.shape == (n, n)
+      return u
+    x = numpy.concatenate([make_tile() for i in range(fac)], axis=1)
+    assert x.shape == (n, fac * n)
+    x = x[:, :m]
+    assert x.shape == (n, m)
+    if transpose:
+      x = x.T
+    x = x.astype(theano.config.floatX)
+    return self.shared(x, name)
+
   def _create_eval_weights(self, n, m, name, default_name_prefix, init_eval_str):
     """
     :param int n: input dimension
@@ -275,7 +296,8 @@ class Container(object):
       lambda scale=None, **kwargs: self.create_random_normal_weights(n, m, scale=scale, name=name, **kwargs)),
       "random_uniform": (
       lambda l=None, p=None, **kwargs: self.create_random_uniform_weights(n, m, p=p, l=l, name=name, **kwargs)),
-      "random_unitary": (lambda **kwargs: self.create_random_unitary_weights(n, m, name=name, **kwargs))
+      "random_unitary": (lambda **kwargs: self.create_random_unitary_weights(n, m, name=name, **kwargs)),
+      "random_unitary_tiled": (lambda **kwargs: self.create_random_unitary_tiled_weights(n, m, name=name, **kwargs))
     }
     v = eval(init_eval_str, eval_locals)
     if isinstance(v, numpy.ndarray):
