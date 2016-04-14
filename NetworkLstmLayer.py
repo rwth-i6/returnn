@@ -548,11 +548,11 @@ class Lstm2Layer(HiddenLayer):
     n_re_in = n_out
     if n_proj:
       # Applied before recurrent matrix.
-      self.W_re_proj = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
+      self.W_re_proj = self.add_param(self.create_recurrent_weights(n=n_out, m=n_proj, name="W_re_proj_%s" % self.name))
       n_re_in = n_proj
     else:
       self.W_re_proj = None
-    self.W_re = self.add_param(self.create_random_uniform_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+    self.W_re = self.add_param(self.create_recurrent_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
     if n_out != n_cells:
       # Applied before output.
       self.W_out_proj = self.add_param(self.create_forward_weights(n_cells, n_out, name='W_proj_%s' % self.name))
