@@ -285,9 +285,13 @@ class Container(object):
     :rtype: theano.shared
     """
     if not name: name = "%s_%s_%i" % (default_name_prefix, self.name, len(self.params))
+    import Config
+    config = Config.get_global_config()
+    if config: config = config.typed_dict
     eval_locals = {
       "numpy": numpy,
       "theano": theano,
+      "config": config,
       "n": n,
       "m": m,
       "sqrt": numpy.sqrt,
