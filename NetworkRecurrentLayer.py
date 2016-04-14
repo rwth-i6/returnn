@@ -315,6 +315,7 @@ class RecurrentUnitLayer(Layer):
     attention_store = attention_store or attention_smooth or attention_momentum != 'none'
     self.set_attr('attention_store', attention_store)
     self.set_attr('attention_smooth', attention_smooth)
+    self.set_attr('attention_momentum', attention_momentum.encode('utf8'))
     self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_lm', attention_lm)

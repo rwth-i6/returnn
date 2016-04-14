@@ -279,22 +279,25 @@ class AttentionBase(RecurrentTransformBase):
 
   def distance(self, C, H):
     dist = self.attrs['distance']
+    if H.ndim == 2:
+      H = H.dimshuffle('x', 0, 1).repeat(C.shape[0],axis=0)
+    assert H.ndim == 3
     if dist == 'l2':
-      dst = T.sqrt(T.sum((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2))
-      #return T.mean((C - H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)) ** 2, axis=2)
+      dst = T.sqrt(T.sum((C - H) ** 2, axis=2))
+      #return T.mean((C - H) ** 2, axis=2)
     elif dist == 'dot':
-      dst = T.sum(C * H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
+      dst = T.sum(C * H, axis=2)
     elif dist == 'l1':
-      dst = T.sum(abs(C - H.dimshuffle('x',0,1)), axis=2)
+      dst = T.sum(T.abs_(C - H), axis=2)
     elif dist == 'cos': # use with template size > 32
-      J = H / T.sqrt(T.sum(H**2,axis=1,keepdims=True))
+      J = H / T.sqrt(T.sum(H**2,axis=2,keepdims=True))
       K = C / T.sqrt(T.sum(C**2,axis=2,keepdims=True))
-      dst = T.sum(K * J.dimshuffle('x',0,1).repeat(C.shape[0],axis=0), axis=2)
+      dst = T.sum(K * J, axis=2)
     elif dist == 'rnn':
       inp, _ = theano.scan(lambda x,p,W:elu(x+T.dot(p,W)), sequences = C, outputs_info = [H[0]], non_sequences=[self.A_re])
       dst = inp[-1]
     elif dist == 'transpose':
-      dst = T.sum(self.W_T.dimshuffle('x','x',0).repeat(C.shape[0],axis=0).repeat(C.shape[1],axis=1) * T.tanh((C + H.dimshuffle('x',0,1).repeat(C.shape[0],axis=0))),axis=2)
+      dst = T.sum(self.W_T.dimshuffle('x','x',0).repeat(C.shape[0],axis=0).repeat(C.shape[1],axis=1) * T.tanh(C + H),axis=2)
     else:
       raise NotImplementedError()
     return dst * T.constant(self.attrs['sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
@@ -369,6 +372,9 @@ class AttentionList(AttentionBase):
     if self.attrs['align']:
       self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32') + numpy.float32(1e10), "Q_%d" % i))
       self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
+    if self.attrs['momentum'] == "conv":
+      self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
+      self.__setattr__("U_att_%d" % i, self.custom_vars['U_att_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -396,6 +402,15 @@ class AttentionList(AttentionBase):
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
       self.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
+      if self.attrs['momentum'] == 'conv':
+        context = 9
+        l = sqrt(6.) / sqrt(n_tmp + context)
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, context)), dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
+        l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="U_att_%d" % i))
+
       self.init(i)
 
   def item(self, name, i):
@@ -416,7 +431,19 @@ class AttentionList(AttentionBase):
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
     c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-    h_p = (T.tanh(T.dot(y_p, W_att_re) + b_att_re) + T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0)) if g == 0 else self.glimpses[i][-1]
+    if g == 0:
+      z_p = T.sum(C * c_i,axis=0,keepdims=True) / T.sum(c_i,axis=0,keepdims=True) + T.dot(y_p, W_att_re) + b_att_re
+      if self.attrs['momentum'] == 'conv':
+        from theano.tensor.nnet import conv
+        att = self.item('att', i)
+        F = self.item("F", i)
+        z_p += T.dot(conv.conv2d(border_mode='full',
+          input=att.dimshuffle(1, 'x', 0, 'x'),
+          filters=F.dimshuffle(0, 'x', 1, 'x')
+        ).dimshuffle(2, 0, 1, 3)[F.shape[1] / 2:-F.shape[1] / 2 + 1].reshape(C.shape) / T.cast(C.shape[0],'float32'), self.item("U_att",i))
+      h_p = T.tanh(z_p)
+    else:
+      h_p = self.glimpses[i][-1]
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
