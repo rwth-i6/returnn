@@ -2,6 +2,7 @@
 import theano
 import numpy
 import json
+import h5py
 from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
@@ -2117,7 +2118,9 @@ class NewConvLayer(_NoOpLayer):
 ############################################# END HERE ######################################################
 
 
-
+def my_print(op, x):
+  with open('w_conv.txt', 'a') as f:
+    f.write(str(x))
 
 
 ################################################# NEW AUTOMATIC CONVOLUTIONAL LAYER #######################################################
@@ -2130,7 +2133,7 @@ class NewConv(_NoOpLayer):
   """
 
   def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid', 
-                ignore_border=True, dropout=0.0, **kwargs):
+                ignore_border=True, dropout=0.0, initW='', cLayer='c0', seeds=23455, **kwargs):
 
     """
 
@@ -2216,6 +2219,9 @@ class NewConv(_NoOpLayer):
     self.set_attr('d_row', d_row_new)   # number of output row
     self.set_attr('n_out', n_out)   # number of output dimension
     self.set_attr('dropout', dropout)
+    self.set_attr('initW', initW)
+    self.set_attr('cLayer', cLayer)
+    self.set_attr('seeds', seeds)
 
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
@@ -2240,7 +2246,12 @@ class NewConv(_NoOpLayer):
     self.filter_shape = (n_features, stack_size, filter, filter)
 
     # weight parameter
-    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size))
+    if initW == '':
+      self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
+    else:
+      self.W = self.add_param(self._get_init_weights(model=initW, layer=cLayer))
+    self.W = theano.printing.Print(global_fn=my_print)(self.W)
+    
     # bias parameter
     self.b = self.add_param(self._create_bias(n_features=n_features))
     
@@ -2250,8 +2261,8 @@ class NewConv(_NoOpLayer):
       mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
       srng = RandomStreams(self.rng.randint(1234) + 1)
   
-      if self.train_flag == True:
-        self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=(self.input.shape)), theano.config.floatX)
+      if self.train_flag:
+        self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
       else:
         self.input = self.input * mass
     
@@ -2298,8 +2309,8 @@ class NewConv(_NoOpLayer):
 
 
   # function for calculating the weight parameter of this class
-  def _create_weights(self, filter_shape, pool_size):
-    rng = numpy.random.RandomState(23455)
+  def _create_weights(self, filter_shape, pool_size, seeds):
+    rng = numpy.random.RandomState(seeds)
     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
@@ -2322,6 +2333,22 @@ class NewConv(_NoOpLayer):
       ),
       borrow=True,
       name="b_conv"
+    )
+    
+  # function for taking the weight parameters from a best model
+  def _get_init_weights(self, model, layer):
+    h5 = h5py.File(model, 'r')
+    wConv = h5['/'+layer+'/W_conv']
+    data = wConv.value    
+    h5.close()
+    
+    return self.shared(
+      numpy.asarray(
+        data,
+        dtype=theano.config.floatX
+      ),
+      borrow=True,
+      name="W_conv"
     )
 
 ################################################# NEW WITH FRACTIONAL MAX POOLING #######################################################

@@ -372,9 +372,11 @@ class AttentionList(AttentionBase):
     if self.attrs['align']:
       self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32') + numpy.float32(1e10), "Q_%d" % i))
       self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
-    if self.attrs['momentum'] == "conv":
+    if self.attrs['momentum'] == "conv1d":
       self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
       self.__setattr__("U_att_%d" % i, self.custom_vars['U_att_%d' % i])
+    elif self.attrs['momentum'] == "conv2d":
+      self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -402,7 +404,7 @@ class AttentionList(AttentionBase):
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
       self.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
-      if self.attrs['momentum'] == 'conv':
+      if self.attrs['momentum'] == 'conv1d':
         context = 9
         l = sqrt(6.) / sqrt(n_tmp + n_tmp*context)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, context)), dtype=theano.config.floatX)
@@ -410,6 +412,11 @@ class AttentionList(AttentionBase):
         l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_att_%d" % i))
+      if self.attrs['momentum'] == 'conv2d':
+        context = 9
+        l = 1. / context
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(2, context)), dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
       self.init(i)
 
   def item(self, name, i):
@@ -432,7 +439,7 @@ class AttentionList(AttentionBase):
     c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
     if g == 0:
       z_p = T.sum(C * c_i,axis=0,keepdims=True) / T.sum(c_i,axis=0,keepdims=True) + T.dot(y_p, W_att_re) + b_att_re
-      if self.attrs['momentum'] == 'conv':
+      if self.attrs['momentum'] == 'conv1d':
         from theano.tensor.nnet import conv
         att = self.item('att', i)
         F = self.item("F", i)
@@ -454,6 +461,14 @@ class AttentionList(AttentionBase):
         if self.attrs['smooth']:
           z_i *= self.state_vars['att_%d' % i] #T.extra_ops.cumsum(self.state_vars['att_%d' % i], axis=0)
         w_i = self.softmax(z_i, I)
+        if self.attrs['momentum'] == 'conv2d':
+          from theano.tensor.nnet import conv
+          F = self.item('F',i)
+          att = self.item('att', i)
+          w_i = conv.conv2d(border_mode='full',
+                            input=T.stack(att, w_i).dimshuffle(2,'x',0,1), # B12T
+                            filters=F.dimshuffle('x','x',0,1)).dimshuffle(3,0,1,2)[F.shape[1] / 2:-F.shape[1] / 2 + 1,:,1].reshape(att.shape)
+          w_i = w_i / T.sum(w_i,axis=0,keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
         updates[self.state_vars['att_%d' % i]] = w_i
