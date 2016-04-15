@@ -404,13 +404,12 @@ class AttentionList(AttentionBase):
       self.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
       if self.attrs['momentum'] == 'conv':
         context = 9
-        l = sqrt(6.) / sqrt(n_tmp + context)
+        l = sqrt(6.) / sqrt(n_tmp + n_tmp*context)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, context)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
         l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_att_%d" % i))
-
       self.init(i)
 
   def item(self, name, i):
@@ -440,7 +439,7 @@ class AttentionList(AttentionBase):
         z_p += T.dot(conv.conv2d(border_mode='full',
           input=att.dimshuffle(1, 'x', 0, 'x'),
           filters=F.dimshuffle(0, 'x', 1, 'x')
-        ).dimshuffle(2, 0, 1, 3)[F.shape[1] / 2:-F.shape[1] / 2 + 1].reshape(C.shape) / T.cast(C.shape[0],'float32'), self.item("U_att",i))
+        ).dimshuffle(2, 0, 1, 3)[F.shape[1] / 2:-F.shape[1] / 2 + 1].reshape(C.shape), self.item("U_att",i))
       h_p = T.tanh(z_p)
     else:
       h_p = self.glimpses[i][-1]
