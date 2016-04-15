@@ -450,13 +450,15 @@ class Device(object):
         elif extract == "posteriors":
           source.append(self.testnet.get_layer('output').p_y_given_x)
         elif extract == "filters":
-          #for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
-          #if self.testnet.hidden[hidden].layer_class == "conv":
-          if self.testnet.hidden["c3"].layer_class == "conv":
-            source.append(self.testnet.hidden["c3"].output)
-            print >> log.v3, "c3"
-          #else:
-          #  print str(self.testnet.hidden[hidden])
+          # for more than one layer
+          for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
+            if self.testnet.hidden[hidden].layer_class == "conv":
+              source.append(self.testnet.hidden[hidden].output)
+            else:
+              print str(self.testnet.hidden[hidden])
+          # for single layer only
+          #if self.testnet.hidden["c1"].layer_class == "conv":
+          #  source.append(self.testnet.hidden["c1"].output)
         elif extract == "ctc-sil":
           feat = self.testnet.get_layer('output').p_y_given_x
           feat = feat[:,:-1] #remove blank
