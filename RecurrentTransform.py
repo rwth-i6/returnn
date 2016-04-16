@@ -466,13 +466,13 @@ class AttentionList(AttentionBase):
           context = F.shape[3]
           padding = T.zeros((2,context/2,C.shape[1]),'float32')
           att = T.concatenate([padding, T.stack([self.item('att',i), w_i]), padding],axis=1) # 2TB
-          w_i += theano.gradient.grad_clip(T.nnet.conv2d(border_mode='valid',
+          w_i += T.nnet.conv2d(border_mode='valid',
                               input=att.dimshuffle(2,'x',0,1), # B12T
-                              filters=F).dimshuffle(3,0,2,1).reshape((C.shape[0],C.shape[1])),-10.0,10.0)
+                              filters=F).dimshuffle(3,0,2,1).reshape((C.shape[0],C.shape[1]))
           w_i = w_i / T.sum(w_i,axis=0,keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
-        updates[self.state_vars['att_%d' % i]] = w_i
+        updates[self.state_vars['att_%d' % i]] = theano.gradient.disconnected_grad(w_i)
       if self.attrs['align']:
         Q,K = self.align(w_i,self.item("Q", i))
         updates[self.state_vars['Q_%d' % i]] = Q
