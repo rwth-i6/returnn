@@ -1578,6 +1578,25 @@ class AttentionReshapeLayer(_NoOpLayer):
     self.make_output(outputs[0].dimshuffle(1,0,2)[:-1])
 
 
+class AttentionLayer(_NoOpLayer):
+  layer_class = 'attention'
+
+  def __init__(self, base, conv_x=None, conv_y=None, **kwargs):
+    super(AttentionLayer, self).__init__(**kwargs)
+    self.set_attr('conv_x',conv_x)
+    self.set_attr('conv_y',conv_y)
+    self.set_attr('base', ",".join([b.name for b in base]))
+    self.attrs['n_out'] = base[0].attrs['n_out']
+    base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base],axis=2)
+    attention = T.zeros((self.index.shape[0],self.index.shape[1],base.shape[0]), 'float32')
+    for src in kwargs['sources']:
+      for att in src.attention:
+        attention += att
+    attention = attention / attention.sum(axis=2, keepdims=True) # NBT
+    attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
+    self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+
+
 class DetectionLayer(HiddenLayer):
   layer_class = "detection"
   def __init__(self, label_idx, **kwargs):
@@ -2132,7 +2151,7 @@ class NewConv(_NoOpLayer):
     Get the reference from deeplearning.net/tutorial/lenet.html
   """
 
-  def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid', 
+  def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid',
                 ignore_border=True, dropout=0.0, initW='', cLayer='c0', seeds=23455, **kwargs):
 
     """
@@ -2251,21 +2270,21 @@ class NewConv(_NoOpLayer):
     else:
       self.W = self.add_param(self._get_init_weights(model=initW, layer=cLayer))
     self.W = theano.printing.Print(global_fn=my_print)(self.W)
-    
+
     # bias parameter
     self.b = self.add_param(self._create_bias(n_features=n_features))
-    
-        
+
+
     if dropout > 0.0:
       assert dropout < 1.0, 'Dropout have to be less than 1.0'
       mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
       srng = RandomStreams(self.rng.randint(1234) + 1)
-  
+
       if self.train_flag:
         self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
       else:
         self.input = self.input * mass
-    
+
 
     # when convolutional layer 1x1, it gave the same size even full or valid border mode
     if filter == 1:
@@ -2334,14 +2353,14 @@ class NewConv(_NoOpLayer):
       borrow=True,
       name="b_conv"
     )
-    
+
   # function for taking the weight parameters from a best model
   def _get_init_weights(self, model, layer):
     h5 = h5py.File(model, 'r')
     wConv = h5['/'+layer+'/W_conv']
-    data = wConv.value    
+    data = wConv.value
     h5.close()
-    
+
     return self.shared(
       numpy.asarray(
         data,

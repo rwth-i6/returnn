@@ -255,6 +255,7 @@ class Updater:
     " :type: list[(theano.SharedVariable, theano.Variable)] "
     upd = { p: 0 for p in self.net_train_param_deltas.keys() }
     grads = {p: T.switch(T.or_(T.isinf(g), T.isnan(g)), numpy.float32(0), g) for (p, g) in self.net_train_param_deltas.items()}
+    #grads = {p: g for (p, g) in self.net_train_param_deltas.items()}
 
     if self.mean_normalized_sgd:
       # https://www-i6.informatik.rwth-aachen.de/publications/download/903/WieslerSimonRichardAlexerSchl%7Bu%7DterRalfNeyHermann--Mean-normalizedstochasticgradientforlarge-scaledeeplearning--2014.pdf
