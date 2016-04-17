@@ -413,7 +413,7 @@ class AttentionList(AttentionBase):
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_att_%d" % i))
       if self.attrs['momentum'] == 'conv2d':
-        context = 3
+        context = 5
         l = 1. / (2 * context)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(1, 1, 2, context)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
@@ -458,15 +458,13 @@ class AttentionList(AttentionBase):
       for g in xrange(self.n_glm):
         B, C, I, H, W_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, H)
-        if self.attrs['smooth']:
-          z_i *= self.state_vars['att_%d' % i] #T.extra_ops.cumsum(self.state_vars['att_%d' % i], axis=0)
         w_i = self.softmax(z_i, I)
         if self.attrs['momentum'] == 'conv2d':
           F = self.item('F',i)
           context = F.shape[3]
           padding = T.zeros((2,context/2,C.shape[1]),'float32')
           att = T.concatenate([padding, T.stack([self.item('att',i), w_i]), padding],axis=1) # 2TB
-          w_i += T.nnet.conv2d(border_mode='valid',
+          w_i = T.nnet.conv2d(border_mode='valid',
                               input=att.dimshuffle(2,'x',0,1), # B12T
                               filters=F).dimshuffle(3,0,2,1).reshape((C.shape[0],C.shape[1]))
           w_i = w_i / T.sum(w_i,axis=0,keepdims=True)

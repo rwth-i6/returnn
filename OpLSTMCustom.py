@@ -633,4 +633,3 @@ def register_func(recurrent_transform):
     setattr(optdb, attr, True)
 
   return function_ops[key]
-

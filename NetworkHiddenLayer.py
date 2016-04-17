@@ -1583,16 +1583,22 @@ class AttentionLayer(_NoOpLayer):
 
   def __init__(self, base, conv_x=None, conv_y=None, **kwargs):
     super(AttentionLayer, self).__init__(**kwargs)
-    self.set_attr('conv_x',conv_x)
-    self.set_attr('conv_y',conv_y)
+    if conv_x:
+      self.set_attr('conv_x',conv_x)
+    if conv_y:
+      self.set_attr('conv_y',conv_y)
     self.set_attr('base', ",".join([b.name for b in base]))
-    self.attrs['n_out'] = base[0].attrs['n_out']
-    base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base],axis=2)
+    self.attrs['n_out'] = kwargs['n_out']
+    self.W_out = self.add_param(self.create_forward_weights(base[0].attrs['n_out'], self.attrs['n_out']), 'W_out')
+    self.b_out = self.add_param(self.create_bias(self.attrs['n_out']), 'b_out')
+    base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
+    base = T.tanh(T.dot(base,self.W_out) + self.b_out)
     attention = T.zeros((self.index.shape[0],self.index.shape[1],base.shape[0]), 'float32')
     for src in kwargs['sources']:
       for att in src.attention:
         attention += att
     attention = attention / attention.sum(axis=2, keepdims=True) # NBT
+    #self.make_output(attention)
     attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
     self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
 

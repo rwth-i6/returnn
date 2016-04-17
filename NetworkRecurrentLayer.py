@@ -479,12 +479,12 @@ class RecurrentUnitLayer(Layer):
         self.act = outputs[:unit.n_act]
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
-    #if self.attrs['attention_store']:
-    #  self.attention = [ self.aux[i][::direction].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
-    #  #for i in xrange(len(self.attention)): # TODO(zeyer): please fix LSTMC state var outputs please
-    #  #  vec = T.eye(self.attention[i].shape[2], 1, direction * (self.attention[i].shape[2] - 1))
-    #  #  last = vec.dimshuffle(1,'x', 0).repeat(self.index.shape[1], axis=1)
-    #  #  self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)
+    if self.attrs['attention_store']:
+      self.attention = [ self.aux[i][::direction].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
+      #for i in xrange(len(self.attention)): # TODO(zeyer): please fix LSTMC state var outputs please
+      #  vec = T.eye(self.attention[i].shape[2], 1, direction * (self.attention[i].shape[2] - 1))
+      #  last = vec.dimshuffle(1,'x', 0).repeat(self.index.shape[1], axis=1)
+      #  self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)
 
     if self.attrs['attention_align']:
       bp = [ self.aux[i] for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]
