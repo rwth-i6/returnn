@@ -1366,6 +1366,74 @@ class LengthProjectionLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class AttentionLengthLayer(_NoOpLayer):
+  layer_class = "attention_length"
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], **kwargs):
+    super(AttentionLengthLayer, self).__init__(**kwargs)
+    self.params = {}
+    self.set_attr('use_real', use_real)
+    self.set_attr('oracle', oracle)
+    self.set_attr('filter', filter)
+    nT = kwargs['sources'][0].output.shape[0]
+    attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
+    for src in kwargs['sources']:
+      for att in src.attention:
+        attention += att
+    l = 6. / (filter[0]*filter[1])
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(1, 1, filter[0], filter[1])), dtype=theano.config.floatX)
+    F = self.add_param(self.shared(value=values, name="F"))
+    conv = T.nnet.conv2d(border_mode='full',
+                        input=attention.dimshuffle(1,'x',2,0), # B1TN
+                        filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1]
+    halting = T.tanh(T.max(conv.reshape(attention.shape),axis=2)) # NB
+    halting = halting / T.sum(halting,axis=0,keepdims=True)
+    hyp = T.sum(halting * T.arange(halting.shape[1],dtype='float32').dimshuffle('x',0).repeat(halting.shape[0],axis=0),axis=0)
+    real = T.sum(T.cast(kwargs['index'], 'float32'), axis=0)
+    self.cost_val = T.sum((hyp - real)**2)
+    if self.train_flag or oracle:
+      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
+    else:
+      self.length = T.ceil(hyp)
+    self.length = T.cast(self.length, 'int32')
+    x_in, n_in = concat_sources(self.sources)
+    out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                                            T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
+                        sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
+    self.index = out[0].dimshuffle(1,0)[:-1]
+    self.output = out[1].dimshuffle(1,0,2)[:-1]
+
+  def cost(self):
+    return self.cost_val, None
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class AttentionLayer(_NoOpLayer):
+  layer_class = 'attention'
+
+  def __init__(self, base, conv_x=None, conv_y=None, **kwargs):
+    super(AttentionLayer, self).__init__(**kwargs)
+    if conv_x:
+      self.set_attr('conv_x',conv_x)
+    if conv_y:
+      self.set_attr('conv_y',conv_y)
+    self.set_attr('base', ",".join([b.name for b in base]))
+    self.attrs['n_out'] = kwargs['n_out']
+    self.W_out = self.add_param(self.create_forward_weights(base[0].attrs['n_out'], self.attrs['n_out']), 'W_out')
+    self.b_out = self.add_param(self.create_bias(self.attrs['n_out']), 'b_out')
+    base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
+    base = T.tanh(T.dot(base,self.W_out) + self.b_out)
+    attention = T.zeros((self.index.shape[0],self.index.shape[1],base.shape[0]), 'float32')
+    for src in kwargs['sources']:
+      for att in src.attention:
+        attention += att
+    attention = attention / attention.sum(axis=2, keepdims=True) # NBT
+    #self.make_output(attention)
+    attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
+    self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+
+
 class SignalSplittingLayer(HiddenLayer):
   layer_class = "signal_splitter"
   def __init__(self, base, p=0.5, oracle=False, **kwargs):
@@ -1576,31 +1644,6 @@ class AttentionReshapeLayer(_NoOpLayer):
     self.y_out = outputs[1].dimshuffle(1,0)[:-1]
     self.index = outputs[2].dimshuffle(1,0)[:-1]
     self.make_output(outputs[0].dimshuffle(1,0,2)[:-1])
-
-
-class AttentionLayer(_NoOpLayer):
-  layer_class = 'attention'
-
-  def __init__(self, base, conv_x=None, conv_y=None, **kwargs):
-    super(AttentionLayer, self).__init__(**kwargs)
-    if conv_x:
-      self.set_attr('conv_x',conv_x)
-    if conv_y:
-      self.set_attr('conv_y',conv_y)
-    self.set_attr('base', ",".join([b.name for b in base]))
-    self.attrs['n_out'] = kwargs['n_out']
-    self.W_out = self.add_param(self.create_forward_weights(base[0].attrs['n_out'], self.attrs['n_out']), 'W_out')
-    self.b_out = self.add_param(self.create_bias(self.attrs['n_out']), 'b_out')
-    base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
-    base = T.tanh(T.dot(base,self.W_out) + self.b_out)
-    attention = T.zeros((self.index.shape[0],self.index.shape[1],base.shape[0]), 'float32')
-    for src in kwargs['sources']:
-      for att in src.attention:
-        attention += att
-    attention = attention / attention.sum(axis=2, keepdims=True) # NBT
-    #self.make_output(attention)
-    attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
-    self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
 
 
 class DetectionLayer(HiddenLayer):
