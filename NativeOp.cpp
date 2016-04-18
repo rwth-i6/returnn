@@ -1,4 +1,7 @@
 
+#include <string.h>
+#include <assert.h>
+
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
 #if CUDA
@@ -12,6 +15,9 @@
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
 #define Ndarray_NewDims CudaNdarray_NewDims
+// PyObject * CudaNdarray_Copy(const CudaNdarray * self);
+#define Ndarray_Copy CudaNdarray_Copy
+#define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
 
 #define DIM_GRID 128
 #define DIM_BLOCK 512
@@ -72,20 +78,14 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
+#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, 0))
+#define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 
 #endif
 
-Ndarray* Ndarray_zeros_like(Ndarray* a) {
-	const int* dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(a->nd, dim);
-	int n = Ndarray_SIZE(a);
-	HANDLE_ERROR(cudaMemset(Ndarray_DEV_DATA(res), 0, sizeof(float) * n));
-	return res;
-}
-
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 	const int* dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*)Ndarray_NewDims(a->nd, dim);
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(a->nd, dim);
 	return res;
 }
 
