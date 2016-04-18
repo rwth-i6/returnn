@@ -4,4 +4,5 @@
 ipython-kernel-*.json
 .*.swp
 .nfs*
+*~
 
