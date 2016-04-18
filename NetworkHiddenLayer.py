@@ -1386,6 +1386,9 @@ class AttentionLengthLayer(_NoOpLayer):
                         input=attention.dimshuffle(1,'x',2,0), # B1TN
                         filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
     halting = T.exp(T.max(conv,axis=2)) # NBF
+    if n_features > 1:
+      W_f = self.add_param(self.create_forward_weights(n_features,1,'W_f'))
+      halting = T.dot(halting, W_f)
     halting = halting.reshape(attention.shape)
     halting = halting / T.sum(halting,axis=0,keepdims=True)
     hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
