@@ -1368,28 +1368,34 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(_NoOpLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, **kwargs):
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('use_real', use_real)
     self.set_attr('oracle', oracle)
     self.set_attr('filter', filter)
+    self.set_attr('n_features', n_features)
     nT = kwargs['sources'][0].output.shape[0]
     attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
     for src in kwargs['sources']:
       for att in src.attention:
         attention += att
-    l = 6. / (filter[0]*filter[1])
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(1, 1, filter[0], filter[1])), dtype=theano.config.floatX)
+    l = numpy.sqrt(6. / (filter[0]*filter[1]))
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
     F = self.add_param(self.shared(value=values, name="F"))
-    conv = T.nnet.conv2d(border_mode='full',
-                        input=attention.dimshuffle(1,'x',2,0), # B1TN
-                        filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1]
-    halting = T.exp(T.max(conv.reshape(attention.shape),axis=2)) # NB
+    halting = T.nnet.conv2d(border_mode='full',
+                           input=attention.dimshuffle(1,'x',2,0), # B1TN
+                           filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
+    if n_features > 1:
+      W_f = self.add_param(self.create_forward_weights(n_features,1,'W_f'))
+      halting = T.dot(halting, W_f)
+    halting = T.exp(T.max(halting.reshape(attention.shape),axis=2)) # NB
     halting = T.extra_ops.cumsum(halting, axis=0)
     halting = halting / T.sum(halting,axis=0,keepdims=True)
     hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     real = T.sum(T.cast(kwargs['index'], 'float32'), axis=0)
+    real = theano.printing.Print("real")(real)
+    hyp = theano.printing.Print("hyp")(hyp)
     x_in, n_in = concat_sources(self.sources)
     self.cost_val = T.sum((hyp - real)**2)
     if self.train_flag or oracle:
@@ -2203,7 +2209,7 @@ class NewConv(_NoOpLayer):
   """
 
   def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid',
-                ignore_border=True, dropout=0.0, initW='', cLayer='c0', seeds=23455, **kwargs):
+                ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
 
     """
 
@@ -2289,8 +2295,6 @@ class NewConv(_NoOpLayer):
     self.set_attr('d_row', d_row_new)   # number of output row
     self.set_attr('n_out', n_out)   # number of output dimension
     self.set_attr('dropout', dropout)
-    self.set_attr('initW', initW)
-    self.set_attr('cLayer', cLayer)
     self.set_attr('seeds', seeds)
 
     # our CRNN input is 3D tensor that consists of (time, batch, dim)
@@ -2316,11 +2320,8 @@ class NewConv(_NoOpLayer):
     self.filter_shape = (n_features, stack_size, filter, filter)
 
     # weight parameter
-    if initW == '':
-      self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
-    else:
-      self.W = self.add_param(self._get_init_weights(model=initW, layer=cLayer))
-    self.W = theano.printing.Print(global_fn=my_print)(self.W)
+    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
+    #self.W = theano.printing.Print(global_fn=my_print)(self.W)
 
     # bias parameter
     self.b = self.add_param(self._create_bias(n_features=n_features))
@@ -2403,22 +2404,6 @@ class NewConv(_NoOpLayer):
       ),
       borrow=True,
       name="b_conv"
-    )
-
-  # function for taking the weight parameters from a best model
-  def _get_init_weights(self, model, layer):
-    h5 = h5py.File(model, 'r')
-    wConv = h5['/'+layer+'/W_conv']
-    data = wConv.value
-    h5.close()
-
-    return self.shared(
-      numpy.asarray(
-        data,
-        dtype=theano.config.floatX
-      ),
-      borrow=True,
-      name="W_conv"
     )
 
 ################################################# NEW WITH FRACTIONAL MAX POOLING #######################################################

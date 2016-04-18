@@ -1,4 +1,6 @@
 
+#define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
+
 #if CUDA
 
 // Defined here: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
@@ -6,6 +8,7 @@
 #define Ndarray CudaNdarray
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
+#define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
 #define Ndarray_NewDims CudaNdarray_NewDims
@@ -66,6 +69,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
 #define Ndarray_HOST_DIMS PyArray_DIMS
+#define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 
