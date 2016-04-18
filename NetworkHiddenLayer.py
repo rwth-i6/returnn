@@ -1368,14 +1368,17 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(_NoOpLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, mean=0, var=1, **kwargs):
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('use_real', use_real)
     self.set_attr('oracle', oracle)
     self.set_attr('filter', filter)
     self.set_attr('n_features', n_features)
+    self.set_attr('mean', mean)
+    self.set_attr('var', var)
     nT = kwargs['sources'][0].output.shape[0]
+    index = kwargs['sources'][0].target_index
     attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
     for src in kwargs['sources']:
       for att in src.attention:
@@ -1392,10 +1395,16 @@ class AttentionLengthLayer(_NoOpLayer):
     halting = T.exp(T.max(halting.reshape(attention.shape),axis=2)) # NB
     halting = T.extra_ops.cumsum(halting, axis=0)
     halting = halting / T.sum(halting,axis=0,keepdims=True)
+    self.b = self.add_param(self.create_bias(1))
+    self.b += T.constant(mean,'float32')
+    self.s = self.add_param(self.create_bias(1))
+    self.s += T.constant(var, 'float32')
     hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
-    real = T.sum(T.cast(kwargs['index'], 'float32'), axis=0)
-    real = theano.printing.Print("real")(real)
-    hyp = theano.printing.Print("hyp")(hyp)
+    hyp = (self.b[0] + hyp) * self.s[0]
+    #index = theano.printing.Print("index", attrs=['shape'])(index)
+    real = T.sum(T.cast(index, 'float32'), axis=0)
+    #real = theano.printing.Print("real")(real)
+    #hyp = theano.printing.Print("hyp")(hyp)
     x_in, n_in = concat_sources(self.sources)
     self.cost_val = T.sum((hyp - real)**2)
     if self.train_flag or oracle:
