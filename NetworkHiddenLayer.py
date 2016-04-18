@@ -1399,6 +1399,7 @@ class AttentionLengthLayer(_NoOpLayer):
     out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                                             T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
                         sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
+    self.attrs['n_out'] = n_in
     self.index = out[0].dimshuffle(1,0)[:-1]
     self.output = out[1].dimshuffle(1,0,2)[:-1]
 
