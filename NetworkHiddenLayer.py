@@ -1368,7 +1368,7 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(_NoOpLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, **kwargs):
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('use_real', use_real)
@@ -1380,12 +1380,13 @@ class AttentionLengthLayer(_NoOpLayer):
       for att in src.attention:
         attention += att
     l = 6. / (filter[0]*filter[1])
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(1, 1, filter[0], filter[1])), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
     F = self.add_param(self.shared(value=values, name="F"))
     conv = T.nnet.conv2d(border_mode='full',
                         input=attention.dimshuffle(1,'x',2,0), # B1TN
-                        filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1]
-    halting = T.exp(T.max(conv.reshape(attention.shape),axis=2)) # NB
+                        filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
+    halting = T.exp(T.max(conv,axis=2)) # NBF
+    halting = halting.reshape(attention.shape)
     halting = halting / T.sum(halting,axis=0,keepdims=True)
     hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     real = T.sum(T.cast(kwargs['index'], 'float32'), axis=0)

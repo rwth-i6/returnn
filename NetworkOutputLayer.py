@@ -96,9 +96,9 @@ class OutputLayer(Layer):
                                     T.concatenate([self.z,pad],axis=0),
                                     self.z)
       #self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
-      #self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], target_length),
-      #                                                             T.inc_subtensor((T.cast(T.zeros_like(self.index),'int32') + numpy.int32(y.n_out - 1))[:target_length], y),
-      #                                                             y))
+      self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
+                         T.inc_subtensor(T.zeros((self.z.shape[0],self.index.shape[1]),'int32')[:self.index.shape[0]], y),
+                                                                   y))
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
