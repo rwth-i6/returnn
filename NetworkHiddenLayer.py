@@ -1385,23 +1385,23 @@ class AttentionLengthLayer(_NoOpLayer):
     conv = T.nnet.conv2d(border_mode='full',
                         input=attention.dimshuffle(1,'x',2,0), # B1TN
                         filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1]
-    halting = T.tanh(T.max(conv.reshape(attention.shape),axis=2)) # NB
+    halting = T.exp(T.max(conv.reshape(attention.shape),axis=2)) # NB
     halting = halting / T.sum(halting,axis=0,keepdims=True)
-    hyp = T.sum(halting * T.arange(halting.shape[1],dtype='float32').dimshuffle('x',0).repeat(halting.shape[0],axis=0),axis=0)
+    hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     real = T.sum(T.cast(kwargs['index'], 'float32'), axis=0)
+    x_in, n_in = concat_sources(self.sources)
     self.cost_val = T.sum((hyp - real)**2)
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
       self.length = T.ceil(hyp)
     self.length = T.cast(self.length, 'int32')
-    x_in, n_in = concat_sources(self.sources)
     out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                                             T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
                         sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
     self.attrs['n_out'] = n_in
     self.index = out[0].dimshuffle(1,0)[:-1]
-    self.output = out[1].dimshuffle(1,0,2)[:-1]
+    self.make_output(out[1].dimshuffle(1,0,2)[:-1])
 
   def cost(self):
     return self.cost_val, None
