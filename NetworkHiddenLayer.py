@@ -1387,26 +1387,28 @@ class AttentionLengthLayer(_NoOpLayer):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
     F = self.add_param(self.shared(value=values, name="F"))
     halting = T.nnet.conv2d(border_mode='full',
-                           input=attention.dimshuffle(1,'x',2,0), # B1TN
-                           filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
+                            input=attention.dimshuffle(1,'x',2,0), # B1TN
+                            filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
     if n_features > 1:
       W_f = self.add_param(self.create_forward_weights(n_features,1,'W_f'))
       halting = T.dot(halting, W_f)
     halting = T.exp(T.max(halting.reshape(attention.shape),axis=2)) # NB
-    halting = T.extra_ops.cumsum(halting, axis=0)
+    #halting = T.extra_ops.cumsum(halting, axis=0)
     halting = halting / T.sum(halting,axis=0,keepdims=True)
-    self.b = self.add_param(self.create_bias(1))
-    self.b += T.constant(mean,'float32')
-    self.s = self.add_param(self.create_bias(1))
-    self.s += T.constant(var, 'float32')
-    hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
-    hyp = (self.b[0] + hyp) * self.s[0]
+    #self.b = self.add_param(self.create_bias(1))
+    #self.b += T.constant(mean,'float32')
+    #self.s = self.add_param(self.create_bias(1))
+    #self.s += T.constant(var, 'float32')
+    #hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
+    #hyp = (self.b[0] + hyp) * self.s[0]
     #index = theano.printing.Print("index", attrs=['shape'])(index)
-    real = T.sum(T.cast(index, 'float32'), axis=0)
+    real = T.sum(T.cast(index, 'int32'), axis=0)
     #real = theano.printing.Print("real")(real)
-    #hyp = theano.printing.Print("hyp")(hyp)
     x_in, n_in = concat_sources(self.sources)
-    self.cost_val = T.sum((hyp - real)**2)
+    #self.cost_val = T.sum((hyp - real)**2) * T.sum(hyp+real)
+    self.cost_val = -T.sum(T.log(halting[real-1,T.arange(halting.shape[1])]))
+    hyp = T.argmax(halting,axis=0) + 1
+    #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
