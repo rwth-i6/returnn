@@ -1331,6 +1331,62 @@ class LengthLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class EosLengthLayer(HiddenLayer):
+  layer_class = "eoslength"
+  def __init__(self, eos=-1, pad=0, **kwargs):
+    target = kwargs['target'] if 'target' in kwargs else 'classes'
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(EosLengthLayer, self).__init__(**kwargs)
+    self.set_attr('eos',eos)
+    self.set_attr('pad',pad)
+    assert len(self.sources) == 2
+    if eos < 0:
+      eos += self.y_in[target].n_out
+
+    z_fw = T.dot(self.sources[0].output, self.W_in[0])
+    z_bw = T.dot(self.sources[1].output, self.W_in[1])
+    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
+    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
+
+    if self.train_flag:
+      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
+      self.cost_eos = T.sum(nll) * z_fw.shape[0]
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[::-1][eos_p], y_idx=self.y_in[target][eos_p])
+      self.cost_sos = T.sum(nll) * z_bw.shape[0]
+    else:
+      self.cost_sos = 0.0
+      self.cost_eos = 0.0
+
+    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
+    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
+    batch = T.ones((self.index.shape[1],), 'int32')
+    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,eos], axis=0) + 1 + pad)), 'int32')
+    max_length = T.max(length)
+    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
+    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
+
+    def cut(fw_t, bw_t, len_t, *args):
+      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
+      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
+      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
+      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
+      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
+      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
+    reduced, _ = theano.scan(cut,
+                             sequences = [fw, bw, length],
+                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
+    fw = reduced[0].dimshuffle(1,0,2)
+    bw = reduced[1].dimshuffle(1,0,2)[::-1]
+    self.index = reduced[3].dimshuffle(1,0)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
+    self.output = T.concatenate([fw,bw], axis=2)
+    self.length = length
+
+  def cost(self):
+    return self.cost_eos + self.cost_sos, None
+
+
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
   def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, method="scale", **kwargs):
@@ -1368,17 +1424,19 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(_NoOpLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, mean=0, var=1, rho=0.5, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=1./16, avg_var=16, rho=0.5, **kwargs):
+    kwargs['n_out'] = 1
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('use_real', use_real)
     self.set_attr('oracle', oracle)
     self.set_attr('filter', filter)
     self.set_attr('n_features', n_features)
-    self.set_attr('mean', mean)
-    self.set_attr('var', var)
+    self.set_attr('avg_obs', avg_obs)
+    self.set_attr('avg_var', avg_var)
     nT = kwargs['sources'][0].output.shape[0]
     index = kwargs['sources'][0].target_index
+
     attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
     for src in kwargs['sources']:
       for att in src.attention:
@@ -1393,9 +1451,18 @@ class AttentionLengthLayer(_NoOpLayer):
       if n_features > 1:
         W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
         halting = T.dot(halting, W_f)
-      halting = T.exp(T.max(halting.reshape(attention.shape), axis=2))  # NB
-      # halting = T.extra_ops.cumsum(halting, axis=0)
+    halting = T.exp(T.max(halting.reshape(attention.shape), axis=2))  # NB
+    # halting = T.extra_ops.cumsum(halting, axis=0)
+    halting = halting / T.sum(halting, axis=0, keepdims=True)
+
+    if avg_obs > 0:
+      x =  T.arange(halting.shape[0],dtype='float32').dimshuffle(0, 'x').repeat(halting.shape[1],axis=1)
+      m = T.constant(avg_obs,'float32')
+      s = T.constant(avg_var,'float32')
+      from math import sqrt,pi
+      halting *= T.exp(-((x - m) ** 2) / (2 * s)) / (s * T.constant(sqrt(2 * pi), "float32"))
       halting = halting / T.sum(halting, axis=0, keepdims=True)
+
     #self.b = self.add_param(self.create_bias(1))
     #self.b += T.constant(mean,'float32')
     #self.s = self.add_param(self.create_bias(1))
