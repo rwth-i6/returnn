@@ -246,18 +246,33 @@ class NativeOp(theano.Op):
 
   def c_support_code(self):
     src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
-    return "#define CUDA 0\n\n" + src
+    return "\n\n".join([
+      T.blas.blas_header_text(),
+      "#define CUDA 0", src])
+
+  def c_libraries(self):
+    return T.blas.ldflags()
+
+  def c_compile_args(self):
+    return T.blas.ldflags(libs=False, flags=True)
+
+  def c_lib_dirs(self):
+    return T.blas.ldflags(libs=False, libs_dir=True)
+
+  def c_header_dirs(self):
+    return T.blas.ldflags(libs=False, include_dir=True)
 
   def c_code(self, node, name, inputs, outputs, sub):
     assert len(inputs) == len(self.in_info)
     assert len(outputs) == len(self.out_info)
     return """
+    {
       int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
       Ndarray* inputs[] = {%(input_var_names_str)s};
       Ndarray** outputs[] = {%(output_var_names_str)s};
       int in_ndims[] = {%(input_ndims_str)s};
       int out_ndims[] = {%(output_ndims_str)s};
-      int output_shapes_flat[] = {%(output_shapes_flat_str)s};
+      Ndarray_DIM_Type output_shapes_flat[] = {%(output_shapes_flat_str)s};
       int in_want_inplace[] = {%(input_want_inplace_str)s};
       bool in_is_inplace[] = {%(input_is_inplace_str)s};
 
@@ -318,6 +333,7 @@ class NativeOp(theano.Op):
       // And the user C code starts here.
       // --------------------------------
       %(c_code)s;
+    }
     """ % {
       'name': name, 'fail': sub['fail'],
       'op_name': escape_c_str(self.name),
@@ -489,7 +505,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* H = *outputs[1];
     Ndarray* d = *outputs[2];
 
-    int T = Ndarray_DIMS(inputs[0])[0];
+    long T = Ndarray_DIMS(inputs[0])[0];
     assert(T > 0);
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
@@ -516,7 +532,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* Dc = *outputs[2];
     Ndarray* tmpDc = *outputs[3]; // (old DY), inplace buffer
 
-    int T = Ndarray_DIMS(Y)[0];
+    long T = Ndarray_DIMS(Y)[0];
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
@@ -529,7 +545,7 @@ class LstmGenericBase(NativeOpGenBase):
     //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
-    const int* Dc_dim = Ndarray_HOST_DIMS(Dc);
+    const auto* Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
