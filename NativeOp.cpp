@@ -43,6 +43,10 @@
 #define DIM_GRID 128
 #define DIM_BLOCK 512
 
+#define DEF_KERNEL __global__
+#define start_dev_kernel(kernel, args)
+	(kernel<<<DIM_GRID,DIM_BLOCK>>>  args);
+
 static const char *_cudaGetErrorEnum(cublasStatus_t error) {
 	switch (error) {
 	case CUBLAS_STATUS_SUCCESS:
@@ -89,7 +93,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #define HANDLE_ERROR(err) (_cudaHandleError( err, __FILE__, __LINE__ ))
 
-#else
+#else   // not CUDA
 
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
 // And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
@@ -116,6 +120,40 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
 	(cblas_sgemm(CblasRowMajor, transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc))
+
+#define DEF_KERNEL
+#define start_dev_kernel(kernel, args) \
+	{ for(_KernelLoop loop; loop.finished(); loop.next()) { kernel args; } }
+
+struct vec3 {
+	int x; int y; int z;
+	void reset() { x = y = z = 0; }
+};
+
+vec3 gridDim;
+vec3 blockDim;
+vec3 threadIdx;
+vec3 blockIdx;
+
+struct _KernelLoop {
+	_KernelLoop() {
+		// When we can choose whatever we want here, this loops becomes trivial,
+		// there will only be one iteration.
+		gridDim.reset(); gridDim.x = 1;
+		blockDim.reset(); blockDim.x = 1;
+		threadIdx.reset();
+		blockIdx.reset();
+	}
+	bool finished() {
+		// TODO: Also block idx but doesn't matter with the constants above.
+		// TODO: Also y/z but doesn't matter with the constants above.
+		return threadIdx.x >= blockDim.x;
+	}
+	void next() {
+		// TODO: Also blockIdx and y/z, but doesn't matter with the constants above.
+		threadIdx.x++;
+	}
+};
 
 #endif
 
@@ -155,7 +193,7 @@ int lastTwoDimsStride(const Ndarray * a) {
 	return dims[0] * dims[1];
 }
 
-__global__ void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
+DEF_KERNEL void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
                             float* output, float* state_out, int n_cells, int n_batch, const float* i) {
 	//layout:
 	//data[0*n_cells..1*n_cells-1] : input gate
@@ -195,7 +233,7 @@ __global__ void lstm_kernel(float* data, const float* old_state, bool old_state_
 	}
 }
 
-__global__ void lstm_bwd_kernel(
+DEF_KERNEL void lstm_bwd_kernel(
         float* delta, float* epsilon, const float* next_epsilon, const float* old_state,
         bool old_state_strided, const float* Y, int n_cells, int n_batch, const float* i) {
 	//layout:
@@ -263,8 +301,7 @@ void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, in
 	const float* data_old_state = x > 0 ? data_ptr(H, x - 1) + 3 * n_cells : data_prev;
 	float* data_out = data_ptr(out, x);
 	const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
-	//TODO tune launch configuration
-	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i);
+	start_dev_kernel(lstm_kernel, (data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i));
 }
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
@@ -283,9 +320,8 @@ void do_lstm_bwd(Ndarray* delta, Ndarray* epsilon, const Ndarray* Y, const Ndarr
 	const float * data_old_state = x > 0 ? data_ptr(delta, x - 1) + 3 * n_cells : Ndarray_DEV_DATA(c);
 	const float * data_Y = data_ptr(Y, x);
 	const float * data_i = Ndarray_DEV_DATA(i) + x * n_batch;
-	//TODO tune launch configuration
-	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(
-	    data_delta, data_epsilon, data_next_epsilon, data_old_state, x > 0, data_Y, n_cells, n_batch, data_i);
+	start_dev_kernel(lstm_bwd_kernel, (
+	    data_delta, data_epsilon, data_next_epsilon, data_old_state, x > 0, data_Y, n_cells, n_batch, data_i));
 }
 
 //C[x] += A[x]*B[x]
