@@ -2695,8 +2695,9 @@ class NativeLayer(_NoOpLayer):
     args_info = []  # dict with ndim, shape, n_in
 
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass)
-    args += [{"ndim": 3, "shape": (None, None, n_in),
-              "type": "input_source", "name": "x"}]
+    args += [x]
+    args_info += [{"ndim": 3, "shape": (None, None, n_in),
+                   "type": "input_source", "name": "x"}]
 
     for param_init_dict in params:
       assert isinstance(param_init_dict, dict)
