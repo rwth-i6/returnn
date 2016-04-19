@@ -18,6 +18,27 @@
 // PyObject * CudaNdarray_Copy(const CudaNdarray * self);
 #define Ndarray_Copy CudaNdarray_Copy
 #define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
+/*
+    // via: http://docs.nvidia.com/cuda/cublas/
+    cublasStatus_t cublasSgemm(cublasHandle_t handle,
+        cublasOperation_t transa, cublasOperation_t transb,
+        int m, int n, int k,
+        const float *alpha, const float *A, int lda,
+        const float *B, int ldb, const float *beta,
+        float *C, int ldc);
+*/
+#define _cublasTranspose(t) \
+	((t == CblasTrans) ? CUBLAS_OP_T : \
+	(t == CblasConjTrans) ? CUBLAS_OP_C : \
+	(t == CblasNoTrans) ? CUBLAS_OP_N : 'E')
+#define Ndarray_sgemm(\
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+	(_cudaHandleError(cublasSgemm(handle, \
+	_cublasTranspose(transpose_A), \
+	_cublasTranspose(transpose_B), \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc), \
+	__FILE__, __LINE__ ))
 
 #define DIM_GRID 128
 #define DIM_BLOCK 512
@@ -80,6 +101,21 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, 0))
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
+/*
+    // via: https://github.com/Theano/Theano/blob/master/theano/tensor/blas_headers.py
+    void cblas_sgemm(const enum CBLAS_ORDER Order,  // default is CblasRowMajor
+                    const enum CBLAS_TRANSPOSE TransA,
+                    const enum CBLAS_TRANSPOSE TransB,
+                    const int M, const int N, const int K,
+                    const float alpha, const float *A, const int lda,
+                    const float *B, const int ldb, const float beta,
+                    float *C, const int ldc);
+*/
+#define Ndarray_sgemm(\
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+	(cblas_sgemm(CblasRowMajor, transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc))
 
 #endif
 
@@ -265,8 +301,8 @@ void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
 
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
-	cublasOperation_t transA = transpose_A ? CUBLAS_OP_T : CUBLAS_OP_N;
-	cublasOperation_t transB = transpose_B ? CUBLAS_OP_T : CUBLAS_OP_N;
+	CBLAS_TRANSPOSE transA = transpose_A ? CblasTrans : CblasNoTrans;
+	CBLAS_TRANSPOSE transB = transpose_B ? CblasTrans : CblasNoTrans;
 	if (transpose_A)
 		std::swap(A_dim[0], A_dim[1]);
 	if (transpose_B)
@@ -274,25 +310,9 @@ void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
 
 	const float alpha = 1;
 	const float beta = 1;
-/*
-    // via: https://github.com/Theano/Theano/blob/master/theano/tensor/blas_headers.py
-    void cblas_sgemm(const enum CBLAS_ORDER Order,  // default is CblasRowMajor
-                    const enum CBLAS_TRANSPOSE TransA,
-                    const enum CBLAS_TRANSPOSE TransB,
-                    const int M, const int N, const int K,
-                    const float alpha, const float *A, const int lda,
-                    const float *B, const int ldb, const float beta,
-                    float *C, const int ldc);
-    // via: http://docs.nvidia.com/cuda/cublas/
-    cublasStatus_t cublasSgemm(cublasHandle_t handle,
-        cublasOperation_t transa, cublasOperation_t transb,
-        int m, int n, int k,
-        const float *alpha, const float *A, int lda,
-        const float *B, int ldb, const float *beta,
-        float *C, int ldc);
-*/
-	HANDLE_ERROR(cublasSgemm(handle, transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
-		data_A, ldA, &beta, data_C, B_dim[1]));
+
+	Ndarray_sgemm(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
+		data_A, ldA, &beta, data_C, B_dim[1]);
 }
 
 //offset is used for x time-shift between A and B
@@ -312,14 +332,14 @@ void affine_global(const Ndarray* A, const Ndarray* B, Ndarray* C,
 
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
-	cublasOperation_t transA = transpose_A ? CUBLAS_OP_T : CUBLAS_OP_N;
-	cublasOperation_t transB = transpose_B ? CUBLAS_OP_T : CUBLAS_OP_N;
+	CBLAS_TRANSPOSE transA = transpose_A ? CblasTrans : CblasNoTrans;
+	CBLAS_TRANSPOSE transB = transpose_B ? CblasTrans : CblasNoTrans;
 	if (transpose_A)
 		std::swap(A_dim[0], A_dim[1]);
 	if (transpose_B)
 		std::swap(B_dim[0], B_dim[1]);
 
 	const float alpha = 1;
-	HANDLE_ERROR(cublasSgemm(handle, transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
-		data_A, ldA, &beta, data_C, B_dim[1]));
+	Ndarray_sgemm(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
+		data_A, ldA, &beta, data_C, B_dim[1]);
 }
