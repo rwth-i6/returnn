@@ -119,13 +119,13 @@ class NativeOp(theano.Op):
 
   @classmethod
   def contiguous(cls, v):
-    from theano.tensor.extra_ops import cpu_contiguous
+    from TheanoUtil import Contiguous
     assert isinstance(v, theano.Variable)
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
-      if v.owner == cpu_contiguous:
+      if isinstance(v.owner.op, Contiguous.__base__):
         return v
-    return cpu_contiguous(v)
+    return Contiguous()(v)
 
   def _convert_input_var(self, v, info):
     v = T.cast(v, info.get("dtype", "float32"))
