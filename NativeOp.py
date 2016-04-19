@@ -130,6 +130,8 @@ class NativeOp(theano.Op):
   def _convert_input_var(self, v, info):
     v = T.cast(v, info.get("dtype", "float32"))
     v = self.as_tensor_var(v)
+    if v.ndim != info["ndim"]:
+      raise TypeError("input var ndim %i does not match with info %r" % (v.ndim, info))
     if info.get("need_contiguous", False):
       v = self.contiguous(v)
     return v
@@ -167,9 +169,17 @@ class NativeOp(theano.Op):
 
     assert len(self.in_info) == len(inputs)
     assert len(self.out_info) == len(output_grads)
+
+    # Some of output_grads might be of disconnected type.
+    out_shapes = self.infer_shape(None, [v.shape for v in inputs])
+    assert len(out_shapes) == len(output_grads)
+    for i, out_grad in enumerate(output_grads):
+      if isinstance(out_grad.type, T.DisconnectedType):
+        output_grads[i] = T.zeros(out_shapes[i], dtype="float32")
+
     # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
     # i.e. we might reuse some of the calculation.
-    grad_inputs = inputs + make_var_tuple(self(inputs)) + output_grads
+    grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
     in_info = list(self.in_info)
     in_info += [self._bw_in_var_info(info) for info in self.out_info]
@@ -207,7 +217,7 @@ class NativeOp(theano.Op):
 
   def connection_pattern(self, node):
     assert len(node.inputs) == len(self.in_info)
-    pattern = [[info.get("gradient", "") != "disconnected"]
+    pattern = [[info.get("gradient", "") != "disconnected"] * len(self.out_info)
                for info in self.in_info]
     return pattern
 
@@ -396,7 +406,7 @@ class NativeOpGenBase:
 
   @classmethod
   def make_op(cls):
-    name = cls.__class__.__name__
+    name = cls.__name__
     assert cls.in_info is not None
     assert cls.out_info is not None
     assert cls.c_fw_code is not None
@@ -441,8 +451,8 @@ class LstmGenericBase(NativeOpGenBase):
      "bw_in_var": {"want_inplace": 0}},
     {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
-
-  def grad_input_map(self, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
+  @classmethod
+  def grad_input_map(cls, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
     return (V_h, c, i,  Y, H,  DY, Dd)
 
   @classmethod

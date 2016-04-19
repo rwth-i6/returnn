@@ -2755,7 +2755,7 @@ class NativeLayer(_NoOpLayer):
 
     import NativeOp
     native_class_cls = getattr(NativeOp, native_class)
-    assert isinstance(native_class_cls, NativeOp.NativeOpGenBase)
+    assert issubclass(native_class_cls, NativeOp.NativeOpGenBase)
     op = native_class_cls.make_op()
 
     args = []
@@ -2769,6 +2769,7 @@ class NativeLayer(_NoOpLayer):
     for param_init_dict in params:
       assert isinstance(param_init_dict, dict)
       assert "name" in param_init_dict
+      assert "shape" in param_init_dict
       param_init_dict = param_init_dict.copy()
       param_init_dict["name"] += "_%s" % self.name
       p = self._create_eval_params(**param_init_dict)
