@@ -130,7 +130,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #define DEF_KERNEL
 #define start_dev_kernel(kernel, args) \
-	{ for(_KernelLoop loop; loop.finished(); loop.next()) { kernel args; } }
+	{ for(_KernelLoop loop; !loop.finished(); loop.next()) { kernel args; } }
 
 struct vec3 {
 	int x; int y; int z;
@@ -295,7 +295,8 @@ DEF_KERNEL void lstm_bwd_kernel(
 	}
 }
 
-void do_lstm(/*out*/Ndarray* H, /*out*/Ndarray* out, Ndarray* prev, float* state_out, int x, Ndarray* i) {
+void do_lstm(/*out*/Ndarray* H, /*out*/Ndarray* out, Ndarray* prev,
+			 /*optional out*/float* state_out, int x, Ndarray* i) {
 	int dims[2];
 	lastTwoDims(H, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell

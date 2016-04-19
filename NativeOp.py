@@ -19,6 +19,20 @@ from TheanoUtil import try_register_gpu_opt, make_var_tuple
 
 
 class NativeOp(theano.Op):
+  """
+  We wrap some C code which can define a forward pass
+  and optionally a backward pass (for gradient calculation).
+  The C code should be Numpy and CUDA compatible. See NativeOp.cpp.
+  We also support inplace operations, i.e. we can operate inplace on some inputs.
+  You can define in a flexible way all the inputs and the outputs.
+  See __init__() for the details.
+
+  All output variables are created automatically with the right shape
+   but their content is not initialized,
+   except when its used by some input variable as the inplace output
+   - in that case, it is either the input variable or it has a copy of its data.
+  """
+
   __props__ = ("in_info", "out_info", "c_fw_code", "c_bw_code", "code_version", "grad_input_map", "name")
 
   def __init__(self, in_info, out_info, c_fw_code, c_bw_code=None, code_version=None,
@@ -494,7 +508,7 @@ class LstmGenericBase(NativeOpGenBase):
     return Z, V_h, c, i
 
   c_fw_code = """
-    // Z, V_h, c, i = input_names
+    // Z*, V_h, c, i = input_names (*: inplace)
     // Y, H, d = output_names
     assert(n_inputs == 4);
     assert(n_outputs == 3);
@@ -502,10 +516,10 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* c = inputs[2];
     Ndarray* i = inputs[3];
     Ndarray* Y = *outputs[0];
-    Ndarray* H = *outputs[1];
+    Ndarray* H = *outputs[1]; // inplace on Z
     Ndarray* d = *outputs[2];
 
-    long T = Ndarray_DIMS(inputs[0])[0];
+    long T = Ndarray_DIMS(i)[0];
     assert(T > 0);
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
@@ -532,7 +546,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* Dc = *outputs[2];
     Ndarray* tmpDc = *outputs[3]; // (old DY), inplace buffer
 
-    long T = Ndarray_DIMS(Y)[0];
+    long T = Ndarray_DIMS(i)[0];
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
@@ -545,7 +559,7 @@ class LstmGenericBase(NativeOpGenBase):
     //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
-    const auto* Dc_dim = Ndarray_HOST_DIMS(Dc);
+    const Ndarray_DIM_Type* Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
