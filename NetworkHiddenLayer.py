@@ -1422,62 +1422,86 @@ class LengthProjectionLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
-class AttentionLengthLayer(_NoOpLayer):
+class AttentionLengthLayer(HiddenLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=1./16, avg_var=16, rho=0.5, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=False, use_att=True, use_rbf=True, use_eos=False, **kwargs):
     kwargs['n_out'] = 1
     super(AttentionLengthLayer, self).__init__(**kwargs)
-    self.params = {}
     self.set_attr('use_real', use_real)
     self.set_attr('oracle', oracle)
     self.set_attr('filter', filter)
     self.set_attr('n_features', n_features)
     self.set_attr('avg_obs', avg_obs)
     self.set_attr('avg_var', avg_var)
-    nT = kwargs['sources'][0].output.shape[0]
-    index = kwargs['sources'][0].target_index
+    self.set_attr('use_act', use_act)
+    self.set_attr('use_att', use_att)
+    self.set_attr('use_rbf', use_rbf)
+    self.set_attr('use_eos', use_eos)
+    self.index = kwargs['sources'][-1].index
+    nT = kwargs['sources'][-1].output.shape[0]
+    index = kwargs['sources'][-1].target_index
+    x_in, n_in = concat_sources(self.sources)
 
-    attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
-    for src in kwargs['sources']:
-      for att in src.attention:
-        attention += att
-    l = numpy.sqrt(6. / (filter[0]*filter[1]))
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
-    F = self.add_param(self.shared(value=values, name="F"))
-    halting = T.nnet.conv2d(border_mode='full',
+    uniform = T.ones(self.index.shape,'float32') #/ T.cast(self.index.shape[0],'float32')
+    w_act, w_att, w_rbf, w_eos = uniform, uniform, uniform, uniform
+    if use_act:
+      w_act = T.exp(self.get_linear_forward_output().reshape(self.index.shape))
+      w_act = w_act / T.sum(w_act,axis=0,keepdims=True)
+    else:
+      self.params = {}
+
+    if use_eos:
+      assert any([src.layer_class == 'softmax' for src in kwargs['sources']])
+      w_eos = T.zeros(self.index.shape,'float32')
+      eos = 0
+      for src in kwargs['sources']:
+        if src.layer_class == 'softmax':
+          pcx = src.output[:nT,:,eos]
+          w_eos += pcx
+      w_eos = w_eos / T.sum(w_eos,axis=0,keepdims=True)
+
+    if use_att:
+      assert any([src.layer_class == 'rec' for src in kwargs['sources']])
+      attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
+      for src in kwargs['sources']:
+        if src.layer_class == 'rec':
+          for att in src.attention:
+            attention += att
+      l = numpy.sqrt(6. / (filter[0]*filter[1]))
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
+      F = self.add_param(self.shared(value=values, name="F"))
+      w_att = T.nnet.conv2d(border_mode='full',
                             input=attention.dimshuffle(1,'x',2,0), # B1TN
                             filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
-    if n_features > 1:
       if n_features > 1:
         W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
-        halting = T.dot(halting, W_f)
-    halting = T.exp(T.max(halting.reshape(attention.shape), axis=2))  # NB
-    # halting = T.extra_ops.cumsum(halting, axis=0)
+        w_att = T.dot(w_att, W_f)
+      w_att = T.exp(T.max(w_att.reshape(attention.shape), axis=2))  # NB
+      w_att = w_att / T.sum(w_att, axis=0, keepdims=True)
+
+    if use_rbf:
+      x =  T.arange(nT,dtype='float32').dimshuffle(0, 'x').repeat(self.index.shape[1],axis=1)
+      m = self.add_param(self.create_bias(1),'m')[0] + T.cast(nT,'float32') / T.constant(avg_obs,'float32')
+      s = self.add_param(self.create_bias(1),'s')[0] + T.cast(nT,'float32') / T.constant(avg_var,'float32')
+      from math import sqrt,pi
+      w_rbf = T.exp(-((x - m) ** 2) / (2 * s)) / (s * T.constant(sqrt(2 * pi), "float32"))
+
+    #w_act = theano.printing.Print("w_act", attrs=['shape'])(w_act)
+    #w_att = theano.printing.Print("w_att", attrs=['shape'])(w_att)
+    #w_rbf = theano.printing.Print("w_rbf", attrs=['shape'])(w_rbf)
+    #w_eos = theano.printing.Print("w_eos", attrs=['shape'])(w_eos)
+
+    halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
 
-    if avg_obs > 0:
-      x =  T.arange(halting.shape[0],dtype='float32').dimshuffle(0, 'x').repeat(halting.shape[1],axis=1)
-      m = T.constant(avg_obs,'float32')
-      s = T.constant(avg_var,'float32')
-      from math import sqrt,pi
-      halting *= T.exp(-((x - m) ** 2) / (2 * s)) / (s * T.constant(sqrt(2 * pi), "float32"))
-      halting = halting / T.sum(halting, axis=0, keepdims=True)
-
-    #self.b = self.add_param(self.create_bias(1))
-    #self.b += T.constant(mean,'float32')
-    #self.s = self.add_param(self.create_bias(1))
-    #self.s += T.constant(var, 'float32')
-    expect = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
-    #hyp = (self.b[0] + hyp) * self.s[0]
-    #index = theano.printing.Print("index", attrs=['shape'])(index)
     real = T.sum(T.cast(index, 'int32'), axis=0)
-    #real = theano.printing.Print("real")(real)
-    x_in, n_in = concat_sources(self.sources)
-    sse = T.sum((expect - real - 1)**2)
-    ce = -T.sum(T.log(halting[real-1,T.arange(halting.shape[1])])) #+T.log(halting[hyp-1,T.arange(halting.shape[1])]))
+    # real = theano.printing.Print("real")(real)
+    exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
+    sse = T.sum((exl - real - 1)**2)
+    ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
-    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * expect) + numpy.float32(1)
+    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
     #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
@@ -1487,9 +1511,8 @@ class AttentionLengthLayer(_NoOpLayer):
     out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                                             T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
                         sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
-    self.attrs['n_out'] = n_in
     self.index = out[0].dimshuffle(1,0)[:-1]
-    self.make_output(out[1].dimshuffle(1,0,2)[:-1])
+    self.make_output(T.zeros(self.index.shape,'float32').dimshuffle(0,1,'x'))
 
   def cost(self):
     return self.cost_val, None

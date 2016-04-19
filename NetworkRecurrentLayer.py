@@ -270,6 +270,8 @@ class RecurrentUnitLayer(Layer):
     :param droplm: probability to take the expected output as predecessor instead of the real one when LM=true
     :param bias_random_init_forget_shift: initialize forget gate bias of lstm networks with this value
     """
+    if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.endswith('length'):
+      kwargs['sources'] = []
     unit_given = unit
     if unit == 'lstm':  # auto selection
       if str(theano.config.device).startswith('cpu'):
@@ -336,14 +338,15 @@ class RecurrentUnitLayer(Layer):
     if n_dec != 0:
       self.target_index = self.index
       if isinstance(n_dec,float):
-        lengths = T.cast(T.ceil(T.sum(T.cast(encoder[0].index,'float32'),axis=0) * n_dec), 'int32')
+        source_index = encoder[0].index if encoder else base[0].index
+        lengths = T.cast(T.ceil(T.sum(T.cast(source_index,'float32'),axis=0) * n_dec), 'int32')
         if n_dec <= 1.0:
           idx, _ = theano.map(lambda l_i, l_m:T.concatenate([T.ones((l_i,),'int8'),T.zeros((l_m-l_i,),'int8')]),
                               [lengths], [T.max(lengths)+1])
           self.index = idx.dimshuffle(1,0)[:-1]
         else:
           self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
-        n_dec = T.cast(T.ceil(T.cast(encoder[0].index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
+        n_dec = T.cast(T.ceil(T.cast(source_index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
     else:
       n_dec = self.index.shape[0]
     # initialize recurrent weights
