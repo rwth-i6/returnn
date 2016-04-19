@@ -362,7 +362,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
 
 @gof.local_optimizer([NativeOp], inplace=True)
 def inplace_NativeOp(node):
-  if isinstance(node.op, NativeOp) and not node.op.inplace and not node.op.zero_with_shape:
+  if isinstance(node.op, NativeOp) and not node.op.destroy_map:
     kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
     # TODO: We could try to make each input inplace individually.
     # What we do now is just to try to make all inplace.
@@ -375,8 +375,9 @@ def inplace_NativeOp(node):
     if not any_inplace:
       return False
     new_op = node.op.__class__(**kwargs)
-    new_v = new_op(*node.inputs)
-    return [new_v]
+    from TheanoUtil import make_var_tuple
+    new_v = make_var_tuple(new_op(*node.inputs))
+    return new_v
   return False
 
 optdb.register('inplace_NativeOp',
