@@ -1368,7 +1368,7 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(_NoOpLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, mean=0, var=1, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, mean=0, var=1, rho=0.5, **kwargs):
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('use_real', use_real)
@@ -1390,24 +1390,27 @@ class AttentionLengthLayer(_NoOpLayer):
                             input=attention.dimshuffle(1,'x',2,0), # B1TN
                             filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
     if n_features > 1:
-      W_f = self.add_param(self.create_forward_weights(n_features,1,'W_f'))
-      halting = T.dot(halting, W_f)
-    halting = T.exp(T.max(halting.reshape(attention.shape),axis=2)) # NB
-    #halting = T.extra_ops.cumsum(halting, axis=0)
-    halting = halting / T.sum(halting,axis=0,keepdims=True)
+      if n_features > 1:
+        W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
+        halting = T.dot(halting, W_f)
+      halting = T.exp(T.max(halting.reshape(attention.shape), axis=2))  # NB
+      # halting = T.extra_ops.cumsum(halting, axis=0)
+      halting = halting / T.sum(halting, axis=0, keepdims=True)
     #self.b = self.add_param(self.create_bias(1))
     #self.b += T.constant(mean,'float32')
     #self.s = self.add_param(self.create_bias(1))
     #self.s += T.constant(var, 'float32')
-    #hyp = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
+    expect = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     #hyp = (self.b[0] + hyp) * self.s[0]
     #index = theano.printing.Print("index", attrs=['shape'])(index)
     real = T.sum(T.cast(index, 'int32'), axis=0)
     #real = theano.printing.Print("real")(real)
     x_in, n_in = concat_sources(self.sources)
-    #self.cost_val = T.sum((hyp - real)**2) * T.sum(hyp+real)
-    self.cost_val = -T.sum(T.log(halting[real-1,T.arange(halting.shape[1])]))
-    hyp = T.argmax(halting,axis=0) + 1
+    sse = T.sum((expect - real - 1)**2)
+    ce = -T.sum(T.log(halting[real-1,T.arange(halting.shape[1])])) #+T.log(halting[hyp-1,T.arange(halting.shape[1])]))
+    rho = T.constant(rho,'float32')
+    self.cost_val = rho * ce + (1.-rho) * sse
+    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * expect) + numpy.float32(1)
     #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
