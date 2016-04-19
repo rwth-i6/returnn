@@ -221,7 +221,8 @@ class NativeOp(theano.Op):
       name="grad-of-%s" % self.name,
       in_info=in_info,
       out_info=out_info,
-      c_fw_code=self.c_bw_code
+      c_fw_code=self.c_bw_code,
+      code_version=self.code_version
     )
     input_grads = make_var_tuple(grad_op(*grad_inputs))
     if grad_op.num_dummy_outs > 0:
@@ -565,4 +566,4 @@ class LstmGenericBase(NativeOpGenBase):
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
   """
 
-  code_version = (1, 1)
+  code_version = ()
