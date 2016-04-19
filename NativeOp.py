@@ -137,12 +137,15 @@ class NativeOp(theano.Op):
     return v
 
   def infer_shape(self, node, input_shapes):
+    assert len(input_shapes) == len(self.in_info)
     out_shapes = []
     for info in self.out_info:
       out_shape = list(info["shape"])
       for idx, s in enumerate(out_shape):
         if isinstance(s, tuple):  # we interpret this as a reference to input shapes
-          assert len(s) == 2
+          assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info)
           out_shape[idx] = input_shapes[s[0]][s[1]]
       assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
       out_shapes += [tuple(out_shape)]
@@ -157,9 +160,11 @@ class NativeOp(theano.Op):
 
   @classmethod
   def _bw_grad_var_info(cls, info):
+    info = dict(info)
     if "bw_grad_var" in info:
-      info = dict(info)
       info.update(info.pop("bw_grad_var"))
+    if "name" in info:
+      info["name"] = "D_" + info["name"]
     return info
 
   def grad(self, inputs, output_grads):
@@ -186,11 +191,16 @@ class NativeOp(theano.Op):
     in_info += [self._bw_grad_var_info(info) for info in self.out_info]
     in_info = self._filter_grad_inputs(in_info)
     assert len(in_info) == len(grad_inputs)
+    in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
     # Outputs: All like original inputs. Filter our the disconnected.
     out_info = [info.copy() for info in self.in_info]
     for idx, info in enumerate(out_info):
-      # Refer to input shapes. See infer_shape().
-      info["shape"] = [(idx, i) for i in range(info["ndim"])]
+      info.pop("shape")
+      if "bw_out_var" in info:
+        info.update(info["bw_out_var"])
+      if "shape" not in info:
+        # Refer to input shapes. See infer_shape().
+        info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
     out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
 
     grad_op = self.__class__(
@@ -438,7 +448,8 @@ class LstmGenericBase(NativeOpGenBase):
   """
   in_info = (
     {"name": "Z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True,
-     "want_inplace": 1},
+     "want_inplace": 1,
+     "bw_out_var": {"shape": ((2, 0), (2, 1), (0, 1))}},  # see grad_input_map() for indices
     {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
     {"name": "c", "ndim": 2, "shape": (None, None), "need_contiguous": True},
     {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True,
