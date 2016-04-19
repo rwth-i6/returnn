@@ -544,3 +544,12 @@ def unroll_scan(fn, sequences=(), outputs_info=(), non_sequences=(), n_steps=Non
     output_scan = output_scan[0]
   updates = {}
   return output_scan, updates
+
+
+def make_var_tuple(v):
+  if isinstance(v, theano.Variable):
+    return (v, )
+  if isinstance(v, list):
+    return tuple(v)
+  assert isinstance(v, tuple)
+  return v

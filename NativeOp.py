@@ -15,13 +15,14 @@ from theano.gof.opt import OpSub
 from theano.compile import optdb
 from theano import gof
 from Util import make_hashable, make_dll_name, escape_c_str
-from TheanoUtil import try_register_gpu_opt
+from TheanoUtil import try_register_gpu_opt, make_var_tuple
 
 
 class NativeOp(theano.Op):
-  __props__ = ("in_info", "out_info", "c_fw_code", "c_bw_code", "code_version", "name")
+  __props__ = ("in_info", "out_info", "c_fw_code", "c_bw_code", "code_version", "grad_input_map", "name")
 
-  def __init__(self, in_info, out_info, c_fw_code, c_bw_code=None, code_version=None, name=None):
+  def __init__(self, in_info, out_info, c_fw_code, c_bw_code=None, code_version=None,
+               grad_input_map=None, name=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
       attribs in the dict:
@@ -31,6 +32,7 @@ class NativeOp(theano.Op):
         str dtype: "float32" by default.
         bool need_contiguous: false by default.
         int want_inplace: -1 by default. try to optimize to destroy input, on output-index.
+          "dummy_out" is a special value which will add another output.
         bool is_inplace: false by default. whether the optimization was applied.
         str gradient: can be "disconnected". see grad().
         bool bw_input: True by default. add this param to the bw input.
@@ -42,25 +44,68 @@ class NativeOp(theano.Op):
     :param str c_fw_code: C code for forward pass
     :param str|None c_bw_code: C code for backward pass (for gradient)
     :param tuple[int] code_version: will be returned by c_code_cache_version.
+    :param tuple|callable grad_input_map: selection of grad inputs.
+      by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
     """
     super(NativeOp, self).__init__()
+    in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
     self.in_info = make_hashable(in_info)
     self.out_info = make_hashable(out_info)
+    self.num_dummy_outs = num_dummy_outs
     self.c_fw_code = c_fw_code
     self.c_bw_code = c_bw_code
     self.code_version = code_version or ()
     self.name = name or "<anonNativeOp>"
-    self.destroy_map = {}
-    for in_idx, info in enumerate(self.in_info):
-      if info.get("want_inplace", -1) >= 0 and info.get("is_inplace", False):
-        out_idx = info["want_inplace"]
+    self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
+    self.destroy_map = self._construct_destroy_map(in_info)
+
+  @classmethod
+  def _resolve_want_inplace_dummy(cls, in_info, out_info):
+    in_info = [dict(info) for info in in_info]  # deep copy, don't modify original
+    out_info = list(out_info)  # copying list is enough here
+    num_dummy_outs = 0
+    for in_idx, info in enumerate(in_info):
+      if info.get("want_inplace", None) == "dummy_out":
+        num_dummy_outs += 1
+        dummy_out_idx = len(out_info)
+        dummy_out = {"ndim": info["ndim"],
+                     "shape": [(in_idx, i) for i in range(info["ndim"])],
+                     "dtype": info.get("dtype", "float32")}
+        out_info += [dummy_out]
+        info["want_inplace"] = dummy_out_idx
+    return in_info, out_info, num_dummy_outs
+
+  @classmethod
+  def _construct_destroy_map(cls, in_info):
+    destroy_map = {}
+    for in_idx, info in enumerate(in_info):
+      want_inplace = info.get("want_inplace", -1)
+      assert isinstance(want_inplace, (int, long))
+      if want_inplace >= 0 and info.get("is_inplace", False):
+        out_idx = want_inplace
         # http://deeplearning.net/software/theano/extending/inplace.html
         # https://github.com/Theano/Theano/issues/3506
         # It's strange that we must mark which output operates on which input -
         # I would expect that it must only know which inputs are destroyed.
-        assert out_idx not in self.destroy_map, "Theano cannot handle that yet"
-        self.destroy_map[out_idx] = [in_idx]
+        assert out_idx not in destroy_map, "Theano cannot handle that yet"
+        destroy_map[out_idx] = [in_idx]
+    return destroy_map
+
+  @classmethod
+  def _convert_grad_input_map(cls, gi_map, num_params):
+    if gi_map is None:
+      gi_map = tuple(range(num_params))
+    if callable(gi_map):
+      gi_map = gi_map(*range(num_params))
+    if isinstance(gi_map, list):
+      gi_map = tuple(gi_map)
+    assert isinstance(gi_map, tuple)
+    return gi_map
+
+  def _filter_grad_inputs(self, inputs):
+    assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
+    return [inputs[i] for i in self.grad_input_map]
 
   def __str__(self):
     return "%s{%s,%s}" % (
@@ -68,10 +113,12 @@ class NativeOp(theano.Op):
       self.name,
       "inplace" if self.destroy_map else "no_inplace")
 
-  def as_tensor_var(self, v):
+  @classmethod
+  def as_tensor_var(cls, v):
     return theano.tensor.as_tensor_variable(v)
 
-  def contiguous(self, v):
+  @classmethod
+  def contiguous(cls, v):
     from theano.tensor.extra_ops import cpu_contiguous
     assert isinstance(v, theano.Variable)
     if getattr(v, 'owner', None):
@@ -99,6 +146,20 @@ class NativeOp(theano.Op):
       out_shapes += [tuple(out_shape)]
     return out_shapes
 
+  @classmethod
+  def _bw_in_var_info(cls, info):
+    if "bw_in_var" in info:
+      info = dict(info)
+      info.update(info.pop("bw_in_var"))
+    return info
+
+  @classmethod
+  def _bw_grad_var_info(cls, info):
+    if "bw_grad_var" in info:
+      info = dict(info)
+      info.update(info.pop("bw_grad_var"))
+    return info
+
   def grad(self, inputs, output_grads):
     if not self.c_bw_code:
       # Unknown how to calculate gradient.
@@ -106,6 +167,16 @@ class NativeOp(theano.Op):
 
     assert len(self.in_info) == len(inputs)
     assert len(self.out_info) == len(output_grads)
+    # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
+    # i.e. we might reuse some of the calculation.
+    grad_inputs = inputs + make_var_tuple(self(inputs)) + output_grads
+    grad_inputs = self._filter_grad_inputs(grad_inputs)
+    in_info = list(self.in_info)
+    in_info += [self._bw_in_var_info(info) for info in self.out_info]
+    in_info += [self._bw_grad_var_info(info) for info in self.out_info]
+    in_info = self._filter_grad_inputs(in_info)
+    assert len(in_info) == len(grad_inputs)
+    # Outputs: All like original inputs. Filter our the disconnected.
     out_info = [info.copy() for info in self.in_info]
     for idx, info in enumerate(out_info):
       # Refer to input shapes. See infer_shape().
@@ -114,11 +185,13 @@ class NativeOp(theano.Op):
 
     grad_op = self.__class__(
       name="grad-of-%s" % self.name,
-      in_info=self.in_info + self.out_info,  # inputs + output_grads
+      in_info=in_info,
       out_info=out_info,
       c_fw_code=self.c_bw_code
     )
-    input_grads = grad_op(*(inputs + output_grads))
+    input_grads = make_var_tuple(grad_op(*grad_inputs))
+    if grad_op.num_dummy_outs > 0:
+      input_grads = input_grads[:-grad_op.num_dummy_outs]  # remove any dummy outputs
     assert len(out_info) == len(input_grads)
 
     results = []
@@ -247,11 +320,13 @@ class NativeOp(theano.Op):
 
 class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
 
-  def as_tensor_var(self, v):
+  @classmethod
+  def as_tensor_var(cls, v):
     from theano.sandbox.cuda.basic_ops import as_cuda_ndarray_variable
     return as_cuda_ndarray_variable(v)
 
-  def contiguous(self, v):
+  @classmethod
+  def contiguous(cls, v):
     from theano.sandbox.cuda.basic_ops import gpu_contiguous
     assert isinstance(v, theano.sandbox.cuda.CudaNdarrayVariable)
     if getattr(v, 'owner', None):
@@ -317,6 +392,7 @@ class NativeOpGenBase:
   c_fw_code = None
   c_bw_code = None
   code_version = None
+  grad_input_map = None
 
   def make_op(self):
     name = self.__class__.__name__
@@ -325,6 +401,7 @@ class NativeOpGenBase:
     assert self.c_fw_code is not None
     return NativeOp(in_info=self.in_info, out_info=self.out_info,
                     c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
+                    grad_input_map=self.grad_input_map,
                     name=name)
 
 
@@ -341,17 +418,22 @@ class LstmGenericBase(NativeOpGenBase):
     :param d: final cell state. 2d (batch,dim)
   """
   in_info = (
-    {"name": "Z", "ndim": 3, "shape": (None, None, None),
-     "need_contiguous": True, "want_inplace": 1, "bw_input": False},
-    {"name": "V_h", "ndim": 2, "shape": (None, None)},
-    {"name": "c", "ndim": 2, "shape": (None, None)},
-    {"name": "i", "ndim": 2, "shape": (None, None), "gradient": "disconnected"}
+    {"name": "Z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True,
+     "want_inplace": 1},
+    {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "c", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True,
+     "gradient": "disconnected"}
   )
   out_info = (
-    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0))},
-    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
-    {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1))}
+    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True,
+     "bw_grad_var": {"want_inplace": "dummy_out"}},
+    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True,
+     "bw_in_var": {"want_inplace": 0}},
+    {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
+  def grad_input_map(self, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
+    return (V_h, c, i,  Y, H,  DY, Dd)
   c_fw_code = """
     // Z, V_h, c, i = input_names
     // Y, H, d = output_names
@@ -376,19 +458,19 @@ class LstmGenericBase(NativeOpGenBase):
     }
   """
   c_bw_code = """
-    // V_h, c, i,   Y, H, d,   DY, DH, Dd = input_names
-    // DZ, DV_h, Dc = output_names
-    assert(n_inputs == 9);
+    // V_h, c, i,   Y, H*,   DY*, Dd = input_names (*: inplace)
+    // DZ, DV_h, Dc, tmpDc = output_names
+    assert(n_inputs == 7);
     assert(n_outputs == 4);
     Ndarray* V_h = inputs[0];
     Ndarray* c = inputs[1];
     Ndarray* i = inputs[2];
     Ndarray* Y = inputs[3];
-    Ndarray* H = inputs[4];
-    Ndarray* Dd = inputs[8];
-    Ndarray* DZ = *outputs[0];
+    Ndarray* Dd = inputs[6];
+    Ndarray* DZ = *outputs[0]; // inplace on H
     Ndarray* DV_h = *outputs[1];
     Ndarray* Dc = *outputs[2];
+    Ndarray* tmpDc = *outputs[3]; // (old DY), inplace buffer
 
     int T = Ndarray_DIMS(Y)[0];
     assert(T > 0);
@@ -396,8 +478,8 @@ class LstmGenericBase(NativeOpGenBase):
       // add recurrent
       bool rightBorder = (x == T - 1);
       if(!rightBorder)
-        affine_y_x(x+1, DZ,  x, V_h,  x, DY, false, true);
-      do_lstm_bwd(DZ, DY, Y, Dd, c, x, rightBorder, i);
+        affine_y_x(x+1, DZ,  x, V_h,  x, tmpDc,  false, true);
+      do_lstm_bwd(DZ, tmpDc, Y, Dd, c, x, rightBorder, i);
     }
 
     //DV_h = Y[0..end-1]^T * DZ[1..end]
@@ -405,7 +487,7 @@ class LstmGenericBase(NativeOpGenBase):
 
     const int* Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
-      Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(DY),
+      Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
   """
   code_version = (1, 1)
