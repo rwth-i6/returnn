@@ -177,13 +177,17 @@ class Container(object):
       return theano.shared(value=value, borrow=borrow, name=name)
     return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
 
-  def create_bias(self, n, prefix='b', name=""):
+  def create_bias(self, n, prefix='b', name="", init_eval_str=None):
     """
     :param int n: output dimension
     :rtype: theano.shared
     """
     if not name:
       name = "%s_%s" % (prefix, self.name)
+      if name in self.params:
+        name += "_%i" % len(self.params)
+    if not init_eval_str:
+      init_eval_str = self.bias_init
     if self.depth > 1:
       size = (self.depth, n)
     else:
@@ -208,7 +212,7 @@ class Container(object):
       "random_normal": random_normal,
       "random_uniform": random_uniform
     }
-    values = eval(self.bias_init, eval_locals)
+    values = eval(init_eval_str, eval_locals)
     values = numpy.asarray(values, dtype=theano.config.floatX)
     assert values.shape == (n,)
     return self.shared(values, name)
@@ -324,6 +328,16 @@ class Container(object):
     vshape = v.get_value(borrow=True, return_internal_type=True).shape
     assert vshape == (n, m)
     return v
+
+  def _create_eval_params(self, shape, name, init_eval_str=None):
+    assert 1 <= len(shape) <= 2
+    if len(shape) == 1:
+      return self.create_bias(n=shape[0], init_eval_str=init_eval_str, name=name)
+    else:
+      return self._create_eval_weights(
+        n=shape[0], m=shape[1],
+        init_eval_str=init_eval_str or "random_uniform()",
+        default_name_prefix="W", name=name)
 
   def create_forward_weights(self, n, m, name=None):
     """
