@@ -12,6 +12,8 @@
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
+#define Ndarray_NDIM(x) (x->nd)
+#define Ndarray_DIM_Type int
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
 #define Ndarray_NewDims CudaNdarray_NewDims
@@ -20,6 +22,7 @@
 #define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
 /*
     // via: http://docs.nvidia.com/cuda/cublas/
+    // matrices are in column-major form
     cublasStatus_t cublasSgemm(cublasHandle_t handle,
         cublasOperation_t transa, cublasOperation_t transb,
         int m, int n, int k,
@@ -28,9 +31,9 @@
         float *C, int ldc);
 */
 #define _cublasTranspose(t) \
-	((t == CblasTrans) ? CUBLAS_OP_T : \
-	(t == CblasConjTrans) ? CUBLAS_OP_C : \
-	(t == CblasNoTrans) ? CUBLAS_OP_N : 'E')
+	((t == 'T') ? CUBLAS_OP_T : \
+	(t == 'C') ? CUBLAS_OP_C : \
+	(t == 'N') ? CUBLAS_OP_N : 'E')
 #define Ndarray_sgemm(\
 	transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
@@ -101,29 +104,33 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
 #define Ndarray_HOST_DIMS PyArray_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
+#define Ndarray_NDIM PyArray_NDIM
+#define Ndarray_DIM_Type npy_intp
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, 0))
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 /*
-    // via: https://github.com/Theano/Theano/blob/master/theano/tensor/blas_headers.py
-    void cblas_sgemm(const enum CBLAS_ORDER Order,  // default is CblasRowMajor
-                    const enum CBLAS_TRANSPOSE TransA,
-                    const enum CBLAS_TRANSPOSE TransB,
-                    const int M, const int N, const int K,
-                    const float alpha, const float *A, const int lda,
-                    const float *B, const int ldb, const float beta,
-                    float *C, const int ldc);
+    // matrices are in column-major form
+	int sgemm_(char *transa, char *transb,
+		integer *m, integer *n, integer *k,
+		real *alpha, real *a, integer *lda,
+		real *b, integer *ldb, real *beta,
+		real *c, integer *ldc);
 */
 #define Ndarray_sgemm(\
 	transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
-	(cblas_sgemm(CblasRowMajor, transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc))
+	{ \
+		char transa = transpose_A, transb = transpose_B; \
+		int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
+		sgemm_(&transa, &transb, \
+			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
+	}
 
 #define DEF_KERNEL
 #define start_dev_kernel(kernel, args) \
-	{ for(_KernelLoop loop; loop.finished(); loop.next()) { kernel args; } }
+	{ for(_KernelLoop loop; !loop.finished(); loop.next()) { kernel args; } }
 
 struct vec3 {
 	int x; int y; int z;
@@ -158,33 +165,32 @@ struct _KernelLoop {
 #endif
 
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
-	const int* dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(a->nd, dim);
+	Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
 	return res;
 }
 
 //if nd is 2 then assume a weight matrix and just return beginning of data
 //else nd should be 3 and we pick the x part
-const float* data_ptr(const Ndarray* a, int x) {
-	assert(a->nd == 2 || a->nd == 3);
-	if (a->nd == 2)
+float* data_ptr(Ndarray* a, int x) {
+	assert(Ndarray_NDIM(a) == 2 || Ndarray_NDIM(a) == 3);
+	if(Ndarray_NDIM(a) == 2)
 		return Ndarray_DEV_DATA(a);
 	else {
-		const int* dims = Ndarray_HOST_DIMS(a);
+		const Ndarray_DIM_Type* dims = Ndarray_HOST_DIMS(a);
 		return Ndarray_DEV_DATA(a) + x * dims[1] * dims[2];
 	}
 }
 
-float* data_ptr(Ndarray* a, int x) {
-	const Ndarray* ca = a;
-	return const_cast<float *>(data_ptr(ca, x));
+const float* data_ptr(const Ndarray* a, int x) {
+	return data_ptr((Ndarray*) a, x);
 }
 
-void lastTwoDims(const Ndarray * a, int out[2]) {
-	const int* dims = Ndarray_HOST_DIMS(a);
-	assert(a->nd >= 2);
-	out[0] = dims[a->nd - 2];
-	out[1] = dims[a->nd - 1];
+void lastTwoDims(const Ndarray* a, int out[2]) {
+	const Ndarray_DIM_Type* dims = Ndarray_HOST_DIMS((Ndarray*) a);
+	assert(Ndarray_NDIM(a) >= 2);
+	out[0] = dims[Ndarray_NDIM(a) - 2];
+	out[1] = dims[Ndarray_NDIM(a) - 1];
 }
 
 int lastTwoDimsStride(const Ndarray * a) {
@@ -289,7 +295,8 @@ DEF_KERNEL void lstm_bwd_kernel(
 	}
 }
 
-void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, int x, const Ndarray* i) {
+void do_lstm(/*out*/Ndarray* H, /*out*/Ndarray* out, Ndarray* prev,
+			 /*optional out*/float* state_out, int x, Ndarray* i) {
 	int dims[2];
 	lastTwoDims(H, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
@@ -306,8 +313,8 @@ void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, in
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
 //Dd stores the derivative w.r.t. end state
-void do_lstm_bwd(Ndarray* delta, Ndarray* epsilon, const Ndarray* Y, const Ndarray* Dd,
-                 const Ndarray* c, int x, bool rightBorder, const Ndarray* i) {
+void do_lstm_bwd(/*out*/Ndarray* delta, /*out*/Ndarray* epsilon, Ndarray* Y, Ndarray* Dd,
+                 Ndarray* c, int x, bool rightBorder, Ndarray* i) {
 	int dims[2];
 	lastTwoDims(delta, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
@@ -326,8 +333,8 @@ void do_lstm_bwd(Ndarray* delta, Ndarray* epsilon, const Ndarray* Y, const Ndarr
 
 //C[x] += A[x]*B[x]
 //(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
-void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
-	            int x_C, Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
+void affine_y_x(int x_A, Ndarray* A, int x_B, Ndarray* B,
+	            int x_C, /*out*/Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
 	const float* data_A = data_ptr(A, x_A);
 	const float* data_B = data_ptr(B, x_B);
 	float* data_C = data_ptr(C, x_C);
@@ -337,8 +344,8 @@ void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
 
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
-	CBLAS_TRANSPOSE transA = transpose_A ? CblasTrans : CblasNoTrans;
-	CBLAS_TRANSPOSE transB = transpose_B ? CblasTrans : CblasNoTrans;
+	char transA = transpose_A ? 'T' : 'N';
+	char transB = transpose_B ? 'T' : 'N';
 	if (transpose_A)
 		std::swap(A_dim[0], A_dim[1]);
 	if (transpose_B)
@@ -353,7 +360,7 @@ void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
 
 //offset is used for x time-shift between A and B
 //if offset == 1, then we will calculate A[0..end-1] * B[1..end]
-void affine_global(const Ndarray* A, const Ndarray* B, Ndarray* C,
+void affine_global(Ndarray* A, Ndarray* B, /*out*/Ndarray* C,
                    bool transpose_A = false, bool transpose_B = false, int offset = 0, float beta = 1.0) {
 	float* data_C = Ndarray_DEV_DATA(C);
 	int A_dim[2], B_dim[2];
@@ -368,8 +375,8 @@ void affine_global(const Ndarray* A, const Ndarray* B, Ndarray* C,
 
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
-	CBLAS_TRANSPOSE transA = transpose_A ? CblasTrans : CblasNoTrans;
-	CBLAS_TRANSPOSE transB = transpose_B ? CblasTrans : CblasNoTrans;
+	char transA = transpose_A ? 'T' : 'N';
+	char transB = transpose_B ? 'T' : 'N';
 	if (transpose_A)
 		std::swap(A_dim[0], A_dim[1]);
 	if (transpose_B)

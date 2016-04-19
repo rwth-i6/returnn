@@ -19,6 +19,20 @@ from TheanoUtil import try_register_gpu_opt, make_var_tuple
 
 
 class NativeOp(theano.Op):
+  """
+  We wrap some C code which can define a forward pass
+  and optionally a backward pass (for gradient calculation).
+  The C code should be Numpy and CUDA compatible. See NativeOp.cpp.
+  We also support inplace operations, i.e. we can operate inplace on some inputs.
+  You can define in a flexible way all the inputs and the outputs.
+  See __init__() for the details.
+
+  All output variables are created automatically with the right shape
+   but their content is not initialized,
+   except when its used by some input variable as the inplace output
+   - in that case, it is either the input variable or it has a copy of its data.
+  """
+
   __props__ = ("in_info", "out_info", "c_fw_code", "c_bw_code", "code_version", "grad_input_map", "name")
 
   def __init__(self, in_info, out_info, c_fw_code, c_bw_code=None, code_version=None,
@@ -119,28 +133,33 @@ class NativeOp(theano.Op):
 
   @classmethod
   def contiguous(cls, v):
-    from theano.tensor.extra_ops import cpu_contiguous
+    from TheanoUtil import Contiguous
     assert isinstance(v, theano.Variable)
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
-      if v.owner == cpu_contiguous:
+      if isinstance(v.owner.op, Contiguous.__base__):
         return v
-    return cpu_contiguous(v)
+    return Contiguous()(v)
 
   def _convert_input_var(self, v, info):
     v = T.cast(v, info.get("dtype", "float32"))
     v = self.as_tensor_var(v)
+    if v.ndim != info["ndim"]:
+      raise TypeError("input var ndim %i does not match with info %r" % (v.ndim, info))
     if info.get("need_contiguous", False):
       v = self.contiguous(v)
     return v
 
   def infer_shape(self, node, input_shapes):
+    assert len(input_shapes) == len(self.in_info)
     out_shapes = []
     for info in self.out_info:
       out_shape = list(info["shape"])
       for idx, s in enumerate(out_shape):
         if isinstance(s, tuple):  # we interpret this as a reference to input shapes
-          assert len(s) == 2
+          assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info)
           out_shape[idx] = input_shapes[s[0]][s[1]]
       assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
       out_shapes += [tuple(out_shape)]
@@ -155,9 +174,11 @@ class NativeOp(theano.Op):
 
   @classmethod
   def _bw_grad_var_info(cls, info):
+    info = dict(info)
     if "bw_grad_var" in info:
-      info = dict(info)
       info.update(info.pop("bw_grad_var"))
+    if "name" in info:
+      info["name"] = "D_" + info["name"]
     return info
 
   def grad(self, inputs, output_grads):
@@ -167,27 +188,41 @@ class NativeOp(theano.Op):
 
     assert len(self.in_info) == len(inputs)
     assert len(self.out_info) == len(output_grads)
+
+    # Some of output_grads might be of disconnected type.
+    out_shapes = self.infer_shape(None, [v.shape for v in inputs])
+    assert len(out_shapes) == len(output_grads)
+    for i, out_grad in enumerate(output_grads):
+      if isinstance(out_grad.type, T.DisconnectedType):
+        output_grads[i] = T.zeros(out_shapes[i], dtype="float32")
+
     # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
     # i.e. we might reuse some of the calculation.
-    grad_inputs = inputs + make_var_tuple(self(inputs)) + output_grads
+    grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
     in_info = list(self.in_info)
     in_info += [self._bw_in_var_info(info) for info in self.out_info]
     in_info += [self._bw_grad_var_info(info) for info in self.out_info]
     in_info = self._filter_grad_inputs(in_info)
     assert len(in_info) == len(grad_inputs)
+    in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
     # Outputs: All like original inputs. Filter our the disconnected.
     out_info = [info.copy() for info in self.in_info]
     for idx, info in enumerate(out_info):
-      # Refer to input shapes. See infer_shape().
-      info["shape"] = [(idx, i) for i in range(info["ndim"])]
+      info.pop("shape")
+      if "bw_out_var" in info:
+        info.update(info["bw_out_var"])
+      if "shape" not in info:
+        # Refer to input shapes. See infer_shape().
+        info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
     out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
 
     grad_op = self.__class__(
       name="grad-of-%s" % self.name,
       in_info=in_info,
       out_info=out_info,
-      c_fw_code=self.c_bw_code
+      c_fw_code=self.c_bw_code,
+      code_version=self.code_version
     )
     input_grads = make_var_tuple(grad_op(*grad_inputs))
     if grad_op.num_dummy_outs > 0:
@@ -207,7 +242,7 @@ class NativeOp(theano.Op):
 
   def connection_pattern(self, node):
     assert len(node.inputs) == len(self.in_info)
-    pattern = [[info.get("gradient", "") != "disconnected"]
+    pattern = [[info.get("gradient", "") != "disconnected"] * len(self.out_info)
                for info in self.in_info]
     return pattern
 
@@ -226,18 +261,33 @@ class NativeOp(theano.Op):
 
   def c_support_code(self):
     src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
-    return "#define CUDA 0\n\n" + src
+    return "\n\n".join([
+      T.blas.blas_header_text(),
+      "#define CUDA 0", src])
+
+  def c_libraries(self):
+    return T.blas.ldflags()
+
+  def c_compile_args(self):
+    return T.blas.ldflags(libs=False, flags=True)
+
+  def c_lib_dirs(self):
+    return T.blas.ldflags(libs=False, libs_dir=True)
+
+  def c_header_dirs(self):
+    return T.blas.ldflags(libs=False, include_dir=True)
 
   def c_code(self, node, name, inputs, outputs, sub):
     assert len(inputs) == len(self.in_info)
     assert len(outputs) == len(self.out_info)
     return """
+    {
       int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
       Ndarray* inputs[] = {%(input_var_names_str)s};
       Ndarray** outputs[] = {%(output_var_names_str)s};
       int in_ndims[] = {%(input_ndims_str)s};
       int out_ndims[] = {%(output_ndims_str)s};
-      int output_shapes_flat[] = {%(output_shapes_flat_str)s};
+      Ndarray_DIM_Type output_shapes_flat[] = {%(output_shapes_flat_str)s};
       int in_want_inplace[] = {%(input_want_inplace_str)s};
       bool in_is_inplace[] = {%(input_is_inplace_str)s};
 
@@ -298,6 +348,7 @@ class NativeOp(theano.Op):
       // And the user C code starts here.
       // --------------------------------
       %(c_code)s;
+    }
     """ % {
       'name': name, 'fail': sub['fail'],
       'op_name': escape_c_str(self.name),
@@ -342,7 +393,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
 
 @gof.local_optimizer([NativeOp], inplace=True)
 def inplace_NativeOp(node):
-  if isinstance(node.op, NativeOp) and not node.op.inplace and not node.op.zero_with_shape:
+  if isinstance(node.op, NativeOp) and not node.op.destroy_map:
     kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
     # TODO: We could try to make each input inplace individually.
     # What we do now is just to try to make all inplace.
@@ -355,8 +406,9 @@ def inplace_NativeOp(node):
     if not any_inplace:
       return False
     new_op = node.op.__class__(**kwargs)
-    new_v = new_op(*node.inputs)
-    return [new_v]
+    from TheanoUtil import make_var_tuple
+    new_v = make_var_tuple(new_op(*node.inputs))
+    return new_v
   return False
 
 optdb.register('inplace_NativeOp',
@@ -396,7 +448,7 @@ class NativeOpGenBase:
 
   @classmethod
   def make_op(cls):
-    name = cls.__class__.__name__
+    name = cls.__name__
     assert cls.in_info is not None
     assert cls.out_info is not None
     assert cls.c_fw_code is not None
@@ -428,7 +480,8 @@ class LstmGenericBase(NativeOpGenBase):
   """
   in_info = (
     {"name": "Z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True,
-     "want_inplace": 1},
+     "want_inplace": 1,
+     "bw_out_var": {"shape": ((2, 0), (2, 1), (0, 1))}},  # see grad_input_map() for indices
     {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
     {"name": "c", "ndim": 2, "shape": (None, None), "need_contiguous": True},
     {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True,
@@ -441,8 +494,8 @@ class LstmGenericBase(NativeOpGenBase):
      "bw_in_var": {"want_inplace": 0}},
     {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
-
-  def grad_input_map(self, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
+  @classmethod
+  def grad_input_map(cls, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
     return (V_h, c, i,  Y, H,  DY, Dd)
 
   @classmethod
@@ -456,7 +509,7 @@ class LstmGenericBase(NativeOpGenBase):
     return Z, V_h, c, i
 
   c_fw_code = """
-    // Z, V_h, c, i = input_names
+    // Z*, V_h, c, i = input_names (*: inplace)
     // Y, H, d = output_names
     assert(n_inputs == 4);
     assert(n_outputs == 3);
@@ -464,10 +517,10 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* c = inputs[2];
     Ndarray* i = inputs[3];
     Ndarray* Y = *outputs[0];
-    Ndarray* H = *outputs[1];
+    Ndarray* H = *outputs[1]; // inplace on Z
     Ndarray* d = *outputs[2];
 
-    int T = Ndarray_DIMS(inputs[0])[0];
+    long T = Ndarray_DIMS(i)[0];
     assert(T > 0);
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
@@ -494,7 +547,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* Dc = *outputs[2];
     Ndarray* tmpDc = *outputs[3]; // (old DY), inplace buffer
 
-    int T = Ndarray_DIMS(Y)[0];
+    long T = Ndarray_DIMS(i)[0];
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
@@ -507,10 +560,10 @@ class LstmGenericBase(NativeOpGenBase):
     //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
-    const int* Dc_dim = Ndarray_HOST_DIMS(Dc);
+    const Ndarray_DIM_Type* Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
   """
 
-  code_version = (1, 1)
+  code_version = ()

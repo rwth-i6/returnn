@@ -553,3 +553,25 @@ def make_var_tuple(v):
     return tuple(v)
   assert isinstance(v, tuple)
   return v
+
+
+class Contiguous(T.extra_ops.CpuContiguous):
+  # Original CpuContiguous is missing the grad.
+  # See https://github.com/Theano/Theano/issues/4399.
+  def grad(self, inputs, output_grads):
+    dout, = output_grads
+    dout = T.as_tensor_variable(dout)
+    return [dout]
+
+
+# Theano will not do this optimization. So we register it now.
+# See: https://github.com/Theano/Theano/issues/4400
+@try_register_gpu_opt(Contiguous)
+def local_gpu_Contiguous(node):
+  if isinstance(node.op, Contiguous):
+    # see also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/opt.py
+    from theano.sandbox.cuda import host_from_gpu
+    x, = node.inputs
+    if x.owner and x.owner.op == host_from_gpu:
+      from theano.sandbox.cuda.basic_ops import gpu_contiguous
+      return [host_from_gpu(gpu_contiguous(x.owner.inputs[0]))]
