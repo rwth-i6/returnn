@@ -2671,3 +2671,51 @@ class TorchLayer(_NoOpLayer):
                  "dtype": "float32", "type": "output"}],
       lua_file=lua_file, lua_fw_func=lua_fw_func, lua_bw_func=lua_bw_func)
     self.output = op(*args)
+
+
+class NativeLayer(_NoOpLayer):
+  recurrent = True  # who knows
+  layer_class = "native"
+
+  def __init__(self, n_out, native_class, params, **kwargs):
+    super(NativeLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(params, (str, unicode)):
+      params = json.loads(params)
+    self.set_attr("params", params)
+    assert isinstance(params, (tuple, list))  # list[param-init-dict]
+    self.set_attr('native_class', native_class)
+
+    import NativeOp
+    native_class_cls = getattr(NativeOp, native_class)
+    assert isinstance(native_class_cls, NativeOp.NativeOpGenBase)
+    op = native_class_cls.make_op()
+
+    args = []
+    args_info = []  # dict with ndim, shape, n_in
+
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass)
+    args += [{"ndim": 3, "shape": (None, None, n_in),
+              "type": "input_source", "name": "x"}]
+
+    for param_init_dict in params:
+      assert isinstance(param_init_dict, dict)
+      assert "name" in param_init_dict
+      param_init_dict = param_init_dict.copy()
+      param_init_dict["name"] += "_%s" % self.name
+      p = self._create_eval_params(**param_init_dict)
+      assert isinstance(p, theano.compile.SharedVariable)
+      p = self.add_param(p)
+      p_shape = p.get_value(borrow=True, return_internal_type=True).shape
+      p_ndim = len(p_shape)
+      args += [p]
+      args_info += [{"ndim": p_ndim, "shape": tuple(p_shape),
+                     "type": "input_param", "name": param_init_dict["name"]}]
+
+    args += [self.index]
+    args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected", "type": "input_index"}]
+
+    from TheanoUtil import make_var_tuple
+    args = make_var_tuple(native_class_cls.map_layer_inputs_to_op(*args))
+    outputs = make_var_tuple(op(*args))
+    self.output = native_class_cls.map_layer_output_from_op(*outputs)

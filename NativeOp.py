@@ -394,15 +394,24 @@ class NativeOpGenBase:
   code_version = None
   grad_input_map = None
 
-  def make_op(self):
-    name = self.__class__.__name__
-    assert self.in_info is not None
-    assert self.out_info is not None
-    assert self.c_fw_code is not None
-    return NativeOp(in_info=self.in_info, out_info=self.out_info,
-                    c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
-                    grad_input_map=self.grad_input_map,
+  @classmethod
+  def make_op(cls):
+    name = cls.__class__.__name__
+    assert cls.in_info is not None
+    assert cls.out_info is not None
+    assert cls.c_fw_code is not None
+    return NativeOp(in_info=cls.in_info, out_info=cls.out_info,
+                    c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
+                    grad_input_map=cls.grad_input_map,
                     name=name)
+
+  @classmethod
+  def map_layer_inputs_to_op(cls, *inputs):
+    return inputs
+
+  @classmethod
+  def map_layer_output_from_op(cls, *outputs):
+    return outputs[0]
 
 
 class LstmGenericBase(NativeOpGenBase):
@@ -432,8 +441,20 @@ class LstmGenericBase(NativeOpGenBase):
      "bw_in_var": {"want_inplace": 0}},
     {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
+
   def grad_input_map(self, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
     return (V_h, c, i,  Y, H,  DY, Dd)
+
+  @classmethod
+  def map_layer_inputs_to_op(cls, Z, V_h, i):
+    assert Z.ndim == 3
+    assert V_h.ndim == 2
+    assert i.ndim == 2
+    n_batch = Z.shape[1]
+    n_out = V_h.shape[0]
+    c = T.zeros((n_batch, n_out), dtype="float32")
+    return Z, V_h, c, i
+
   c_fw_code = """
     // Z, V_h, c, i = input_names
     // Y, H, d = output_names
@@ -457,6 +478,7 @@ class LstmGenericBase(NativeOpGenBase):
       do_lstm(H, Y, c, d_ptr, x, i);
     }
   """
+
   c_bw_code = """
     // V_h, c, i,   Y, H*,   DY*, Dd = input_names (*: inplace)
     // DZ, DV_h, Dc, tmpDc = output_names
@@ -490,4 +512,5 @@ class LstmGenericBase(NativeOpGenBase):
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
   """
+
   code_version = (1, 1)
