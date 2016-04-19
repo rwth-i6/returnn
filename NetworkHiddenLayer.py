@@ -2788,3 +2788,11 @@ class NativeLayer(_NoOpLayer):
     args = make_var_tuple(native_class_cls.map_layer_inputs_to_op(*args))
     outputs = make_var_tuple(op(*args))
     self.output = native_class_cls.map_layer_output_from_op(*outputs)
+
+    def print_fn(op, x):
+      import numpy
+      first = x[(0,) * x.ndim]
+      stats = (first, x.shape, numpy.min(x), numpy.max(x), numpy.mean(x), numpy.std(x),
+               numpy.isinf(x).any(), numpy.isnan(x).any())
+      print(op.message, "first/shape/min/max/mean/std/any-inf/any-nan:", stats)
+    #self.output = theano.printing.Print("native_out", global_fn=print_fn)(self.output)
