@@ -91,7 +91,7 @@ Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 
 //if nd is 2 then assume a weight matrix and just return beginning of data
 //else nd should be 3 and we pick the x part
-const float* data_ptr(const Ndarray* a, int y, int x) {
+const float* data_ptr(const Ndarray* a, int x) {
 	assert(a->nd == 2 || a->nd == 3);
 	if (a->nd == 2)
 		return Ndarray_DEV_DATA(a);
@@ -101,9 +101,9 @@ const float* data_ptr(const Ndarray* a, int y, int x) {
 	}
 }
 
-float* data_ptr(Ndarray* a, int y, int x) {
+float* data_ptr(Ndarray* a, int x) {
 	const Ndarray* ca = a;
-	return const_cast<float *>(data_ptr(ca, y, x));
+	return const_cast<float *>(data_ptr(ca, x));
 }
 
 void lastTwoDims(const Ndarray * a, int out[2]) {
@@ -215,18 +215,17 @@ __global__ void lstm_bwd_kernel(
 	}
 }
 
-void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, int y, int x, const Ndarray* i) {
-	assert(y == 0 && "2d LSTM not supported yet");
+void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, int x, const Ndarray* i) {
 	int dims[2];
 	lastTwoDims(H, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
 	int n_cells = dims[1] / 4;
 	int n_batch = dims[0];
 
-	float* data_H = data_ptr(H, y, x);
+	float* data_H = data_ptr(H, x);
 	const float* data_prev = Ndarray_DEV_DATA(prev);
-	const float* data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
-	float* data_out = data_ptr(out, y, x);
+	const float* data_old_state = x > 0 ? data_ptr(H, x - 1) + 3 * n_cells : data_prev;
+	float* data_out = data_ptr(out, x);
 	const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
 	//TODO tune launch configuration
 	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i);
@@ -234,33 +233,32 @@ void do_lstm(Ndarray* H, Ndarray* out, const Ndarray* prev, float* state_out, in
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
 //Dd stores the derivative w.r.t. end state
-void do_lstm_bwd(Ndarray* delta, Ndarray* epsilon, const Ndarray* Y, const Ndarray * Dd,
-                 const Ndarray* c, int y, int x, bool rightBorder, const Ndarray* i) {
-	assert(y == 0 && "2d LSTM not supported yet");
+void do_lstm_bwd(Ndarray* delta, Ndarray* epsilon, const Ndarray* Y, const Ndarray* Dd,
+                 const Ndarray* c, int x, bool rightBorder, const Ndarray* i) {
 	int dims[2];
 	lastTwoDims(delta, dims);
 	assert(dims[1] % 4 == 0); //3 gates + cell
 	int n_cells = dims[1] / 4;
 	int n_batch = dims[0];
 
-	float * data_delta = data_ptr(delta, y, x);
-	float * data_epsilon = data_ptr(epsilon, y, x);
-	const float * data_next_epsilon = rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
-	const float * data_old_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : Ndarray_DEV_DATA(c);
-	const float * data_Y = data_ptr(Y, y, x);
+	float * data_delta = data_ptr(delta, x);
+	float * data_epsilon = data_ptr(epsilon, x);
+	const float * data_next_epsilon = rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(epsilon, x + 1);
+	const float * data_old_state = x > 0 ? data_ptr(delta, x - 1) + 3 * n_cells : Ndarray_DEV_DATA(c);
+	const float * data_Y = data_ptr(Y, x);
 	const float * data_i = Ndarray_DEV_DATA(i) + x * n_batch;
 	//TODO tune launch configuration
 	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(
 	    data_delta, data_epsilon, data_next_epsilon, data_old_state, x > 0, data_Y, n_cells, n_batch, data_i);
 }
 
-//C[y,x] += A[y,x]*B[y,x]
-//(if not 4-dimensional, then indexing [y,x] is ignored (e.g. for weight matrices))
-void affine_y_x(int y_A, int x_A, const Ndarray* A, int y_B, int x_B, const Ndarray* B,
-	            int y_C, int x_C, Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
-	const float* data_A = data_ptr(A, y_A, x_A);
-	const float* data_B = data_ptr(B, y_B, x_B);
-	float* data_C = data_ptr(C, y_C, x_C);
+//C[x] += A[x]*B[x]
+//(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
+void affine_y_x(int x_A, const Ndarray* A, int x_B, const Ndarray* B,
+	            int x_C, Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
+	const float* data_A = data_ptr(A, x_A);
+	const float* data_B = data_ptr(B, x_B);
+	float* data_C = data_ptr(C, x_C);
 	int A_dim[2], B_dim[2];
 	lastTwoDims(A, A_dim);
 	lastTwoDims(B, B_dim);

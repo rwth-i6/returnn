@@ -369,10 +369,10 @@ class LstmGenericBase(NativeOpGenBase):
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
         //H += Y[x-1]*V_h
-        affine_y_x(/*y*/0, x-1, Y, /*y*/0, x, V_h, /*y*/0, x, H);
+        affine_y_x(x-1, Y,  x, V_h,  x, H);
       }
       float* d_ptr = (x == T - 1) ? Ndarray_DEV_DATA(d) : 0;
-      do_lstm(H, Y, c, d_ptr, /*y*/0, x, i);
+      do_lstm(H, Y, c, d_ptr, x, i);
     }
   """
   c_bw_code = """
@@ -396,11 +396,11 @@ class LstmGenericBase(NativeOpGenBase):
       // add recurrent
       bool rightBorder = (x == T - 1);
       if(!rightBorder)
-        affine_y_x(/*y*/0, x+1, DZ, /*y*/0, x, V_h, /*y*/0, x, DY, false, true);
-      do_lstm_bwd(DZ, DY, Y, Dd, c, /*y*/0, x, rightBorder, i);
+        affine_y_x(x+1, DZ,  x, V_h,  x, DY, false, true);
+      do_lstm_bwd(DZ, DY, Y, Dd, c, x, rightBorder, i);
     }
 
-    //DV_h = Y[0..end-1]^T * delta[1..end]
+    //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
     const int* Dc_dim = Ndarray_HOST_DIMS(Dc);
