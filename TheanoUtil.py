@@ -631,7 +631,7 @@ class DumpOp(theano.Op):
     return "%s.%i.npy" % (self.filename, counter)
 
   def get_counter(self):
-    if self.parent: return self.parent.get_counter()
+    if self.parent: return self.parent.get_counter() - 1
     return self.counter
 
   def inc_counter(self):
