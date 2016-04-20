@@ -576,7 +576,7 @@ def opt_remove_contiguous(node):
 
 optdb.register('opt_remove_contiguous',
                gof.TopoOptimizer(opt_remove_contiguous),
-               50, 'fast_run')
+               10, 'fast_run')
 
 # Theano will not do this optimization. So we register it now.
 # See: https://github.com/Theano/Theano/issues/4400
