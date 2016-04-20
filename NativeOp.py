@@ -233,6 +233,15 @@ class NativeOp(theano.Op):
       input_grads = input_grads[:-grad_op.num_dummy_outs]  # remove any dummy outputs
     assert len(out_info) == len(input_grads)
 
+    def print_fn(op, x):
+      import numpy
+      first = x[(0,) * x.ndim]
+      stats = (first, x.shape, numpy.min(x), numpy.max(x), numpy.mean(x), numpy.std(x),
+               numpy.isinf(x).any(), numpy.isnan(x).any())
+      print(op.message, "first/shape/min/max/mean/std/any-inf/any-nan:", stats)
+    #input_grads = [theano.printing.Print("in grad %i" % i, global_fn=print_fn)(v)
+    #               for (i, v) in enumerate(input_grads)]
+
     results = []
     for info in self.in_info:
       if info.get("gradient", "") == "disconnected":
