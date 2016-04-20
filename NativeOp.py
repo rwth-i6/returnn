@@ -394,7 +394,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
     assert isinstance(v, theano.sandbox.cuda.CudaNdarrayVariable)
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
-      if v.owner == gpu_contiguous:
+      if v.owner.op == gpu_contiguous:
         return v
     return gpu_contiguous(v)
 
