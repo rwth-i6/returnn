@@ -33,8 +33,8 @@
 #define _cublasTranspose(t) \
 	((t == 'T') ? CUBLAS_OP_T : \
 	(t == 'C') ? CUBLAS_OP_C : \
-	(t == 'N') ? CUBLAS_OP_N : 'E')
-#define Ndarray_sgemm(\
+	(t == 'N') ? CUBLAS_OP_N : cublasOperation_t('E'))
+#define Ndarray_sgemm( \
 	transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
 	(_cudaHandleError(cublasSgemm(handle, \
@@ -47,7 +47,7 @@
 #define DIM_BLOCK 512
 
 #define DEF_KERNEL __global__
-#define start_dev_kernel(kernel, args)
+#define start_dev_kernel(kernel, args) \
 	(kernel<<<DIM_GRID,DIM_BLOCK>>>  args);
 
 static const char *_cudaGetErrorEnum(cublasStatus_t error) {
@@ -165,8 +165,8 @@ struct _KernelLoop {
 #endif
 
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
-	Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
+	const Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), (Ndarray_DIM_Type*) dim);
 	return res;
 }
 

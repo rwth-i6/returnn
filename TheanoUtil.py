@@ -3,6 +3,8 @@ import theano
 import theano.sandbox.cuda
 import theano.tensor as T
 from theano.compile import ViewOp
+from theano import gof
+from theano.compile import optdb
 import numpy
 
 
@@ -563,6 +565,18 @@ class Contiguous(T.extra_ops.CpuContiguous):
     dout = T.as_tensor_variable(dout)
     return [dout]
 
+
+@gof.local_optimizer([Contiguous], inplace=True)
+def opt_remove_contiguous(node):
+  if isinstance(node.op, Contiguous):
+    x, = node.inputs
+    if x.owner and isinstance(x.owner.op, (T.Alloc, T.AllocEmpty, T.extra_ops.CpuContiguous)):
+      return [x]
+  return False
+
+optdb.register('opt_remove_contiguous',
+               gof.TopoOptimizer(opt_remove_contiguous),
+               10, 'fast_run')
 
 # Theano will not do this optimization. So we register it now.
 # See: https://github.com/Theano/Theano/issues/4400

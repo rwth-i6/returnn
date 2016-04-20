@@ -587,6 +587,31 @@ class Lstm2Layer(HiddenLayer):
     self.make_output(h)
 
 
+class NativeLstmLayer(HiddenLayer):
+  recurrent = True
+  layer_class = "native_lstm"
+
+  def __init__(self, n_out, direction=1, truncation=None, **kwargs):
+    n_cells = n_out
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(NativeLstmLayer, self).__init__(n_out=n_cells * 4, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('direction', direction)
+
+    n_re_in = n_out
+    self.W_re = self.add_param(self.create_recurrent_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+
+    z = self.get_linear_forward_output()
+    assert z.ndim == 3
+
+    from NativeOp import LstmGenericBase
+    lstm_op = LstmGenericBase.make_op()
+    op_out = lstm_op(*LstmGenericBase.map_layer_inputs_to_op(z[::direction], self.W_re, self.index[::direction]))
+    from TheanoUtil import make_var_tuple
+    out = LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
+    self.make_output(out[::direction])
+
+
 class GenericLstmLayer(_NoOpLayer):
   """
   LSTM implementation which allows a custom input+recurrent function (n_in + n_out -> n_cells * 4)
