@@ -592,13 +592,13 @@ def local_gpu_Contiguous(node):
 
 
 class DumpOp(theano.Op):
-  __props__ = ("filename", "dump_grad")
+  __props__ = ("filename", "with_grad")
   view_map = {0: [0]}
 
-  def __init__(self, filename, dump_grad=True, parent=None):
+  def __init__(self, filename, with_grad=True, parent=None):
     super(DumpOp, self).__init__()
     self.filename = filename
-    self.dump_grad = dump_grad
+    self.with_grad = with_grad
     self.counter = 0
     self.parent = parent
 
@@ -614,14 +614,15 @@ class DumpOp(theano.Op):
   def grad(self, inputs, output_grads):
     dout, = output_grads
     dout = T.as_tensor_variable(dout)
-    if self.dump_grad:
+    if self.with_grad:
+      # Note: This assumes that there will be only one such gradient.
       dout = DumpOp(filename=self.filename + ".grad", parent=self)(dout)
     return [dout]
 
   def dump(self, x):
     filename = self.get_full_filename()
     import os, numpy
-    assert not os.path.exists(filename), "%s already exists, not overwriting"
+    assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
     numpy.save(filename, x)
 
   def get_full_filename(self):
