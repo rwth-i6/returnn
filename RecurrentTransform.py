@@ -377,6 +377,7 @@ class AttentionList(AttentionBase):
       self.__setattr__("U_att_%d" % i, self.custom_vars['U_att_%d' % i])
     elif self.attrs['momentum'] == "conv2d":
       self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
+      self.__setattr__("U_%d" % i, self.custom_vars['U_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -411,12 +412,15 @@ class AttentionList(AttentionBase):
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
         l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp)), dtype=theano.config.floatX)
-        self.add_param(self.layer.shared(value=values, borrow=True, name="U_att_%d" % i))
+        self.add_param(self.layer.shared(value=values, borrow=True, name="U_%d" % i))
       if self.attrs['momentum'] == 'conv2d':
         context = 5
         l = 1. / (2 * context)
-        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(1, 1, 2, context)), dtype=theano.config.floatX)
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.attrs['filters'], 1, 2, context)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
+        l = sqrt(6.) / sqrt(self.attrs['filters'] + 1)
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.attrs['filters'], 1)), dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="U_%d" % i))
       self.init(i)
 
   def item(self, name, i):
@@ -464,10 +468,12 @@ class AttentionList(AttentionBase):
           context = F.shape[3]
           padding = T.zeros((2,context/2,C.shape[1]),'float32')
           att = T.concatenate([padding, T.stack([self.item('att',i), w_i]), padding],axis=1) # 2TB
-          w_i = T.nnet.conv2d(border_mode='valid',
+          v_i = T.exp(T.dot(T.nnet.conv2d(border_mode='valid',
                               input=att.dimshuffle(2,'x',0,1), # B12T
-                              filters=F).dimshuffle(3,0,2,1).reshape((C.shape[0],C.shape[1]))
-          w_i = w_i / T.sum(w_i,axis=0,keepdims=True)
+                              filters=F).dimshuffle(3,0,2,1),self.item('U',i)).reshape((C.shape[0],C.shape[1])))
+          v_i = v_i / T.sum(v_i, axis=0, keepdims=True)
+          w_i *= v_i
+          w_i = w_i / T.sum(w_i, axis=0, keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
         updates[self.state_vars['att_%d' % i]] = theano.gradient.disconnected_grad(w_i)
