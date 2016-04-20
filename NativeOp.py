@@ -384,7 +384,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
   def tensor_type(cls, dtype, ndim):
     from theano.sandbox.cuda import CudaNdarrayType
     if dtype != "float32":
-      print("%s: WARNING: cannot handle type %r, will use float32 instead" % (self, dtype))
+      print("%s: WARNING: cannot handle type %r, will use float32 instead" % ("GpuNativeOp", dtype))
       dtype = "float32"
     return CudaNdarrayType(dtype=dtype, broadcastable=(False,) * ndim)
 
