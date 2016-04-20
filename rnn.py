@@ -109,7 +109,8 @@ def getDevicesInitArgs(config):
   """
   multiproc = config.bool('multiprocessing', True)
   if config.value('task', 'train') == "theano_graph":
-    multiproc = False
+    # Should have been reset earlier. See init() which handles this case.
+    assert not multiproc, "set multiprocessing = False to use theano_graph"
   device_info = config.list('device', ['cpu0'])
   if len(device_info) == 1 and device_info[0] == 'json':
     try:
@@ -323,6 +324,8 @@ def init(configFilename, commandLineOptions):
   print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
   print >> log.v3, "Theano:", describe_theano_version()
   initFaulthandler()
+  if config.value('task', 'train') == "theano_graph":
+    config.set("multiprocessing", False)
   if config.bool('multiprocessing', True):
     initCudaNotInMainProcCheck()
   if config.bool('ipython', False):
