@@ -269,11 +269,12 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
+    self.sprint_opts = sprint_opts
     self.initialize()
 
   def initialize(self):
@@ -297,12 +298,14 @@ class SequenceOutputLayer(OutputLayer):
     y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
-      err, grad = SprintErrorSigOp(self.target)(self.p_y_given_x, T.sum(self.index, axis=0))
+      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+      err, grad = SprintErrorSigOp(self.target, self.sprint_opts)(self.p_y_given_x, T.sum(self.index, axis=0))
       known_grads = {self.z: grad}
       return err.sum(), known_grads
     elif self.loss == 'sprint_smoothed':
+      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       assert self.log_prior is not None
-      err, grad = SprintErrorSigOp(self.target)(self.p_y_given_x, T.sum(self.index, axis=0))
+      err, grad = SprintErrorSigOp(self.target, self.sprint_opts)(self.p_y_given_x, T.sum(self.index, axis=0))
       err *= (1.0 - self.ce_smoothing)
       err = err.sum()
       grad *= (1.0 - self.ce_smoothing)
