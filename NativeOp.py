@@ -132,6 +132,10 @@ class NativeOp(theano.Op):
     return theano.tensor.as_tensor_variable(v)
 
   @classmethod
+  def tensor_type(cls, dtype, ndim):
+    return T.TensorType(dtype=dtype, broadcastable=(False,) * ndim)
+
+  @classmethod
   def contiguous(cls, v):
     from TheanoUtil import Contiguous
     assert isinstance(v, theano.Variable)
@@ -249,7 +253,7 @@ class NativeOp(theano.Op):
   def make_node(self, *args):
     assert len(args) == len(self.in_info)
     args = [self._convert_input_var(arg, info) for arg, info in zip(args, self.in_info)]
-    outputs = [T.TensorType(info.get("dtype", "float32"), (False,) * info["ndim"])()
+    outputs = [self.tensor_type(dtype=info.get("dtype", "float32"), ndim=info["ndim"])()
                for info in self.out_info]
     return theano.Apply(self, args, outputs)
 
@@ -377,6 +381,14 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
     return as_cuda_ndarray_variable(v)
 
   @classmethod
+  def tensor_type(cls, dtype, ndim):
+    from theano.sandbox.cuda import CudaNdarrayType
+    if dtype != "float32":
+      print("%s: WARNING: cannot handle type %r, will use float32 instead" % (self, dtype))
+      dtype = "float32"
+    return CudaNdarrayType(dtype=dtype, broadcastable=(False,) * ndim)
+
+  @classmethod
   def contiguous(cls, v):
     from theano.sandbox.cuda.basic_ops import gpu_contiguous
     assert isinstance(v, theano.sandbox.cuda.CudaNdarrayVariable)
@@ -428,9 +440,8 @@ def local_gpu_NativeOp(node):
       gpu_op = GpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
       args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
               for x in args]
-      outputs = gpu_op(*args)
-      if not isinstance(outputs, tuple):
-        outputs = [outputs]
+      from TheanoUtil import make_var_tuple
+      outputs = make_var_tuple(gpu_op(*args))
       return [host_from_gpu(out) for out in outputs]
 
 
