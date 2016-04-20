@@ -589,3 +589,51 @@ def local_gpu_Contiguous(node):
     if x.owner and x.owner.op == host_from_gpu:
       from theano.sandbox.cuda.basic_ops import gpu_contiguous
       return [host_from_gpu(gpu_contiguous(x.owner.inputs[0]))]
+
+
+class DumpOp(theano.Op):
+  __props__ = ("filename", "with_grad")
+  view_map = {0: [0]}
+
+  def __init__(self, filename, with_grad=True, parent=None):
+    super(DumpOp, self).__init__()
+    self.filename = filename
+    self.with_grad = with_grad
+    self.counter = 0
+    self.parent = parent
+
+  def make_node(self, x):
+    x = T.as_tensor_variable(x)
+    return gof.Apply(self, [x], [x.type()])
+
+  def perform(self, node, inputs, output_storage):
+    x, = inputs
+    self.dump(x)
+    output_storage[0][0] = x
+
+  def grad(self, inputs, output_grads):
+    dout, = output_grads
+    dout = T.as_tensor_variable(dout)
+    if self.with_grad:
+      # Note: This assumes that there will be only one such gradient.
+      dout = DumpOp(filename=self.filename + ".grad", parent=self)(dout)
+    return [dout]
+
+  def dump(self, x):
+    filename = self.get_full_filename()
+    import os, numpy
+    assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
+    numpy.save(filename, x)
+
+  def get_full_filename(self):
+    counter = self.get_counter()
+    self.inc_counter()
+    return "%s.%i.npy" % (self.filename, counter)
+
+  def get_counter(self):
+    if self.parent: return self.parent.get_counter() - 1
+    return self.counter
+
+  def inc_counter(self):
+    if self.parent: return
+    self.counter += 1

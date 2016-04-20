@@ -2820,3 +2820,21 @@ class NativeLayer(_NoOpLayer):
                numpy.isinf(x).any(), numpy.isnan(x).any())
       print(op.message, "first/shape/min/max/mean/std/any-inf/any-nan:", stats)
     #self.output = theano.printing.Print("native_out", global_fn=print_fn)(self.output)
+
+
+class DumpLayer(_NoOpLayer):
+  layer_class = "dump"
+
+  def __init__(self, filename, with_grad=True, n_out=None, **kwargs):
+    super(DumpLayer, self).__init__(**kwargs)
+    self.output, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass)
+    if n_out: assert n_out == n_in
+    n_out = n_in
+    self.set_attr("n_out", n_out)
+    self.set_attr("filename", filename)
+    self.set_attr("with_grad", with_grad)
+
+    if self.train_flag:
+      from TheanoUtil import DumpOp
+      self.output = DumpOp(filename, with_grad=with_grad)(self.output)
+      self.index = DumpOp(filename + ".index", with_grad=False)(self.index)

@@ -7,7 +7,7 @@ import os
 import atexit
 import signal
 from TaskSystem import Pickler, Unpickler
-from Util import eval_shell_str
+from Util import eval_shell_str, make_hashable
 from Log import log
 
 
@@ -25,7 +25,6 @@ class SprintSubprocessInstance:
       Numpy arrays encoded via Numpy fromstring/tostring.
   """
 
-  instance = None
   Version = 1  # increase when some protocol changes
 
   def __init__(self, sprintExecPath, sprintConfigStr):
@@ -182,17 +181,7 @@ class SprintSubprocessInstance:
     self._exit_child()
     self._start_child()
 
-  @classmethod
-  def new_instance(cls):
-    import Config
-    config = Config.get_global_config()
-    sprintExecPath = config.value("sprint_loss_exec_path", None)
-    assert sprintExecPath, "need sprint_loss_exec_path in config"
-    sprintConfigStr = config.value("sprint_loss_config", None)
-    return cls(sprintExecPath=sprintExecPath, sprintConfigStr=sprintConfigStr)
-
-  @classmethod
-  def get_batch_loss_and_error_signal(cls, target, log_posteriors, seq_lengths):
+  def get_batch_loss_and_error_signal(self, target, log_posteriors, seq_lengths):
     """
     :param str target: e.g. "classes". not yet passed over to Sprint.
     :param numpy.ndarray log_posteriors: 3d (time,batch,label)
@@ -201,16 +190,12 @@ class SprintSubprocessInstance:
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     loss is a 1d-array (batch).
 
-    Note that this accesses some global references, like global config and global current seg info.
+    Note that this accesses some global references, like global current seg info.
     """
     assert seq_lengths.ndim == 1
     assert log_posteriors.ndim == 3
     n_batch = seq_lengths.shape[0]
     assert n_batch == log_posteriors.shape[1]
-
-    if not cls.instance:
-      cls.instance = cls.new_instance()
-    instance = cls.instance; ":type: SprintSubprocessInstance"
 
     import Device
     index = Device.get_current_seq_index(target)  # (time,batch)
@@ -223,7 +208,7 @@ class SprintSubprocessInstance:
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
     for b in range(n_batch):
-      loss, error_signal = instance.get_loss_and_error_signal(
+      loss, error_signal = self.get_loss_and_error_signal(
         seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:, b])
       batch_loss[b] = loss
       batch_error_signal[:, b] = error_signal
@@ -235,11 +220,13 @@ class SprintErrorSigOp(theano.Op):
   Op: posteriors, seq_lengths -> loss, error signal
   """
 
-  __props__ = ("target",)
+  __props__ = ("target", "sprint_opts")
 
-  def __init__(self, target):
-    self.target = target  # default is "classes"
+  def __init__(self, target, sprint_opts):
     super(SprintErrorSigOp, self).__init__()
+    self.target = target  # default is "classes"
+    self.sprint_opts = make_hashable(sprint_opts)
+    self.sprint_instance = None
 
   def make_node(self, posteriors, seq_lengths):
     log_posteriors = T.log(theano.tensor.as_tensor_variable(posteriors))
@@ -247,7 +234,7 @@ class SprintErrorSigOp(theano.Op):
     assert seq_lengths.ndim == 1  # vector of seqs lengths
     return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), posteriors.type()])
 
-  def perform(self, node, inputs, outputs):
+  def perform(self, node, inputs, output_storage):
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
@@ -257,9 +244,13 @@ class SprintErrorSigOp(theano.Op):
       numpy.set_printoptions(threshold=numpy.nan)
       print >> log.v1, 'log_posteriors:', log_posteriors
 
-    loss, errsig = SprintSubprocessInstance.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
+    if self.sprint_instance is None:
+      print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
+      self.sprint_instance = SprintSubprocessInstance(**self.sprint_opts)
+
+    loss, errsig = self.sprint_instance.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
-    outputs[0][0] = loss
-    outputs[1][0] = errsig
+    output_storage[0][0] = loss
+    output_storage[1][0] = errsig
 
     print >> log.v5, 'avg frame loss for segments:', loss.sum() / seq_lengths.sum()
