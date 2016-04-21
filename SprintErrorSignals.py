@@ -217,7 +217,7 @@ class SprintSubprocessInstance:
 
 class SprintErrorSigOp(theano.Op):
   """
-  Op: posteriors, seq_lengths -> loss, error signal
+  Op: posteriors, seq_lengths -> loss, error signal (grad w.r.t. z, i.e. before softmax is applied)
   """
 
   __props__ = ("target", "sprint_opts")

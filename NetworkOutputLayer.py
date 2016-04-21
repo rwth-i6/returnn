@@ -79,7 +79,7 @@ class OutputLayer(Layer):
       self.y = copy_output.y_out
     self.y_data_flat = time_batch_make_flat(y)
 
-    self.norm = 1.0
+    self.norm = numpy.float32(1)
     self.target_index = self.index
     if time_limit == 'inf':
       import theano.ifelse
@@ -272,13 +272,19 @@ class SequenceOutputLayer(OutputLayer):
   def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
+    if prior_scale:
+      self.set_attr("prior_scale", prior_scale)
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
+    if ce_smoothing:
+      self.set_attr("ce_smoothing", ce_smoothing)
     self.sprint_opts = sprint_opts
+    if sprint_opts:
+      self.set_attr("sprint_opts", sprint_opts)
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'sprint_smoothed'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
@@ -300,21 +306,22 @@ class SequenceOutputLayer(OutputLayer):
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       err, grad = SprintErrorSigOp(self.target, self.sprint_opts)(self.p_y_given_x, T.sum(self.index, axis=0))
-      known_grads = {self.z: grad}
-      return err.sum(), known_grads
-    elif self.loss == 'sprint_smoothed':
-      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      assert self.log_prior is not None
-      err, grad = SprintErrorSigOp(self.target, self.sprint_opts)(self.p_y_given_x, T.sum(self.index, axis=0))
-      err *= (1.0 - self.ce_smoothing)
       err = err.sum()
-      grad *= (1.0 - self.ce_smoothing)
-      y_m_prior = T.reshape(self.z + self.prior_scale * self.log_prior, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-      p_y_given_x_prior = T.nnet.softmax(y_m_prior)
-      pcx = p_y_given_x_prior[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
-      ce = self.ce_smoothing * (-1.0) * T.sum(T.log(pcx))
-      err += ce
-      known_grads = {self.z: grad + T.grad(ce, self.z)}
+      if self.ce_smoothing:
+        err *= numpy.float32(1.0 - self.ce_smoothing)
+        grad *= numpy.float32(1.0 - self.ce_smoothing)
+        if not self.prior_scale:  # we kept the softmax bias as it was
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+        else:  # assume that we have subtracted the bias by the log priors beforehand
+          assert self.log_prior is not None
+          # In this case, for the CE calculation, we need to add the log priors again.
+          y_m_prior = T.reshape(self.z + numpy.float32(self.prior_scale) * self.log_prior,
+                                (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m_prior[self.i], y_idx=self.y_data_flat[self.i])
+        ce = numpy.float32(self.ce_smoothing) * T.sum(nll)
+        err += ce
+        grad += T.grad(ce, self.z)
+      known_grads = {self.z: grad}
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
