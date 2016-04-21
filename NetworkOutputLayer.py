@@ -305,7 +305,8 @@ class SequenceOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      err, grad = SprintErrorSigOp(self.target, self.sprint_opts)(self.p_y_given_x, T.sum(self.index, axis=0))
+      sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
+      err, grad = sprint_error_op(self.p_y_given_x, T.sum(self.index, axis=0))
       err = err.sum()
       if self.ce_smoothing:
         err *= numpy.float32(1.0 - self.ce_smoothing)
