@@ -672,8 +672,9 @@ class Device(object):
     """
     device = self.name
     config = self.config
-    global asyncChildGlobalDevice
+    global asyncChildGlobalDevice, deviceInstance
     asyncChildGlobalDevice = self
+    deviceInstance = self
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
@@ -770,9 +771,9 @@ class Device(object):
         target_keys = input_queue.recv()
         for k in target_keys:
           t[k] = input_queue.recv()
-        j = {}
+        self.output_index = {}
         for k in target_keys:
-          j[k] = input_queue.recv()
+          self.output_index[k] = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
         # self.x == self.y["data"], will be set also here.
@@ -780,7 +781,7 @@ class Device(object):
           self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
         for k in target_keys:
-          self.j[k].set_value(j[k].astype('int8'), borrow = True)
+          self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
@@ -1218,7 +1219,9 @@ class Device(object):
 
 
 def get_current_seq_tags():
+  assert deviceInstance, "get_current_seq_tags: deviceInstance not set"
   return deviceInstance.tags
 
 def get_current_seq_index(target):
+  assert deviceInstance, "get_current_seq_index: deviceInstance not set"
   return deviceInstance.output_index[target]

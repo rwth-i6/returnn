@@ -187,7 +187,7 @@ class SprintSubprocessInstance:
       ret = self._read()
     except (IOError, EOFError):
       raise
-    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % ret
+    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret, )
     loss = ret[1]
     error_signal_str = ret[2]
     error_signal = numpy.fromstring(error_signal_str, dtype="float32")
