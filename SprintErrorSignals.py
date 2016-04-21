@@ -70,6 +70,22 @@ class SprintSubprocessInstance:
         self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
         self.child_pid = None
 
+  def _env_update_child(self):
+    theano_flags = {key: value for (key, value)
+                    in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+
+    # First set some sane default for compile dir.
+    theano_flags.setdefault("compiledir_format",
+                            "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
+    compiledir_format = theano_flags["compiledir_format"]
+    p = compiledir_format.find("--dev-")  # Device.startProc might have added that.
+    if p >= 0: compiledir_format = compiledir_format[:p]
+    compiledir_format += "--sprint-sub"
+    theano_flags["compiledir_format"] = compiledir_format
+    theano_flags["device"] = "cpu"  # Force CPU.
+    theano_flags["force_device"] = True
+    os.environ["THEANO_FLAGS"] = ",".join(["%s=%s" % (key, value) for (key, value) in sorted(theano_flags.items())])
+
   def _start_child(self):
     assert self.child_pid is None
     self.pipe_c2p = self._pipe_open()
@@ -80,6 +96,7 @@ class SprintSubprocessInstance:
     pid = os.fork()
     if pid == 0:  # child
       try:
+        self._env_update_child()
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
