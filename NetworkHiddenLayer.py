@@ -1467,7 +1467,7 @@ class AttentionLengthLayer(HiddenLayer):
         if src.layer_class == 'rec':
           for att in src.attention:
             attention += att
-      l = numpy.sqrt(6. / (filter[0]*filter[1]))
+      l = numpy.sqrt(6. / (filter[0]*filter[1]*n_features))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
       F = self.add_param(self.shared(value=values, name="F"))
       w_att = T.nnet.conv2d(border_mode='full',
@@ -1494,26 +1494,34 @@ class AttentionLengthLayer(HiddenLayer):
     halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
 
-    if use_act or use_att or use_rbf or use_eos or use_real == 1.0:
-      real = T.sum(T.cast(index, 'int32'), axis=0)
-      # real = theano.printing.Print("real")(real)
-      exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
-      sse = T.sum((exl - real - 1)**2)
-      ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]))
-      rho = T.constant(rho,'float32')
-      self.cost_val = rho * ce + (1.-rho) * sse
-      hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
-      #hyp = theano.printing.Print("hyp")(hyp)
-      if self.train_flag or oracle:
-        self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
-      else:
-        self.length = T.ceil(hyp)
-      self.length = T.cast(self.length, 'int32')
-      out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
-                                              T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
-                          sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
-      self.index = out[0].dimshuffle(1,0)[:-1]
+    real = T.sum(T.cast(index, 'int32'), axis=0)
+    # real = theano.printing.Print("real")(real)
+    exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
+    sse = T.sum(((exl - T.cast(real,'float32') - 1)**2) * T.cast(real,'float32'))
+    #ce = -T.log(halting[real - 1, T.arange(halting.shape[1])])
+    pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
+    halting = T.concatenate([halting,pad])
+    #import theano.ifelse
+    #halting = theano.ifelse.ifelse(T.le(T.max(real),halting.shape[0]), halting, T.concatenate([halting,pad],axis=0))
+    ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    rho = T.constant(rho,'float32')
+    self.cost_val = rho * ce + (1.-rho) * sse
+    self.error_val = T.sum(((T.cast(T.argmax(halting,axis=0),'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    #hyp = theano.printing.Print("hyp")(hyp)
+    if self.train_flag or oracle:
+      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
+    else:
+      self.length = T.ceil(hyp)
+    self.length = T.cast(self.length, 'int32')
+    out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                                            T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
+                        sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
+    self.index = out[0].dimshuffle(1,0)[:-1]
     self.make_output(T.zeros(self.index.shape,'float32').dimshuffle(0,1,'x'))
+
+  def errors(self):
+    return self.error_val
 
   def cost(self):
     return self.cost_val, None
