@@ -13,6 +13,7 @@ from Updater import Updater
 from Device import Device
 from Util import NumbersDict
 from Config import Config
+from NetworkHiddenLayer import DumpLayer
 import rnn
 import EngineUtil
 import Network
@@ -78,15 +79,21 @@ def test_DummyDevice():
   assert assign_success
 
 
-def load():
+def load(lstm_opts={"class": "lstm2"}):
+  lstm_opts = lstm_opts.copy()
+  lstm_opts.update({"n_out": 10, "from": "in"})
   num_inputs = 9
   num_outputs = 2
   net_topo = {
-    "fw0": {"class": "native_lstm", "n_out": 10},
-    "output": {"class": "softmax", "loss": "ce", "from": ["fw0"]}
+    "in": {"class": "dump", "filename": "in"},
+    "lstm": lstm_opts,
+    "lstm_dump": {"class": "dump", "from": "lstm", "filename": "lstm"},
+    "output": {"class": "softmax", "loss": "ce", "from": "lstm_dump"}
   }
 
-  epoch = 1
+  collected_data = {}
+  DumpLayer.global_debug_container = collected_data
+
   net = Network.LayerNetwork.from_json(
     json_content=net_topo,
     n_in=num_inputs,
@@ -96,6 +103,7 @@ def load():
   net.declare_train_params()
 
   # Init dataset and prepare one minibatch.
+  epoch = 1
   dataset = Task12AXDataset(num_seqs=1000, seq_ordering="random", chunking="200:200")
   dataset.init_seq_order(epoch=epoch)
   batch_gen = dataset.generate_batches(
@@ -128,6 +136,8 @@ def load():
 
   # And finally, run it.
   cost = trainer()
+  collected_data["cost"] = cost
+  return collected_data
 
 
 def test_load():
