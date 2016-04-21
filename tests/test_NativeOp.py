@@ -12,11 +12,19 @@ from GeneratingDataset import Task12AXDataset
 from Updater import Updater
 from Device import Device
 from Util import NumbersDict
+from Config import Config
+import rnn
 import EngineUtil
 import Network
 import better_exchook
+from Log import log
 
 better_exchook.replace_traceback_format_tb()
+log.initialize()  # some code needs it
+
+# Some code uses get_global_config().
+# Not sure about the most clean solution.
+rnn.config = Config()
 
 
 class DummyDevice:
@@ -45,6 +53,13 @@ class DummyDevice:
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0, 0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # seq-name for each batch slice
+
+  def initialize(self, net):
+    self.y = {k: theano.shared(numpy.zeros((1,) * net.y[k].ndim, dtype=net.y[k].dtype),
+                               borrow=True, name='y_%s' % k)
+              for k in self.used_data_keys}
+    self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
+              for k in self.used_data_keys}
 
   def update_data(self):
     for target in self.used_data_keys:
@@ -75,7 +90,7 @@ def load():
   net = Network.LayerNetwork.from_json(
     json_content=net_topo,
     n_in=num_inputs,
-    n_out={"classes": (1, num_outputs)},
+    n_out={"classes": (num_outputs, 1)},
     train_flag=True
   )
   net.declare_train_params()
@@ -92,6 +107,8 @@ def load():
   dev = DummyDevice()
   assign_success, _ = EngineUtil.assign_dev_data(device=dev, dataset=dataset, batches=batches)
   assert assign_success
+  dev.initialize(net)
+  dev.update_data()
   givens = [(net.y[k], dev.y[k]) for k in dev.used_data_keys]
   givens += [(net.j[k], dev.j[k]) for k in dev.used_data_keys]
 
@@ -111,6 +128,10 @@ def load():
 
   # And finally, run it.
   cost = trainer()
+
+
+def test_load():
+  load()
 
 
 def test_1():
