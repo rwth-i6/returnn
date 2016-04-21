@@ -34,6 +34,11 @@ class SprintSubprocessInstance:
     """
     assert os.path.exists(sprintExecPath)
     self.sprintExecPath = sprintExecPath
+    if sprintConfigStr.startswith("config:"):
+      from Config import get_global_config
+      config = get_global_config()
+      assert config
+      sprintConfigStr = config.typed_dict[sprintConfigStr[len("config:"):]]
     self.sprintConfig = eval_shell_str(sprintConfigStr)
     self.child_pid = None
     self.parent_pid = os.getpid()
