@@ -342,13 +342,12 @@ class RecurrentUnitLayer(Layer):
       if isinstance(n_dec,float):
         source_index = encoder[0].index if encoder else base[0].index
         lengths = T.cast(T.ceil(T.sum(T.cast(source_index,'float32'),axis=0) * n_dec), 'int32')
-        if n_dec <= 1.0:
-          idx, _ = theano.map(lambda l_i, l_m:T.concatenate([T.ones((l_i,),'int8'),T.zeros((l_m-l_i,),'int8')]),
-                              [lengths], [T.max(lengths)+1])
-          self.index = idx.dimshuffle(1,0)[:-1]
-        else:
-          self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
+        idx, _ = theano.map(lambda l_i, l_m:T.concatenate([T.ones((l_i,),'int8'),T.zeros((l_m-l_i,),'int8')]),
+                            [lengths], [T.max(lengths)+1])
+        self.index = idx.dimshuffle(1,0)[:-1]
         n_dec = T.cast(T.ceil(T.cast(source_index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
+      else:
+        self.index = T.alloc(numpy.cast[numpy.int8](1), n_dec, self.index.shape[1])
     else:
       n_dec = self.index.shape[0]
     # initialize recurrent weights
