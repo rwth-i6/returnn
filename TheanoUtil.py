@@ -595,9 +595,10 @@ class DumpOp(theano.Op):
   __props__ = ("filename", "with_grad")
   view_map = {0: [0]}
 
-  def __init__(self, filename, with_grad=True, parent=None):
+  def __init__(self, filename, container=None, with_grad=True, parent=None):
     super(DumpOp, self).__init__()
     self.filename = filename
+    self.container = container
     self.with_grad = with_grad
     self.counter = 0
     self.parent = parent
@@ -621,9 +622,13 @@ class DumpOp(theano.Op):
 
   def dump(self, x):
     filename = self.get_full_filename()
-    import os, numpy
-    assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
-    numpy.save(filename, x)
+    if self.container is not None:
+      assert filename not in self.container
+      self.container[filename] = x.copy()
+    else:
+      import os, numpy
+      assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
+      numpy.save(filename, x)
 
   def get_full_filename(self):
     counter = self.get_counter()

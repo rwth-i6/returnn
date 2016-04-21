@@ -22,7 +22,7 @@ class SprintSubprocessInstance:
     "init", name, version -> "ok", child_name, version
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
-      Numpy arrays encoded via Numpy fromstring/tostring.
+      Numpy arrays encoded via Numpy dumps/loads.
   """
 
   Version = 1  # increase when some protocol changes
@@ -34,6 +34,11 @@ class SprintSubprocessInstance:
     """
     assert os.path.exists(sprintExecPath)
     self.sprintExecPath = sprintExecPath
+    if sprintConfigStr.startswith("config:"):
+      from Config import get_global_config
+      config = get_global_config()
+      assert config
+      sprintConfigStr = config.typed_dict[sprintConfigStr[len("config:"):]]
     self.sprintConfig = eval_shell_str(sprintConfigStr)
     self.child_pid = None
     self.parent_pid = os.getpid()
@@ -65,6 +70,22 @@ class SprintSubprocessInstance:
         self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
         self.child_pid = None
 
+  def _env_update_child(self):
+    theano_flags = {key: value for (key, value)
+                    in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+
+    # First set some sane default for compile dir.
+    theano_flags.setdefault("compiledir_format",
+                            "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
+    compiledir_format = theano_flags["compiledir_format"]
+    p = compiledir_format.find("--dev-")  # Device.startProc might have added that.
+    if p >= 0: compiledir_format = compiledir_format[:p]
+    compiledir_format += "--sprint-sub"
+    theano_flags["compiledir_format"] = compiledir_format
+    theano_flags["device"] = "cpu"  # Force CPU.
+    theano_flags["force_device"] = True
+    os.environ["THEANO_FLAGS"] = ",".join(["%s=%s" % (key, value) for (key, value) in sorted(theano_flags.items())])
+
   def _start_child(self):
     assert self.child_pid is None
     self.pipe_c2p = self._pipe_open()
@@ -75,6 +96,7 @@ class SprintSubprocessInstance:
     pid = os.fork()
     if pid == 0:  # child
       try:
+        self._env_update_child()
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
@@ -159,16 +181,16 @@ class SprintSubprocessInstance:
     :rtype (float, numpy.ndarray)
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     """
-    posteriors_str = posteriors.astype('float32').tostring()
+    posteriors_str = posteriors.astype('float32').dumps()
     try:
       self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors_str))
       ret = self._read()
     except (IOError, EOFError):
       raise
-    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % ret
+    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret, )
     loss = ret[1]
     error_signal_str = ret[2]
-    error_signal = numpy.fromstring(error_signal_str, dtype="float32")
+    error_signal = numpy.loads(error_signal_str)
     assert error_signal.shape == posteriors.shape
     return loss, error_signal
 
@@ -209,15 +231,15 @@ class SprintSubprocessInstance:
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
     for b in range(n_batch):
       loss, error_signal = self.get_loss_and_error_signal(
-        seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:, b])
+        seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:seq_lengths[b], b])
       batch_loss[b] = loss
-      batch_error_signal[:, b] = error_signal
+      batch_error_signal[:seq_lengths[b], b] = error_signal
     return batch_loss, batch_error_signal
 
 
 class SprintErrorSigOp(theano.Op):
   """
-  Op: posteriors, seq_lengths -> loss, error signal
+  Op: posteriors, seq_lengths -> loss, error signal (grad w.r.t. z, i.e. before softmax is applied)
   """
 
   __props__ = ("target", "sprint_opts")

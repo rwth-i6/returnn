@@ -165,8 +165,8 @@ class PythonControl:
     self.error_signal = None
     self.loss = None
 
-  def _send(self, dataType, args=None):
-    Pickler(self.pipe_c2p).dump((dataType, args))
+  def _send(self, data):
+    Pickler(self.pipe_c2p).dump(data)
     self.pipe_c2p.flush()
 
   def _read(self):
@@ -184,8 +184,19 @@ class PythonControl:
     assert version == self.Version
     return "SprintControl", self.Version
 
-  def handle_get_loss_and_error_signal(self, seg_name, seg_len, posteriors_str):
-    posteriors = numpy.fromstring(posteriors_str, dtype="float32")
+  def handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors_str):
+    """
+    :param str seg_name: seg name
+    :param int seg_len: the segment length in frames
+    :param str posteriors_str: numpy.ndarray as str, 2d (time,label) float array
+
+    See SprintErrorSignals.SprintSubprocessInstance.get_loss_and_error_signal().
+    """
+    assert isinstance(seg_len, (int, long))
+    assert seg_len > 0
+    posteriors = numpy.loads(posteriors_str)
+    assert posteriors.ndim == 2
+    assert posteriors.shape[0] == seg_len
     with self.cond:
       self.have_new_seg = True
       self.have_new_error_signal = False
@@ -198,10 +209,11 @@ class PythonControl:
       self.notified_for_segment = False
       self.cond.notifyAll()
     loss, error_signal = self.callback("get_loss_and_error_signal", seg_name, seg_len, posteriors)
+    assert error_signal.shape == posteriors.shape
     with self.cond:
       self.have_new_error_signal = True
       self.cond.notifyAll()
-    error_signal_str = posteriors.astype('float32').tostring()
+    error_signal_str = error_signal.astype('float32').dumps()
     return loss, error_signal_str
 
   def handle_cmd(self, cmd, *args):
@@ -209,12 +221,15 @@ class PythonControl:
     return func(*args)
 
   def handle_next(self):
+    import sys
     args = self._read()
     try:
       if not isinstance(args, tuple): raise TypeError("expected tuple but got %r" % args)
       if len(args) < 1: raise Exception("need multiple args (cmd, ...)")
       res = self.handle_cmd(*args)
     except Exception as e:
+      print("CRNN PythonControl handle_next exception")
+      sys.excepthook(*sys.exc_info())
       self._send(("exception", str(e)))
     else:
       assert isinstance(res, tuple)
@@ -223,7 +238,7 @@ class PythonControl:
   # Called by Sprint.
   def run_control_loop(self, callback, **kwargs):
     print("CRNN PythonControl run_control_loop: %r, %r" % (callback, kwargs))
-    print(">> Version: %r" % callback("version"))
+    print("CRNN PythonControl run_control_loop control: %r" % callback("version"))
     self.callback = callback
     with self.cond:
       assert not self.control_loop_started
@@ -343,7 +358,7 @@ class PythonControl:
             return  # no more segments
           self.cond.wait(timeout=1)
 
-      # We got a new segment name from the parent CRNN process (via self.handle_get_loss_and_error_signal()).
+      # We got a new segment name from the parent CRNN process (via self.handle_cmd_get_loss_and_error_signal()).
       # We wait in this segment because we wait to get the error signal from Sprint (via SprintNnPythonLayer.backpropagate()).
       # Sprint waits currently for us to get the new segment (in the PythonSegmentOrder code).
       # Once it gets it, it will call SprintNnPythonLayer.forward(), then calculate the loss and error signal
@@ -354,14 +369,14 @@ class PythonControl:
       # When we are back here, Sprint asks for the next segment.
       # It means that is has finished any processing with this segment.
       with self.cond:
-        # See self.handle_get_loss_and_error_signal().
+        # See self.handle_cmd_get_loss_and_error_signal().
         # We are still stuck in there in the other thread, if not self.have_new_error_signal.
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
         if not self.have_new_error_signal:
-          print "CRNN SprintControl skip segment:", self.seg_name
+          print "CRNN SprintControl getSegmentList, no error signal, skip segment:", self.seg_name
           if not self.notified_for_segment:
-            print "Do you use PythonControl in the Sprint trainer?"
+            print "CRNN SprintControl getSegmentList: Do you use PythonControl in the Sprint trainer? Got no segment notification."
           if not self.asked_for_posteriors:
-            print "Do you use PythonLayer in Sprint?"
+            print "CRNN SprintControl getSegmentList: Do you use PythonLayer in Sprint? Did not get asked for posteriors."
           self.skip_segment_loss_and_error()

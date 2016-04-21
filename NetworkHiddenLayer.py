@@ -2832,6 +2832,9 @@ class NativeLayer(_NoOpLayer):
 
 class DumpLayer(_NoOpLayer):
   layer_class = "dump"
+  # You can set this var to a dict to get the content in there
+  # instead of being written to disc.
+  global_debug_container = None
 
   def __init__(self, filename, with_grad=True, n_out=None, **kwargs):
     super(DumpLayer, self).__init__(**kwargs)
@@ -2844,5 +2847,5 @@ class DumpLayer(_NoOpLayer):
 
     if self.train_flag:
       from TheanoUtil import DumpOp
-      self.output = DumpOp(filename, with_grad=with_grad)(self.output)
-      self.index = DumpOp(filename + ".index", with_grad=False)(self.index)
+      self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
+      self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
