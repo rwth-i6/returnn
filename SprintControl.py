@@ -194,7 +194,7 @@ class PythonControl:
     """
     assert isinstance(seg_len, (int, long))
     assert seg_len > 0
-    posteriors = numpy.fromstring(posteriors_str, dtype="float32")
+    posteriors = numpy.loads(posteriors_str)
     assert posteriors.ndim == 2
     assert posteriors.shape[0] == seg_len
     with self.cond:
@@ -213,7 +213,7 @@ class PythonControl:
     with self.cond:
       self.have_new_error_signal = True
       self.cond.notifyAll()
-    error_signal_str = error_signal.astype('float32').tostring()
+    error_signal_str = error_signal.astype('float32').dumps()
     return loss, error_signal_str
 
   def handle_cmd(self, cmd, *args):
@@ -228,7 +228,7 @@ class PythonControl:
       if len(args) < 1: raise Exception("need multiple args (cmd, ...)")
       res = self.handle_cmd(*args)
     except Exception as e:
-      print("CRNN PythonControl handle_next %r exception: %s" % (args, e))
+      print("CRNN PythonControl handle_next exception")
       sys.excepthook(*sys.exc_info())
       self._send(("exception", str(e)))
     else:
@@ -374,9 +374,9 @@ class PythonControl:
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
         if not self.have_new_error_signal:
-          print "CRNN SprintControl segment_list_iterator, no error signal, skip segment:", self.seg_name
+          print "CRNN SprintControl getSegmentList, no error signal, skip segment:", self.seg_name
           if not self.notified_for_segment:
-            print "Do you use PythonControl in the Sprint trainer? Got no segment notification."
+            print "CRNN SprintControl getSegmentList: Do you use PythonControl in the Sprint trainer? Got no segment notification."
           if not self.asked_for_posteriors:
-            print "Do you use PythonLayer in Sprint? Did not get asked for posteriors."
+            print "CRNN SprintControl getSegmentList: Do you use PythonLayer in Sprint? Did not get asked for posteriors."
           self.skip_segment_loss_and_error()

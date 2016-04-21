@@ -22,7 +22,7 @@ class SprintSubprocessInstance:
     "init", name, version -> "ok", child_name, version
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
-      Numpy arrays encoded via Numpy fromstring/tostring.
+      Numpy arrays encoded via Numpy dumps/loads.
   """
 
   Version = 1  # increase when some protocol changes
@@ -181,7 +181,7 @@ class SprintSubprocessInstance:
     :rtype (float, numpy.ndarray)
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     """
-    posteriors_str = posteriors.astype('float32').tostring()
+    posteriors_str = posteriors.astype('float32').dumps()
     try:
       self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors_str))
       ret = self._read()
@@ -190,7 +190,7 @@ class SprintSubprocessInstance:
     assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret, )
     loss = ret[1]
     error_signal_str = ret[2]
-    error_signal = numpy.fromstring(error_signal_str, dtype="float32")
+    error_signal = numpy.loads(error_signal_str)
     assert error_signal.shape == posteriors.shape
     return loss, error_signal
 
@@ -231,9 +231,9 @@ class SprintSubprocessInstance:
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
     for b in range(n_batch):
       loss, error_signal = self.get_loss_and_error_signal(
-        seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:, b])
+        seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:seq_lengths[b], b])
       batch_loss[b] = loss
-      batch_error_signal[:, b] = error_signal
+      batch_error_signal[:seq_lengths[b], b] = error_signal
     return batch_loss, batch_error_signal
 
 
