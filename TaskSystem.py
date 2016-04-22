@@ -388,15 +388,6 @@ class ExecingProcess:
     self.pipe_p2c = pipeOpen()
     self.parent_pid = os.getpid()
     pid = os.fork()
-    flags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-    if 'base_compiledir' in flags:
-      offset = flags['base_compiledir'].find("_-_", 1)
-      if offset > 1:
-        flags['base_compiledir'] = flags['base_compiledir'][:offset]
-      flags['base_compiledir'] += '_-_' + self.name.replace(' ','_')
-    else:
-      flags['base_compiledir'] = '/tmp/theano/' + self.name.replace(' ','_')
-    os.environ["THEANO_FLAGS"] = ",".join(["=".join(x) for x in flags.items()])
     if pid == 0: # child
       try:
         sys.stdin.close()  # Force no tty stdin.
