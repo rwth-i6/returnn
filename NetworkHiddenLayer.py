@@ -1491,21 +1491,23 @@ class AttentionLengthLayer(HiddenLayer):
     #w_att = theano.printing.Print("w_att", attrs=['shape'])(w_att)
     #w_rbf = theano.printing.Print("w_rbf", attrs=['shape'])(w_rbf)
     #w_eos = theano.printing.Print("w_eos", attrs=['shape'])(w_eos)
-    halting = (w_act+eps) * (w_att+eps) * (w_rbf+eps) * (w_eos+eps) * T.cast(self.index, 'float32') #- (use_act+use_att+use_rbf+use_eos) * eps
+    halting = (w_act+eps) * (w_att+eps) * (w_rbf+eps) * (w_eos+eps) #* T.cast(self.index, 'float32') #- (use_act+use_att+use_rbf+use_eos) * eps
     #halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
     #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
 
     real = T.sum(T.cast(index, 'int32'), axis=0)
-    # real = theano.printing.Print("real")(real)
+    #real = theano.printing.Print("real")(real)
     exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     sse = T.sum(((exl - T.cast(real,'float32') - 1)**2) * T.cast(real,'float32'))
     #ce = -T.log(halting[real - 1, T.arange(halting.shape[1])])
     pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
-    halting = T.concatenate([halting,pad])
+    #halting = T.concatenate([halting,pad])
     #import theano.ifelse
     #halting = theano.ifelse.ifelse(T.le(T.max(real),halting.shape[0]), halting, T.concatenate([halting,pad],axis=0))
-    ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    ridx = T.arange(halting.shape[1],dtype='int32') * halting.shape[0] + (real-1).flatten()
+    ce = T.sum(-T.log(halting.flatten()[ridx]) * T.cast(real.flatten(),'float32'))
+    #ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
     self.error_val = T.sum(((T.cast(T.argmax(halting,axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
