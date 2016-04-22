@@ -1476,7 +1476,7 @@ class AttentionLengthLayer(HiddenLayer):
       if n_features > 1:
         W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
         w_att = T.dot(w_att, W_f)
-      w_att = T.exp(T.max(w_att.reshape(attention.shape), axis=2))  # NB
+      w_att = T.exp(T.sum(w_att.reshape(attention.shape), axis=2))  # NB
       w_att = w_att / T.sum(w_att, axis=0, keepdims=True)
 
     if use_rbf:
@@ -1506,7 +1506,7 @@ class AttentionLengthLayer(HiddenLayer):
     ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
-    self.error_val = T.sum(((T.cast(T.argmax(halting,axis=0),'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    self.error_val = T.sum(((T.cast(T.argmax(halting,axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
     hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
     #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
