@@ -27,10 +27,13 @@ class SprintSubprocessInstance:
 
   Version = 1  # increase when some protocol changes
 
-  def __init__(self, sprintExecPath, sprintConfigStr):
+  def __init__(self, sprintExecPath, sprintConfigStr="", sprintControlConfig=None):
     """
-    :type sprintExecPath: str
-    :type sprintConfigStr: str
+    :param str sprintExecPath: this executable will be called for the sub proc.
+    :param str sprintConfigStr: passed to Sprint as command line args.
+      can have "config:" prefix - in that case, looked up in config.
+      handled via eval_shell_str(), can thus have lazy content (if it is callable, will be called).
+    :param dict[str]|None sprintControlConfig: passed to SprintControl.init().
     """
     assert os.path.exists(sprintExecPath)
     self.sprintExecPath = sprintExecPath
@@ -40,6 +43,7 @@ class SprintSubprocessInstance:
       assert config
       sprintConfigStr = config.typed_dict[sprintConfigStr[len("config:"):]]
     self.sprintConfig = eval_shell_str(sprintConfigStr)
+    self.sprintControlConfig = sprintControlConfig
     self.child_pid = None
     self.parent_pid = os.getpid()
     # There is no generic way to see whether Python is exiting.
@@ -135,6 +139,8 @@ class SprintSubprocessInstance:
   def _build_sprint_args(self):
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
+    if self.sprintControlConfig:
+      config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
     my_mod_name = "SprintControl"
     args = [
       self.sprintExecPath,
