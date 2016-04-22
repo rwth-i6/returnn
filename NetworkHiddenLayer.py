@@ -1442,7 +1442,8 @@ class AttentionLengthLayer(HiddenLayer):
     index = kwargs['sources'][-1].target_index
     x_in, n_in = concat_sources(self.sources)
 
-    uniform = T.ones(self.index.shape,'float32') #/ T.cast(self.index.shape[0],'float32')
+    eps = T.constant(1e-10, 'float32')
+    uniform = T.ones(self.index.shape,'float32') - eps #/ T.cast(self.index.shape[0],'float32')
     w_act, w_att, w_rbf, w_eos = uniform, uniform, uniform, uniform
     if use_act:
       w_act = T.exp(self.get_linear_forward_output().reshape(self.index.shape))
@@ -1476,7 +1477,7 @@ class AttentionLengthLayer(HiddenLayer):
       if n_features > 1:
         W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
         w_att = T.dot(w_att, W_f)
-      w_att = T.exp(T.sum(w_att.reshape(attention.shape), axis=2))  # NB
+      w_att = T.exp(T.sum(w_att.reshape(attention.shape), axis=2)) # NB
       w_att = w_att / T.sum(w_att, axis=0, keepdims=True)
 
     if use_rbf:
@@ -1490,8 +1491,9 @@ class AttentionLengthLayer(HiddenLayer):
     #w_att = theano.printing.Print("w_att", attrs=['shape'])(w_att)
     #w_rbf = theano.printing.Print("w_rbf", attrs=['shape'])(w_rbf)
     #w_eos = theano.printing.Print("w_eos", attrs=['shape'])(w_eos)
-
-    halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
+    halting = (w_act+eps) * (w_att+eps) * (w_rbf+eps) * (w_eos+eps) * T.cast(self.index, 'float32') #- (use_act+use_att+use_rbf+use_eos) * eps
+    #halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
+    #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
 
     real = T.sum(T.cast(index, 'int32'), axis=0)
