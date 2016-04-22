@@ -216,10 +216,10 @@ DEF_KERNEL void lstm_kernel(float* data, const float* old_state, bool old_state_
 		float i_batch = i[batch_idx];
 
 		//input, forget and output gates
-		float inpGate = 1.f / (1.f + expf(-data[start]));
-		float fgtGate = 1.f / (1.f + expf(-data[start + n_cells]));
-		float outGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
-		float state = inpGate * tanhf(data[start + 3 * n_cells]);
+		float inpGate = 1.f / (1.f + expf(-data[start + n_cells]));
+		float fgtGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
+		float outGate = 1.f / (1.f + expf(-data[start + 3 * n_cells]));
+		float state = inpGate * tanhf(data[start]);
 		float old_state_batch = old_state_strided ? old_state[start] : old_state[idx];
 
 		state += fgtGate * old_state_batch;
@@ -228,10 +228,10 @@ DEF_KERNEL void lstm_kernel(float* data, const float* old_state, bool old_state_
 		//cell output
 		output[idx] = outGate * tanhf(state) * i_batch;
 
-		data[start] = inpGate;
-		data[start + n_cells] = fgtGate;
-		data[start + 2 * n_cells] = outGate;
-		data[start + 3 * n_cells] = state;
+		data[start] = state;
+		data[start + n_cells] = inpGate;
+		data[start + 2 * n_cells] = fgtGate;
+		data[start + 3 * n_cells] = outGate;
 		if(state_out)
 		    state_out[idx] = state;
 
@@ -259,11 +259,11 @@ DEF_KERNEL void lstm_bwd_kernel(
 		int start = batch_offset + cell_offset;
 		float i_batch = i[batch_idx];
 
-		float inpGate = delta[start];
-		float fgtGate = delta[start + n_cells];
-		float outGate = delta[start + 2 * n_cells];
+		float inpGate = delta[start + n_cells];
+		float fgtGate = delta[start + 2 * n_cells];
+		float outGate = delta[start + 3 * n_cells];
 		float oldState = old_state_strided ? old_state[start] : old_state[idx];
-		float state = delta[start + 3 * n_cells];
+		float state = delta[start];
 		float eps = epsilon[idx];
 
 		//avoid division by 0 (TODO: check if this is needed)
@@ -275,7 +275,7 @@ DEF_KERNEL void lstm_bwd_kernel(
 			gzc = (state - fgtGate * oldState) / inpGate;
 
 		//delta_output
-		delta[start + 2 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
+		delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
 
 		//epsilon_c
 		float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
@@ -283,13 +283,13 @@ DEF_KERNEL void lstm_bwd_kernel(
 		epsilon[idx] = epsilon_c * fgtGate * i_batch + next_epsilon[idx] * (1.f - i_batch);
 
 		//delta_cell
-		delta[start + 3 * n_cells] = inpGate * (1.f - (gzc * gzc)) * epsilon_c * i_batch;
+		delta[start] = inpGate * (1.f - (gzc * gzc)) * epsilon_c * i_batch;
 
 		//delta_forget
-		delta[start + n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c * i_batch;
+		delta[start + 2 * n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c * i_batch;
 
 		//delta_input
-		delta[start] = inpGate * (1.f - inpGate) * gzc * epsilon_c * i_batch;
+		delta[start + n_cells] = inpGate * (1.f - inpGate) * gzc * epsilon_c * i_batch;
 
 		idx += gridDim.x * blockDim.x;
 	}
@@ -305,7 +305,7 @@ void do_lstm(/*out*/Ndarray* H, /*out*/Ndarray* out, Ndarray* prev,
 
 	float* data_H = data_ptr(H, x);
 	const float* data_prev = Ndarray_DEV_DATA(prev);
-	const float* data_old_state = x > 0 ? data_ptr(H, x - 1) + 3 * n_cells : data_prev;
+	const float* data_old_state = x > 0 ? data_ptr(H, x - 1) : data_prev;
 	float* data_out = data_ptr(out, x);
 	const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
 	start_dev_kernel(lstm_kernel, (data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i));
@@ -324,7 +324,7 @@ void do_lstm_bwd(/*out*/Ndarray* delta, /*out*/Ndarray* epsilon, Ndarray* Y, Nda
 	float * data_delta = data_ptr(delta, x);
 	float * data_epsilon = data_ptr(epsilon, x);
 	const float * data_next_epsilon = rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(epsilon, x + 1);
-	const float * data_old_state = x > 0 ? data_ptr(delta, x - 1) + 3 * n_cells : Ndarray_DEV_DATA(c);
+	const float * data_old_state = x > 0 ? data_ptr(delta, x - 1) : Ndarray_DEV_DATA(c);
 	const float * data_Y = data_ptr(Y, x);
 	const float * data_i = Ndarray_DEV_DATA(i) + x * n_batch;
 	start_dev_kernel(lstm_bwd_kernel, (
