@@ -152,7 +152,8 @@ class SprintSubprocessInstance:
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
       "--*.python-segment-order-pymod-name=%s" % my_mod_name,
-      "--*.python-segment-order-config=%s" % config_str
+      "--*.python-segment-order-config=%s" % config_str,
+      "--*.python-segment-order-allow-copy=false"
     ]
     args += self.sprintConfig
     return args
