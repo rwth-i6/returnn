@@ -202,16 +202,6 @@ class Device(object):
     # See also the comment in TaskSystem.ExecingProcess.
     theano_flags = {key: value for (key, value)
                     in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-
-    # Set base_compiledir.
-    if 'base_compiledir' in theano_flags:
-      offset = theano_flags['base_compiledir'].find("_-_", 1)
-      if offset > 1:
-        theano_flags['base_compiledir'] = theano_flags['base_compiledir'][:offset]
-      theano_flags['base_compiledir'] += '_-_' + self.name
-    else:
-      theano_flags['base_compiledir'] = '/tmp/theano/' + self.name
-
     # First set some sane default for compile dir.
     theano_flags.setdefault("compiledir_format",
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
