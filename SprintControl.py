@@ -18,6 +18,7 @@ from TaskSystem import Pickler, Unpickler
 from threading import RLock, Condition
 
 
+Verbose = False
 
 rnn.initBetterExchook()
 Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
@@ -26,10 +27,14 @@ rnn.initThreadJoinHack()
 # Start Sprint PythonControl interface. {
 
 def init(name, reference, config, **kwargs):
-  print("CRNN SprintControl init: %r, %r, %r, %r" % (name, reference, config, kwargs))
+  print("CRNN SprintControl init: name=%r, ref=%r, config=%r, kwargs=%r" % (name, reference, config, kwargs))
 
   config = config.split(",")
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
+
+  global Verbose
+  if bool(config.get("verbose", False)):
+    Verbose = True
 
   # Remaining Sprint interface is in this PythonControl instance.
   return PythonControl.create(c2p_fd=int(config["c2p_fd"]), p2c_fd=int(config["p2c_fd"]))
@@ -39,7 +44,7 @@ def init(name, reference, config, **kwargs):
 # Start Sprint PythonSegmentOrder interface. {
 
 def getSegmentList(corpusName, segmentList, config, **kwargs):
-  print("CRNN SprintControl getSegmentList: %r, %r" % (corpusName, config))
+  print("CRNN SprintControl getSegmentList: corpus=%r, config=%r" % (corpusName, config))
 
   # If we were not initialized via PythonControl interface, this will initialize us
   # and setup the communication channel (PythonControl).
@@ -63,7 +68,7 @@ class SprintNnPythonLayer:
     self.output_size = None
 
   def setInputDimension(self, stream, size):
-    print("SprintNnPythonLayer.setInputDimension: %r, %r" % (stream, size))
+    print("SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (stream, size))
     assert stream == 0, "we only support a single input stream (for now)"
     self.input_size = size
 
@@ -197,6 +202,7 @@ class PythonControl:
     posteriors = numpy.loads(posteriors_str)
     assert posteriors.ndim == 2
     assert posteriors.shape[0] == seg_len
+    if Verbose: print("CRNN PythonControl handle_cmd_get_loss_and_error_signal: name=%r, len=%r" % (seg_name, seg_len))
     with self.cond:
       self.have_new_seg = True
       self.have_new_error_signal = False
@@ -255,10 +261,13 @@ class PythonControl:
     print("CRNN PythonControl exit: %r" % kwargs)
 
   def check_control_loop_running(self):
-    if self.control_loop_started: return
+    if self.control_loop_started:
+      if Verbose: print("CRNN PythonControl check_control_loop_running: already running")
+      return
     self.run_threaded_control_loop()
 
   def run_threaded_control_loop(self):
+    if Verbose: print("CRNN PythonControl run_threaded_control_loop")
     from threading import Thread
     def control_loop():
       self.run_control_loop(self.own_callback)
@@ -349,9 +358,12 @@ class PythonControl:
 
     while True:  # outer loop
       # wait until we get new segment
+      seg_name = None
       while True:
         with self.cond:
           if self.have_new_seg:
+            assert self.seg_name
+            seg_name = self.seg_name
             self.have_new_seg = False
             break
           if self.control_loop_exited:
@@ -363,8 +375,8 @@ class PythonControl:
       # Sprint waits currently for us to get the new segment (in the PythonSegmentOrder code).
       # Once it gets it, it will call SprintNnPythonLayer.forward(), then calculate the loss and error signal
       # and then call SprintNnPythonLayer.backpropagate().
-      assert self.seg_name
-      yield self.seg_name
+      if Verbose: print("CRNN SprintControl getSegmentList, yield %r" % seg_name)
+      yield seg_name
 
       # When we are back here, Sprint asks for the next segment.
       # It means that is has finished any processing with this segment.
@@ -374,7 +386,11 @@ class PythonControl:
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
         if not self.have_new_error_signal:
-          print "CRNN SprintControl getSegmentList, no error signal, skip segment:", self.seg_name
+          print "CRNN SprintControl getSegmentList, no error signal, skip segment:", seg_name
+          if Verbose:
+            # Print Sprint stacktrace.
+            import signal, os
+            os.kill(os.getpid(), signal.SIGUSR1)
           if not self.notified_for_segment:
             print "CRNN SprintControl getSegmentList: Do you use PythonControl in the Sprint trainer? Got no segment notification."
           if not self.asked_for_posteriors:
