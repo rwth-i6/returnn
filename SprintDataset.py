@@ -2,6 +2,7 @@ import thread
 from threading import Condition, currentThread
 import math
 import time
+import numpy
 
 from Dataset import Dataset, DatasetSeq
 from Log import log
@@ -27,9 +28,18 @@ class SprintDataset(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, window=1, *args, **kwargs):
+  def __init__(self, window=1, target_maps=None, **kwargs):
     assert window == 1
-    super(SprintDataset, self).__init__(window, *args, **kwargs)
+    super(SprintDataset, self).__init__(**kwargs)
+    if target_maps:
+      assert isinstance(target_maps, dict)
+      target_maps = target_maps.copy()
+      for key, tmap in list(target_maps.items()):
+        if isinstance(tmap, (str, unicode)):
+          tmap = {l: i for (i, l) in enumerate(open(tmap).read().splitlines())}
+        assert isinstance(tmap, dict)  # dict[str,int]
+        target_maps[key] = tmap
+    self.target_maps = target_maps
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -202,7 +212,7 @@ class SprintDataset(Dataset):
     Adds a new seq.
     This is called via the Sprint main thread.
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-    :param dict[str,numpy.ndarray] targets: format (time) (idx of output-feature)
+    :param dict[str,numpy.ndarray|str] targets: format (time) (idx of output-feature)
     :returns the sorted seq index
     :rtype: int
     """
@@ -221,6 +231,15 @@ class SprintDataset(Dataset):
     if "classes" in targets:
       # 'classes' is always the alignment
       assert targets["classes"].shape == (T,)  # is in format (time,)
+
+    if self.target_maps:
+      for key, tmap in self.target_maps.items():
+        assert key in targets
+        v = tmap[targets[key]]
+        v = numpy.asarray(v)
+        if v.ndim == 0:
+          v = numpy.zeros((T,), dtype=v.dtype) + v  # add time dimension
+        targets[key] = v
 
     with self.lock:
       # This gets called in the Sprint main thread.
