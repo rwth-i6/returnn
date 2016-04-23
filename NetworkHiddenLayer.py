@@ -1424,7 +1424,7 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(HiddenLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=0.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=False, use_att=True, use_rbf=True, use_eos=False, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=False, use_att=True, use_rbf=True, use_eos=False, **kwargs):
     kwargs['n_out'] = 1
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.set_attr('use_real', use_real)
@@ -1471,14 +1471,14 @@ class AttentionLengthLayer(HiddenLayer):
       l = numpy.sqrt(6. / (filter[0]*filter[1]*n_features))
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
       F = self.add_param(self.shared(value=values, name="F"))
-      w_att = T.nnet.conv2d(border_mode='full',
+      conv_out = T.nnet.conv2d(border_mode='full',
                             input=attention.dimshuffle(1,'x',2,0), # B1TN
                             filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
       if n_features > 1:
         W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
-        w_att = T.dot(w_att, W_f)
-      w_att = T.exp(T.sum(w_att.reshape(attention.shape), axis=2)) # NB
-      w_att = w_att / T.sum(w_att, axis=0, keepdims=True)
+        conv_out = T.dot(conv_out, W_f)
+      conv_out = T.exp(T.sum(conv_out.reshape(attention.shape), axis=2)) # NB
+      w_att = conv_out / T.sum(conv_out, axis=0, keepdims=True)
 
     if use_rbf:
       x =  T.arange(nT,dtype='float32').dimshuffle(0, 'x').repeat(self.index.shape[1],axis=1)
@@ -1492,6 +1492,7 @@ class AttentionLengthLayer(HiddenLayer):
     #w_rbf = theano.printing.Print("w_rbf", attrs=['shape'])(w_rbf)
     #w_eos = theano.printing.Print("w_eos", attrs=['shape'])(w_eos)
     halting = (w_act+eps) * (w_att+eps) * (w_rbf+eps) * (w_eos+eps) #* T.cast(self.index, 'float32') #- (use_act+use_att+use_rbf+use_eos) * eps
+    #halting = ((w_att+eps) + (w_eos+eps)) * (w_rbf+eps)
     #halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
     #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
@@ -1501,17 +1502,17 @@ class AttentionLengthLayer(HiddenLayer):
     exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
     sse = T.sum(((exl - T.cast(real,'float32') - 1)**2) * T.cast(real,'float32'))
     #ce = -T.log(halting[real - 1, T.arange(halting.shape[1])])
-    pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
-    #halting = T.concatenate([halting,pad])
+    pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
+    halting = T.concatenate([halting,pad])
     #import theano.ifelse
     #halting = theano.ifelse.ifelse(T.le(T.max(real),halting.shape[0]), halting, T.concatenate([halting,pad],axis=0))
-    ridx = T.arange(halting.shape[1],dtype='int32') * halting.shape[0] + (real-1).flatten()
-    ce = T.sum(-T.log(halting.flatten()[ridx]) * T.cast(real.flatten(),'float32'))
-    #ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    #ridx = T.arange(halting.shape[1],dtype='int32') * halting.shape[0] + (real-1).flatten()
+    #ce = T.sum(-T.log(halting.flatten()[ridx]) * T.cast(real.flatten(),'float32'))
+    ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
-    self.error_val = T.sum(((T.cast(T.argmax(halting,axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
-    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    hyp = (rho * T.cast(T.argmax(halting[:self.index.shape[0]],axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
     #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
