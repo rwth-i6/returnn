@@ -1424,7 +1424,7 @@ class LengthProjectionLayer(HiddenLayer):
 
 class AttentionLengthLayer(HiddenLayer):
   layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=False, use_att=True, use_rbf=True, use_eos=False, **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=True, use_att=False, use_rbf=False, use_eos=False, **kwargs):
     kwargs['n_out'] = 1
     super(AttentionLengthLayer, self).__init__(**kwargs)
     self.set_attr('use_real', use_real)
