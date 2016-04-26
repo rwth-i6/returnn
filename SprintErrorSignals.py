@@ -184,7 +184,7 @@ class SprintSubprocessInstance:
     """
     :param str seg_name: the segment name (seq_tag)
     :param int seg_len: the segment length in frames
-    :param numpy.ndarray posteriors: 2d (time,label) float array
+    :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
     :rtype (float, numpy.ndarray)
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     """
@@ -246,7 +246,7 @@ class SprintSubprocessInstance:
 
 class SprintErrorSigOp(theano.Op):
   """
-  Op: posteriors, seq_lengths -> loss, error signal (grad w.r.t. z, i.e. before softmax is applied)
+  Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
   """
 
   __props__ = ("target", "sprint_opts")
@@ -257,11 +257,11 @@ class SprintErrorSigOp(theano.Op):
     self.sprint_opts = make_hashable(sprint_opts)
     self.sprint_instance = None
 
-  def make_node(self, posteriors, seq_lengths):
-    log_posteriors = T.log(theano.tensor.as_tensor_variable(posteriors))
+  def make_node(self, log_posteriors, seq_lengths):
+    log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
     seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
     assert seq_lengths.ndim == 1  # vector of seqs lengths
-    return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), posteriors.type()])
+    return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
   def perform(self, node, inputs, output_storage):
     log_posteriors, seq_lengths = inputs

@@ -269,7 +269,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, normalize=True, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -278,6 +278,9 @@ class SequenceOutputLayer(OutputLayer):
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
+    self.normalize = normalize
+    if not normalize:
+      self.set_attr("normalize", normalize)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -305,8 +308,12 @@ class SequenceOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+      if self.normalize:
+        log_probs = T.log(self.p_y_given_x)
+      else:
+        log_probs = self.z
       sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
-      err, grad = sprint_error_op(self.p_y_given_x, T.sum(self.index, axis=0))
+      err, grad = sprint_error_op(log_probs, T.sum(self.index, axis=0))
       err = err.sum()
       if self.ce_smoothing:
         err *= numpy.float32(1.0 - self.ce_smoothing)
