@@ -101,7 +101,7 @@ class SprintNnPythonLayer:
     :param input: tuple of input matrices of format (input_size,time). we ignore them.
     :return: single output matrix of format (output_size,time)
     """
-    print("SprintNnPythonLayer.forward: %s" % input[0].shape if input else repr(input)[:10])
+    print("SprintNnPythonLayer.forward: %s" % (input[0].shape,) if input else repr(input)[:10])
     assert len(input) == 1
     assert input[0].ndim == 2
     assert input[0].shape[0] == self.input_size
@@ -115,7 +115,7 @@ class SprintNnPythonLayer:
     :param errorSignalIn: matrix of format (output_size,time)
     :return: tuple of matrices of format (input_size,time)
     """
-    print("SprintNnPythonLayer.backpropagate: %r" % errorSignalIn.shape)
+    print("SprintNnPythonLayer.backpropagate: %r" % (errorSignalIn.shape,))
     assert errorSignalIn.ndim == 2
     assert errorSignalIn.shape[0] == self.output_size
     seg_len = errorSignalIn.shape[1]
@@ -143,7 +143,7 @@ class PythonControl:
 
   @classmethod
   def create(cls, **kwargs):
-    print "PythonControl init", kwargs
+    print "CRNN PythonControl init", kwargs
     if cls.instance: return cls.instance
     return PythonControl(**kwargs)
 
