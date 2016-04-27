@@ -269,7 +269,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, loss_like_ce=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -281,6 +281,9 @@ class SequenceOutputLayer(OutputLayer):
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
+    self.loss_like_ce = loss_like_ce
+    if loss_like_ce:
+      self.set_attr("loss_like_ce", loss_like_ce)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -315,6 +318,9 @@ class SequenceOutputLayer(OutputLayer):
       sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
       err, grad = sprint_error_op(log_probs, T.sum(self.index, axis=0))
       err = err.sum()
+      if self.loss_like_ce:
+        y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
+        err = -T.sum(T.log(T.pow(self.p_y_given_x, y_ref)) * T.cast(self.index, "float32").dimshuffle(0, 1, 'x'))
       if self.ce_smoothing:
         err *= numpy.float32(1.0 - self.ce_smoothing)
         grad *= numpy.float32(1.0 - self.ce_smoothing)
