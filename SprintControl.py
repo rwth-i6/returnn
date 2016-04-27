@@ -378,6 +378,17 @@ class PythonControl:
       if Verbose: print("CRNN SprintControl getSegmentList, yield %r" % seg_name)
       yield seg_name
 
+      # We might need to wait for the control loop thread.
+      while True:
+        with self.cond:
+          if self.have_new_error_signal:
+            break
+          if self.control_loop_exited:
+            break
+          if self.loss is not None and self.error_signal is not None:
+            if Verbose: print "CRNN SprintControl getSegmentList: wait for control loop to handle error signal"
+            self.cond.wait(timeout=1)
+
       # When we are back here, Sprint asks for the next segment.
       # It means that is has finished any processing with this segment.
       with self.cond:
