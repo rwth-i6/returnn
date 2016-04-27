@@ -267,11 +267,11 @@ class SprintErrorSigOp(theano.Op):
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
-      print >> log.v1, 'log_posteriors contain NaN!'
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain NaN!'
     if numpy.isinf(log_posteriors).any():
-      print >> log.v1, 'log_posteriors contain Inf!'
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain Inf!'
       numpy.set_printoptions(threshold=numpy.nan)
-      print >> log.v1, 'log_posteriors:', log_posteriors
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors:', log_posteriors
 
     if self.sprint_instance is None:
       print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
@@ -282,4 +282,4 @@ class SprintErrorSigOp(theano.Op):
     output_storage[0][0] = loss
     output_storage[1][0] = errsig
 
-    print >> log.v5, 'avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+    print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
