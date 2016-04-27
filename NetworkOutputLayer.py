@@ -269,7 +269,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, normalize=True, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -278,9 +278,9 @@ class SequenceOutputLayer(OutputLayer):
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
-    self.normalize = normalize
-    if not normalize:
-      self.set_attr("normalize", normalize)
+    self.exp_normalize = exp_normalize
+    if not exp_normalize:
+      self.set_attr("exp_normalize", exp_normalize)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -308,7 +308,7 @@ class SequenceOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      if self.normalize:
+      if self.exp_normalize:
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
