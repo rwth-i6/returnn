@@ -397,6 +397,8 @@ class PythonControl:
           if self.loss is not None and self.error_signal is not None:
             if Verbose: print "CRNN SprintControl getSegmentList: wait for control loop to handle error signal"
             self.cond.wait(timeout=1)
+          else:
+            break
 
       # When we are back here, Sprint asks for the next segment.
       # It means that is has finished any processing with this segment.
