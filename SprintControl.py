@@ -13,10 +13,15 @@ print("CRNN SprintControl Python module load")
 import rnn
 import Debug
 import os
+import sys
 import numpy
 from TaskSystem import Pickler, Unpickler
 from threading import RLock, Condition
 
+
+# Do line-based buffering for stdout.
+sys.stdout.flush()
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
 
 Verbose = False
 
