@@ -250,11 +250,13 @@ class PythonControl:
       assert not self.control_loop_started
       self.control_loop_started = True
       self.cond.notifyAll()
-    while True:
-      self.handle_next()
-    with self.cond:
-      self.control_loop_exited = False
-      self.cond.notifyAll()
+    try:
+      while True:
+        self.handle_next()
+    finally:
+      with self.cond:
+        self.control_loop_exited = True
+        self.cond.notifyAll()
 
   # Called by Sprint.
   def exit(self, **kwargs):
