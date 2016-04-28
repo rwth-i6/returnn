@@ -666,6 +666,9 @@ class Device(object):
     asyncChildGlobalDevice = self
     deviceInstance = self
     try:
+      # Do line-based buffering for stdout.
+      sys.stdout.flush()
+      sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
       import rnn
