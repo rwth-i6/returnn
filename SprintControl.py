@@ -311,6 +311,7 @@ class PythonControl:
     with self.cond:
       assert self.seg_name == segment_name
       self.notified_for_segment = True
+      self.cond.notifyAll()
 
   # Called by Sprint.
   def notify_segment_loss(self, segment_name, loss):
@@ -326,6 +327,7 @@ class PythonControl:
       assert self.seg_len == seg_len
       assert self.posteriors.shape[0] == seg_len
       self.asked_for_posteriors = True
+      self.cond.notifyAll()
       return self.posteriors
 
   def set_current_seg_error_signal(self, seg_len, error_signal):
