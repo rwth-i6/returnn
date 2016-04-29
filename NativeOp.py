@@ -592,14 +592,17 @@ class LstmGenericBase(NativeOpGenBase):
       if(!rightBorder)
         affine_y_x(x+1, DZ,  x, V_h,  x, tmpDc,  false, true);
 
-      float* data_delta = data_ptr(DZ, x);
-      float* data_epsilon = data_ptr(tmpDc, x);
-      const float* data_next_epsilon = rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(tmpDc, x + 1);
-      const float* data_old_state = x > 0 ? data_ptr(DZ, x - 1) : Ndarray_DEV_DATA(c);
-      const float* data_Y = data_ptr(Y, x);
-      const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
       start_dev_kernel(lstm_bwd_kernel, (
-          data_delta, data_epsilon, data_next_epsilon, data_old_state, x > 0, data_Y, n_cells, n_batch, data_i));
+        data_ptr(DZ, x),
+        data_ptr(tmpDc, x),
+        rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(tmpDc, x + 1),
+        x > 0 ? data_ptr(DZ, x - 1) : Ndarray_DEV_DATA(c),
+        x > 0,
+        data_ptr(Y, x),
+        n_cells,
+        n_batch,
+        Ndarray_DEV_DATA(i) + x * n_batch
+      ));
     }
 
     //DV_h = Y[0..end-1]^T * DZ[1..end]
