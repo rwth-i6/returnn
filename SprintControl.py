@@ -19,10 +19,6 @@ from TaskSystem import Pickler, Unpickler
 from threading import RLock, Condition
 
 
-# Do line-based buffering for stdout.
-sys.stdout.flush()
-sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
-
 Verbose = False
 
 rnn.initBetterExchook()
