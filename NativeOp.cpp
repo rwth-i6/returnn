@@ -164,6 +164,7 @@ struct _KernelLoop {
 
 #endif
 
+
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 	const Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
 	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), (Ndarray_DIM_Type*) dim);
@@ -199,101 +200,6 @@ int lastTwoDimsStride(const Ndarray * a) {
 	return dims[0] * dims[1];
 }
 
-DEF_KERNEL void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
-                            float* output, float* state_out, int n_cells, int n_batch, const float* i) {
-	//layout:
-	//data[0*n_cells..1*n_cells-1] : input gate
-	//data[1*n_cells..2*n_cells-1] : forget gate
-	//data[2*n_cells..3*n_cells-1] : output gate
-	//data[3*n_cells..4*n_cells-1] : cell state
-	//output[0*n_cells..1*n_cells-1]: cell output
-	//repeated for every mini-batch
-
-	int idx = threadIdx.x + blockDim.x * blockIdx.x;
-	while (idx < n_cells * n_batch) {
-	    int batch_idx = idx / n_cells;
-		int start = batch_idx * 4 * n_cells + idx % n_cells;
-		float i_batch = i[batch_idx];
-
-		//input, forget and output gates
-		float inpGate = 1.f / (1.f + expf(-data[start + n_cells]));
-		float fgtGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
-		float outGate = 1.f / (1.f + expf(-data[start + 3 * n_cells]));
-		float state = inpGate * tanhf(data[start]);
-		float old_state_batch = old_state_strided ? old_state[start] : old_state[idx];
-
-		state += fgtGate * old_state_batch;
-		state = state * i_batch + old_state_batch * (1.f - i_batch);
-
-		//cell output
-		output[idx] = outGate * tanhf(state) * i_batch;
-
-		data[start] = state;
-		data[start + n_cells] = inpGate;
-		data[start + 2 * n_cells] = fgtGate;
-		data[start + 3 * n_cells] = outGate;
-		if(state_out)
-		    state_out[idx] = state;
-
-		idx += gridDim.x * blockDim.x;
-	}
-}
-
-DEF_KERNEL void lstm_bwd_kernel(
-        float* delta, float* epsilon, const float* next_epsilon, const float* old_state,
-        bool old_state_strided, const float* Y, int n_cells, int n_batch, const float* i) {
-	//layout:
-	//delta[0*n_cells..1*n_cells-1] : input gate
-	//delta[1*n_cells..2*n_cells-1] : forget gate
-	//delta[2*n_cells..3*n_cells-1] : output gate
-	//delta[3*n_cells..4*n_cells-1] : cell state
-	//epsilon[0*n_cells..1*n_cells-1]: cell output derivative (later overwritten, see below)
-	//next_epsilon[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate (of next timestep)
-	//repeated for every mini-batch
-
-	int idx = threadIdx.x + blockDim.x * blockIdx.x;
-	while (idx < n_cells * n_batch) {
-		int batch_idx = idx / n_cells;
-		int batch_offset = batch_idx * 4 * n_cells;
-		int cell_offset = idx % n_cells;
-		int start = batch_offset + cell_offset;
-		float i_batch = i[batch_idx];
-
-		float inpGate = delta[start + n_cells];
-		float fgtGate = delta[start + 2 * n_cells];
-		float outGate = delta[start + 3 * n_cells];
-		float oldState = old_state_strided ? old_state[start] : old_state[idx];
-		float state = delta[start];
-		float eps = epsilon[idx];
-
-		//avoid division by 0 (TODO: check if this is needed)
-		float gc = 0.f; //g(c(t))
-		float gzc = 0.f; //g(z_c(t))
-		if (outGate != 0)
-			gc = Y[idx] / outGate;
-		if (inpGate != 0)
-			gzc = (state - fgtGate * oldState) / inpGate;
-
-		//delta_output
-		delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
-
-		//epsilon_c
-		float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
-		epsilon_c += next_epsilon[idx];
-		epsilon[idx] = epsilon_c * fgtGate * i_batch + next_epsilon[idx] * (1.f - i_batch);
-
-		//delta_cell
-		delta[start] = inpGate * (1.f - (gzc * gzc)) * epsilon_c * i_batch;
-
-		//delta_forget
-		delta[start + 2 * n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c * i_batch;
-
-		//delta_input
-		delta[start + n_cells] = inpGate * (1.f - inpGate) * gzc * epsilon_c * i_batch;
-
-		idx += gridDim.x * blockDim.x;
-	}
-}
 
 //C[x] += A[x]*B[x]
 //(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
