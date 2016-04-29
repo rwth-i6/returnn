@@ -295,42 +295,6 @@ DEF_KERNEL void lstm_bwd_kernel(
 	}
 }
 
-void do_lstm(/*out*/Ndarray* H, /*out*/Ndarray* out, Ndarray* prev,
-			 /*optional out*/float* state_out, int x, Ndarray* i) {
-	int dims[2];
-	lastTwoDims(H, dims);
-	assert(dims[1] % 4 == 0); //3 gates + cell
-	int n_cells = dims[1] / 4;
-	int n_batch = dims[0];
-
-	float* data_H = data_ptr(H, x);
-	const float* data_prev = Ndarray_DEV_DATA(prev);
-	const float* data_old_state = x > 0 ? data_ptr(H, x - 1) : data_prev;
-	float* data_out = data_ptr(out, x);
-	const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
-	start_dev_kernel(lstm_kernel, (data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i));
-}
-
-//epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
-//Dd stores the derivative w.r.t. end state
-void do_lstm_bwd(/*out*/Ndarray* delta, /*out*/Ndarray* epsilon, Ndarray* Y, Ndarray* Dd,
-                 Ndarray* c, int x, bool rightBorder, Ndarray* i) {
-	int dims[2];
-	lastTwoDims(delta, dims);
-	assert(dims[1] % 4 == 0); //3 gates + cell
-	int n_cells = dims[1] / 4;
-	int n_batch = dims[0];
-
-	float * data_delta = data_ptr(delta, x);
-	float * data_epsilon = data_ptr(epsilon, x);
-	const float * data_next_epsilon = rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(epsilon, x + 1);
-	const float * data_old_state = x > 0 ? data_ptr(delta, x - 1) : Ndarray_DEV_DATA(c);
-	const float * data_Y = data_ptr(Y, x);
-	const float * data_i = Ndarray_DEV_DATA(i) + x * n_batch;
-	start_dev_kernel(lstm_bwd_kernel, (
-	    data_delta, data_epsilon, data_next_epsilon, data_old_state, x > 0, data_Y, n_cells, n_batch, data_i));
-}
-
 //C[x] += A[x]*B[x]
 //(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
 void affine_y_x(int x_A, Ndarray* A, int x_B, Ndarray* B,
