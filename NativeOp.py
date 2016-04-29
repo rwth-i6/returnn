@@ -541,6 +541,10 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* d = *outputs[2];
 
     long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    assert(Ndarray_DIMS(i)[2] %% 4 == 0); // 3 gates + cell
+    int n_cells = Ndarray_DIMS(i)[2] / 4;
+
     assert(T > 0);
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
@@ -548,7 +552,13 @@ class LstmGenericBase(NativeOpGenBase):
         affine_y_x(x-1, Y,  x, V_h,  x, H);
       }
       float* d_ptr = (x == T - 1) ? Ndarray_DEV_DATA(d) : 0;
-      do_lstm(H, Y, c, d_ptr, x, i);
+
+      float* data_H = data_ptr(H, x);
+      const float* data_prev = Ndarray_DEV_DATA(c);
+      const float* data_old_state = x > 0 ? data_ptr(H, x - 1) : data_prev;
+      float* data_out = data_ptr(Y, x);
+      const float* data_i = Ndarray_DEV_DATA(i) + x * n_batch;
+      start_dev_kernel(lstm_kernel, (data_H, data_old_state, x > 0, data_out, d_ptr, n_cells, n_batch, data_i));
     }
   """
 
