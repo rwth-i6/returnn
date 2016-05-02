@@ -58,6 +58,12 @@ class Log:
       if t == 'stdout':
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(logging.DEBUG)
+      elif t.startswith("|"):  # pipe-format
+        proc_cmd = t[1:].strip()
+        from subprocess import Popen, PIPE
+        proc = Popen(proc_cmd, shell=True, stdin=PIPE)
+        handler = logging.StreamHandler(proc.stdin)
+        handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
