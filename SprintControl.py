@@ -161,8 +161,8 @@ class PythonControl:
     self.callback = None
     self.control_loop_started = False
     self.control_loop_exited = False
-    self.have_new_seg = False
-    self.have_new_error_signal = False
+    self.control_thread__have_new_seg = False
+    self.control_thread__have_new_error_signal = False
     self.seg_name = None
     self.seg_len = None
     self.posteriors = None
@@ -205,8 +205,8 @@ class PythonControl:
     assert posteriors.shape[0] == seg_len
     if Verbose: print("CRNN PythonControl handle_cmd_get_loss_and_error_signal: name=%r, len=%r" % (seg_name, seg_len))
     with self.cond:
-      self.have_new_seg = True
-      self.have_new_error_signal = False
+      self.control_thread__have_new_seg = True
+      self.control_thread__have_new_error_signal = False
       self.seg_name = seg_name
       self.seg_len = seg_len
       self.posteriors = posteriors
@@ -218,7 +218,7 @@ class PythonControl:
     loss, error_signal = self.callback("get_loss_and_error_signal", seg_name, seg_len, posteriors)
     assert error_signal.shape == posteriors.shape
     with self.cond:
-      self.have_new_error_signal = True
+      self.control_thread__have_new_error_signal = True
       self.cond.notifyAll()
     error_signal_str = error_signal.astype('float32').dumps()
     return loss, error_signal_str
@@ -348,7 +348,7 @@ class PythonControl:
       self.loss = loss
       self.cond.notifyAll()
 
-  def skip_segment_loss_and_error(self):
+  def _skip_segment_loss_and_error(self):
     with self.cond:
       assert self.posteriors is not None
       if self.loss is None:
@@ -356,6 +356,18 @@ class PythonControl:
       if self.error_signal is None:
         self.error_signal = numpy.zeros_like(self.posteriors)
       self.cond.notifyAll()
+
+  def _wait_for_control_loop_error_signal(self):
+    while True:
+      with self.cond:
+        if self.control_thread__have_new_error_signal or self.control_thread__have_new_seg:
+          break
+        if self.control_loop_exited:
+          break
+        if self.loss is None or self.error_signal is None:
+          break
+        if Verbose: print "CRNN SprintControl getSegmentList: wait for control loop to handle error signal"
+        self.cond.wait(timeout=1)
 
   def segment_list_iterator(self):
     with self.cond:
@@ -366,10 +378,10 @@ class PythonControl:
       seg_name = None
       while True:
         with self.cond:
-          if self.have_new_seg:
+          if self.control_thread__have_new_seg:
             assert self.seg_name
             seg_name = self.seg_name
-            self.have_new_seg = False
+            self.control_thread__have_new_seg = False
             break
           if self.control_loop_exited:
             return  # no more segments
@@ -384,17 +396,7 @@ class PythonControl:
       yield seg_name
 
       # We might need to wait for the control loop thread.
-      while True:
-        with self.cond:
-          if self.have_new_error_signal:
-            break
-          if self.control_loop_exited:
-            break
-          if self.loss is not None and self.error_signal is not None:
-            if Verbose: print "CRNN SprintControl getSegmentList: wait for control loop to handle error signal"
-            self.cond.wait(timeout=1)
-          else:
-            break
+      self._wait_for_control_loop_error_signal()
 
       # When we are back here, Sprint asks for the next segment.
       # It means that is has finished any processing with this segment.
@@ -403,7 +405,7 @@ class PythonControl:
         # We are still stuck in there in the other thread, if not self.have_new_error_signal.
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
-        if not self.have_new_error_signal:
+        if not self.control_thread__have_new_error_signal:
           print "CRNN SprintControl getSegmentList, no error signal, skip segment:", seg_name
           if Verbose:
             # Print Sprint stacktrace.
@@ -413,4 +415,5 @@ class PythonControl:
             print "CRNN SprintControl getSegmentList: Do you use PythonControl in the Sprint trainer? Got no segment notification."
           if not self.asked_for_posteriors:
             print "CRNN SprintControl getSegmentList: Do you use PythonLayer in Sprint? Did not get asked for posteriors."
-          self.skip_segment_loss_and_error()
+          self._skip_segment_loss_and_error()
+          self._wait_for_control_loop_error_signal()
