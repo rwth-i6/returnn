@@ -234,7 +234,7 @@ class SprintInstancePool:
   def __init__(self, sprint_opts):
     assert isinstance(sprint_opts, dict)
     sprint_opts = sprint_opts.copy()
-    self.max_num_instances = sprint_opts.pop("numInstances", 5)
+    self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
     self.sprint_opts = sprint_opts
     self.instances = []
 
@@ -271,6 +271,10 @@ class SprintInstancePool:
 
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
+    # Very simple parallelism. We must avoid any form of multi-threading
+    # because this can be problematic with Theano.
+    # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
+    # We also try to keep it simple here.
     for bb in range(0, n_batch, self.max_num_instances):
       for i in range(self.max_num_instances):
         b = bb + i
