@@ -148,7 +148,7 @@ class SprintSubprocessInstance:
     args = [
       self.sprintExecPath,
       # Enable Sprint PythonControl
-      "--*.python-control-enabled = true",
+      "--*.python-control-enabled=true",
       # Sprint PythonControl or PythonTrainer
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=%s" % my_mod_name,
