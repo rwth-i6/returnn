@@ -340,11 +340,12 @@ class PythonControl:
 
   def set_current_seg_loss(self, seg_name, loss):
     """
-    :param str seg_name: just for double checking, the name of the current segment
+    :param str|None seg_name: just for double checking, the name of the current segment. might be None
     :param float loss: the loss of the current seg
     """
     with self.cond:
-      assert self.seg_name == seg_name
+      if seg_name:
+        assert self.seg_name == seg_name
       self.loss = loss
       self.cond.notifyAll()
 
