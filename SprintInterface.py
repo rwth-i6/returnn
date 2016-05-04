@@ -555,14 +555,6 @@ class Criterion(theano.Op):
     print >> log.v5, 'time-frames:', seq_lengths.sum()
 
 
-# HACK for now.
-import SprintErrorSignals
-import Network
-
-SprintErrorSignals.SprintErrorSigOp = Criterion
-Network.SprintErrorSigOp = Criterion
-
-
 def demo():
   print "Note: Load this module via Sprint python-trainer to really use it."
   print "We are running a demo now."
