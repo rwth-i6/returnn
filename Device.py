@@ -3,7 +3,6 @@ from Updater import Updater
 from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined
 from Log import log
 from Network import LayerNetwork
-from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
