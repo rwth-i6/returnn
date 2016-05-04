@@ -1,14 +1,14 @@
 
-# This is the Sprint PythonControl interface implementation.
-# For reference, in Sprint code, see:
-#  * src/Nn/PythonControl.cc
-#  * src/Tools/NnTrainer/python_control_demo.py
-# This interface will behave similar as SprintExternInterface.
-# See SprintErrorSignals for the other end.
-# It can also be used as a PythonSegmentOrdering interface.
-# It also supports SprintNnPythonLayer.
-
-print("CRNN SprintControl Python module load")
+"""
+This is the Sprint PythonControl interface implementation.
+For reference, in Sprint code, see:
+ * src/Nn/PythonControl.cc
+ * src/Tools/NnTrainer/python_control_demo.py
+This interface will behave similar as SprintExternInterface.
+See SprintErrorSignals for the other end.
+It can also be used as a PythonSegmentOrdering interface.
+It also supports SprintNnPythonLayer.
+"""
 
 import rnn
 import Debug
@@ -17,6 +17,8 @@ import sys
 import numpy
 from TaskSystem import Pickler, Unpickler
 from threading import RLock, Condition
+
+print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
 
 Verbose = False
