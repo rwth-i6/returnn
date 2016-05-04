@@ -1,3 +1,9 @@
+
+"""
+Implements the SprintDataset class.
+Note that from the main RETURNN process, you probably want ExternSprintDataset instead.
+"""
+
 import thread
 from threading import Condition, currentThread
 import math
@@ -9,21 +15,24 @@ from Log import log
 
 
 class SprintDataset(Dataset):
+  """
+  In Sprint, we use this object for multiple purposes:
+  - Multiple epoch handling via SprintInterface.getSegmentList().
+    For this, we get the segment list from Sprint and use the Dataset
+    shuffling method.
+  - Fill in data which we get via SprintInterface.feedInput*().
+    Note that each such input doesn't necessarily correspond to a single
+    segment. This depends which type of FeatureExtractor is used in Sprint.
+    If we use the BufferedFeatureExtractor in utterance mode, we will get
+    one call for every segment and we get also segmentName as parameter.
+    Otherwise, we will get batches of fixed size - in that case,
+    it doesn't correspond to the segments.
+    In any case, we use this data as-is as a new seq.
+    Because of that, we cannot really know the number of seqs in advance,
+    nor the total number of time frames, etc.
 
-  # In Sprint, we use this object for multiple purposes:
-  # - Multiple epoch handling via SprintInterface.getSegmentList().
-  #   For this, we get the segment list from Sprint and use the Dataset
-  #   shuffling method.
-  # - Fill in data which we get via SprintInterface.feedInput*().
-  #   Note that each such input doesn't necessarily correspond to a single
-  #   segment. This depends which type of FeatureExtractor is used in Sprint.
-  #   If we use the BufferedFeatureExtractor in utterance mode, we will get
-  #   one call for every segment and we get also segmentName as parameter.
-  #   Otherwise, we will get batches of fixed size - in that case,
-  #   it doesn't correspond to the segments.
-  #   In any case, we use this data as-is as a new seq.
-  #   Because of that, we cannot really know the number of seqs in advance,
-  #   nor the total number of time frames, etc.
+  If you want to use this directly in RETURNN, see ExternSprintDataset.
+  """
 
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100

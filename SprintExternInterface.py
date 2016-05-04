@@ -1,6 +1,9 @@
 
-# See SprintInterface.py for another Sprint interface.
-# This Sprint interface is to be used for ExternSprintDataset.
+"""
+This is a Sprint interface implementation.
+See SprintInterface.py for another Sprint interface.
+This Sprint interface is to be used for ExternSprintDataset, which should automatically use it.
+"""
 
 import os
 from TaskSystem import Pickler, Unpickler

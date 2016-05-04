@@ -1,4 +1,12 @@
 
+"""
+This provides the Theano Op `SprintErrorSigOp` to get a loss and error signal
+which is calculated via Sprint.
+And there are helper classes to communicate with the Sprint subprocess
+to transfer the posteriors and get back the loss and error signal.
+It uses the SprintControl Sprint interface for the communication.
+"""
+
 import theano
 import theano.tensor as T
 import numpy
@@ -23,6 +31,7 @@ class SprintSubprocessInstance:
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
       Numpy arrays encoded via Numpy dumps/loads.
+  On the Sprint side, we handle this via the SprintControl Sprint interface.
   """
 
   Version = 1  # increase when some protocol changes

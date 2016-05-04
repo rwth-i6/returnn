@@ -1,4 +1,8 @@
 
+"""
+Implements ExternSprintDataset, a Dataset.
+"""
+
 import sys
 import os
 import thread
@@ -12,11 +16,14 @@ from Log import log
 
 
 class ExternSprintDataset(SprintDataset):
-
   """
-  This because like SprintDataset, except that we will start an external Sprint instance ourselves
+  This is a Dataset which you can use directly in RETURNN.
+  You can use it to get any type of data from Sprint (RWTH ASR toolkit),
+  e.g. you can use Sprint to do feature extraction and preprocessing.
+
+  This class is like SprintDataset, except that we will start an external Sprint instance ourselves
   which will forward the data to us over a pipe.
-  See SprintExternInterface.
+  The Sprint subprocess will use SprintExternInterface to communicate with us.
   """
 
   def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, *args, **kwargs):

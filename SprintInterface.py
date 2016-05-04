@@ -1,9 +1,19 @@
 
+"""
+This is a Sprint interface implementation, i.e. you would specify this module in your Sprint config.
+(Sprint = the RWTH ASR toolkit.)
+Note that there are multiple Sprint interface implementations provided.
+This one would be used explicitly, e.g. for forwarding in recognition
+or wherever else Sprint needs posteriors (a FeatureScorer).
+Most of the other Sprint interfaces will be used automatically,
+e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
+"""
+
 # We expect that Theano works in the current Python env.
 
-print "CRNN Python SprintInterface module load"
-
 import os
+print("CRNN Python SprintInterface module load, pid %i" % os.getpid())
+
 import sys
 import time
 from threading import Event, Thread

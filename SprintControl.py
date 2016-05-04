@@ -1,6 +1,7 @@
 
 """
-This is the Sprint PythonControl interface implementation.
+This is the Sprint interface implementation,
+concretely for Sprint PythonControl, Sprint PythonSegmentOrder and Sprint SprintNnPythonLayer.
 For reference, in Sprint code, see:
  * src/Nn/PythonControl.cc
  * src/Tools/NnTrainer/python_control_demo.py
