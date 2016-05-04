@@ -445,6 +445,7 @@ class Layer(Container):
   def __init__(self, sources, n_out, index, y_in=None, target=None, target_index=None,
                sparse=False, cost_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
+               output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
@@ -481,6 +482,12 @@ class Layer(Container):
     for s in self.sources:
       s.transfer_output(self.device)
     self.set_attr('varreg', varreg)
+    if output_L2_reg:
+      self.set_attr('output_L2_reg', output_L2_reg)
+    if output_entropy_reg:
+      self.set_attr('output_entropy_reg', output_entropy_reg)
+    if output_entropy_exp_reg:
+      self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
       self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
@@ -564,7 +571,23 @@ class Layer(Container):
     return energy
 
   def make_constraints(self):
-    return self.constraints
+    c = self.constraints
+    f32_index = T.cast(self.index, "float32")
+    if self.attrs.get('output_L2_reg', 0.0):
+      # Note: For the output layer, it might even make sense to use a negative factor. http://www.danielpovey.com/files/2016_interspeech_mmi.pdf
+      assert self.output.ndim == 3
+      l2 = f32_index * T.sum(T.sqr(self.output), axis=2)
+      c += numpy.float32(self.attrs.get('output_L2_reg', 0.0)) * T.sum(l2)
+    if self.attrs.get('output_entropy_reg', 0.0):
+      assert self.output.ndim == 3
+      epsilon = numpy.float32(1e-10)
+      entropy = f32_index * (-T.sum(self.output * T.log(self.output + epsilon), axis=2))
+      c += numpy.float32(self.attrs.get('output_entropy_reg', 0.0)) * T.sum(entropy)
+    if self.attrs.get('output_entropy_exp_reg', 0.0):
+      assert self.output.ndim == 3
+      entropy = f32_index * (-T.sum(T.exp(self.output) * self.output, axis=2))
+      c += numpy.float32(self.attrs.get('output_entropy_exp_reg', 0.0)) * T.sum(entropy)
+    return c
 
   def make_consensus(self, networks, axis=2):
     cns = self.attrs['consensus']
