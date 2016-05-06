@@ -496,6 +496,10 @@ def forward(segmentName, features):
   assert len(result) == 1
   posteriors = result[0]
 
+  # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
+  if posteriors.ndim == 3:
+    assert posteriors.shape == (T, 1, OutputDim)
+    posteriors = posteriors[:, 0]
   # Posteriors are in format (time,emission).
   assert posteriors.shape == (T, OutputDim)
   # Reformat to Sprint expected format (emission,time).
