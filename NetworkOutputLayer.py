@@ -96,12 +96,14 @@ class OutputLayer(Layer):
                                     #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
                                     T.concatenate([self.z,pad],axis=0),
                                     self.z)
-      #self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
+      self.z = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),self.z,self.z[:self.index.shape[0]])
       self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
                          T.inc_subtensor(T.zeros((self.z.shape[0],self.index.shape[1]),'int32')[:self.index.shape[0]], y),
                                                                    y))
       num = T.cast(T.sum(self.index),'float32')
-      self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.ones(self.z[:,:,0].shape,'int8'), self.index)
+      #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
+      self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate(
+        [T.ones((self.z.shape[0] - self.index.shape[0], self.z.shape[1]), 'int8'), self.index], axis=0), self.index)
       self.norm = num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
