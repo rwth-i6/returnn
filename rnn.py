@@ -23,7 +23,6 @@ from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_cla
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version
-from SprintCommunicator import SprintCommunicator
 
 
 TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}

@@ -33,9 +33,12 @@ class NativeOp(theano.Op):
    - in that case, it is either the input variable or it has a copy of its data.
   """
 
-  __props__ = ("in_info", "out_info", "c_fw_code", "c_bw_code", "code_version", "grad_input_map", "name")
+  __props__ = ("in_info", "out_info",
+               "c_fw_code", "c_bw_code", "c_extra_support_code", "code_version",
+               "grad_input_map", "name")
 
-  def __init__(self, in_info, out_info, c_fw_code, c_bw_code=None, code_version=None,
+  def __init__(self, in_info, out_info,
+               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
                grad_input_map=None, name=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
@@ -56,6 +59,7 @@ class NativeOp(theano.Op):
         shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
         need_contiguous/want_inplace: used for bw, in case for bw_input == True.
     :param str c_fw_code: C code for forward pass
+    :param str c_extra_support_code: C support code (for c_support_code)
     :param str|None c_bw_code: C code for backward pass (for gradient)
     :param tuple[int] code_version: will be returned by c_code_cache_version.
     :param tuple|callable grad_input_map: selection of grad inputs.
@@ -69,6 +73,7 @@ class NativeOp(theano.Op):
     self.num_dummy_outs = num_dummy_outs
     self.c_fw_code = c_fw_code
     self.c_bw_code = c_bw_code
+    self.c_extra_support_code = self._reduce_c_extra_support_code(c_extra_support_code)
     self.code_version = code_version or ()
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
@@ -89,6 +94,17 @@ class NativeOp(theano.Op):
         out_info += [dummy_out]
         info["want_inplace"] = dummy_out_idx
     return in_info, out_info, num_dummy_outs
+
+  @classmethod
+  def _reduce_c_extra_support_code(cls, c):
+    if c is None:
+      return ""
+    if isinstance(c, dict):
+      c = [v for (k, v) in sorted(c.items())]
+    if isinstance(c, (list, tuple)):
+      c = "\n".join([v + "\n\n" for v in c])
+    assert isinstance(c, (str, unicode))
+    return c
 
   @classmethod
   def _construct_destroy_map(cls, in_info):
@@ -226,6 +242,7 @@ class NativeOp(theano.Op):
       in_info=in_info,
       out_info=out_info,
       c_fw_code=self.c_bw_code,
+      c_extra_support_code=self.c_extra_support_code,
       code_version=self.code_version
     )
     input_grads = make_var_tuple(grad_op(*grad_inputs))
@@ -273,10 +290,12 @@ class NativeOp(theano.Op):
     return self.code_version
 
   def c_support_code(self):
-    src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
+    base_src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
     return "\n\n".join([
       T.blas.blas_header_text(),
-      "#define CUDA 0", src])
+      "#define CUDA 0",
+      base_src,
+      self.c_extra_support_code])
 
   def c_libraries(self):
     return T.blas.ldflags()
@@ -463,6 +482,7 @@ class NativeOpGenBase:
   out_info = None
   c_fw_code = None
   c_bw_code = None
+  c_extra_support_code = None
   code_version = None
   grad_input_map = None
 
@@ -474,6 +494,7 @@ class NativeOpGenBase:
     assert cls.c_fw_code is not None
     return NativeOp(in_info=cls.in_info, out_info=cls.out_info,
                     c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
+                    c_extra_support_code=cls.c_extra_support_code,
                     grad_input_map=cls.grad_input_map,
                     name=name)
 
@@ -528,6 +549,109 @@ class LstmGenericBase(NativeOpGenBase):
     c = T.zeros((n_batch, n_out), dtype="float32")
     return Z, V_h, c, i
 
+  c_extra_support_code = {
+    "lstm_kernel": """
+      DEF_KERNEL
+      void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
+                       float* output, float* state_out, int n_cells, int n_batch, const float* i) {
+        //layout:
+        //data[0*n_cells..1*n_cells-1] : input gate
+        //data[1*n_cells..2*n_cells-1] : forget gate
+        //data[2*n_cells..3*n_cells-1] : output gate
+        //data[3*n_cells..4*n_cells-1] : cell state
+        //output[0*n_cells..1*n_cells-1]: cell output
+        //repeated for every mini-batch
+
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int start = batch_idx * 4 * n_cells + idx % n_cells;
+          float i_batch = i[batch_idx];
+
+          //input, forget and output gates
+          float inpGate = 1.f / (1.f + expf(-data[start + n_cells]));
+          float fgtGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
+          float outGate = 1.f / (1.f + expf(-data[start + 3 * n_cells]));
+          float state = inpGate * tanhf(data[start]);
+          float old_state_batch = old_state_strided ? old_state[start] : old_state[idx];
+
+          state += fgtGate * old_state_batch;
+          state = state * i_batch + old_state_batch * (1.f - i_batch);
+
+          //cell output
+          output[idx] = outGate * tanhf(state) * i_batch;
+
+          data[start] = state;
+          data[start + n_cells] = inpGate;
+          data[start + 2 * n_cells] = fgtGate;
+          data[start + 3 * n_cells] = outGate;
+          if(state_out)
+            state_out[idx] = state;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
+    "lstm_bwd_kernel": """
+      DEF_KERNEL
+      void lstm_bwd_kernel(
+            float* delta, float* epsilon, const float* next_epsilon, const float* old_state,
+            bool old_state_strided, const float* Y, int n_cells, int n_batch, const float* i) {
+        //layout:
+        //delta[0*n_cells..1*n_cells-1] : input gate
+        //delta[1*n_cells..2*n_cells-1] : forget gate
+        //delta[2*n_cells..3*n_cells-1] : output gate
+        //delta[3*n_cells..4*n_cells-1] : cell state
+        //epsilon[0*n_cells..1*n_cells-1]: cell output derivative (later overwritten, see below)
+        //next_epsilon[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate (of next timestep)
+        //repeated for every mini-batch
+
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int batch_offset = batch_idx * 4 * n_cells;
+          int cell_offset = idx % n_cells;
+          int start = batch_offset + cell_offset;
+          float i_batch = i[batch_idx];
+
+          float inpGate = delta[start + n_cells];
+          float fgtGate = delta[start + 2 * n_cells];
+          float outGate = delta[start + 3 * n_cells];
+          float oldState = old_state_strided ? old_state[start] : old_state[idx];
+          float state = delta[start];
+          float eps = epsilon[idx];
+
+          //avoid division by 0 (TODO: check if this is needed)
+          float gc = 0.f; //g(c(t))
+          float gzc = 0.f; //g(z_c(t))
+          if (outGate != 0)
+              gc = Y[idx] / outGate;
+          if (inpGate != 0)
+              gzc = (state - fgtGate * oldState) / inpGate;
+
+          //delta_output
+          delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
+
+          //epsilon_c
+          float epsilon_c = (1.f - (gc * gc)) * outGate * eps;
+          epsilon_c += next_epsilon[idx];
+          epsilon[idx] = epsilon_c * fgtGate * i_batch + next_epsilon[idx] * (1.f - i_batch);
+
+          //delta_cell
+          delta[start] = inpGate * (1.f - (gzc * gzc)) * epsilon_c * i_batch;
+
+          //delta_forget
+          delta[start + 2 * n_cells] = fgtGate * (1.f - fgtGate) * oldState * epsilon_c * i_batch;
+
+          //delta_input
+          delta[start + n_cells] = inpGate * (1.f - inpGate) * gzc * epsilon_c * i_batch;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """
+  }
+
   c_fw_code = """
     // Z*, V_h, c, i = input_names (*: inplace)
     // Y, H, d = output_names
@@ -541,14 +665,27 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* d = *outputs[2];
 
     long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    assert(Ndarray_DIMS(H)[2] %% 4 == 0); // 3 gates + cell
+    int n_cells = Ndarray_DIMS(H)[2] / 4;
+
     assert(T > 0);
     for(int x = 0; x < T; ++x) {
       if(x > 0) {
         //H += Y[x-1]*V_h
         affine_y_x(x-1, Y,  x, V_h,  x, H);
       }
-      float* d_ptr = (x == T - 1) ? Ndarray_DEV_DATA(d) : 0;
-      do_lstm(H, Y, c, d_ptr, x, i);
+
+      start_dev_kernel(lstm_kernel, (
+        data_ptr(H, x),
+        x > 0 ? data_ptr(H, x - 1) : Ndarray_DEV_DATA(c),
+        x > 0,
+        data_ptr(Y, x),
+        (x == T - 1) ? Ndarray_DEV_DATA(d) : 0,
+        n_cells,
+        n_batch,
+        Ndarray_DEV_DATA(i) + x * n_batch
+      ));
     }
   """
 
@@ -568,13 +705,28 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray* tmpDc = *outputs[3]; // (old DY), inplace buffer
 
     long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    assert(Ndarray_DIMS(DZ)[2] %% 4 == 0); // 3 gates + cell
+    int n_cells = Ndarray_DIMS(DZ)[2] / 4;
+
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
       bool rightBorder = (x == T - 1);
       if(!rightBorder)
         affine_y_x(x+1, DZ,  x, V_h,  x, tmpDc,  false, true);
-      do_lstm_bwd(DZ, tmpDc, Y, Dd, c, x, rightBorder, i);
+
+      start_dev_kernel(lstm_bwd_kernel, (
+        data_ptr(DZ, x),
+        data_ptr(tmpDc, x),
+        rightBorder ? Ndarray_DEV_DATA(Dd) : data_ptr(tmpDc, x + 1),
+        x > 0 ? data_ptr(DZ, x - 1) : Ndarray_DEV_DATA(c),
+        x > 0,
+        data_ptr(Y, x),
+        n_cells,
+        n_batch,
+        Ndarray_DEV_DATA(i) + x * n_batch
+      ));
     }
 
     //DV_h = Y[0..end-1]^T * DZ[1..end]

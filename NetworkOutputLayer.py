@@ -96,13 +96,15 @@ class OutputLayer(Layer):
                                     #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
                                     T.concatenate([self.z,pad],axis=0),
                                     self.z)
-      #self.z = theano.ifelse.ifelse(is_eval,self.z,self.z[:self.index.shape[0]])
+      self.z = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),self.z,self.z[:self.index.shape[0]])
       self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
                          T.inc_subtensor(T.zeros((self.z.shape[0],self.index.shape[1]),'int32')[:self.index.shape[0]], y),
                                                                    y))
       num = T.cast(T.sum(self.index),'float32')
-      self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.ones(self.z[:,:,0].shape,'int8'), self.index)
-      #self.norm = num / T.cast(T.sum(self.index),'float32')
+      #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
+      self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate(
+        [T.ones((self.z.shape[0] - self.index.shape[0], self.z.shape[1]), 'int8'), self.index], axis=0), self.index)
+      self.norm = num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
@@ -269,7 +271,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, loss_like_ce=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -278,6 +280,12 @@ class SequenceOutputLayer(OutputLayer):
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
+    self.exp_normalize = exp_normalize
+    if not exp_normalize:
+      self.set_attr("exp_normalize", exp_normalize)
+    self.loss_like_ce = loss_like_ce
+    if loss_like_ce:
+      self.set_attr("loss_like_ce", loss_like_ce)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -305,9 +313,16 @@ class SequenceOutputLayer(OutputLayer):
     known_grads = None
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+      if self.exp_normalize:
+        log_probs = T.log(self.p_y_given_x)
+      else:
+        log_probs = self.z
       sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
-      err, grad = sprint_error_op(self.p_y_given_x, T.sum(self.index, axis=0))
+      err, grad = sprint_error_op(log_probs, T.sum(self.index, axis=0))
       err = err.sum()
+      if self.loss_like_ce:
+        y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
+        err = -T.sum(T.log(T.pow(self.p_y_given_x, y_ref)) * T.cast(self.index, "float32").dimshuffle(0, 1, 'x'))
       if self.ce_smoothing:
         err *= numpy.float32(1.0 - self.ce_smoothing)
         grad *= numpy.float32(1.0 - self.ce_smoothing)

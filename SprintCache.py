@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Author: Pavel Golik (golik@cs.rwth-aachen.de)
+
+"""
+This module is about reading (maybe later also writing) the Sprint archive format.
+"""
+
 import sys, array
 from struct import pack, unpack
 from os.path import exists
+
 
 class FileInfo:
     def __init__(self, name, pos, size, compressed, index):
@@ -16,21 +22,22 @@ class FileInfo:
     def __repr__(self):
         return " ".join(str(s) for s in self.__dict__.values())
 
+
 class FileArchive:
 
     # read routines
     def read_u32(self):
         return int(unpack("i", self.f.read(4))[0])
-    
+
     def read_U32(self):
         return int(unpack("I", self.f.read(4))[0])
 
     def read_u64(self):
         return int(unpack("q", self.f.read(8))[0])
-    
+
     def read_char(self):
         return unpack("b", self.f.read(1))[0]
-    
+
     def read_str(self, l, enc='ascii'):
         a = array.array('b')
         a.fromfile(self.f, l)
@@ -144,7 +151,7 @@ class FileArchive:
             size = self.read_u32()
             comp = self.read_u32()
             chk  = self.read_u32()
-            
+
             self.f.seek(size, 1)
             self.ft[name] = FileInfo(name, pos, size, comp, i)
             i += 1
@@ -219,8 +226,8 @@ class FileArchive:
                     raise NotImplementedError("No support for weighted "
                                               "alignments yet.")
             else:
-                raise Error("No valid alignment header found. Wrong cache?")
-                
+                raise Exception("No valid alignment header found. Wrong cache?")
+
 
     def getState(self, mix):
       max_states = 6
@@ -262,7 +269,7 @@ class FileArchive:
 
         self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
         self.write_U32(self.end_recovery_tag)
-        
+
         self.addAttributes(filename, len(features[0]), times[-1][1])
 
     def addAttributes(self, filename, dim, duration):
@@ -299,9 +306,9 @@ def main(argv):
       print(str(time) + "--------" + " ".join("%.6f " % x for x in row))
 
 def usage(prog):
-	print("USAGE: %s <alignment.cache> [<allophones.txt>]" % prog)
-	sys.exit(-1)
+    print("USAGE: %s <alignment.cache> [<allophones.txt>]" % prog)
+    sys.exit(-1)
 
 if __name__ == "__main__":
-	if len(sys.argv) < 2: usage(sys.argv[0])
-	main(sys.argv)
+    if len(sys.argv) < 2: usage(sys.argv[0])
+    main(sys.argv)

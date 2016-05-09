@@ -1511,13 +1511,14 @@ class AttentionLengthLayer(HiddenLayer):
     ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
-    self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
-    hyp = (rho * T.cast(T.argmax(halting[:self.index.shape[0]],axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    #self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    self.error_val = T.sum((hyp - T.cast(real, 'float32')) ** 2)  # * T.cast(real, 'float32'))
     #hyp = theano.printing.Print("hyp")(hyp)
     if self.train_flag or oracle:
-      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
+      self.length = (1. - use_real) * T.floor(hyp) + use_real * real
     else:
-      self.length = T.ceil(hyp)
+      self.length = T.floor(hyp)
     self.length = T.cast(self.length, 'int32')
     out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                                             T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
