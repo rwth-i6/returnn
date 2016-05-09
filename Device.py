@@ -3,7 +3,6 @@ from Updater import Updater
 from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined
 from Log import log
 from Network import LayerNetwork
-from SprintCommunicator import SprintCommunicator
 import numpy
 import sys
 import os
@@ -815,6 +814,9 @@ class Device(object):
           print >> log.v2, "warning: Runtime error on device", device_name
           output_queue.send("error")
           sys.excepthook(*sys.exc_info())
+          # If there are any other than the main thread.
+          # Actually, that would be unexpected.
+          Debug.dumpAllThreadTracebacks()
           return
         except MemoryError:
           output_queue.send("error")

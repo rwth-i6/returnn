@@ -1,9 +1,19 @@
 
+"""
+This is a Sprint interface implementation, i.e. you would specify this module in your Sprint config.
+(Sprint = the RWTH ASR toolkit.)
+Note that there are multiple Sprint interface implementations provided.
+This one would be used explicitly, e.g. for forwarding in recognition
+or wherever else Sprint needs posteriors (a FeatureScorer).
+Most of the other Sprint interfaces will be used automatically,
+e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
+"""
+
 # We expect that Theano works in the current Python env.
 
-print "CRNN Python SprintInterface module load"
-
 import os
+print("CRNN Python SprintInterface module load, pid %i" % os.getpid())
+
 import sys
 import time
 from threading import Event, Thread
@@ -486,6 +496,10 @@ def forward(segmentName, features):
   assert len(result) == 1
   posteriors = result[0]
 
+  # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
+  if posteriors.ndim == 3:
+    assert posteriors.shape == (T, 1, OutputDim)
+    posteriors = posteriors[:, 0]
   # Posteriors are in format (time,emission).
   assert posteriors.shape == (T, OutputDim)
   # Reformat to Sprint expected format (emission,time).
@@ -553,14 +567,6 @@ class Criterion(theano.Op):
 
     print >> log.v5, 'avg frame loss for segments:', loss.sum() / seq_lengths.sum(),
     print >> log.v5, 'time-frames:', seq_lengths.sum()
-
-
-# HACK for now.
-import SprintErrorSignals
-import Network
-
-SprintErrorSignals.SprintErrorSigOp = Criterion
-Network.SprintErrorSigOp = Criterion
 
 
 def demo():
