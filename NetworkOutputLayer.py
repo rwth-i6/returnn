@@ -102,7 +102,7 @@ class OutputLayer(Layer):
                                                                    y))
       num = T.cast(T.sum(self.index),'float32')
       self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.ones(self.z[:,:,0].shape,'int8'), self.index)
-      self.norm = num / T.cast(T.sum(self.index),'float32')
+      #self.norm = num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
