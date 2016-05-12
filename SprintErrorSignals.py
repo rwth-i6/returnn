@@ -30,7 +30,7 @@ class SprintSubprocessInstance:
     "init", name, version -> "ok", child_name, version
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
-      Numpy arrays encoded via Numpy dumps/loads.
+      Numpy arrays encoded via TaskSystem.Pickler (which is optimized for Numpy).
   On the Sprint side, we handle this via the SprintControl Sprint interface.
   """
 
@@ -204,9 +204,8 @@ class SprintSubprocessInstance:
     self._cur_seg_name = seg_name
     assert seg_len == posteriors.shape[0]
     self._cur_posteriors_shape = posteriors.shape
-    posteriors_str = posteriors.astype('float32').dumps()
     try:
-      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors_str))
+      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
     except (IOError, EOFError):
       raise
 
@@ -224,8 +223,7 @@ class SprintSubprocessInstance:
       raise
     assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret,)
     loss = ret[1]
-    error_signal_str = ret[2]
-    error_signal = numpy.loads(error_signal_str)
+    error_signal = ret[2]
     assert error_signal.shape == self._cur_posteriors_shape
     return self._cur_seg_name, loss, error_signal
 
