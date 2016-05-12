@@ -15,6 +15,7 @@ import marshal
 from importlib import import_module
 import errno
 import time
+import numpy
 
 
 def execInMainProc(func):
@@ -183,6 +184,9 @@ def getNormalDict(d):
     r[k] = v
   return r
 
+def make_numpy_ndarray_fromstring(s, dtype, shape):
+  return numpy.fromstring(s, dtype=dtype).reshape(shape)
+
 
 class Pickler(pickle.Pickler):
   """
@@ -275,6 +279,13 @@ class Pickler(pickle.Pickler):
     self.save((str(obj),))
     self.write(pickle.REDUCE)
   dispatch[types.BufferType] = save_buffer
+
+  def save_ndarray(self, obj):
+    # For some reason, Numpy fromstring/tostring is faster than Numpy loads/dumps.
+    self.save(make_numpy_ndarray_fromstring)
+    self.save((obj.tostring(), str(obj.dtype), obj.shape))
+    self.write(pickle.REDUCE)
+  dispatch[numpy.ndarray] = save_ndarray
 
   # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
   def save_global(self, obj, name=None, pack=pickle.struct.pack):

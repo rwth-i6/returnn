@@ -1437,6 +1437,7 @@ class AttentionLengthLayer(HiddenLayer):
     self.set_attr('use_att', use_att)
     self.set_attr('use_rbf', use_rbf)
     self.set_attr('use_eos', use_eos)
+    real = T.sum(T.cast(self.index, 'int32'), axis=0)
     self.index = kwargs['sources'][-1].index
     nT = kwargs['sources'][-1].output.shape[0]
     index = kwargs['sources'][-1].target_index
@@ -1497,9 +1498,8 @@ class AttentionLengthLayer(HiddenLayer):
     #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
 
-    real = T.sum(T.cast(index, 'int32'), axis=0)
     #real = theano.printing.Print("real")(real)
-    exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0)
+    exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0) + numpy.float32(1)
     sse = T.sum(((exl - T.cast(real,'float32') - 1)**2) * T.cast(real,'float32'))
     #ce = -T.log(halting[real - 1, T.arange(halting.shape[1])])
     pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
@@ -1511,9 +1511,12 @@ class AttentionLengthLayer(HiddenLayer):
     ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
-    self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
-    hyp = (rho * T.cast(T.argmax(halting[:self.index.shape[0]],axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    #self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    #hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
+    hyp = exl
     #hyp = theano.printing.Print("hyp")(hyp)
+    #real = theano.printing.Print("real")(real)
+    self.error_val = sse * T.sum(T.cast(real, 'float32')) / T.cast(self.index.shape[1], 'float32')
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:

@@ -1,4 +1,12 @@
 
+"""
+This provides the Theano Op `SprintErrorSigOp` to get a loss and error signal
+which is calculated via Sprint.
+And there are helper classes to communicate with the Sprint subprocess
+to transfer the posteriors and get back the loss and error signal.
+It uses the SprintControl Sprint interface for the communication.
+"""
+
 import theano
 import theano.tensor as T
 import numpy
@@ -22,7 +30,8 @@ class SprintSubprocessInstance:
     "init", name, version -> "ok", child_name, version
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
-      Numpy arrays encoded via Numpy dumps/loads.
+      Numpy arrays encoded via TaskSystem.Pickler (which is optimized for Numpy).
+  On the Sprint side, we handle this via the SprintControl Sprint interface.
   """
 
   Version = 1  # increase when some protocol changes
@@ -50,6 +59,8 @@ class SprintSubprocessInstance:
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self.exit_handler)
+    self._cur_seg_name = None
+    self._cur_posteriors_shape = None
     self.init()
 
   def _exit_child(self, should_interrupt=False):
@@ -99,6 +110,7 @@ class SprintSubprocessInstance:
 
     pid = os.fork()
     if pid == 0:  # child
+      print >> log.v5, "SprintSubprocessInstance: starting, pid %i" % os.getpid()
       try:
         self._env_update_child()
         sys.stdin.close()  # Force no tty stdin.
@@ -144,6 +156,8 @@ class SprintSubprocessInstance:
     my_mod_name = "SprintControl"
     args = [
       self.sprintExecPath,
+      # Enable Sprint PythonControl
+      "--*.python-control-enabled=true",
       # Sprint PythonControl or PythonTrainer
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=%s" % my_mod_name,
@@ -180,26 +194,38 @@ class SprintSubprocessInstance:
       assert exit_status == expected_exit_status, "Sprint exit code is %i" % exit_status
     return True
 
-  def get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
+  def get_loss_and_error_signal__send(self, seg_name, seg_len, posteriors):
     """
     :param str seg_name: the segment name (seq_tag)
     :param int seg_len: the segment length in frames
-    :param numpy.ndarray posteriors: 2d (time,label) float array
-    :rtype (float, numpy.ndarray)
-    :returns (loss, error_signal). error_signal has the same shape as posteriors.
+    :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
     """
-    posteriors_str = posteriors.astype('float32').dumps()
+    assert seg_name
+    self._cur_seg_name = seg_name
+    assert seg_len == posteriors.shape[0]
+    self._cur_posteriors_shape = posteriors.shape
     try:
-      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors_str))
+      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
+    except (IOError, EOFError):
+      raise
+
+  def get_loss_and_error_signal__read(self):
+    """
+    :param str seg_name: the segment name (seq_tag)
+    :param int seg_len: the segment length in frames
+    :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
+    :rtype (str, float, numpy.ndarray)
+    :returns (seg_name, loss, error_signal). error_signal has the same shape as posteriors.
+    """
+    try:
       ret = self._read()
     except (IOError, EOFError):
       raise
-    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret, )
+    assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret,)
     loss = ret[1]
-    error_signal_str = ret[2]
-    error_signal = numpy.loads(error_signal_str)
-    assert error_signal.shape == posteriors.shape
-    return loss, error_signal
+    error_signal = ret[2]
+    assert error_signal.shape == self._cur_posteriors_shape
+    return self._cur_seg_name, loss, error_signal
 
   def exit_handler(self):
     assert os.getpid() == self.parent_pid
@@ -209,6 +235,33 @@ class SprintSubprocessInstance:
   def init(self):
     self._exit_child()
     self._start_child()
+
+
+class SprintInstancePool:
+  global_instances = {}  # sprint_opts -> SprintInstancePool instance
+
+  @classmethod
+  def get_global_instance(cls, sprint_opts):
+    sprint_opts = make_hashable(sprint_opts)
+    if sprint_opts in cls.global_instances:
+      return cls.global_instances[sprint_opts]
+    instance = SprintInstancePool(sprint_opts=sprint_opts)
+    cls.global_instances[sprint_opts] = instance
+    return instance
+
+  def __init__(self, sprint_opts):
+    assert isinstance(sprint_opts, dict)
+    sprint_opts = sprint_opts.copy()
+    self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
+    self.sprint_opts = sprint_opts
+    self.instances = []
+
+  def _get_instance(self, i):
+    assert i < self.max_num_instances
+    if i >= len(self.instances):
+      assert i == len(self.instances)
+      self.instances += [SprintSubprocessInstance(**self.sprint_opts)]
+    return self.instances[i]
 
   def get_batch_loss_and_error_signal(self, target, log_posteriors, seq_lengths):
     """
@@ -236,17 +289,31 @@ class SprintSubprocessInstance:
 
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
-    for b in range(n_batch):
-      loss, error_signal = self.get_loss_and_error_signal(
-        seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:seq_lengths[b], b])
-      batch_loss[b] = loss
-      batch_error_signal[:seq_lengths[b], b] = error_signal
+    # Very simple parallelism. We must avoid any form of multi-threading
+    # because this can be problematic with Theano.
+    # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
+    # We also try to keep it simple here.
+    for bb in range(0, n_batch, self.max_num_instances):
+      for i in range(self.max_num_instances):
+        b = bb + i
+        if b >= n_batch: break
+        instance = self._get_instance(i)
+        instance.get_loss_and_error_signal__send(
+          seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:seq_lengths[b], b])
+      for i in range(self.max_num_instances):
+        b = bb + i
+        if b >= n_batch: break
+        instance = self._get_instance(i)
+        seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
+        assert seg_name == tags[b]
+        batch_loss[b] = loss
+        batch_error_signal[:seq_lengths[b], b] = error_signal
     return batch_loss, batch_error_signal
 
 
 class SprintErrorSigOp(theano.Op):
   """
-  Op: posteriors, seq_lengths -> loss, error signal (grad w.r.t. z, i.e. before softmax is applied)
+  Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
   """
 
   __props__ = ("target", "sprint_opts")
@@ -255,31 +322,31 @@ class SprintErrorSigOp(theano.Op):
     super(SprintErrorSigOp, self).__init__()
     self.target = target  # default is "classes"
     self.sprint_opts = make_hashable(sprint_opts)
-    self.sprint_instance = None
+    self.sprint_instance_pool = None
 
-  def make_node(self, posteriors, seq_lengths):
-    log_posteriors = T.log(theano.tensor.as_tensor_variable(posteriors))
+  def make_node(self, log_posteriors, seq_lengths):
+    log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
     seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
     assert seq_lengths.ndim == 1  # vector of seqs lengths
-    return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), posteriors.type()])
+    return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
   def perform(self, node, inputs, output_storage):
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
-      print >> log.v1, 'log_posteriors contain NaN!'
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain NaN!'
     if numpy.isinf(log_posteriors).any():
-      print >> log.v1, 'log_posteriors contain Inf!'
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain Inf!'
       numpy.set_printoptions(threshold=numpy.nan)
-      print >> log.v1, 'log_posteriors:', log_posteriors
+      print >> log.v1, 'SprintErrorSigOp: log_posteriors:', log_posteriors
 
-    if self.sprint_instance is None:
+    if self.sprint_instance_pool is None:
       print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
-      self.sprint_instance = SprintSubprocessInstance(**self.sprint_opts)
+      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
-    loss, errsig = self.sprint_instance.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
+    loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
     output_storage[0][0] = loss
     output_storage[1][0] = errsig
 
-    print >> log.v5, 'avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+    print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
