@@ -238,6 +238,17 @@ class SprintSubprocessInstance:
 
 
 class SprintInstancePool:
+  global_instances = {}  # sprint_opts -> SprintInstancePool instance
+
+  @classmethod
+  def get_global_instance(cls, sprint_opts):
+    sprint_opts = make_hashable(sprint_opts)
+    if sprint_opts in cls.global_instances:
+      return cls.global_instances[sprint_opts]
+    instance = SprintInstancePool(sprint_opts=sprint_opts)
+    cls.global_instances[sprint_opts] = instance
+    return instance
+
   def __init__(self, sprint_opts):
     assert isinstance(sprint_opts, dict)
     sprint_opts = sprint_opts.copy()
@@ -331,7 +342,7 @@ class SprintErrorSigOp(theano.Op):
 
     if self.sprint_instance_pool is None:
       print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
-      self.sprint_instance_pool = SprintInstancePool(sprint_opts=self.sprint_opts)
+      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
     loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
