@@ -30,7 +30,7 @@ class SprintSubprocessInstance:
     "init", name, version -> "ok", child_name, version
     "exit" -> (exit)
     "get_loss_and_error_signal", seg_name, seg_len, posteriors -> "ok", loss, error_signal
-      Numpy arrays encoded via Numpy dumps/loads.
+      Numpy arrays encoded via TaskSystem.Pickler (which is optimized for Numpy).
   On the Sprint side, we handle this via the SprintControl Sprint interface.
   """
 
@@ -204,9 +204,8 @@ class SprintSubprocessInstance:
     self._cur_seg_name = seg_name
     assert seg_len == posteriors.shape[0]
     self._cur_posteriors_shape = posteriors.shape
-    posteriors_str = posteriors.astype('float32').dumps()
     try:
-      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors_str))
+      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
     except (IOError, EOFError):
       raise
 
@@ -224,8 +223,7 @@ class SprintSubprocessInstance:
       raise
     assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret,)
     loss = ret[1]
-    error_signal_str = ret[2]
-    error_signal = numpy.loads(error_signal_str)
+    error_signal = ret[2]
     assert error_signal.shape == self._cur_posteriors_shape
     return self._cur_seg_name, loss, error_signal
 
@@ -240,6 +238,17 @@ class SprintSubprocessInstance:
 
 
 class SprintInstancePool:
+  global_instances = {}  # sprint_opts -> SprintInstancePool instance
+
+  @classmethod
+  def get_global_instance(cls, sprint_opts):
+    sprint_opts = make_hashable(sprint_opts)
+    if sprint_opts in cls.global_instances:
+      return cls.global_instances[sprint_opts]
+    instance = SprintInstancePool(sprint_opts=sprint_opts)
+    cls.global_instances[sprint_opts] = instance
+    return instance
+
   def __init__(self, sprint_opts):
     assert isinstance(sprint_opts, dict)
     sprint_opts = sprint_opts.copy()
@@ -333,7 +342,7 @@ class SprintErrorSigOp(theano.Op):
 
     if self.sprint_instance_pool is None:
       print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
-      self.sprint_instance_pool = SprintInstancePool(sprint_opts=self.sprint_opts)
+      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
     loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
