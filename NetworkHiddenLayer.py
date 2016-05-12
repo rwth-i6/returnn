@@ -1497,26 +1497,38 @@ class AttentionLengthLayer(HiddenLayer):
     #halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
     #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
     halting = halting / T.sum(halting, axis=0, keepdims=True)
-
     #real = theano.printing.Print("real")(real)
-    exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0) + numpy.float32(1)
-    sse = T.sum(((exl - T.cast(real,'float32') - 1)**2) * T.cast(real,'float32'))
-    #ce = -T.log(halting[real - 1, T.arange(halting.shape[1])])
-    pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
-    halting = T.concatenate([halting,pad])
+    #exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0) + numpy.float32(1)
+    exl = T.dot(T.arange(halting.shape[0], dtype='float32'),halting) + T.constant(1.,'float32')
+    hyp = T.cast(T.argmax(halting, axis=0), 'float32') + numpy.float32(1)
+    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]), halting.shape[1]),
+    #             'float32')  # + T.min(halting) #T.constant(0.5,'float32')
+    #halting = T.concatenate([halting, pad], axis=0)
+    sse = T.sum(((exl - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
+    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]), halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
+    #halting = T.concatenate([halting,pad])
+    #import theano.ifelse
+    #ce = T.sum(T.switch(T.ge(real,halting.shape[0]),
+    #                                T.zeros((halting.shape[1],),'float32') + T.constant(25.,'float32'),
+    #                                -T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32')))
+    ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    #sse = T.sum(halting) - T.sum([real-1,T.arange(halting.shape[1])])
+    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
+    #halting = T.concatenate([halting,pad])
     #import theano.ifelse
     #halting = theano.ifelse.ifelse(T.le(T.max(real),halting.shape[0]), halting, T.concatenate([halting,pad],axis=0))
     #ridx = T.arange(halting.shape[1],dtype='int32') * halting.shape[0] + (real-1).flatten()
     #ce = T.sum(-T.log(halting.flatten()[ridx]) * T.cast(real.flatten(),'float32'))
-    ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    #ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     rho = T.constant(rho,'float32')
     self.cost_val = rho * ce + (1.-rho) * sse
+    hyp = rho * hyp + (1.-rho) * exl
     #self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
     #hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
-    hyp = exl
     #hyp = theano.printing.Print("hyp")(hyp)
     #real = theano.printing.Print("real")(real)
-    self.error_val = sse * T.sum(T.cast(real, 'float32')) / T.cast(self.index.shape[1], 'float32')
+    self.error_val = T.sum(((hyp - T.cast(real, 'float32')) ** 2) * T.cast(real, 'float32'))
+    #self.cost_val = sse
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
     else:
