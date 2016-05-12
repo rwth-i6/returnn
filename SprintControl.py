@@ -193,17 +193,16 @@ class PythonControl:
     assert version == self.Version
     return "SprintControl", self.Version
 
-  def handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors_str):
+  def handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
     """
     :param str seg_name: seg name
     :param int seg_len: the segment length in frames
-    :param str posteriors_str: numpy.ndarray as str, 2d (time,label) float array
+    :param numpy.ndarray posteriors: 2d (time,label) float array
 
     See SprintErrorSignals.SprintSubprocessInstance.get_loss_and_error_signal().
     """
     assert isinstance(seg_len, (int, long))
     assert seg_len > 0
-    posteriors = numpy.loads(posteriors_str)
     assert posteriors.ndim == 2
     assert posteriors.shape[0] == seg_len
     if Verbose: print("CRNN SprintControl[pid %i] PythonControl handle_cmd_get_loss_and_error_signal: name=%r, len=%r" % (os.getpid(), seg_name, seg_len))
@@ -223,8 +222,8 @@ class PythonControl:
     with self.cond:
       self.control_thread__have_new_error_signal = True
       self.cond.notifyAll()
-    error_signal_str = error_signal.astype('float32').dumps()
-    return loss, error_signal_str
+    error_signal = error_signal.astype('float32', copy=False)
+    return loss, error_signal
 
   def handle_cmd(self, cmd, *args):
     func = getattr(self, "handle_cmd_%s" % cmd)
