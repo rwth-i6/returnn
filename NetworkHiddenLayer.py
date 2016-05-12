@@ -1540,7 +1540,8 @@ class AttentionLayer(_NoOpLayer):
   layer_class = 'attention'
 
   def __init__(self, base, conv_x=None, conv_y=None, **kwargs):
-    super(AttentionLayer, self).__init__(**kwargs)    if conv_x:
+    super(AttentionLayer, self).__init__(**kwargs)
+    if conv_x:
       self.set_attr('conv_x',conv_x)
     if conv_y:
       self.set_attr('conv_y',conv_y)
