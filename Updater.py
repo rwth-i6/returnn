@@ -748,9 +748,10 @@ class Updater:
         upd[param] += self.learning_rate_var * dx_new
 
       elif self.rmsprop:
-        #https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
+        # https://github.com/fchollet/keras/blob/master/keras/optimizers.py#L156
+        # https://github.com/Lasagne/Lasagne/blob/master/lasagne/updates.py#L398-L453
         accumulator = self.var(param, zero=True, name="accumulator_%s" % param.name)
-        epsilon = numpy.float32(1e-6)
+        epsilon = numpy.float32(1e-8)
         accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
         upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new) + epsilon)
