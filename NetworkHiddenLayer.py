@@ -1508,10 +1508,10 @@ class AttentionLengthLayer(HiddenLayer):
     #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]), halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
     #halting = T.concatenate([halting,pad])
     #import theano.ifelse
-    #ce = T.sum(T.switch(T.ge(real,halting.shape[0]),
-    #                                T.zeros((halting.shape[1],),'float32') + T.constant(25.,'float32'),
-    #                                -T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32')))
-    ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
+    ce = T.sum(T.switch(T.ge(real,halting.shape[0]),
+                                  T.zeros((halting.shape[1],),'float32') + T.constant(25.,'float32'),
+                                  -T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32')))
+    #ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
     #sse = T.sum(halting) - T.sum([real-1,T.arange(halting.shape[1])])
     #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
     #halting = T.concatenate([halting,pad])
