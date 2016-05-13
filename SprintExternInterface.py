@@ -43,7 +43,22 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 
 isInitialized = False
 
-def init(inputDim, outputDim, config, targetMode, **kwargs):
+def init(**kwargs):
+  import better_exchook
+  better_exchook.install()
+  # This module can also be used for Sprint PythonControl, which will also call init().
+  # We need to catch these cases.
+  if "name" in kwargs and kwargs["name"] == "Sprint.PythonControl":
+    return PythonControl.init(**kwargs)
+  return init_PythonTrainer(**kwargs)
+
+def _parse_config_str(config_str):
+  assert isinstance(config_str, (str, unicode))
+  config_list = config_str.split(",")
+  config = {key: value for (key, value) in [s.split(":", 1) for s in config_list if s]}
+  return config
+
+def init_PythonTrainer(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
   Set trainer = python-trainer in Sprint to enable.
@@ -55,7 +70,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   :param str config: config string, passed by Sprint. assumed to be ","-separated
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
   """
-  print "PythonTrainer SprintExternInterface init()"
+  print "SprintExternInterface: PythonTrainer init_PythonTrainer()"
   print "inputDim:", inputDim
   print "outputDim:", outputDim
   print "config:", config
@@ -67,17 +82,23 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   OutputDim = outputDim
   isInitialized = True
   assert targetMode != "criterion-by-sprint"
-  config = config.split(",")
-  config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
+  config = _parse_config_str(config)
   assert config["action"] == "ExternSprintDataset"
 
+  _init_global_sprintDataset(inputDim=inputDim, outputDim=outputDim, config=config)
+
+sprintDataset = None; ":type: ExternSprintDatasetSource"
+
+def _init_global_sprintDataset(inputDim, outputDim, config):
   global sprintDataset
+  if sprintDataset: return
   numSegments = len(segmentOrderList) if segmentOrderList is not None else None
   sprintDataset = ExternSprintDatasetSource(c2p_fd=int(config["c2p_fd"]), p2c_fd=int(config["p2c_fd"]),
                                             inputDim=inputDim, outputDim=outputDim, numSegments=numSegments)
 
+
 def exit():
-  print "PythonTrainer SprintExternInterface exit()"
+  print "SprintExternInterface: PythonTrainer exit()"
   assert isInitialized
   sprintDataset.close()
 
@@ -105,6 +126,39 @@ def feedInputAndTarget(features, weights=None, segmentName=None,
   sprintDataset.addNewData(segmentName=segmentName, features=features, targets=targets)
 
 # End Sprint PythonTrainer interface. }
+
+# Start Sprint PythonControl interface. {
+
+class PythonControl:
+  instance = None
+
+  @classmethod
+  def init(cls, **kwargs):  # called by global init().
+    print("SprintExternInterface: PythonControl init %r" % kwargs)
+    if cls.instance:
+      return cls.instance
+    cls.instance = cls(**kwargs)
+    return cls.instance
+
+  def __init__(self, config, **kwargs):
+    self.config = _parse_config_str(config)
+
+  def init_processing(self, input_dim, output_dim, **kwargs):
+    print("SprintExternInterface: PythonControl init_processing inputDim=%i, outputDim=%i, other:%r" % (input_dim, output_dim, kwargs))
+    _init_global_sprintDataset(inputDim=input_dim, outputDim=output_dim, config=self.config)
+
+  def process_segment(self, name, orthography, features, alignment, soft_alignment, **kwargs):
+    assert sprintDataset
+    targets = {}
+    if orthography is not None:
+      targets["orth"] = orthography
+    if alignment is not None:
+      targets["classes"] = alignment
+    elif soft_alignment is not None:
+      targets["classes"] = soft_alignment
+    sprintDataset.addNewData(segmentName=name, features=features, targets=targets)
+
+# End Sprint PythonControl interface. }
 
 
 class ExternSprintDatasetSource:
