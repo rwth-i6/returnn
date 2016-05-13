@@ -60,6 +60,7 @@ class Updater:
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
+               smorms3=False,
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
@@ -90,6 +91,7 @@ class Updater:
     self.mean_normalized_sgd = mean_normalized_sgd
     self.mean_normalized_sgd_average_interpolation = numpy.float32(mean_normalized_sgd_average_interpolation)
     self.rmsprop = rmsprop
+    self.smorms3 = smorms3
     self.update_multiple_models = update_multiple_models
     self.update_multiple_models_averaging = update_multiple_models_averaging
     self.update_multiple_models_average_step = update_multiple_models_average_step
@@ -121,6 +123,8 @@ class Updater:
       print >> log.v4, "using update clipping %f" % self.update_clip
     if self.rmsprop:
       print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
+    if self.smorms3:
+      print >> log.v4, "using SMORMS3"
     if self.adamax:
       print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
     if self.adam:
@@ -755,6 +759,22 @@ class Updater:
         accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
         upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new) + epsilon)
+
+      elif self.smorms3:
+        # http://sifter.org/~simon/journal/20150420.html
+        # https://www.reddit.com/r/MachineLearning/comments/3edb42/rmsprop_loses_to_smorms3_beware_the_epsilon/?
+        epsilon = numpy.float32(1e-16)
+        g = self.var(param, zero=True, name="g")
+        g2 = self.var(param, zero=True, name="g2")
+        mem = self.var(param.get_value() * numpy.float32(0) + numpy.float32(1), name="mem")
+        r = numpy.float32(1) / (mem + numpy.float32(1))
+        g_ = (numpy.float32(1) - r) * g + r * deltas
+        g2_ = (numpy.float32(1) - r) * g2 + r * T.sqr(deltas)
+        gg_ = T.sqr(g_)
+        denoise = gg_ / (g2_ + epsilon)
+        mem_ = numpy.float32(1) + mem * (numpy.float32(1) - denoise)
+        updates.extend([(g, g_), (g2, g2_), (mem, mem_)])
+        upd[param] += - ((T.minimum(self.learning_rate_var, denoise) * deltas) / T.sqrt(g2_) + epsilon)
 
       else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
