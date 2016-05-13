@@ -758,7 +758,7 @@ class Updater:
         epsilon = numpy.float32(1e-8)
         accumulator_new = self.rmsprop * accumulator + (numpy.float32(1) - self.rmsprop) * deltas ** 2
         updates.append((accumulator, accumulator_new))
-        upd[param] += - ((self.learning_rate_var * deltas) / T.sqrt(accumulator_new) + epsilon)
+        upd[param] += - (self.learning_rate_var * deltas) / (T.sqrt(accumulator_new) + epsilon)
 
       elif self.smorms3:
         # http://sifter.org/~simon/journal/20150420.html
@@ -774,7 +774,7 @@ class Updater:
         denoise = gg_ / (g2_ + epsilon)
         mem_ = numpy.float32(1) + mem * (numpy.float32(1) - denoise)
         updates.extend([(g, g_), (g2, g2_), (mem, mem_)])
-        upd[param] += - ((T.minimum(self.learning_rate_var, denoise) * deltas) / T.sqrt(g2_) + epsilon)
+        upd[param] += - (T.minimum(self.learning_rate_var, denoise) * deltas) / (T.sqrt(g2_) + epsilon)
 
       else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
