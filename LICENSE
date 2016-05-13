@@ -1,4 +1,4 @@
-RETURNN License
+The RWTH Extensible Training framework for Universal Recurrent Neural Networks (RETURNN) License
 
 This license is derived from the Q Public License v1.0 and the Qt Non-Commercial License v1.0 which are both Copyright by Trolltech AS, Norway.
 The aim of this license is to lay down the conditions enabling you to use, modify and circulate the SOFTWARE, use of third-party application programs based on the Software and publication of results obtained through the use of modified and unmodified versions of the SOFTWARE.
@@ -20,9 +20,9 @@ When you access and use the SOFTWARE, you are presumed to be aware of and to hav
     a. You must ensure that all recipients of machine-executable forms of these items are also able to receive and use the complete machine-readable source code to the items without any charge beyond the costs of data transfer.
     b. You must explicitly license all recipients of your items to use and re-distribute original and modified versions of the items in both machine-executable and source code forms. The recipients must be able to do so without any charges whatsoever, and they must be able to re-distribute to anyone they choose.
     c. If an application program gives you access to functionality of the Software for development of application programs, reusable components or other software components (e.g. an application that is a scripting wrapper), usage of the application program is considered to be usage of the Software and is thus bound by this license.
-   d. If the items are not available to the general public, and the initial developer of the Software requests a copy of the items, then you must supply one.
+    d. If the items are not available to the general public, and the initial developer of the Software requests a copy of the items, then you must supply one.
  7. Users must cite the authors of the Software upon publication of results obtained through the use of original or modified versions of the Software by refering to the following publication:
-tbd
+    tbd
 
  8. In no event shall the initial developers or copyright holders be liable for any damages whatsoever, including - but not restricted to - lost revenue or profits or other direct, indirect, special, incidental or consequential damages, even if they have been advised of the possibility of such damages, except to the extent invariable law, if any, provides otherwise.
 The Software and this license document are provided "AS IS" with NO EXPLICIT OR IMPLICIT WARRANTY OF ANY KIND, INCLUDING WARRANTY OF DESIGN, ADAPTION, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
