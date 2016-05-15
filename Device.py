@@ -297,7 +297,8 @@ class Device(object):
         self.trainnet.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = set(self.trainnet.j.keys())
+    self.used_data_keys = sorted(self.trainnet.j.keys())
+    print >> log.v4, "Device train-network: Used data keys:", self.used_data_keys
     assert "data" in self.used_data_keys
     self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
                                borrow=True, name='y_%s' % k)
