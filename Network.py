@@ -532,6 +532,21 @@ class LayerNetwork(object):
       if target not in self.n_out:
         self.n_out[target] = self.base_network.n_out[target]
       return
+    if target.endswith("[sparse:coo]"):
+      tprefix = target[:target.index("[")]
+      ndim = self.n_out[target][1]  # expected (without batch), e.g. 2 if like (time,feature)
+      # For each coordinate axe. Also with batch-dim.
+      for i in range(ndim):
+        self.y["%s[%i]" % (tprefix, i)] = T.TensorType("int32", (False,) * 2)('y_%s[%i]' % (tprefix, i))
+      # And the data itself. Also with batch-dim.
+      self.y["%s[%i]" % (tprefix, ndim)] = \
+        T.TensorType(dtype, (False,) * 2)("y_%s[%i]" % (tprefix, ndim))
+      # self.j will be used to get the list of keys we need to get from the dataset.
+      for i in range(ndim + 1):
+        self.j.setdefault("%s[%i]" % (tprefix, ndim), T.bmatrix('j_%s[%i]' % (tprefix, i)))
+      # self.y[target] will be given to the OutputLayer.
+      self.y[target] = (self.y["%s[%i]" % (tprefix, i)] for i in range(ndim + 1))
+      return
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim
     self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
