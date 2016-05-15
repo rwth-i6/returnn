@@ -155,7 +155,12 @@ class PythonControl:
     if alignment is not None:
       targets["classes"] = alignment
     elif soft_alignment is not None:
-      targets["classes"] = soft_alignment
+      # We expect a sparse soft-alignment in coordinate format (time, class-idx, weight [0,1]).
+      assert isinstance(soft_alignment, tuple)
+      assert len(soft_alignment) == 3
+      targets["classes[0]"] = soft_alignment[0]
+      targets["classes[1]"] = soft_alignment[1]
+      targets["classes[2]"] = soft_alignment[2]
     sprintDataset.addNewData(segmentName=name, features=features, targets=targets)
 
 # End Sprint PythonControl interface. }
