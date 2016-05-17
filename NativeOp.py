@@ -739,3 +739,95 @@ class LstmGenericBase(NativeOpGenBase):
   """
 
   code_version = ()
+
+
+class MaxAndArgmaxSparse(NativeOpGenBase):
+  in_info = (
+    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "_out_arg", "ndim": 2, "shape": (None, None), "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "_out_max", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"}
+  )
+  out_info = (
+    {"name": "out_arg", "ndim": 2, "shape": ((4, 0), (4, 1))},
+    {"name": "out_max", "ndim": 2, "shape": ((5, 0), (5, 1))}
+  )
+
+  c_extra_support_code = {
+    "doit_kernel": """
+    DEF_KERNEL
+    void doit_kernel(
+        int n_batch, int n_in_time, int n_out_time,
+        float* s0, float* s1, float* weight, float* mask,
+        float* out_arg, float* out_max) {
+      int batch_idx = threadIdx.x + blockDim.x * blockIdx.x;
+      while(batch_idx < n_batch) {
+        for(int i = 0; i < n_in_time; ++i) {
+          int idx = i * n_batch + batch_idx;
+          if(mask[idx] < 0.1) continue;
+          int t = (int) s0[idx];
+          int j = (int) s1[idx];
+          float w = weight[idx];
+          if(t < 0 || t >= n_out_time) continue;  // error somehow?
+          int out_idx = t * n_batch + batch_idx;
+          if(w > out_max[out_idx]) {
+            out_max[out_idx] = w;
+            out_arg[out_idx] = (float) j;
+          }
+        }
+        batch_idx += gridDim.x * blockDim.x;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 6);
+    assert(n_outputs == 2);
+    Ndarray* s0 = inputs[0];
+    Ndarray* s1 = inputs[1];
+    Ndarray* weight = inputs[2];
+    Ndarray* mask = inputs[3];
+    Ndarray* out_arg = *outputs[0];
+    Ndarray* out_max = *outputs[1];
+
+    int n_in_time = Ndarray_DIMS(s0)[0];
+    assert(n_in_time == Ndarray_DIMS(s1)[0]);
+    assert(n_in_time == Ndarray_DIMS(weight)[0]);
+    assert(n_in_time == Ndarray_DIMS(mask)[0]);
+    int n_batch = Ndarray_DIMS(s0)[1];
+    assert(n_batch == Ndarray_DIMS(s1)[1]);
+    assert(n_batch == Ndarray_DIMS(weight)[1]);
+    assert(n_batch == Ndarray_DIMS(mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_arg)[1]);
+    assert(n_batch == Ndarray_DIMS(out_max)[1]);
+    int n_out_time = Ndarray_DIMS(out_mask)[0];
+    assert(n_out_time == Ndarray_DIMS(out_arg)[0]);
+    assert(n_out_time == Ndarray_DIMS(out_max)[0]);
+
+    start_dev_kernel(doit_kernel, (
+      n_batch, n_in_time, n_out_time,
+      Ndarray_DEV_DATA(s0),
+      Ndarray_DEV_DATA(s1),
+      Ndarray_DEV_DATA(weight),
+      Ndarray_DEV_DATA(mask),
+      Ndarray_DEV_DATA(out_arg),
+      Ndarray_DEV_DATA(out_max)
+      ));
+  """
+
+  c_bw_code = """
+  PyErr_Format(PyExc_NotImplementedError, "MaxAndArgmaxSparse grad not implemented");
+  %(fail)s;
+  """
+
+  code_version = ()
+
+
+def max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max):
+  op = MaxAndArgmaxSparse.make_op()
+  out_arg, out_max = op(s0, s1, weight, mask, out_arg, out_max)
+  return out_arg, out_max
