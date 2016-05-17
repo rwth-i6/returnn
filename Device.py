@@ -297,7 +297,8 @@ class Device(object):
         self.trainnet.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = set(self.trainnet.j.keys())
+    self.used_data_keys = sorted(self.trainnet.j.keys())
+    print >> log.v4, "Device train-network: Used data keys:", self.used_data_keys
     assert "data" in self.used_data_keys
     self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
                                borrow=True, name='y_%s' % k)
@@ -1140,7 +1141,7 @@ class Device(object):
           print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
           return None, None
         timeout -= 1
-      print >> log.v3, "Timeout expired for device", self.name
+      print >> log.v3, "Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name)
       try:
         os.kill(self.proc.proc.pid, signal.SIGUSR1)
       except Exception as e:
