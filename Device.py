@@ -1141,7 +1141,7 @@ class Device(object):
           print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
           return None, None
         timeout -= 1
-      print >> log.v3, "Timeout expired for device", self.name
+      print >> log.v3, "Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name)
       try:
         os.kill(self.proc.proc.pid, signal.SIGUSR1)
       except Exception as e:
