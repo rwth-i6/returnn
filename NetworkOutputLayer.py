@@ -80,7 +80,19 @@ class OutputLayer(Layer):
     if isinstance(y, T.Variable):
       self.y_data_flat = time_batch_make_flat(y)
     else:
-      self.y_data_flat = None
+      assert self.attrs.get("target", "").endswith("[sparse:coo]")
+      assert isinstance(self.y, tuple)
+      assert len(self.y) == 3
+      s0, s1, weight = self.y
+      from NativeOp import max_and_argmax_sparse
+      n_time = self.z.shape[0]
+      n_batch = self.z.shape[1]
+      mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[0]")]
+      out_arg = T.zeros((n_time, n_batch), dtype="float32")
+      out_max = T.zeros((n_time, n_batch), dtype="float32") - numpy.float32(1e16)
+      out_arg, out_max = max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max)
+      assert out_arg.ndim == 2
+      self.y_data_flat = out_arg.astype("int32")
 
     self.norm = numpy.float32(1)
     self.target_index = self.index
