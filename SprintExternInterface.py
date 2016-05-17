@@ -163,6 +163,11 @@ class PythonControl:
       targets["classes[2]"] = soft_alignment[2]
     sprintDataset.addNewData(segmentName=name, features=features, targets=targets)
 
+  def exit(self, **kwargs):
+    print("SprintExternInterface: PythonControl exit %r" % kwargs)
+    if sprintDataset:
+      sprintDataset.close()
+
 # End Sprint PythonControl interface. }
 
 
