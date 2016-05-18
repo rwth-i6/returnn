@@ -658,7 +658,7 @@ class LayerNetwork(object):
     return params
 
   def get_all_params_vars(self):
-    return self.get_params_vars(**self.get_train_param_args_default())
+    return self.get_params_vars(hidden_layer_selection=sorted(self.hidden.keys()), with_output=True)
 
   def get_train_param_args_default(self):
     """
