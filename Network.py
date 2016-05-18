@@ -660,14 +660,15 @@ class LayerNetwork(object):
     return params
 
   def get_all_params_vars(self):
-    return self.get_params_vars(**self.get_train_param_args_default())
+    return self.get_params_vars(hidden_layer_selection=sorted(self.hidden.keys()), with_output=True)
 
   def get_train_param_args_default(self):
     """
     :returns default kwargs for self.get_params(), which returns all params with this.
     """
     return {
-      "hidden_layer_selection": sorted(self.hidden.keys()),  # Use all.
+      "hidden_layer_selection": [name for (name, layer) in sorted(self.hidden.items())
+                                 if layer.attrs.get("trainable", True)],  # Use all.
       "with_output": True
     }
 
