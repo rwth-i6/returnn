@@ -954,4 +954,6 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
 
 def crossentropy_softmax_and_gradient_z_sparse(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
-  pass
+  op = CrossEntropySoftmaxAndGradientZSparse.make_op()
+  out_ce, out_grad_z, _out_max_z = op(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask)
+  return out_ce, out_grad_z
