@@ -87,14 +87,12 @@ class OutputLayer(Layer):
     if time_limit == 'inf':
       import theano.ifelse
       pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
-      ipad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int8')
-      #pad = self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0) #
-      is_eval = T.and_(T.eq(self.index.shape[1], 1), T.le(self.index.shape[0],3))
       #target_length = self.index.shape[0]
       #mass = T.cast(T.sum(self.index),'float32')
       #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0],target_length),self.sources[0].index,self.index)
       #self.norm = mass / T.cast(T.sum(self.index),'float32')
-      self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
+      if self.eval_flag:
+        self.index = self.sources[0].index
       self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
                                     #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
                                     T.concatenate([self.z,pad],axis=0),

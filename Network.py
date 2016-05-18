@@ -162,14 +162,14 @@ class LayerNetwork(object):
     }
 
   @classmethod
-  def from_json_and_config(cls, json_content, config, mask=None, train_flag=False):
+  def from_json_and_config(cls, json_content, config, mask=None, train_flag=False, eval_flag=False):
     """
     :type config: Config.Config
     :type json_content: str | dict
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    return cls.from_json(json_content, mask=mask, train_flag=train_flag,
+    return cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=False,
                          **cls.init_args_from_config(config))
 
   @classmethod
@@ -242,7 +242,7 @@ class LayerNetwork(object):
 
   @classmethod
   def from_json(cls, json_content, n_in=None, n_out=None, network=None,
-                mask=None, sparse_input=False, target='classes', train_flag=False):
+                mask=None, sparse_input=False, target='classes', train_flag=False, eval_flag=False):
     """
     :type json_content: dict[str]
     :type n_in: int | None
@@ -259,6 +259,7 @@ class LayerNetwork(object):
       network.sparse_input = sparse_input
       network.default_target = target
       network.train_flag = train_flag
+      network.eval_flag = eval_flag
     n_in = network.n_in
     n_out = network.n_out
     assert isinstance(json_content, dict)
@@ -326,6 +327,7 @@ class LayerNetwork(object):
                  'dropout' : 0.0,
                  'name' : layer_name,
                  "train_flag": train_flag,
+                 "eval_flag": train_flag,
                  'network': network }
       params.update(obj)
       params["mask"] = mask # overwrite

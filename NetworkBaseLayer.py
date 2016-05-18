@@ -17,7 +17,7 @@ class Container(object):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class=None, name="", network=None,
-               train_flag=False, depth=1, consensus="flat",
+               train_flag=False, eval_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                recurrent_weights_init=None,
                substitute_param_expr=None):
@@ -35,6 +35,7 @@ class Container(object):
       self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
     self.train_flag = train_flag
+    self.eval_flag = eval_flag
     self.depth = depth
     if depth != 1:
       self.set_attr('depth', depth)
