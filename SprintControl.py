@@ -408,7 +408,7 @@ class PythonControl:
         # We are still stuck in there in the other thread, if not self.have_new_error_signal.
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
-        if not self.control_thread__have_new_error_signal:
+        if not (self.control_thread__have_new_error_signal or self.control_thread__have_new_seg):
           print("CRNN SprintControl[pid %i] getSegmentList, no error signal, skip segment: %s" % (os.getpid(), seg_name))
           if Verbose:
             # Print Sprint stacktrace.

@@ -77,7 +77,10 @@ class OutputLayer(Layer):
     else:
       self.index = copy_output.index
       self.y = copy_output.y_out
-    self.y_data_flat = time_batch_make_flat(y)
+    if isinstance(y, T.Variable):
+      self.y_data_flat = time_batch_make_flat(y)
+    else:
+      self.y_data_flat = None
 
     self.norm = numpy.float32(1)
     self.target_index = self.index
