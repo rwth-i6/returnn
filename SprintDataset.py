@@ -59,6 +59,7 @@ class SprintDataset(Dataset):
     self.crnnEpoch = None  # in CRNN train thread, Engine.train(). set via init_seq_order
     self.predefined_seq_list_order = None  # via init_seq_order
     self.sprintFinalized = False
+    self._target_black_list = []  # if we get non numpy arrays and cannot convert them
     self._resetCache()
     assert self.shuffle_frames_of_nseqs == 0  # Currently broken. But just use Sprint itself to do this.
 
@@ -241,6 +242,7 @@ class SprintDataset(Dataset):
       # 'classes' is always the alignment
       assert targets["classes"].shape == (T,)  # is in format (time,)
 
+    # Maybe convert some targets.
     if self.target_maps:
       for key, tmap in self.target_maps.items():
         assert key in targets
@@ -249,6 +251,18 @@ class SprintDataset(Dataset):
         if v.ndim == 0:
           v = numpy.zeros((T,), dtype=v.dtype) + v  # add time dimension
         targets[key] = v
+
+    # Maybe remove some targets.
+    for key in self._target_black_list:
+      if key in targets:
+        del targets[key]
+
+    # Check if all targets are valid.
+    for key, v in sorted(targets.items()):
+      if isinstance(v, numpy.ndarray): continue  # ok
+      print >> log.v3, "SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v)
+      self._target_black_list += [key]
+      del targets[key]
 
     with self.lock:
       # This gets called in the Sprint main thread.

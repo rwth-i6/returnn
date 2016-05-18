@@ -139,6 +139,49 @@ void find_best_path_kernel(float* in, long in_idx_stride, long out_idx_stride, l
 	}
 }
 
+DEF_KERNEL
+void levenshtein_kernel(int n_batch,
+						float str1c,
+						float* str2, float* str2index, long str2len,
+						float* row0, float* row1) {
+	long idx = threadIdx.x + blockDim.x * blockIdx.x;
+	long max_idx = str2len * n_batch;
+	while(idx < max_idx) {
+		float cost = (fabs(str1c - str2[idx]) < 0.1) ? 0 : 1;
+		float v = row1[idx] + 1; // insertion   XXX violation
+		float v2 = row0[idx + 1] + 1; // deletion
+		float v3 = row0[idx] + cost; // substitution
+		if(v2 < v) v = v2;
+		if(v3 < v) v = v3;
+		row1[idx + 1] = v;
+		idx += gridDim.x * blockDim.x;
+	}
+}
+
+void levenshtein(int n_batch,
+				 float* str1, float* str1index, long str1len,
+				 float* str2, float* str2index, long str2len,
+				 float* row0, float* row1) {
+	/*
+	formally:
+	 lev_{a,b}(i,j) =
+		max(i,j)  if i == 0 or j == 0, else
+		min(lev_{a,b}(i - 1, j) + 1,
+			lev_{a,b}(i, j - 1) + 1,
+			lev_{a,b}(i - 1, j - 1) + 1_(a_i != b_j))
+	If str1/str2 were single strings, we just would have:
+	 levenstein(str1, str2) = lev_{str1,str2}(str1len, str2len)
+	In this implementation, we support multiple batches.
+	 */
+	ndSetZero(row0, (str2len + 1) * n_batch); // previous row
+	ndSetZero(row1, (str2len + 1) * n_batch); // current row
+	
+	for(long i = 0; i < str1len * n_batch; ++i) {
+		row1[0] = float(i + 1);
+		start_dev_kernel(levenshtein_kernel, ());
+	}
+}
+
 void make_best_path(Ndarray* posteriors, int local_n_best_num) {
 	assert(Ndarray_NDIM(posteriors) == 3);
 	long T = Ndarray_DIMS(posteriors)[0];
