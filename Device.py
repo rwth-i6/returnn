@@ -496,6 +496,13 @@ class Device(object):
           signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.output
           sidx = hidden.index[param].dimshuffle('x',0) if param is not None else hidden.index
           source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
+        elif extract in self.testnet.output:
+          if param is not None:
+            param = int(param)
+          hidden = self.testnet.output[extract]
+          signal = hidden.output[param].dimshuffle('x', 0, 1) if param is not None else hidden.output
+          sidx = hidden.index[param].dimshuffle('x', 0) if param is not None else hidden.index
+          source.append(signal * sidx.dimshuffle(0, 1, 'x').repeat(signal.shape[2], axis=2))
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         elif extract == 'attention':

@@ -1396,27 +1396,33 @@ class LengthProjectionLayer(HiddenLayer):
     super(LengthProjectionLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('method',method)
-    z = T.concatenate([s.output[-1] for s in self.sources], axis=1)
+    z = T.concatenate([s.output[::s.attrs['direction']][-1] for s in self.sources], axis=1)
     dim = sum([s.attrs['n_out'] for s in self.sources])
-    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.01, name='W_%s' % self.name))
+    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.001, name='W_%s' % self.name))
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    #self.cost_scl = T.cast(T.sum(self.sources[0].index),'float32')
     if method == 'scale':
-      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0))
+      hyp = T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
     elif method == 'map':
-      hyp = T.maximum(T.ones((z.shape[0],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
-    self.cost_val = T.sum((hyp - real)**2)
+      hyp = T.maximum(T.ones((z.shape[1],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
+    self.cost_val = T.sqrt(T.sum(((hyp - real)**2) * T.cast(real, 'float32')))
+    #self.error_val = T.sum(T.abs_(hyp - T.cast(real, 'float32')) * T.cast(real, 'float32'))
     if self.train_flag or oracle:
-      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
+      self.length = (1. - use_real) * T.round(hyp) + use_real * real
     else:
-      self.length = T.ceil(hyp)
-    self.length = T.cast(self.length, 'int32')
+      self.length = T.round(hyp)
+    self.length = T.cast(T.maximum(self.length,T.ones_like(self.length)), 'int32')
+    self.error_val = T.sum(T.cast(T.neq(self.length, real), 'float32') * T.cast(real, 'float32'))
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
-    self.output = z
+    self.output = self.length.dimshuffle('x',0,'x')
 
   def cost(self):
     return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
@@ -1446,8 +1452,11 @@ class AttentionLengthLayer(HiddenLayer):
     eps = T.constant(1e-10, 'float32')
     uniform = T.ones(self.index.shape,'float32') - eps #/ T.cast(self.index.shape[0],'float32')
     w_act, w_att, w_rbf, w_eos = uniform, uniform, uniform, uniform
+
     if use_act:
-      w_act = T.exp(self.get_linear_forward_output().reshape(self.index.shape))
+      z = T.nnet.sigmoid(self.get_linear_forward_output().reshape(self.index.shape))
+      y = T.switch(T.eq(z.shape[0],1), z, T.inc_subtensor(z[:-1],-z[1:]))
+      w_act = T.exp(y)
       w_act = w_act / T.sum(w_act,axis=0,keepdims=True)
     else:
       self.params = {}
@@ -2508,8 +2517,8 @@ class NewConv(_NoOpLayer):
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
-    self.make_output(self.output)
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
+    self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
 
 
   # function for calculating the weight parameter of this class
