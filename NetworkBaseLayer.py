@@ -449,7 +449,7 @@ class Layer(Container):
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
-               sparse_filtering=False, gradient_scale=1.0, device=None,
+               sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
                **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
@@ -463,13 +463,18 @@ class Layer(Container):
     self.index = index
     self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
-    self.gradient_scale = gradient_scale
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
     self.set_attr('sparse_filtering', sparse_filtering)
-    self.set_attr('gradient_scale', gradient_scale)
+    if not trainable:
+      self.set_attr('trainable', trainable)  # only store if not default
+      self.gradient_scale = 0.0  # just to be sure
+    else:
+      self.gradient_scale = gradient_scale
+    if gradient_scale != 1.0:
+      self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('layer_drop', layer_drop)
     assert not carry, "not supported anymore"
     self.set_attr('residual', residual)

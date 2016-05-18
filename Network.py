@@ -665,7 +665,8 @@ class LayerNetwork(object):
     :returns default kwargs for self.get_params(), which returns all params with this.
     """
     return {
-      "hidden_layer_selection": sorted(self.hidden.keys()),  # Use all.
+      "hidden_layer_selection": [name for (name, layer) in sorted(self.hidden.items())
+                                 if layer.attrs.get("trainable", True)],  # Use all.
       "with_output": True
     }
 
