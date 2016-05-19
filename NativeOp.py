@@ -835,6 +835,17 @@ def sparse_to_dense(s0, s1, weight, mask, n_time, n_dim):
   return W
 
 
+def onehot_to_sparse(y, mask):
+  assert y.ndim == 2
+  assert mask.ndim == 2
+  n_time = y.shape[0]
+  n_batch = y.shape[1]
+  y_t = T.arange(0, n_time, dtype="float32").dimshuffle(0, 'x') + T.zeros((n_time, n_batch), dtype="float32")
+  y_i = y
+  y_w = T.ones((n_time, n_batch), dtype="float32")
+  return y_t, y_i, y_w, mask
+
+
 class MaxAndArgmaxSparse(NativeOpGenBase):
   """
   Expects a sparse matrix in COOrdinate format,
