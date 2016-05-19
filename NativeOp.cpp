@@ -109,7 +109,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DIM_Type npy_intp
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
-#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, 0))
+#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 #define Ndarray_memset(s, c, size) (memset(s, c, size))
 /*
