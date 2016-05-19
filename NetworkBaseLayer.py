@@ -17,7 +17,7 @@ class Container(object):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
   def __init__(self, layer_class=None, name="", network=None,
-               train_flag=False, depth=1, consensus="flat",
+               train_flag=False, eval_flag=False, depth=1, consensus="flat",
                forward_weights_init=None, bias_init=None,
                recurrent_weights_init=None,
                substitute_param_expr=None):
@@ -35,6 +35,7 @@ class Container(object):
       self.layer_class = layer_class.encode("utf8")
     self.name = name.encode("utf8")
     self.train_flag = train_flag
+    self.eval_flag = eval_flag
     self.depth = depth
     if depth != 1:
       self.set_attr('depth', depth)
@@ -449,7 +450,7 @@ class Layer(Container):
                with_bias=True,
                mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
-               sparse_filtering=False, gradient_scale=1.0, device=None,
+               sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
                **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
@@ -463,13 +464,18 @@ class Layer(Container):
     self.index = index
     self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
-    self.gradient_scale = gradient_scale
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
     self.set_attr('sparse_filtering', sparse_filtering)
-    self.set_attr('gradient_scale', gradient_scale)
+    if not trainable:
+      self.set_attr('trainable', trainable)  # only store if not default
+      self.gradient_scale = 0.0  # just to be sure
+    else:
+      self.gradient_scale = gradient_scale
+    if gradient_scale != 1.0:
+      self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('layer_drop', layer_drop)
     assert not carry, "not supported anymore"
     self.set_attr('residual', residual)
@@ -490,9 +496,11 @@ class Layer(Container):
       self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
-      self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
+      self.y_in = {}
       for k in y_in:
-        self.y_in[k].n_out = y_in[k].n_out
+        if not isinstance(y_in[k], T.Variable): continue
+        self.y_in[k] = time_batch_make_flat(y_in[k])  # TODO: better not flatten here...
+        self.y_in[k].n_out = getattr(y_in[k], "n_out", None)
     else:
       self.y_in = None
     self.constraints = T.constant(0)

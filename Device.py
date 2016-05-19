@@ -276,9 +276,10 @@ class Device(object):
     import h5py
     self.T = T
     self.network_task = config.value('task', 'train')
+    eval_flag = self.network_task in [ 'eval', 'forward' ]
     if json_content is not None:
-      self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True)
-      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False)
+      self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True, eval_flag=eval_flag)
+      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False, eval_flag=eval_flag)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True,
@@ -297,7 +298,7 @@ class Device(object):
         self.trainnet.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = sorted(self.trainnet.j.keys())
+    self.used_data_keys = [k for k in sorted(self.trainnet.j.keys()) if not k.endswith("[sparse:coo]")]
     print >> log.v4, "Device train-network: Used data keys:", self.used_data_keys
     assert "data" in self.used_data_keys
     self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
@@ -502,8 +503,7 @@ class Device(object):
             param = int(param)
           hidden = self.testnet.output[extract]
           signal = hidden.output[param].dimshuffle('x', 0, 1) if param is not None else hidden.output
-          sidx = hidden.index[param].dimshuffle('x', 0) if param is not None else hidden.index
-          source.append(signal * sidx.dimshuffle(0, 1, 'x').repeat(signal.shape[2], axis=2))
+          source.append(signal.dimshuffle(0, 1, 'x').repeat(signal.shape[2], axis=2))
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         elif extract == 'attention':

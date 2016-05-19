@@ -271,7 +271,7 @@ class RecurrentUnitLayer(Layer):
     :param droplm: probability to take the expected output as predecessor instead of the real one when LM=true
     :param bias_random_init_forget_shift: initialize forget gate bias of lstm networks with this value
     """
-    if len(kwargs['sources']) == 1 and kwargs['sources'][0].layer_class.endswith('length'):
+    if len(kwargs['sources']) == 1 and (kwargs['sources'][0].layer_class.endswith('length') or kwargs['sources'][0].layer_class.startswith('length')):
       kwargs['sources'] = []
     unit_given = unit
     if unit == 'lstm':  # auto selection

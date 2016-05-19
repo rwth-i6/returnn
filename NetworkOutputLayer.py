@@ -80,21 +80,31 @@ class OutputLayer(Layer):
     if isinstance(y, T.Variable):
       self.y_data_flat = time_batch_make_flat(y)
     else:
-      self.y_data_flat = None
+      assert self.attrs.get("target", "").endswith("[sparse:coo]")
+      assert isinstance(self.y, tuple)
+      assert len(self.y) == 3
+      s0, s1, weight = self.y
+      from NativeOp import max_and_argmax_sparse
+      n_time = self.z.shape[0]
+      n_batch = self.z.shape[1]
+      mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[0]")]
+      out_arg = T.zeros((n_time, n_batch), dtype="float32")
+      out_max = T.zeros((n_time, n_batch), dtype="float32") - numpy.float32(1e16)
+      out_arg, out_max = max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max)
+      assert out_arg.ndim == 2
+      self.y_data_flat = out_arg.astype("int32")
 
     self.norm = numpy.float32(1)
     self.target_index = self.index
     if time_limit == 'inf':
       import theano.ifelse
       pad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32')
-      ipad = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int8')
-      #pad = self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0) #
-      is_eval = T.and_(T.eq(self.index.shape[1], 1), T.le(self.index.shape[0],3))
       #target_length = self.index.shape[0]
       #mass = T.cast(T.sum(self.index),'float32')
       #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0],target_length),self.sources[0].index,self.index)
       #self.norm = mass / T.cast(T.sum(self.index),'float32')
-      self.index = theano.ifelse.ifelse(is_eval,self.sources[0].index,self.index)
+      if self.eval_flag:
+        self.index = self.sources[0].index
       self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
                                     #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
                                     T.concatenate([self.z,pad],axis=0),
@@ -195,6 +205,14 @@ class FramewiseOutputLayer(OutputLayer):
     """
     known_grads = None
     if self.loss == 'ce' or self.loss == 'priori':
+      if self.attrs.get("target", "").endswith("[sparse:coo]"):
+        assert isinstance(self.y, tuple)
+        assert len(self.y) == 3
+        from NativeOp import crossentropy_softmax_and_gradient_z_sparse
+        y_mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[0]")]
+        ce, grad_z = crossentropy_softmax_and_gradient_z_sparse(
+          self.z, self.index, self.y[0], self.y[1], self.y[2], y_mask)
+        return self.norm * T.sum(ce), {self.z: grad_z}
       if self.y_data_flat.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.

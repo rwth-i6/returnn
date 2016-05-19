@@ -20,6 +20,7 @@
 // PyObject * CudaNdarray_Copy(const CudaNdarray * self);
 #define Ndarray_Copy CudaNdarray_Copy
 #define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
+#define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
 /*
     // via: http://docs.nvidia.com/cuda/cublas/
     // matrices are in column-major form
@@ -108,8 +109,9 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DIM_Type npy_intp
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
-#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, 0))
+#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
+#define Ndarray_memset(s, c, size) (memset(s, c, size))
 /*
     // matrices are in column-major form
 	int sgemm_(char *transa, char *transb,
@@ -169,6 +171,18 @@ Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 	const Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
 	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), (Ndarray_DIM_Type*) dim);
 	return res;
+}
+
+long Ndarray_get_n_total_elements(Ndarray* a) {
+	long c = 1;
+	for(long i = 0; i < Ndarray_NDIM(a); ++i)
+		c *= Ndarray_DIMS(a)[i];
+	return c;
+}
+
+void Ndarray_set_zero(Ndarray* a) {
+	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
+	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
 }
 
 //if nd is 2 then assume a weight matrix and just return beginning of data

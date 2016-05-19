@@ -1389,7 +1389,7 @@ class EosLengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, err='ce', oracle=False, pad=0, method="scale", **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, method="scale", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
@@ -1407,12 +1407,12 @@ class LengthProjectionLayer(HiddenLayer):
       hyp = T.maximum(T.ones((z.shape[1],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
     self.cost_val = T.sqrt(T.sum(((hyp - real)**2) * T.cast(real, 'float32')))
     #self.error_val = T.sum(T.abs_(hyp - T.cast(real, 'float32')) * T.cast(real, 'float32'))
+    self.error_val = T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
     if self.train_flag or oracle:
       self.length = (1. - use_real) * T.round(hyp) + use_real * real
     else:
       self.length = T.round(hyp)
     self.length = T.cast(T.maximum(self.length,T.ones_like(self.length)), 'int32')
-    self.error_val = T.sum(T.cast(T.neq(self.length, real), 'float32') * T.cast(real, 'float32'))
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
