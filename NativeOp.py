@@ -1097,3 +1097,15 @@ def crossentropy_softmax_and_gradient_z_sparse(z, z_mask, y_target_t, y_target_i
   op = CrossEntropySoftmaxAndGradientZSparse.make_op()
   out_ce, out_grad_z, _out_max_z = op(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask)
   return out_ce, out_grad_z
+
+
+def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
+  assert z.ndim == 3
+  n_time = z.shape[0]
+  n_batch = z.shape[1]
+  n_dim = z.shape[2]
+  y_target = sparse_to_dense(y_target_t, y_target_i, y_target_w, y_target_mask, n_time, n_dim)
+  y = T.nnet.softmax(z.reshape(n_time * n_batch, n_dim)).reshape(n_time, n_batch, n_dim)
+  ce = -T.sum(y_target * T.log(y), axis=2)
+  grad_z = y - y_target
+  return ce, grad_z
