@@ -741,6 +741,100 @@ class LstmGenericBase(NativeOpGenBase):
   code_version = ()
 
 
+class SparseToDense(NativeOpGenBase):
+  """
+  Expects a sparse matrix in COOrdinate format,
+  where W[s0[i,b],b,s1[i]] = weight[i,b] for all i, and all batches b.
+  Will return W (time,batch,dim).
+  """
+  in_info = (
+    {"name": "_initial_W", "ndim": 3, "shape": (None, None, None), "need_contiguous": True, "want_inplace": 0},
+    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
+  )
+  out_info = (
+    {"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))}
+  )
+
+  c_extra_support_code = {
+    "assign_kernel": """
+    DEF_KERNEL
+    void assign_kernel(
+      float* out, float* s0, float* s1, float* w, float* mask,
+      long n_sparse_idx, long n_time, long n_batch, long n_dim)
+    {
+      long max_idx = n_batch * n_sparse_index;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        if(mask[idx] < 0.1) continue;
+        long batch = idx % n_batch;
+        long t = (long) s0[idx];
+        long j = (long) s1[idx];
+        float y = w[idx];
+        if(t < 0 || t >= n_time) continue;  // error somehow?
+        if(j < 0 || j >= n_dim) continue;  // error somehow?
+        long out_idx = t * n_batch * n_dim + batch * n_dim + j;
+        out[out_idx] += y;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 5);
+    assert(n_outputs == 1);
+    Ndarray* s0 = inputs[1];
+    Ndarray* s1 = inputs[2];
+    Ndarray* weight = inputs[3];
+    Ndarray* mask = inputs[4];
+    Ndarray* out_W = *outputs[0];
+
+    assert(Ndarray_NDIM(s0) == 2);
+    assert(Ndarray_NDIM(s1) == 2);
+    assert(Ndarray_NDIM(weight) == 2);
+    assert(Ndarray_NDIM(mask) == 2);
+    assert(Ndarray_NDIM(out_W) == 3);
+    int n_sparse_idx = Ndarray_DIMS(s0)[0];
+    assert(n_sparse_idx == Ndarray_DIMS(s1)[0]);
+    assert(n_sparse_idx == Ndarray_DIMS(weight)[0]);
+    assert(n_sparse_idx == Ndarray_DIMS(mask)[0]);
+    int n_batch = Ndarray_DIMS(s0)[1];
+    assert(n_batch == Ndarray_DIMS(s1)[1]);
+    assert(n_batch == Ndarray_DIMS(weight)[1]);
+    assert(n_batch == Ndarray_DIMS(mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_W)[1]);
+    int n_time = Ndarray_DIMS(out_W)[0];
+    int n_dim = Ndarray_DIMS(out_W)[2];
+
+    start_dev_kernel(assign_kernel, (
+      Ndarray_DEV_DATA(out_W),
+      Ndarray_DEV_DATA(s0),
+      Ndarray_DEV_DATA(s1),
+      Ndarray_DEV_DATA(weight),
+      Ndarray_DEV_DATA(mask),
+      n_sparse_idx, n_time, n_batch, n_dim
+    ));
+  """
+
+
+def sparse_to_dense(s0, s1, weight, mask, n_time, n_dim):
+  assert s0.ndim == 2
+  assert s1.ndim == 2
+  assert weight.ndim == 2
+  assert mask.ndim == 2
+  n_batch = s0.shape[1]
+  initial_W = T.zeros((n_time, n_batch, n_dim), dtype="float32")
+  op = SparseToDense.make_op()
+  W = op(initial_W, s0, s1, weight, mask)
+  assert isinstance(W, T.Variable)
+  return W
+
+
 class MaxAndArgmaxSparse(NativeOpGenBase):
   """
   Expects a sparse matrix in COOrdinate format,
@@ -822,7 +916,7 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
       Ndarray_DEV_DATA(mask),
       Ndarray_DEV_DATA(out_arg),
       Ndarray_DEV_DATA(out_max)
-      ));
+    ));
   """
 
   code_version = ()
@@ -982,12 +1076,14 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
     start_dev_kernel(max_kernel, (
       Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(z_mask),
-      n_dim, n_time * n_batch));
+      n_dim, n_time * n_batch
+    ));
     Ndarray_set_zero(out_ce);
     start_dev_kernel(softmax_kernel), (
       Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
-      n_dim, n_time * n_batch));
+      n_dim, n_time * n_batch
+    ));
     start_dev_kernel(ce_sm_grad_kernel, (
       Ndarray_DEV_DATA(out_ce), Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
