@@ -430,7 +430,11 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
 
   def c_support_code(self):
     src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
-    return "#define CUDA 1\n\n" + src
+    return "\n\n".join([
+      "#define CUDA 1",
+      src,
+      self.c_extra_support_code,
+      "// end of c_support_code\n\n\n"])
 
 
 @gof.local_optimizer([NativeOp], inplace=True)
