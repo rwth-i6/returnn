@@ -67,6 +67,8 @@ class NativeOp(theano.Op):
     :param str name: name
     """
     super(NativeOp, self).__init__()
+    assert isinstance(in_info, (list, tuple))
+    assert isinstance(out_info, (list, tuple))
     in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
     self.in_info = make_hashable(in_info)
     self.out_info = make_hashable(out_info)
@@ -755,7 +757,7 @@ class SparseToDense(NativeOpGenBase):
     {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
   )
   out_info = (
-    {"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))}
+    {"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
   )
 
   c_extra_support_code = {
@@ -765,7 +767,7 @@ class SparseToDense(NativeOpGenBase):
       float* out, float* s0, float* s1, float* w, float* mask,
       long n_sparse_idx, long n_time, long n_batch, long n_dim)
     {
-      long max_idx = n_batch * n_sparse_index;
+      long max_idx = n_batch * n_sparse_idx;
       for(
         long idx = threadIdx.x + blockDim.x * blockIdx.x;
         idx < max_idx;
