@@ -15,7 +15,7 @@ from theano.gof.opt import OpSub
 from theano.compile import optdb
 from theano import gof
 from Util import make_hashable, make_dll_name, escape_c_str
-from TheanoUtil import try_register_gpu_opt, make_var_tuple
+from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
 
 
 class NativeOp(theano.Op):
@@ -1032,12 +1032,12 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
         long j = (long) s1[idx];
         float y_target = w[idx];
         if(t < 0 || t >= n_time) continue;  // error somehow?
-        if(j < 0 || j >= n_ndim) continue;  // error somehow?
+        if(j < 0 || j >= n_dim) continue;  // error somehow?
         long out_ce_idx = t * n_batch + batch;
         long out_y_idx = t * n_batch * n_dim + batch * n_dim + j;
         // This assumes that out_grad_z is still softmax(z).
         // This also assumes that every [t,j] is only represented once in the sparse data.
-        out_ce[out_ce_idx] -= y_target * log(min(out_grad_z[out_y_idx], 1e-30));
+        out_ce[out_ce_idx] -= y_target * log(fmin(out_grad_z[out_y_idx], 1e-30));
         out_grad_z[out_y_idx] -= y_target;
       }
     }
@@ -1092,7 +1092,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
       n_dim, n_time * n_batch
     ));
     Ndarray_set_zero(out_ce);
-    start_dev_kernel(softmax_kernel), (
+    start_dev_kernel(softmax_kernel, (
       Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
       n_dim, n_time * n_batch
@@ -1118,7 +1118,7 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
   n_batch = z.shape[1]
   n_dim = z.shape[2]
   y_target = sparse_to_dense(y_target_t, y_target_i, y_target_w, y_target_mask, n_time, n_dim)
-  y = T.nnet.softmax(z.reshape(n_time * n_batch, n_dim)).reshape(n_time, n_batch, n_dim)
+  y = softmax(z)
   ce = -T.sum(y_target * T.log(y), axis=2)
   grad_z = y - y_target
   return ce, grad_z
