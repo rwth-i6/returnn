@@ -1037,7 +1037,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
         long out_y_idx = t * n_batch * n_dim + batch * n_dim + j;
         // This assumes that out_grad_z is still softmax(z).
         // This also assumes that every [t,j] is only represented once in the sparse data.
-        out_ce[out_ce_idx] -= y_target * log(fmin(out_grad_z[out_y_idx], 1e-30));
+        out_ce[out_ce_idx] -= y_target * log(fmax(out_grad_z[out_y_idx], 1e-30));
         out_grad_z[out_y_idx] -= y_target;
       }
     }
