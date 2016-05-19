@@ -880,6 +880,31 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
       }
     }
     """,
+    "softmax_kernel": """
+    DEF_KERNEL
+    void softmax_kernel(
+      float* out_softmax,
+      float* z, float* max_z, float* mask,
+      long stride, long max_idx)
+    {
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long start = idx * stride;
+        float s = 0;
+        for(long i = 0; i < stride; ++i) {
+          s += exp(z[start + i] - max_z[idx]);
+        }
+        if(s < 1e-16) s = 1e-16;
+        for(long i = 0; i < stride; ++i) {
+          float y = exp(z[start + i] - max_z[idx]) / s;
+          out_softmax[start + i] = (mask[idx] > 0.5) ? y : 0;
+        }
+      }
+    }
+    """,
     "ce_sm_grad_kernel": """
     DEF_KERNEL
     void ce_sm_grad_kernel(
@@ -894,7 +919,19 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
         idx < max_idx;
         idx += gridDim.x * blockDim.x)
       {
-        // TODO...
+        if(s_mask[idx] < 0.1) continue;
+        long batch = idx % n_batch;
+        long t = (long) s0[idx];
+        long j = (long) s1[idx];
+        float y_target = w[idx];
+        if(t < 0 || t >= n_time) continue;  // error somehow?
+        if(j < 0 || j >= n_ndim) continue;  // error somehow?
+        long out_ce_idx = t * n_batch + batch;
+        long out_y_idx = t * n_batch * n_dim + batch * n_dim + j;
+        // This assumes that out_grad_z is still softmax(z).
+        // This also assumes that every [t,j] is only represented once in the sparse data.
+        out_ce[out_ce_idx] -= y_target * log(min(out_grad_z[out_y_idx], 1e-30));
+        out_grad_z[out_y_idx] -= y_target;
       }
     }
     """
@@ -943,7 +980,14 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
     assert(n_sparse_index == Ndarray_DIMS(w)[0]);
     assert(n_sparse_index == Ndarray_DIMS(s_mask)[0]);
 
-    start_dev_kernel(max_kernel, (out_max_z, z, index, n_dim, n_time * n_batch));
+    start_dev_kernel(max_kernel, (
+      Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(z_mask),
+      n_dim, n_time * n_batch));
+    Ndarray_set_zero(out_ce);
+    start_dev_kernel(softmax_kernel), (
+      Ndarray_DEV_DATA(out_grad_z),
+      Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
+      n_dim, n_time * n_batch));
     start_dev_kernel(ce_sm_grad_kernel, (
       Ndarray_DEV_DATA(out_ce), Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
