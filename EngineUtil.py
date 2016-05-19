@@ -27,8 +27,6 @@ def assign_dev_data(device, dataset, batches):
         o = seq.batch_frame_offset
         q = seq.batch_slice + offset_slice
         l = seq.frame_length
-        #assert o + l[0] <= shape[0]
-        #assert q < shape[1]
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in device.used_data_keys:
           data = dataset.get_data(seq.seq_idx, k)
@@ -36,12 +34,7 @@ def assign_dev_data(device, dataset, batches):
             assert data is not None
             device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
           if data is not None:
-            #print k,o[k],l[k]
             device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
-            #if exclude:
-            #  for i in xrange(l[1]):
-            #    if device.targets[target][o + i, q] in exclude:
-            #      device.index[o + i, q] = 0
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
@@ -50,12 +43,6 @@ def assign_dev_data(device, dataset, batches):
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
-    #for i in xrange(device.input_index.shape[0]):
-    #  if numpy.sum(device.input_index[i,:]) == 0:
-    #    device.input_index[i,0] = 1
-    #for i in xrange(device.output_index.shape[0]):
-    #  if numpy.sum(device.output_index[i,:]) == 0:
-    #    device.output_index[i,0] = 1
     # Note on multiple batches for the non-recurrent case:
     # We could either concatenate all into a single slice, or do multiple slices.
     # We do multiple slices here.
