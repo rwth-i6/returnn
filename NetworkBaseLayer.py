@@ -496,9 +496,11 @@ class Layer(Container):
       self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
     if y_in is not None:
-      self.y_in = {k: time_batch_make_flat(y_in[k]) for k in y_in}
+      self.y_in = {}
       for k in y_in:
-        self.y_in[k].n_out = y_in[k].n_out
+        if not isinstance(y_in[k], T.Variable): continue
+        self.y_in[k] = time_batch_make_flat(y_in[k])  # TODO: better not flatten here...
+        self.y_in[k].n_out = getattr(y_in[k], "n_out", None)
     else:
       self.y_in = None
     self.constraints = T.constant(0)
