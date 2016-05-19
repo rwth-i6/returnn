@@ -425,10 +425,10 @@ class Engine:
 
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
-    
+
     if self.epoch == 1:
-      print >> log.v4, "new save model", self.get_epoch_model_filename().replace('train.001','train.000')
-      self.save_model(self.get_epoch_model_filename().replace('train.001','train.000'), 0)
+      print >> log.v4, "new save model", self.get_epoch_model_filename().replace('.001', '.000')
+      self.save_model(self.get_epoch_model_filename().replace('.001', '.000'), 0)
 
     if self.is_pretrain_epoch():
       self.print_network_info()
@@ -460,8 +460,6 @@ class Engine:
 
     assert not any(numpy.isinf(trainer.score.values())) or any(numpy.isnan(trainer.score.values())), \
       "Model is broken, got inf or nan final score: %s" % trainer.score
-      
-    print >> log.v4, "epoch now:", self.epoch
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
