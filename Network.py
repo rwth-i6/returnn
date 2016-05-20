@@ -542,15 +542,15 @@ class LayerNetwork(object):
       ndim = self.n_out[target][1]  # expected (without batch), e.g. 2 if like (time,feature)
       # For each coordinate axe. Also with batch-dim.
       for i in range(ndim):
-        self.y["%s[%i]" % (tprefix, i)] = T.TensorType("int32", (False,) * 2)('y_%s[%i]' % (tprefix, i))
+        self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, i)] = T.TensorType("int32", (False,) * 2)('y_%s[sparse:coo:%i:%i]' % (tprefix, ndim, i))
       # And the data itself. Also with batch-dim.
-      self.y["%s[%i]" % (tprefix, ndim)] = \
+      self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, ndim)] = \
         T.TensorType(dtype, (False,) * 2)("y_%s[%i]" % (tprefix, ndim))
       # self.j will be used to get the list of keys we need to get from the dataset.
       for i in range(ndim + 1):
-        self.j.setdefault("%s[%i]" % (tprefix, i), T.bmatrix('j_%s[%i]' % (tprefix, i)))
+        self.j.setdefault("%s[sparse:coo:%i:%i]" % (tprefix, ndim, i), T.bmatrix('j_%s[sparse:coo:%i:%i]' % (tprefix, ndim, i)))
       # self.y[target] will be given to the OutputLayer.
-      self.y[target] = tuple(self.y["%s[%i]" % (tprefix, i)] for i in range(ndim + 1))
+      self.y[target] = tuple(self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, i)] for i in range(ndim + 1))
       self.j[target] = self.j["data"]  # Not sure if this is the best we can do...
       return
     assert target in self.n_out
