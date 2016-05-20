@@ -426,8 +426,8 @@ class Dataset(object):
         yield (s, NumbersDict(0), length)
       else:
         t = 0
-        while t < length.max_value():
-          l = min(t + chunk_size, length.max_value())
+        while t < length["data"]:
+          l = min(t + chunk_size, length["data"])
           yield (s, NumbersDict(t), NumbersDict(l))
           t += chunk_step
       s += 1
