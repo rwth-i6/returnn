@@ -86,14 +86,14 @@ class LayerNetwork(object):
     self.base_network = base_network
 
   @classmethod
-  def from_config_topology(cls, config, mask=None, train_flag = False):
+  def from_config_topology(cls, config, mask=None, train_flag=False, eval_flag=False):
     """
     :type config: Config.Config
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
     json_content = cls.json_from_config(config, mask=mask)
-    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag)
+    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag, eval_flag=eval_flag)
 
   @classmethod
   def json_from_config(cls, config, mask=None):
@@ -169,7 +169,7 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    return cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=False,
+    return cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=eval_flag,
                          **cls.init_args_from_config(config))
 
   @classmethod
@@ -200,7 +200,7 @@ class LayerNetwork(object):
       network.get_layer_param = shared_get_layer_param
     if json_content is None:
       json_content = base_network.to_json_content()
-    cls.from_json(json_content, network=network, train_flag=base_network.train_flag)
+    cls.from_json(json_content, network=network, train_flag=base_network.train_flag, eval_flag=base_network.eval_flag)
     if share_params:
       trainable_params = network.get_all_params_vars()
       assert len(trainable_params) == 0
@@ -327,7 +327,7 @@ class LayerNetwork(object):
                  'dropout' : 0.0,
                  'name' : layer_name,
                  "train_flag": train_flag,
-                 "eval_flag": train_flag,
+                 "eval_flag": eval_flag,
                  'network': network }
       params.update(obj)
       params["mask"] = mask # overwrite
@@ -362,7 +362,8 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, input_mask=None, sparse_input=False, target='classes', train_flag=False):
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, input_mask=None, sparse_input=False, target='classes',
+                              train_flag=False, eval_flag=False):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -388,6 +389,7 @@ class LayerNetwork(object):
     network.sparse_input = sparse_input
     network.default_target = target
     network.train_flag = train_flag
+    network.eval_flag = eval_flag
 
     if 'target' in model['n_out'].attrs:
       target = model['n_out'].attrs['target']
@@ -486,6 +488,7 @@ class LayerNetwork(object):
                    'name': layer_name,
                    'mask': mask,
                    'train_flag' : train_flag,
+                   "eval_flag": eval_flag,
                    'network': network,
                    'index' : index }
         try:

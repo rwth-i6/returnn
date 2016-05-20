@@ -1389,30 +1389,73 @@ class EosLengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, oracle=False, method="scale", **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, eval_oracle=True, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
     super(LengthProjectionLayer, self).__init__(**kwargs)
     self.params = {}
     self.set_attr('method',method)
+    self.set_attr('pad', pad)
+    self.set_attr('smo', smo)
     z = T.concatenate([s.output[::s.attrs['direction']][-1] for s in self.sources], axis=1)
+    q = T.concatenate([s.act[1][::s.attrs['direction']][-1] for s in self.sources], axis=1)
+    zf = T.concatenate([s.output for s in self.sources], axis=2)
+    #z = T.sum(zf,axis=0)
     dim = sum([s.attrs['n_out'] for s in self.sources])
-    self.W = self.add_param(self.create_random_uniform_weights(1, dim, l = 0.001, name='W_%s' % self.name))
+
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
     #self.cost_scl = T.cast(T.sum(self.sources[0].index),'float32')
     if method == 'scale':
-      hyp = T.nnet.sigmoid(T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0)) * T.sum(self.sources[0].index, axis=0)
+      self.W = self.add_param(self.create_random_uniform_weights(1, dim, l=0.0001, name='W_%s' % self.name))
+      self.bs = self.add_param(self.create_bias(1, "bs_%s" % self.name))
+      hyp = T.nnet.sigmoid(
+        T.sum(self.W.repeat(z.shape[0], axis=0) * z, axis=1) + self.b.repeat(z.shape[0], axis=0)) * (self.bs[0] + T.constant(avg,'float32'))
+      self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    elif method == 'scaleq':
+      self.W_a = self.add_param(self.create_forward_weights(dim,dim,'A'))
+      self.ba = self.add_param(self.create_bias(dim, "ba_%s" % self.name))
+      z = T.tanh(T.dot(z,self.W_a) + self.ba)
+      self.W = self.add_param(self.create_random_uniform_weights(1, dim, l=0.001, name='W_%s' % self.name))
+      self.bs = self.add_param(self.create_bias(1, "bs_%s" % self.name))
+      hyp = T.nnet.sigmoid(
+        T.sum(self.W.repeat(z.shape[0], axis=0) * z, axis=1) + self.b.repeat(z.shape[0], axis=0)) * (
+            self.bs[0] + T.constant(avg, 'float32'))
+      self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    elif method == 'exp':
+      self.Q = self.add_param(self.create_random_uniform_weights(dim, 1, l=0.001, name='Q_%s' % self.name))
+      expect = T.exp(T.dot(zf,self.Q)[:,:,0] + self.b[0])
+      expect = expect / expect.sum(axis=0,keepdims=True)
+      hyp = T.cast(T.argmax(expect,axis=0),'float32') + T.constant(1.,'float32')
+      self.cost_val = -T.sum(T.log(expect[T.cast(real,'int32')-1,T.arange(expect.shape[1])]) * T.cast(real, 'float32'))
     elif method == 'map':
-      hyp = T.maximum(T.ones((z.shape[1],),'float32'), T.sum(self.W.repeat(z.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0],axis=0) + T.sum(self.sources[0].index, axis=0))
-    self.cost_val = T.sqrt(T.sum(((hyp - real)**2) * T.cast(real, 'float32')))
-    #self.error_val = T.sum(T.abs_(hyp - T.cast(real, 'float32')) * T.cast(real, 'float32'))
+      self.W = self.add_param(self.create_random_uniform_weights(1, dim, l=0.001, name='W_%s' % self.name))
+      hyp = T.sum(self.W.repeat(q.shape[0],axis=0) * z,axis=1) + self.b.repeat(z.shape[0], axis=0) + T.constant(avg,'float32') #T.sum(self.sources[0].index, axis=0) #+ T.constant(1,'float32')
+      self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    elif method == 'maps':
+      #self.W = self.add_param(self.create_random_uniform_weights(1, dim, l=0.001, name='W_%s' % self.name))
+      #self.bs = self.add_param(self.create_bias(1, "bs_%s" % self.name))
+      hyp = T.sum(q, axis=1) + self.b.repeat(z.shape[0], axis=0) + T.constant(avg, 'float32')
+      self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    elif method == 'mapq':
+      self.W_a = self.add_param(self.create_forward_weights(dim, dim*4, 'A'))
+      self.ba = self.add_param(self.create_bias(dim*4, "ba_%s" % self.name))
+      z = T.nnet.relu(T.dot(q, self.W_a) + self.ba)
+      self.W = self.add_param(self.create_random_uniform_weights(1, dim*4, l=0.001, name='W_%s' % self.name))
+      hyp = T.sum(self.W.repeat(z.shape[0], axis=0) * z, axis=1) + self.b.repeat(z.shape[0], axis=0) + T.constant(avg, 'float32')
+      self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    #if smo != 0:
+    #  self.scl = T.sum(T.exp(T.constant(smo,'float32') * (real-hyp))) + T.constant(1,'float32')
+    #else:
+    #  self.scl = T.constant(1.,'float32')
+    #  #self.error_val = T.sum(T.abs_(hyp - T.cast(real, 'float32')) * T.cast(real, 'float32'))
     self.error_val = T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
-    if self.train_flag or oracle:
+    if self.train_flag or (oracle and not self.eval_flag) or eval_oracle:
       self.length = (1. - use_real) * T.round(hyp) + use_real * real
     else:
       self.length = T.round(hyp)
-    self.length = T.cast(T.maximum(self.length,T.ones_like(self.length)), 'int32')
+    self.length = T.maximum(self.length,T.ones_like(self.length))
+    self.length = T.cast(self.length + T.constant(pad,'float32'),'int32')
     idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
                         sequences = [self.length], non_sequences=[T.max(self.length) + 1])
     self.index = idx.dimshuffle(1,0)[:-1]
