@@ -293,7 +293,7 @@ class Dataset(object):
 
   def _get_data_slice_sparse(self, seq_idx, key, start_frame, end_frame):
     key_prefix = key[:key.index("[")]
-    sparse_info = key[key.index("["):key.index("]")].split(":")
+    sparse_info = key[key.index("[") + 1:key.index("]")].split(":")
     assert len(sparse_info) == 4
     assert tuple(sparse_info[0:3]) == ("sparse", "coo", "2")
     s0 = self.get_data(seq_idx, "%s[sparse:coo:2:0]" % key_prefix)
