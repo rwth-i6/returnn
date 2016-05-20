@@ -285,6 +285,28 @@ class Dataset(object):
   def get_ctc_targets(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def get_data_slice(self, seq_idx, key, start_frame, end_frame):
+    if "[sparse:" in key and (start_frame > 0 or end_frame < self.get_seq_length(seq_idx)[key]):
+      return self._get_data_slice_sparse(seq_idx, key, start_frame, end_frame)
+    data = self.get_data(seq_idx, key)
+    return data[start_frame:end_frame]
+
+  def _get_data_slice_sparse(self, seq_idx, key, start_frame, end_frame):
+    key_prefix = key[:key.index("[")]
+    sparse_info = key[key.index("["):key.index("]")].split(":")
+    assert len(sparse_info) == 4
+    assert tuple(sparse_info[0:3]) == ("sparse", "coo", "2")
+    s0 = self.get_data(seq_idx, "%s[sparse:coo:2:0]" % key_prefix)
+    assert s0 is not None
+    from NativeOp import sparse_splice_offset_numpy
+    s0_start = sparse_splice_offset_numpy(s0, start_frame)
+    s0_end = sparse_splice_offset_numpy(s0, end_frame)
+    if sparse_info[-1] == "0":
+      return s0[s0_start:s0_end] - start_frame
+    else:
+      data = self.get_data(seq_idx, key)
+      return data[s0_start:s0_end]
+
   def get_tag(self, sorted_seq_idx):
     return "seq-%i" % sorted_seq_idx
 

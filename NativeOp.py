@@ -852,6 +852,25 @@ def onehot_to_sparse(y, mask):
   return y_t, y_i, y_w, mask
 
 
+def sparse_slice_offset(s0, idx):
+  """
+  :param s0: 1D tensor, ordered indices for sparse coo-format matrix (without batch)
+  :param idx: scalar, index to find in s0
+  :return: s0_idx, such that s0[i] >= idx for all i >= s0_idx, s0[i] < idx for all i < s0_idx.
+  This assumes that the indices in s0 are ordered.
+  """
+  mask = s0 < idx
+  return T.sum(mask)
+
+
+def sparse_splice_offset_numpy(s0, idx):
+  """
+  Like sparse_slice_offset().
+  """
+  mask = s0 < idx
+  return numpy.sum(mask)
+
+
 class MaxAndArgmaxSparse(NativeOpGenBase):
   """
   Expects a sparse matrix in COOrdinate format,
