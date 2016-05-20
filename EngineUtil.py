@@ -29,17 +29,15 @@ def assign_dev_data(device, dataset, batches):
         l = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in device.used_data_keys:
+          if l[k] == 0: continue
           data = dataset.get_data(seq.seq_idx, k)
-          if l[k] > 0:
-            assert data is not None
-            device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
-          if data is not None:
-            device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+          assert data is not None
+          device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
+          device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
         if dataset.has_ctc_targets() and not chunking_active:
-          #assert dataset.get_seq_length_2d(seq.seq_idx) == l  # Full seq.
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
