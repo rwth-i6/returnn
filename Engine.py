@@ -183,6 +183,7 @@ class Engine:
     self.update_batch_size = config.int('update_batch_size', 0)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
+    self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
     self.learning_rate = self.learning_rate_control.defaultLearningRate
     self.initial_learning_rate = self.learning_rate
@@ -425,6 +426,11 @@ class Engine:
 
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
+
+    if self.epoch == 1 and self.save_epoch1_initial_model:
+      epoch0_model_filename = self.epoch_model_filename(self.model_filename, 0, self.is_pretrain_epoch())
+      print >> log.v4, "save initial epoch1 model", epoch0_model_filename
+      self.save_model(epoch0_model_filename, 0)
 
     if self.is_pretrain_epoch():
       self.print_network_info()

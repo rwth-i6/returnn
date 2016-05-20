@@ -548,9 +548,10 @@ class LayerNetwork(object):
         T.TensorType(dtype, (False,) * 2)("y_%s[%i]" % (tprefix, ndim))
       # self.j will be used to get the list of keys we need to get from the dataset.
       for i in range(ndim + 1):
-        self.j.setdefault("%s[%i]" % (tprefix, ndim), T.bmatrix('j_%s[%i]' % (tprefix, i)))
+        self.j.setdefault("%s[%i]" % (tprefix, i), T.bmatrix('j_%s[%i]' % (tprefix, i)))
       # self.y[target] will be given to the OutputLayer.
-      self.y[target] = (self.y["%s[%i]" % (tprefix, i)] for i in range(ndim + 1))
+      self.y[target] = tuple(self.y["%s[%i]" % (tprefix, i)] for i in range(ndim + 1))
+      self.j[target] = self.j["data"]  # Not sure if this is the best we can do...
       return
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim

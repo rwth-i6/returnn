@@ -15,7 +15,7 @@ from theano.gof.opt import OpSub
 from theano.compile import optdb
 from theano import gof
 from Util import make_hashable, make_dll_name, escape_c_str
-from TheanoUtil import try_register_gpu_opt, make_var_tuple
+from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
 
 
 class NativeOp(theano.Op):
@@ -67,6 +67,8 @@ class NativeOp(theano.Op):
     :param str name: name
     """
     super(NativeOp, self).__init__()
+    assert isinstance(in_info, (list, tuple))
+    assert isinstance(out_info, (list, tuple))
     in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
     self.in_info = make_hashable(in_info)
     self.out_info = make_hashable(out_info)
@@ -350,12 +352,12 @@ class NativeOp(theano.Op):
           assert(in_want_inplace[i] < n_outputs);
           Py_XDECREF(*outputs[in_want_inplace[i]]);
           if(in_is_inplace[i]) {
-            *outputs[in_want_inplace[i]] = inputs[i];
+            *(outputs[in_want_inplace[i]]) = inputs[i];
             Py_INCREF(inputs[i]);
           } else {
-            *outputs[in_want_inplace[i]] = (Ndarray*) Ndarray_Copy(inputs[i]);
-            if(!*outputs[in_want_inplace[i]]) %(fail)s;
-            inputs[i] = *outputs[in_want_inplace[i]];  // reset with copy
+            *(outputs[in_want_inplace[i]]) = (Ndarray*) Ndarray_Copy(inputs[i]);
+            if(!*(outputs[in_want_inplace[i]])) %(fail)s;
+            inputs[i] = *(outputs[in_want_inplace[i]]);  // reset with copy
           }
         }
 
@@ -364,13 +366,13 @@ class NativeOp(theano.Op):
         int out_shape_idx = 0;
         for(int i = 0; i < n_outputs; ++i) {
           assert(out_shape_idx + out_ndims[i] <= ARRAY_LEN(output_shapes_flat));
-          if(*outputs[i]) {
+          if(*(outputs[i])) {
             for(int j = 0; j < out_ndims[i]; ++j)
               assert(output_shapes_flat[out_shape_idx + j] == Ndarray_DIMS(*outputs[i])[j]);
           }
           else {
-            *outputs[i] = (Ndarray*) Ndarray_NewDims(out_ndims[i], &output_shapes_flat[out_shape_idx]);
-            if(!*outputs[i]) %(fail)s;
+            *(outputs[i]) = (Ndarray*) Ndarray_NewDims(out_ndims[i], &output_shapes_flat[out_shape_idx]);
+            if(!*(outputs[i])) %(fail)s;
           }
           out_shape_idx += out_ndims[i];
         }
@@ -428,7 +430,11 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
 
   def c_support_code(self):
     src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
-    return "#define CUDA 1\n\n" + src
+    return "\n\n".join([
+      "#define CUDA 1",
+      src,
+      self.c_extra_support_code,
+      "// end of c_support_code\n\n\n"])
 
 
 @gof.local_optimizer([NativeOp], inplace=True)
@@ -739,3 +745,389 @@ class LstmGenericBase(NativeOpGenBase):
   """
 
   code_version = ()
+
+
+class SparseToDense(NativeOpGenBase):
+  """
+  Expects a sparse matrix in COOrdinate format,
+  where W[s0[i,b],b,s1[i]] = weight[i,b] for all i, and all batches b.
+  Will return W (time,batch,dim).
+  """
+  in_info = (
+    {"name": "_initial_W", "ndim": 3, "shape": (None, None, None), "need_contiguous": True, "want_inplace": 0},
+    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
+  )
+  out_info = (
+    {"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
+  )
+
+  c_extra_support_code = {
+    "assign_kernel": """
+    DEF_KERNEL
+    void assign_kernel(
+      float* out, float* s0, float* s1, float* w, float* mask,
+      long n_sparse_idx, long n_time, long n_batch, long n_dim)
+    {
+      long max_idx = n_batch * n_sparse_idx;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        if(mask[idx] < 0.1) continue;
+        long batch = idx % n_batch;
+        long t = (long) s0[idx];
+        long j = (long) s1[idx];
+        float y = w[idx];
+        if(t < 0 || t >= n_time) continue;  // error somehow?
+        if(j < 0 || j >= n_dim) continue;  // error somehow?
+        long out_idx = t * n_batch * n_dim + batch * n_dim + j;
+        out[out_idx] += y;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 5);
+    assert(n_outputs == 1);
+    Ndarray* s0 = inputs[1];
+    Ndarray* s1 = inputs[2];
+    Ndarray* weight = inputs[3];
+    Ndarray* mask = inputs[4];
+    Ndarray* out_W = *outputs[0];
+
+    assert(Ndarray_NDIM(s0) == 2);
+    assert(Ndarray_NDIM(s1) == 2);
+    assert(Ndarray_NDIM(weight) == 2);
+    assert(Ndarray_NDIM(mask) == 2);
+    assert(Ndarray_NDIM(out_W) == 3);
+    int n_sparse_idx = Ndarray_DIMS(s0)[0];
+    assert(n_sparse_idx == Ndarray_DIMS(s1)[0]);
+    assert(n_sparse_idx == Ndarray_DIMS(weight)[0]);
+    assert(n_sparse_idx == Ndarray_DIMS(mask)[0]);
+    int n_batch = Ndarray_DIMS(s0)[1];
+    assert(n_batch == Ndarray_DIMS(s1)[1]);
+    assert(n_batch == Ndarray_DIMS(weight)[1]);
+    assert(n_batch == Ndarray_DIMS(mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_W)[1]);
+    int n_time = Ndarray_DIMS(out_W)[0];
+    int n_dim = Ndarray_DIMS(out_W)[2];
+
+    start_dev_kernel(assign_kernel, (
+      Ndarray_DEV_DATA(out_W),
+      Ndarray_DEV_DATA(s0),
+      Ndarray_DEV_DATA(s1),
+      Ndarray_DEV_DATA(weight),
+      Ndarray_DEV_DATA(mask),
+      n_sparse_idx, n_time, n_batch, n_dim
+    ));
+  """
+
+
+def sparse_to_dense(s0, s1, weight, mask, n_time, n_dim):
+  assert s0.ndim == 2
+  assert s1.ndim == 2
+  assert weight.ndim == 2
+  assert mask.ndim == 2
+  n_batch = s0.shape[1]
+  initial_W = T.zeros((n_time, n_batch, n_dim), dtype="float32")
+  op = SparseToDense.make_op()
+  W = op(initial_W, s0, s1, weight, mask)
+  assert isinstance(W, T.Variable)
+  return W
+
+
+def onehot_to_sparse(y, mask):
+  assert y.ndim == 2
+  assert mask.ndim == 2
+  n_time = y.shape[0]
+  n_batch = y.shape[1]
+  y_t = T.arange(0, n_time, dtype="float32").dimshuffle(0, 'x') + T.zeros((n_time, n_batch), dtype="float32")
+  y_i = y
+  y_w = T.ones((n_time, n_batch), dtype="float32")
+  return y_t, y_i, y_w, mask
+
+
+class MaxAndArgmaxSparse(NativeOpGenBase):
+  """
+  Expects a sparse matrix in COOrdinate format,
+  where W[s0[i,b],s1[i],b] = weight[i,b] for all i, and all batches b.
+  It will return the max and argmax for all W[:,:,b]
+  over the second axis.
+  """
+  in_info = (
+    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "_out_max", "ndim": 2, "shape": (None, None), "need_contiguous": True, "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "_out_arg", "ndim": 2, "shape": (None, None), "need_contiguous": True, "want_inplace": 1, "gradient": "disconnected"},
+  )
+  out_info = (
+    {"name": "out_max", "ndim": 2, "shape": ((4, 0), (4, 1))},
+    {"name": "out_arg", "ndim": 2, "shape": ((5, 0), (5, 1))},
+  )
+
+  c_extra_support_code = {
+    "doit_kernel": """
+    DEF_KERNEL
+    void doit_kernel(
+        long n_batch, long n_in_time, long n_out_time,
+        float* s0, float* s1, float* weight, float* mask,
+        float* out_max, float* out_arg) {
+      long batch_idx = threadIdx.x + blockDim.x * blockIdx.x;
+      while(batch_idx < n_batch) {
+        for(long i = 0; i < n_in_time; ++i) {
+          long idx = i * n_batch + batch_idx;
+          if(mask[idx] < 0.1) continue;
+          long t = (long) s0[idx];
+          long j = (long) s1[idx];
+          float w = weight[idx];
+          if(t < 0 || t >= n_out_time) continue;  // error somehow?
+          long out_idx = t * n_batch + batch_idx;
+          if(w > out_max[out_idx]) {
+            out_max[out_idx] = w;
+            out_arg[out_idx] = (float) j;
+          }
+        }
+        batch_idx += gridDim.x * blockDim.x;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 6);
+    assert(n_outputs == 2);
+    Ndarray* s0 = inputs[0];
+    Ndarray* s1 = inputs[1];
+    Ndarray* weight = inputs[2];
+    Ndarray* mask = inputs[3];
+    Ndarray* out_max = *outputs[0];
+    Ndarray* out_arg = *outputs[1];
+
+    assert(Ndarray_NDIM(s0) == 2);
+    assert(Ndarray_NDIM(s1) == 2);
+    assert(Ndarray_NDIM(weight) == 2);
+    assert(Ndarray_NDIM(mask) == 2);
+    assert(Ndarray_NDIM(out_max) == 2);
+    assert(Ndarray_NDIM(out_arg) == 2);
+    int n_in_time = Ndarray_DIMS(s0)[0];
+    assert(n_in_time == Ndarray_DIMS(s1)[0]);
+    assert(n_in_time == Ndarray_DIMS(weight)[0]);
+    assert(n_in_time == Ndarray_DIMS(mask)[0]);
+    int n_batch = Ndarray_DIMS(s0)[1];
+    assert(n_batch == Ndarray_DIMS(s1)[1]);
+    assert(n_batch == Ndarray_DIMS(weight)[1]);
+    assert(n_batch == Ndarray_DIMS(mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_arg)[1]);
+    assert(n_batch == Ndarray_DIMS(out_max)[1]);
+    int n_out_time = Ndarray_DIMS(out_arg)[0];
+    assert(n_out_time == Ndarray_DIMS(out_max)[0]);
+    assert(out_max != out_arg);  // earlier bug in NativeOp
+
+    start_dev_kernel(doit_kernel, (
+      n_batch, n_in_time, n_out_time,
+      Ndarray_DEV_DATA(s0),
+      Ndarray_DEV_DATA(s1),
+      Ndarray_DEV_DATA(weight),
+      Ndarray_DEV_DATA(mask),
+      Ndarray_DEV_DATA(out_max),
+      Ndarray_DEV_DATA(out_arg)
+    ));
+  """
+
+  code_version = ()
+
+
+def max_and_argmax_sparse(s0, s1, weight, mask, out_max, out_arg):
+  op = MaxAndArgmaxSparse.make_op()
+  out_max, out_arg = op(s0, s1, weight, mask, out_max, out_arg)
+  return out_max, out_arg
+
+
+class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
+  """
+  y_target is given in sparse COOrdinate format.
+  We will calculate CE[t,b] = \sum_i y_target[t,b,i] * log(softmax(z[t,b])[i]),
+  for any timeframe t and batch b,
+  and grad(CE[t,b], z[t,b]) = softmax(z[t,b]) - y_target[t,b].
+  We also support an index-mask for z, i.e. for the possible [t,b].
+  """
+  in_info = (
+    {"name": "z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+    {"name": "z_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y_target_t", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y_target_i", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y_target_w", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y_target_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
+  )
+  out_info = (
+    {"name": "out_ce", "ndim": 2, "shape": ((0, 0), (0, 1))},
+    {"name": "out_grad_z", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
+    {"name": "_out_max_z", "ndim": 2, "shape": ((0, 0), (0, 1))}
+  )
+
+  c_extra_support_code = {
+    "max_kernel": """
+    DEF_KERNEL
+    void max_kernel(float* out, float* v, float* mask, long stride, long max_idx) {
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        if(mask[idx] < 0.1)
+          continue;
+        long start = idx * stride;
+        float last_max = v[start];
+        out[idx] = last_max;
+        for(long i = 1; i < stride; ++i) {
+          float cur = v[start + i];
+          if(cur > last_max) {
+            last_max = cur;
+            out[idx] = cur;
+          }
+        }
+      }
+    }
+    """,
+    "softmax_kernel": """
+    DEF_KERNEL
+    void softmax_kernel(
+      float* out_softmax,
+      float* z, float* max_z, float* mask,
+      long stride, long max_idx)
+    {
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long start = idx * stride;
+        float s = 0;
+        for(long i = 0; i < stride; ++i) {
+          s += exp(z[start + i] - max_z[idx]);
+        }
+        if(s < 1e-16) s = 1e-16;
+        for(long i = 0; i < stride; ++i) {
+          float y = exp(z[start + i] - max_z[idx]) / s;
+          out_softmax[start + i] = (mask[idx] > 0.5) ? y : 0;
+        }
+      }
+    }
+    """,
+    "ce_sm_grad_kernel": """
+    DEF_KERNEL
+    void ce_sm_grad_kernel(
+      float* out_ce, float* out_grad_z,
+      float* z, float* max_z, float* z_mask,
+      float* s0, float* s1, float* w, float* s_mask,
+      long n_time, long n_batch, long n_dim, long n_sparse_index)
+    {
+      long max_idx = n_batch * n_sparse_index;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        if(s_mask[idx] < 0.1) continue;
+        long batch = idx % n_batch;
+        long t = (long) s0[idx];
+        long j = (long) s1[idx];
+        float y_target = w[idx];
+        if(t < 0 || t >= n_time) continue;  // error somehow?
+        if(j < 0 || j >= n_dim) continue;  // error somehow?
+        long out_ce_idx = t * n_batch + batch;
+        long out_y_idx = t * n_batch * n_dim + batch * n_dim + j;
+        // This assumes that out_grad_z is still softmax(z).
+        // This also assumes that every [t,j] is only represented once in the sparse data.
+        out_ce[out_ce_idx] -= y_target * log(fmax(out_grad_z[out_y_idx], 1e-30f));
+        out_grad_z[out_y_idx] -= y_target;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 6);
+    assert(n_outputs == 3);
+    Ndarray* z = inputs[0];
+    Ndarray* z_mask = inputs[1];
+    Ndarray* s0 = inputs[2];
+    Ndarray* s1 = inputs[3];
+    Ndarray* w = inputs[4];
+    Ndarray* s_mask = inputs[5];
+    Ndarray* out_ce = *outputs[0];
+    Ndarray* out_grad_z = *outputs[1];
+    Ndarray* out_max_z = *outputs[2];
+
+    assert(Ndarray_NDIM(z) == 3);
+    assert(Ndarray_NDIM(z_mask) == 2);
+    assert(Ndarray_NDIM(out_ce) == 2);
+    assert(Ndarray_NDIM(out_grad_z) == 3);
+    assert(Ndarray_NDIM(out_max_z) == 2);
+    assert(Ndarray_NDIM(s0) == 2);
+    assert(Ndarray_NDIM(s1) == 2);
+    assert(Ndarray_NDIM(w) == 2);
+    assert(Ndarray_NDIM(out_ce) == 2);
+    int n_time = Ndarray_DIMS(z)[0];
+    int n_batch = Ndarray_DIMS(z)[1];
+    int n_dim = Ndarray_DIMS(z)[2];
+    assert(n_time == Ndarray_DIMS(z_mask)[0]);
+    assert(n_time == Ndarray_DIMS(out_ce)[0]);
+    assert(n_time == Ndarray_DIMS(out_grad_z)[0]);
+    assert(n_time == Ndarray_DIMS(out_max_z)[0]);
+    assert(n_batch == Ndarray_DIMS(z_mask)[1]);
+    assert(n_batch == Ndarray_DIMS(out_ce)[1]);
+    assert(n_batch == Ndarray_DIMS(out_grad_z)[1]);
+    assert(n_batch == Ndarray_DIMS(out_max_z)[1]);
+    assert(n_batch == Ndarray_DIMS(s0)[1]);
+    assert(n_batch == Ndarray_DIMS(s1)[1]);
+    assert(n_batch == Ndarray_DIMS(w)[1]);
+    assert(n_batch == Ndarray_DIMS(s_mask)[1]);
+    assert(n_dim == Ndarray_DIMS(out_grad_z)[2]);
+    int n_sparse_index = Ndarray_DIMS(s0)[0];
+    assert(n_sparse_index == Ndarray_DIMS(s1)[0]);
+    assert(n_sparse_index == Ndarray_DIMS(w)[0]);
+    assert(n_sparse_index == Ndarray_DIMS(s_mask)[0]);
+
+    start_dev_kernel(max_kernel, (
+      Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(z_mask),
+      n_dim, n_time * n_batch
+    ));
+    Ndarray_set_zero(out_ce);
+    start_dev_kernel(softmax_kernel, (
+      Ndarray_DEV_DATA(out_grad_z),
+      Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
+      n_dim, n_time * n_batch
+    ));
+    start_dev_kernel(ce_sm_grad_kernel, (
+      Ndarray_DEV_DATA(out_ce), Ndarray_DEV_DATA(out_grad_z),
+      Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
+      Ndarray_DEV_DATA(s0), Ndarray_DEV_DATA(s1), Ndarray_DEV_DATA(w), Ndarray_DEV_DATA(s_mask),
+      n_time, n_batch, n_dim, n_sparse_index
+    ));
+  """
+
+
+def crossentropy_softmax_and_gradient_z_sparse(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
+  op = CrossEntropySoftmaxAndGradientZSparse.make_op()
+  out_ce, out_grad_z, _out_max_z = op(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask)
+  return out_ce, out_grad_z
+
+
+def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
+  assert z.ndim == 3
+  n_time = z.shape[0]
+  n_batch = z.shape[1]
+  n_dim = z.shape[2]
+  y_target = sparse_to_dense(y_target_t, y_target_i, y_target_w, y_target_mask, n_time, n_dim)
+  y = softmax(z)
+  ce = -T.sum(y_target * T.log(y), axis=2)
+  grad_z = y - y_target
+  return ce, grad_z

@@ -642,3 +642,10 @@ class DumpOp(theano.Op):
   def inc_counter(self):
     if self.parent: return
     self.counter += 1
+
+
+def softmax(z):
+  dims = [z.shape[i] for i in range(z.ndim)]
+  collapsed_dim = numpy.prod(dims[:-1])
+  return T.nnet.softmax(z.reshape((collapsed_dim, dims[-1]))).reshape(dims)
+

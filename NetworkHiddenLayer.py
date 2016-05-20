@@ -2469,6 +2469,8 @@ class NewConv(_NoOpLayer):
       d_col_new = d_col/pool_size[1]
     else:
       assert False, 'invalid border_mode %r' % border_mode
+
+    assert ((d_row_new > 0) and (d_col_new > 0)), 'invalid spatial dimensions!'
     n_out = (d_row_new * d_col_new) * n_features
 
     # set all attributes of this class
