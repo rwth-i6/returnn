@@ -3,9 +3,6 @@ The RWTH Extensible Training framework for Universal Recurrent Neural Networks (
 Copyright (c) 2010--2016, RWTH.
 All rights reserved.
 
-Depends on code from Theano, Copyright (c) 2008--2016, Theano Development Team
-All rights reserved.
-
 Contains code from better_exchook, Copyright (c) 2011--2016, Albert Zeyer.
 All rights reserved.
 
