@@ -158,9 +158,10 @@ class PythonControl:
       # We expect a sparse soft-alignment in coordinate format (time, class-idx, weight [0,1]).
       assert isinstance(soft_alignment, tuple)
       assert len(soft_alignment) == 3
-      targets["classes[0]"] = soft_alignment[0]
-      targets["classes[1]"] = soft_alignment[1]
-      targets["classes[2]"] = soft_alignment[2]
+      # We encode: sparse-coo-format, ndim == 2.
+      targets["classes[sparse:coo:2:0]"] = soft_alignment[0]
+      targets["classes[sparse:coo:2:1]"] = soft_alignment[1]
+      targets["classes[sparse:coo:2:2]"] = soft_alignment[2]
     sprintDataset.addNewData(segmentName=name, features=features, targets=targets)
 
   def exit(self, **kwargs):

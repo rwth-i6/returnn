@@ -29,17 +29,20 @@ def assign_dev_data(device, dataset, batches):
         l = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in device.used_data_keys:
-          data = dataset.get_data(seq.seq_idx, k)
-          if l[k] > 0:
-            assert data is not None
-            device.output_index[k][o[k]:o[k] + l[k], q] = numpy.ones((l[k],), dtype='int8')
-          if data is not None:
-            device.targets[k][o[k]:o[k] + l[k], q] = data[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+          if l[k] == 0: continue
+          data = dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
+          ls = data.shape[0]
+          if "[sparse:" in k:
+            assert o[k] == 0, "sparse non-recurrent batching + chunking not implemented"
+            _device_maybe_enlarge_data(device, k, ls)
+          else:
+            assert ls == l[k]
+          device.output_index[k][o[k]:o[k] + ls, q] = numpy.ones((ls,), dtype='int8')
+          device.targets[k][o[k]:o[k] + ls, q] = data
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
         chunking_active = dataset.chunk_size > 0
         if dataset.has_ctc_targets() and not chunking_active:
-          #assert dataset.get_seq_length_2d(seq.seq_idx) == l  # Full seq.
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 
         device.tags[q] = dataset.get_tag(seq.seq_idx)
@@ -50,6 +53,28 @@ def assign_dev_data(device, dataset, batches):
     offset_slice += batch.num_slices
 
   return True, len(batches)
+
+
+def _device_maybe_enlarge_data(device, key, needed_len):
+  cur_len = device.output_index[key].shape[0]
+  if cur_len >= needed_len:
+    return
+  diff_len = needed_len - cur_len
+  new_len = cur_len + int(diff_len * 1.5)  # a bit more than needed
+  assert new_len >= needed_len
+  # Also see Device.alloc_data() for reference.
+  # First, new output_index.
+  old_index = device.output_index[key]
+  index_shape = list(old_index.shape)
+  index_shape[0] = new_len
+  device.output_index[key] = numpy.zeros(index_shape, dtype='int8')
+  device.output_index[key][0:cur_len] = old_index
+  # Now, new targets.
+  old_targets = device.targets[key]
+  targets_shape = list(old_targets.shape)
+  targets_shape[0] = new_len
+  device.targets[key] = numpy.full(targets_shape, -1, dtype=device.targets[key].dtype)
+  device.targets[key][0:cur_len] = old_targets
 
 
 def assign_dev_data_single_seq(device, dataset, seq):

@@ -95,7 +95,7 @@ void get_n_max_and_argmax(Ndarray* v, int n, Ndarray* nbest, Ndarray* nbestidx) 
 		/*n*/ n,
 		/*out*/ Ndarray_DEV_DATA(nbestidx)
 	));
-	
+
 	start_dev_kernel(subtensor_idxs_kernel, (
 		/*in*/ Ndarray_DEV_DATA(v),
 		/*in_idx_stride*/ n_dim,
@@ -135,30 +135,62 @@ void grad_n_max_and_argmax(Ndarray* out, int n, Ndarray* nbestidx, Ndarray* errs
 DEF_KERNEL
 void find_best_path_kernel(float* in, long in_idx_stride, long out_idx_stride, long T, float* out) {
 	for(long t = 0; t < T; ++t) {
-		
+
 	}
 }
 
 DEF_KERNEL
-void levenshtein_kernel(int n_batch,
-						float str1c,
+void levenshtein_kernel(long n_batch,
+						float* str1, float* str1index, long str1len,
 						float* str2, float* str2index, long str2len,
 						float* row0, float* row1) {
-	long idx = threadIdx.x + blockDim.x * blockIdx.x;
-	long max_idx = str2len * n_batch;
-	while(idx < max_idx) {
-		float cost = (fabs(str1c - str2[idx]) < 0.1) ? 0 : 1;
-		float v = row1[idx] + 1; // insertion   XXX violation
-		float v2 = row0[idx + 1] + 1; // deletion
-		float v3 = row0[idx] + cost; // substitution
-		if(v2 < v) v = v2;
-		if(v3 < v) v = v3;
-		row1[idx + 1] = v;
-		idx += gridDim.x * blockDim.x;
+	// rows are of length str2len + 1.
+	float* original_row1 = row1;
+
+	for(
+		long batch_idx = threadIdx.x + blockDim.x * blockIdx.x;
+		batch_idx < n_batch;
+		batch_idx += gridDim.x * blockDim.x)
+	{
+		for(long j = 0; j <= str2len; ++j)
+			row1[j * n_batch + batch_idx] = (float) j;
+
+		for(long i = 0; i < str1len; ++i) {
+			long idx1 = i * n_batch + batch_idx;
+			if(str1index[idx1] < 0.1)
+				break;
+
+			{ float* tmp = row0; row0 = v1; row1 = tmp; }  // swap row0/row1
+
+			float str1c = str1[idx1];
+			row1[batch_idx] = float(i + 1); // delete (i+1) chars from str1
+
+			for(long j = 0; j < str2len; ++j) {
+				long idx2 = j * n_batch + batch_idx;
+				if(str2index[idx2] < 0.1) {
+					row1[idx2 + n_batch] = row1[idx2];
+					continue;
+				}
+				float cost = (fabs(str1c - str2[idx2]) < 0.1) ? 0 : 1;
+				float v = row1[idx2] + 1; // insertion
+				float v2 = row0[idx2 + n_batch] + 1; // deletion
+				float v3 = row0[idx2] + cost; // substitution
+				if(v2 < v) v = v2;
+				if(v3 < v) v = v3;
+				row1[idx2 + n_batch] = v;
+			}
+		}
+
+		if(original_row1 != row1) {
+			for(long j = 0; j <= str2len; ++j)
+				original_row1[j * n_batch + batch_idx] = row1[j * n_batch + batch_idx];  // we need row1
+			row0 = row1;
+			row1 = original_row1;
+		}
 	}
 }
 
-void levenshtein(int n_batch,
+void levenshtein(long n_batch,
 				 float* str1, float* str1index, long str1len,
 				 float* str2, float* str2index, long str2len,
 				 float* row0, float* row1) {
@@ -169,17 +201,21 @@ void levenshtein(int n_batch,
 		min(lev_{a,b}(i - 1, j) + 1,
 			lev_{a,b}(i, j - 1) + 1,
 			lev_{a,b}(i - 1, j - 1) + 1_(a_i != b_j))
-	If str1/str2 were single strings, we just would have:
+	If str1/str2 were single strings, we would have:
 	 levenstein(str1, str2) = lev_{str1,str2}(str1len, str2len)
 	In this implementation, we support multiple batches.
 	 */
-	ndSetZero(row0, (str2len + 1) * n_batch); // previous row
-	ndSetZero(row1, (str2len + 1) * n_batch); // current row
-	
-	for(long i = 0; i < str1len * n_batch; ++i) {
-		row1[0] = float(i + 1);
-		start_dev_kernel(levenshtein_kernel, ());
-	}
+	Ndarray_memset(row0, 0, (str2len + 1) * n_batch * sizeof(float)); // previous row
+	Ndarray_memset(row1, 0, (str2len + 1) * n_batch * sizeof(float)); // current row
+
+	start_dev_kernel(levenshtein_kernel, (
+		n_batch,
+		str1, str1index, str1len,
+		str2, str2index, str2len,
+		row0, row1
+	));
+
+
 }
 
 void make_best_path(Ndarray* posteriors, int local_n_best_num) {
@@ -187,7 +223,7 @@ void make_best_path(Ndarray* posteriors, int local_n_best_num) {
 	long T = Ndarray_DIMS(posteriors)[0];
 	long n_batch = Ndarray_DIMS(posteriors)[1];
 	long n_dim = Ndarray_DIMS(posteriors)[2];
-	
+
 	Ndarray_DIM_Type local_n_best_dims[] = {T, n_batch, local_n_best_num};
 	Ndarray* local_n_best = (Ndarray*) Ndarray_NewDims(/*ndim*/3, local_n_best_dims);
 	start_dev_kernel(find_best_n_kernel, (
@@ -200,7 +236,7 @@ void make_best_path(Ndarray* posteriors, int local_n_best_num) {
 	));
 
 	// note: we don't do a real search. we just take the local max in each time-frame.
-	
+
 
 	// now: which are the possible allophone states regarding these n-best labels?
 	// what are possible sequences?

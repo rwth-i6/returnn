@@ -87,7 +87,7 @@ class OutputLayer(Layer):
       from NativeOp import max_and_argmax_sparse
       n_time = self.z.shape[0]
       n_batch = self.z.shape[1]
-      mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[0]")]
+      mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
       out_arg = T.zeros((n_time, n_batch), dtype="float32")
       out_max = T.zeros((n_time, n_batch), dtype="float32") - numpy.float32(1e16)
       out_arg, out_max = max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max)
@@ -210,7 +210,7 @@ class FramewiseOutputLayer(OutputLayer):
         assert isinstance(self.y, tuple)
         assert len(self.y) == 3
         from NativeOp import crossentropy_softmax_and_gradient_z_sparse
-        y_mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[0]")]
+        y_mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
         ce, grad_z = crossentropy_softmax_and_gradient_z_sparse(
           self.z, self.index, self.y[0], self.y[1], self.y[2], y_mask)
         return self.norm * T.sum(ce), {self.z: grad_z}
