@@ -199,6 +199,10 @@ class DownsampleLayer(_NoOpLayer):
     output = z
     if method == 'concat':
       n_out *= numpy.prod(factor)
+    elif method == 'mlp':
+      self.DP = self.add_param(self.create_forward_weights(n_out * numpy.prod(factor),z_dim,self.name + "_DP"))
+      self.b = self.add_param(self.create_bias(z_dim))
+      output = T.nnet.relu(T.dot(output,self.DP) + self.b)
     elif method == 'lstm':
       num_batches = z.shape[2]
       #z = theano.printing.Print("a", attrs=['shape'])(z)
@@ -224,9 +228,9 @@ class DownsampleLayer(_NoOpLayer):
       def attent(xt, yp, W_re):
         return T.tanh(xt + elu(T.dot(yp, W_re)))
         #return T.tanh(T.dot(xt, W_in) + T.dot(yp, W_re))
-      z, _ = theano.scan(attent, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0])], non_sequences=[self.A_re])
-      #result, _ = theano.scan(lstmk, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0]),T.zeros_like(z[0])])
-      #z = result[0]
+      ####z, _ = theano.scan(attent, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0])], non_sequences=[self.A_re])
+      result, _ = theano.scan(lstmk, sequences = T.dot(z,self.A_in), outputs_info = [T.zeros_like(z[0]),T.zeros_like(z[0])])
+      z = result[0]
       #from OpLSTM import LSTMOpInstance
       #inp = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[0], z.shape[1], z.shape[2] * 4) + T.dot(z,self.A_in)
       #sta = T.alloc(numpy.cast[theano.config.floatX](0), z.shape[1], z.shape[2])
@@ -1389,7 +1393,7 @@ class EosLengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, oracle=False, eval_oracle=True, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+  def __init__(self, use_real=1.0, oracle=False, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
@@ -1602,6 +1606,18 @@ class AttentionLengthLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class SegmentLayer(_NoOpLayer):
+  layer_class = 'segment'
+
+  def __init__(self, **kwargs):
+    super(SegmentLayer, self).__init__(**kwargs)
+    assert len(kwargs['sources']) == 2
+    self.attrs['n_out'] = kwargs['sources'][0].attrs['n_out']
+    cutoff = self.index.shape[0] / 2
+    concat = T.concatenate([kwargs['sources'][0].output[:cutoff],kwargs['sources'][1].output[cutoff:]],axis=0)
+    self.make_output(concat)
+
+
 class AttentionLayer(_NoOpLayer):
   layer_class = 'attention'
 
@@ -1612,7 +1628,7 @@ class AttentionLayer(_NoOpLayer):
     if conv_y:
       self.set_attr('conv_y',conv_y)
     self.set_attr('base', ",".join([b.name for b in base]))
-    self.attrs['n_out'] = kwargs['n_out']
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in base])
     self.W_out = self.add_param(self.create_forward_weights(base[0].attrs['n_out'], self.attrs['n_out']), 'W_out')
     self.b_out = self.add_param(self.create_bias(self.attrs['n_out']), 'b_out')
     base = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)

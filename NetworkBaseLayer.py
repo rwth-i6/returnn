@@ -100,13 +100,18 @@ class Container(object):
         print >> log.v4, "unable to load parameter %s in %s" % (p, self.name)
     for p in grp:
       if p in self.params:
-        assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
-          "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
-          " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
-          " got " + str(grp[p].shape) + ")"
-        array = grp[p][...]
-        assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
-        self.params[p].set_value(array)
+        if self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape:
+          array = grp[p][...]
+          assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
+          self.params[p].set_value(array)
+        else:
+          print >> log.v2, "warning: invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
+            " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
+            " got " + str(grp[p].shape) + ")"
+          #assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
+          #  "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
+          #  " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
+          #  " got " + str(grp[p].shape) + ")"
       else:
         print >> log.v4, "unable to match parameter %s in %s" % (p, self.name)
     #for p in self.attrs.keys():

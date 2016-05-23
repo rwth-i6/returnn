@@ -441,6 +441,8 @@ class Dataset(object):
     """
     if batch_size == 0: batch_size = sys.maxint
     assert batch_size > 0
+    ms = max_seqs
+    bs = batch_size
     if max_seqs == -1: max_seqs = float('inf')
     assert max_seqs > 0
     chunk_size = self.chunk_size
@@ -450,14 +452,13 @@ class Dataset(object):
         print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
         chunk_size = 0
 
-    ms = max_seqs
-    bs = batch_size
-
     assert batch_variance <= 1.0
     if batch_variance > 0.0:
       r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
-      max_seqs = max(int(r * ms), 1)
-      batch_size = max(int(r * bs), 1)
+      if max_seqs > 0:
+        max_seqs = max(int(r * ms), 1)
+      if batch_size > 0:
+        batch_size = max(int(r * bs), 1)
 
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
@@ -473,8 +474,10 @@ class Dataset(object):
           batch = Batch()
           if batch_variance > 0.0:
             r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
-            max_seqs = max(int(r * ms), 1)
-            batch_size = max(int(r * bs), 1)
+            if max_seqs > 0:
+              max_seqs = max(int(r * ms), 1)
+            if batch_size > 0:
+              batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():

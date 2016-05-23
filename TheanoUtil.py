@@ -96,6 +96,9 @@ def downsample(source, axis, factor, method="average"):
   # Add a temporary dimension as the factor.
   added_dim_shape = [source.shape[i] for i in range(source.ndim)]
   added_dim_shape = added_dim_shape[:axis] + [source.shape[axis] / factor, factor] + added_dim_shape[axis + 1:]
+  if method == "lstm":
+    assert axis == 0
+    return source
   source = T.reshape(source, added_dim_shape)
   if method == "average":
     return T.mean(source, axis=axis + 1)
@@ -103,11 +106,8 @@ def downsample(source, axis, factor, method="average"):
     return T.max(source, axis=axis + 1)
   elif method == "min":
     return T.min(source, axis=axis + 1)
-  elif method == "concat": # concatenates in last dimension
+  elif method == "concat" or method == 'mlp': # concatenates in last dimension
     return T.reshape(source, added_dim_shape[:axis+1] + added_dim_shape[axis+2:-1] + [added_dim_shape[-1] * factor])
-  elif method == "lstm":
-    assert axis == 0
-    return source
   elif method == "batch":
     assert axis == 0
     return source.dimshuffle(1,0,2,3).reshape((source.shape[1],source.shape[0]*source.shape[2],source.shape[3]))
