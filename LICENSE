@@ -3,6 +3,15 @@ The RWTH Extensible Training framework for Universal Recurrent Neural Networks (
 Copyright (c) 2010--2016, RWTH.
 All rights reserved.
 
+Contains code from better_exchook, Copyright (c) 2011--2016, Albert Zeyer.
+All rights reserved.
+
+Contains code from TaskSystem and MusicPlayer, Copyright (c) 2011--2016, Albert Zeyer.
+All rights reserved.
+
+Contains code from pydbattach, Copyright (c) 2011--2016, Albert Zeyer.
+All rights reserved.
+
 This license is derived from the Q Public License v1.0 and the Qt Non-Commercial License v1.0 which are both Copyright by Trolltech AS, Norway.
 The aim of this license is to lay down the conditions enabling you to use, modify and circulate the SOFTWARE, use of third-party application programs based on the Software and publication of results obtained through the use of modified and unmodified versions of the SOFTWARE.
 However, RWTH remain the authors of the SOFTWARE and so retain property rights and the use of all ancillary rights.
