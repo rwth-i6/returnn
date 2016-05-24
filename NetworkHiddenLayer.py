@@ -2563,6 +2563,7 @@ class NewConv(_NoOpLayer):
         border_mode=border_mode
       )
     self.conv_out.name = 'conv_layer_conv_out'
+    self.conv_out = self.conv_out * T.cast(self.index.flatten(),'float32').dimshuffle(0,'x','x','x').repeat(self.conv_out.shape[1],axis=1).repeat(self.conv_out.shape[2],axis=2).repeat(self.conv_out.shape[3],axis=3)
 
     # max pooling function
     self.pooled_out = downsample.max_pool_2d(
@@ -2580,10 +2581,10 @@ class NewConv(_NoOpLayer):
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
-    #self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
-    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
-    self.make_output(self.output)
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
+    self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
+    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    #self.make_output(self.output)
 
   # function for calculating the weight parameter of this class
   def _create_weights(self, filter_shape, pool_size, seeds):
