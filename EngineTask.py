@@ -559,7 +559,7 @@ class TrainTaskThread(TaskThread):
     for device in self.devices:
       device.sync_net_train_params()
     try:
-      basenet = self.network.train_params_vars
+      basenet = self.network.get_all_params_vars()
       consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
       hypnets = []
       nparams = len(basenet)
@@ -568,6 +568,7 @@ class TrainTaskThread(TaskThread):
       #hypnets = pipe.copy_from_device()
       for device in self.devices:
         hypnets.append([ p for p in device.get_net_train_params(self.network) ])
+        assert len(hypnets[-1]) == len(basenet)
       if len(hypnets) == 0:
         consnet = basenet
       elif len(hypnets) == 1:
@@ -587,7 +588,9 @@ class TrainTaskThread(TaskThread):
             consnet[i] = basenet[i].get_value()
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       self.network.update_step = sum([ dev.get_num_updates() for dev in self.devices ]) / len(self.devices)
-      for p, q in zip(self.network.train_params_vars, consnet):
+      for p, q in zip(self.network.get_all_params_vars(), consnet):
+        p_shape = p.get_value(borrow=True, return_internal_type=True).shape
+        assert p_shape == q.shape
         p.set_value(q)
         encoded.append(q)
       if len(hypnets) > 1:
