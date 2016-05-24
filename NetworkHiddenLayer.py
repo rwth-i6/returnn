@@ -2563,8 +2563,8 @@ class NewConv(_NoOpLayer):
         border_mode=border_mode
       )
     self.conv_out.name = 'conv_layer_conv_out'
-    self.conv_out = self.conv_out * T.cast(self.index.flatten(),'float32').dimshuffle(0,'x','x','x').repeat(self.conv_out.shape[1],axis=1).repeat(self.conv_out.shape[2],axis=2).repeat(self.conv_out.shape[3],axis=3)
-
+    #self.conv_out = self.conv_out * T.cast(self.index.flatten(),'float32').dimshuffle(0,'x','x','x').repeat(self.conv_out.shape[1],axis=1).repeat(self.conv_out.shape[2],axis=2).repeat(self.conv_out.shape[3],axis=3)
+    self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
     # max pooling function
     self.pooled_out = downsample.max_pool_2d(
       input=self.conv_out,
