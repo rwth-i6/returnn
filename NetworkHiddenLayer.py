@@ -1638,9 +1638,11 @@ class AttentionLayer(_NoOpLayer):
       for att in src.attention:
         attention += att
     attention = attention / attention.sum(axis=2, keepdims=True) # NBT
-    #self.make_output(attention)
-    attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
-    self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+    att, _ = theano.map(lambda att,base: T.sum(base*att.dimshuffle(1,0,'x').repeat(base.shape[2],axis=2),axis=0),
+                        sequences=[attention], non_sequences=[base])
+    self.make_output(att)
+    #attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
+    #self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
 
 
 class SignalSplittingLayer(HiddenLayer):
@@ -2578,9 +2580,10 @@ class NewConv(_NoOpLayer):
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
-    self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
-
+    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
+    #self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    self.make_output(self.output)
 
   # function for calculating the weight parameter of this class
   def _create_weights(self, filter_shape, pool_size, seeds):
