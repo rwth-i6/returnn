@@ -2580,10 +2580,11 @@ class NewConv(_NoOpLayer):
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    output2 = T.set_subtensor(output2[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(output2[0]))
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
     #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
-    self.tempOutput = T.set_subtensor(output2[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(output2[0])).reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
-    self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    self.make_output(self.output)
     #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
     #self.make_output(self.output)
 
