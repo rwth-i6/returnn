@@ -1393,7 +1393,7 @@ class EosLengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, oracle=False, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+  def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
