@@ -392,16 +392,17 @@ class RecurrentUnitLayer(Layer):
     if self.attrs['lm']:
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
-      l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-      self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
+      if self.attrs['droplm'] > 0.0 or not (self.train_flag or force_lm):
+        l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
+        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
+        self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
-        if recurrent_transform != 'none':
-          recurrent_transform = recurrent_transform[:-3]
+        #if recurrent_transform != 'none':
+        #  recurrent_transform = recurrent_transform[:-3]
       elif self.attrs['droplm'] < 1.0 and (self.train_flag or force_lm):
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
         srng = RandomStreams(self.rng.randint(1234) + 1)
@@ -483,11 +484,11 @@ class RecurrentUnitLayer(Layer):
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
     if self.attrs['attention_store']:
-      self.attention = [ self.aux[i][::direction].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
-      for i in xrange(len(self.attention)): # TODO(zeyer): please fix LSTMC state var outputs please
+      self.attention = [ self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
+      for i in xrange(len(self.attention)):
         vec = T.eye(self.attention[i].shape[2], 1, -direction * (self.attention[i].shape[2] - 1))
         last = vec.dimshuffle(1,'x', 0).repeat(self.index.shape[1], axis=1)
-        self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)
+        self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)[::direction]
 
     if self.attrs['attention_align']:
       bp = [ self.aux[i] for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]

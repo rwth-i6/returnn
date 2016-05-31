@@ -47,7 +47,7 @@ class HDFDataset(CachedDataset):
       self.timestamps.extend(fin[attr_times][...].tolist())
     seq_lengths = fin[attr_seqLengths][...]
     if 'targets' in fin:
-      self.target_keys = fin['targets/labels'].keys()
+      self.target_keys = sorted(fin['targets/labels'].keys())
     else:
       self.target_keys = ['classes']
 

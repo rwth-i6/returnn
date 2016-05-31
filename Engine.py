@@ -565,9 +565,14 @@ class Engine:
           if k != 'data':
             output_dim[k] = network.n_out[k] # = [network.n_in,2] if k == 'data' else network.n_out[k]
         except Exception:
-          ret['error'] = 'unable to convert %s to an array' % k
+          if k != 'data' and not k in network.n_out:
+            ret['error'] = 'unknown target: %s' % k
+          else:
+            ret['error'] = 'unable to convert %s to an array from value %s' % (k,str(params[k]))
           break
       if not 'error' in ret:
+        data = StaticDataset(data=[params], output_dim=output_dim)
+        data.init_seq_order()
         try:
           data = StaticDataset(data=[params], output_dim=output_dim)
           data.init_seq_order()

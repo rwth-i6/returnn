@@ -1393,7 +1393,7 @@ class EosLengthLayer(HiddenLayer):
 
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
-  def __init__(self, use_real=1.0, oracle=False, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+  def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
@@ -1638,9 +1638,11 @@ class AttentionLayer(_NoOpLayer):
       for att in src.attention:
         attention += att
     attention = attention / attention.sum(axis=2, keepdims=True) # NBT
-    #self.make_output(attention)
-    attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
-    self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+    att, _ = theano.map(lambda att,base: T.sum(base*att.dimshuffle(1,0,'x').repeat(base.shape[2],axis=2),axis=0),
+                        sequences=[attention], non_sequences=[base])
+    self.make_output(att)
+    #attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
+    #self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
 
 
 class SignalSplittingLayer(HiddenLayer):
@@ -2561,7 +2563,8 @@ class NewConv(_NoOpLayer):
         border_mode=border_mode
       )
     self.conv_out.name = 'conv_layer_conv_out'
-
+    #self.conv_out = self.conv_out * T.cast(self.index.flatten(),'float32').dimshuffle(0,'x','x','x').repeat(self.conv_out.shape[1],axis=1).repeat(self.conv_out.shape[2],axis=2).repeat(self.conv_out.shape[3],axis=3)
+    self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
     # max pooling function
     self.pooled_out = downsample.max_pool_2d(
       input=self.conv_out,
@@ -2577,10 +2580,13 @@ class NewConv(_NoOpLayer):
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
     output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    output2 = T.set_subtensor(output2[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(output2[0]))
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
-    self.make_output(self.output * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
-
+    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
+    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    self.make_output(self.output)
+    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
+    #self.make_output(self.output)
 
   # function for calculating the weight parameter of this class
   def _create_weights(self, filter_shape, pool_size, seeds):

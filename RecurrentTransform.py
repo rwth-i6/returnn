@@ -449,7 +449,7 @@ class AttentionList(AttentionBase):
       v = T.dot(T.sum(conv.conv2d(border_mode='full',
         input=att.dimshuffle(1, 'x', 0, 'x'),
         filters=F).dimshuffle(2,3,0,1),axis=1)[F.shape[2]/2:-F.shape[2]/2+1],self.item("U",i))
-      v = v / v.sum(axis=0,keepdims=True)
+      v = I * v / v.sum(axis=0,keepdims=True)
       z_p += T.sum(C * v,axis=0)
     if g > 0:
       z_p += self.glimpses[i][-1]

@@ -654,8 +654,9 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     data = cls(**kwargs)
   if isinstance(data, HDFDataset):
     for f in config_str.split(","):
-      assert os.path.exists(f)
-      data.add_file(f)
+      if f:
+        assert os.path.exists(f)
+        data.add_file(f)
   data.initialize()
   return data
 
