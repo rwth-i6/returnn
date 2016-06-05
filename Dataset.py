@@ -479,8 +479,8 @@ class Dataset(object):
       r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
       if max_seqs > 0:
         max_seqs = max(int(r * ms), 1)
-      if batch_size > 0:
-        batch_size = max(int(r * bs), 1)
+      #if batch_size > 0:
+      #  batch_size = max(int(r * bs), 1)
 
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
@@ -498,8 +498,8 @@ class Dataset(object):
             r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
             if max_seqs > 0:
               max_seqs = max(int(r * ms), 1)
-            if batch_size > 0:
-              batch_size = max(int(r * bs), 1)
+            #if batch_size > 0:
+            #  batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():

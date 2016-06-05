@@ -184,7 +184,7 @@ def initCudaNotInMainProcCheck():
   use_original = cuda.use
   def use_wrapped(device, **kwargs):
     print "CUDA.use", device, "in proc", os.getpid()
-    assert not TaskSystem.isMainProcess, "multiprocessing is set to True in your config but the main proc tries to use CUDA"
+    #assert not TaskSystem.isMainProcess, "multiprocessing is set to True in your config but the main proc tries to use CUDA"
     use_original(device=device, **kwargs)
   cuda.use = use_wrapped
   cuda.use.device_number = None
