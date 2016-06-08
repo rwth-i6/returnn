@@ -276,7 +276,7 @@ class Device(object):
     import h5py
     self.T = T
     self.network_task = config.value('task', 'train')
-    eval_flag = self.network_task in ['eval', 'forward']
+    eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True, eval_flag=False)
       self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False, eval_flag=eval_flag)
