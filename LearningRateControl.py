@@ -31,6 +31,7 @@ class LearningRateControl(object):
     """
     return {
       "defaultLearningRate": config.float('learning_rate', 1.0),
+      "minLearningRate": config.float('min_learning_rate', 0.0),
       "defaultLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
       "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
       "filename": config.value('learning_rate_file', None)}
@@ -44,7 +45,7 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, defaultLearningRate, defaultLearningRates=None, errorMeasureKey=None, filename=None):
+  def __init__(self, defaultLearningRate, minLearningRate=0.0, defaultLearningRates=None, errorMeasureKey=None, filename=None):
     """
     :param float defaultLearningRate: default learning rate. usually for epoch 1
     :param list[float] | dict[int,float] defaultLearningRates: learning rates
@@ -53,6 +54,7 @@ class LearningRateControl(object):
     """
     self.epochData = {}
     self.defaultLearningRate = defaultLearningRate
+    self.minLearningRate = minLearningRate
     if defaultLearningRates:
       if isinstance(defaultLearningRates, list):
         defaultLearningRates = {i + 1: v for (i, v) in enumerate(defaultLearningRates)}
@@ -95,7 +97,7 @@ class LearningRateControl(object):
     """
     assert epoch >= 1
     if epoch in self.epochData: return self.epochData[epoch].learningRate
-    learningRate = self.calcLearningRateForEpoch(epoch)
+    learningRate = max(self.calcLearningRateForEpoch(epoch), self.minLearningRate)
     self.setDefaultLearningRateForEpoch(epoch, learningRate)
     return learningRate
 
