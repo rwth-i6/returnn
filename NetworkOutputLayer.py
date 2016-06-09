@@ -334,6 +334,9 @@ class SequenceOutputLayer(OutputLayer):
     y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
     if self.loss == 'sprint':
+      if not isinstance(self.sprint_opts, dict):
+        import json
+        self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.exp_normalize:
         log_probs = T.log(self.p_y_given_x)
