@@ -186,20 +186,21 @@ class LM(RecurrentTransformBase):
     self.lmmask = self.add_var(self.layer.lmmask, "lmmask")
     self.t = self.add_state_var(T.zeros((1,), dtype="float32"), name="t")
     y = self.layer.y_in[self.layer.attrs['target']].flatten()
-    eos = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
-    if self.layer.attrs['direction'] == 1:
-      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
-      self.cls = T.concatenate([eos, y_t], axis=0)
-    else:
-      y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-      self.cls = T.concatenate([eos,y_t[::-1]], axis=0)
-    self.add_input(self.cls, 'cls')
+    if self.layer.attrs['droplm'] < 1.0 and (self.layer.train_flag or self.layer.attrs['force_lm']):
+      eos = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
+      if self.layer.attrs['direction'] == 1:
+        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
+        self.cls = T.concatenate([eos, y_t], axis=0)
+      else:
+        y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
+        self.cls = T.concatenate([eos,y_t[::-1]], axis=0)
+      self.add_input(self.cls, 'cls')
 
   def step(self, y_p):
     result = 0
     updates = {}
     p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in))
-    if self.layer.attrs['droplm'] < 1.0:
+    if self.layer.attrs['droplm'] < 1.0 and (self.layer.train_flag or self.layer.attrs['force_lm']):
       mask = self.lmmask[T.cast(self.t[0],'int32')]
       if self.layer.attrs['attention_lm'] == "hard":
         result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
@@ -216,6 +217,7 @@ class LM(RecurrentTransformBase):
 
 class AttentionBase(RecurrentTransformBase):
   base=None
+  name = "attention_base"
 
   @property
   def attrs(self):
@@ -241,13 +243,13 @@ class AttentionBase(RecurrentTransformBase):
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
       self.drop_mask = self.add_var(self.layer.lmmask, "drop_mask")
       y = self.layer.y_in[self.layer.attrs['target']].flatten()
-      eos = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
+      nil = T.unbroadcast(self.W_lm_out[0].dimshuffle('x','x',0),1).repeat(self.layer.index.shape[1],axis=1)
       if self.layer.attrs['direction'] == 1:
         y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[:-1] # (T-1)BD
-        self.cls = T.concatenate([eos, y_t], axis=0)
+        self.cls = T.concatenate([nil, y_t], axis=0)
       else:
         y_t = self.W_lm_out[y].reshape((self.layer.index.shape[0],self.layer.index.shape[1],self.layer.unit.n_in))[1:] # (T-1)BD
-        self.cls = T.concatenate([eos,y_t[::-1]], axis=0)
+        self.cls = T.concatenate([nil,y_t[::-1]], axis=0)
       self.add_input(self.cls, 'cls')
 
   def default_updates(self):

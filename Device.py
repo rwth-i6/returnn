@@ -491,13 +491,16 @@ class Device(object):
           else:
             hidden = self.testnet.reverse_hidden[-idx - 1]
           source.append(T.reshape(hidden.output[target], (hidden.output[target].shape[0] * hidden.output[target].shape[1], hidden.output[target].shape[2])))
-        elif extract in self.testnet.hidden:
+        elif extract in self.testnet.hidden.keys():
           if param is not None:
             param = int(param)
           hidden = self.testnet.hidden[extract]
-          signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.output
-          sidx = hidden.index[param].dimshuffle('x',0) if param is not None else hidden.index
-          source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
+          if hidden.layer_class == 'mdlstm':
+            source.append(T.sum(hidden.output,axis=0))
+          else:
+            signal = hidden.output[param].dimshuffle('x',0,1) if param is not None else hidden.output
+            sidx = hidden.index[param].dimshuffle('x',0) if param is not None else hidden.index
+            source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
         elif extract in self.testnet.output:
           if param is not None:
             param = int(param)

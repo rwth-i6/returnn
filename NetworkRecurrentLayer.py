@@ -221,7 +221,7 @@ class RecurrentUnitLayer(Layer):
                attention = "none",
                recurrent_transform = "none",
                recurrent_transform_attribs = "{}",
-               attention_template = None,
+               attention_template = 128,
                attention_distance = 'l2',
                attention_step = "linear",
                attention_beam = 0,
@@ -440,16 +440,19 @@ class RecurrentUnitLayer(Layer):
       sources = self.sources
       if encoder:
         outputs_info = [ T.concatenate([e.act[i][-1] * self.attention_weight for e in encoder], axis=1) for i in xrange(unit.n_act) ]
-        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if recurrent_transform == 'input' else 0)
+        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
 
       if self.attrs['lm'] and self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
-        y = self.y_in[self.attrs['target']].flatten()
-        sequences += self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
+        if self.network.y[self.attrs['target']].ndim == 3:
+          sequences += T.dot(self.network.y[self.attrs['target']],self.W_lm_out)
+        else:
+          y = self.y_in[self.attrs['target']].flatten()
+          sequences += self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
 
       if sequences == self.b:
-        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if recurrent_transform == 'input' else 0)
+        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
 
       if unit.recurrent_transform:
         outputs_info += unit.recurrent_transform.get_sorted_state_vars_initial()

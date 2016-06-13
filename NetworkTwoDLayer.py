@@ -118,9 +118,15 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)
-    if collapse_output:
+    if collapse_output == 'sum':
       Y = Y.sum(axis=0)
       self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
+    elif collapse_output == 'mean':
+      Y = Y.mean(axis=0)
+      self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
+    elif collapse_output == 'flatten':
+      Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
+      self.index = T.ones((Y.shape[0] * Y.shape[1],Y.shape[2]), dtype='int8')
     self.output = Y
 
   def create_and_add_2d_lstm_weights(self, n, m, name_suffix):

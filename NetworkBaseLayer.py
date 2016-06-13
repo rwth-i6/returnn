@@ -457,6 +457,7 @@ class Layer(Container):
                mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
                sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
+               dtype='float32',
                **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers

@@ -357,7 +357,7 @@ class LayerNetwork(object):
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name]:
-        network.use_target(trg, dtype=json_content.get("dtype", "int32"))
+        network.use_target(trg, dtype=json_content.get("dtype", json_content[layer_name].get('dtype',"int32")))
         traverse(json_content, layer_name, trg, network.j[trg])
     return network
 
