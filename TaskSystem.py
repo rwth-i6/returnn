@@ -479,6 +479,9 @@ class ExecingProcess:
   @staticmethod
   def checkExec():
     if "--forkExecProc" in sys.argv:
+      mod_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
+      if not any(mod_path == os.path.realpath(s) for s in sys.path):
+        sys.path.append(mod_path)
       try:
         import better_exchook
       except ImportError:
