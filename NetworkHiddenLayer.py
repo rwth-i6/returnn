@@ -1476,6 +1476,48 @@ class LengthProjectionLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class MultiLengthLayer(HiddenLayer):
+  layer_class = "multilength"
+  def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(LengthProjectionLayer, self).__init__(**kwargs)
+    self.params = {}
+    self.set_attr('method',method)
+    self.set_attr('pad', pad)
+    self.set_attr('smo', smo)
+    z = T.concatenate([s.output[::s.attrs['direction']] for s in self.sources], axis=2)
+    dim = sum([s.attrs['n_out'] for s in self.sources])
+
+    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    self.W_a = self.add_param(self.create_forward_weights(dim, dim*4, 'A'))
+    self.ba = self.add_param(self.create_bias(dim*4, "ba_%s" % self.name))
+    z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
+    self.W = self.add_param(self.create_random_uniform_weights(dim*4, 1, l=0.001, name='W_%s' % self.name))
+    hyps = T.dot(self.W,z) + self.b + T.constant(avg, 'float32') # TB
+    hyp = T.sum(hyps,axis=0)
+    self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+
+    self.error_val = T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
+    self.lengths = T.round(hyps)
+    def outer(lx):
+      idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+                          sequences = [lx], non_sequences=[T.max(lx) + 1])
+      return idx.dimshuffle(1,0)[:-1] # LB
+    self.idxs, _ = theano.map(outer,sequences=[self.lengths]) # TLB
+    self.output = self.hyp.dimshuffle('x',0,'x')
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
 class AttentionLengthLayer(HiddenLayer):
   layer_class = "attention_length"
   def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=True, use_att=False, use_rbf=False, use_eos=False, **kwargs):
