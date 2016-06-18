@@ -1478,35 +1478,52 @@ class LengthProjectionLayer(HiddenLayer):
 
 class MultiLengthLayer(HiddenLayer):
   layer_class = "multilength"
-  def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+  def __init__(self, avg=2.0, oracle=True, subsampling = 50, **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
-    super(LengthProjectionLayer, self).__init__(**kwargs)
+    super(MultiLengthLayer, self).__init__(**kwargs)
     self.params = {}
-    self.set_attr('method',method)
-    self.set_attr('pad', pad)
-    self.set_attr('smo', smo)
-    z = T.concatenate([s.output[::s.attrs['direction']] for s in self.sources], axis=2)
+    z = T.concatenate([s.output for s in self.sources], axis=2)[::subsampling]
     dim = sum([s.attrs['n_out'] for s in self.sources])
 
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    self.W_a = self.add_param(self.create_forward_weights(dim, dim*4, 'A'))
-    self.ba = self.add_param(self.create_bias(dim*4, "ba_%s" % self.name))
-    z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
-    self.W = self.add_param(self.create_random_uniform_weights(dim*4, 1, l=0.001, name='W_%s' % self.name))
-    hyps = T.dot(self.W,z) + self.b + T.constant(avg, 'float32') # TB
-    hyp = T.sum(hyps,axis=0)
-    self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    self.W_a = self.add_param(self.create_forward_weights(dim, dim, 'A'))
+    self.ba = self.add_param(self.create_bias(dim, "ba_%s" % self.name))
+    #z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
+    z = T.tanh(T.dot(z, self.W_a) + self.ba)
+    self.W = self.add_param(self.create_forward_weights(dim, 1, name='W_%s' % self.name))
+    self.hyps = (T.dot(z,self.W)[:,:,0] + self.b[0] + T.constant(avg, 'float32')) # TB
+    #self.hyps = self.hyps.reshape((self.hyps.shape[0],self.hyps.shape[1])) # TB
+    self.hyps = T.ones((z.shape[0],z.shape[1]),'float32')
+    self.hyps = theano.printing.Print("hypin")(self.hyps)
+    hyp = T.sum(self.hyps,axis=0)
+    #real = theano.printing.Print("real")(real)
+    self.cost_val = T.constant(0,'float32') #T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    self.error_val = T.constant(0,'int32') #T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
+    #if self.train_flag or oracle:
+    #  self.hyps = T.maximum(self.hyps, T.ones_like(self.hyps))
+    #  self.hyps = self.hyps * T.cast(real / T.sum(self.hyps,axis=0),'float32').dimshuffle('x',0).repeat(self.hyps.shape[0],axis=0)
+    self.lengths = T.cast(T.maximum(T.round(self.hyps),T.ones_like(self.hyps)),'int32')
+    self.chunks = self.lengths.flatten()
+    self.chunks = theano.printing.Print("chunks")(self.chunks)
+    idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
+                       sequences=[self.chunks], non_sequences=[T.max(self.chunks) + T.cast(1,'int32')])
+    self.index = idx.dimshuffle(1,0)[::-1]
+    self.act = [T.concatenate([s.act[i][::s.attrs['direction'] * subsampling]
+                               for s in self.sources], axis=2) for i in [0, 1]]
+    self.act = [act.reshape((act.shape[0] * act.shape[1], act.shape[2])).dimshuffle('x', 0, 1) for act in self.act]
+    self.output = 0
 
-    self.error_val = T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
-    self.lengths = T.round(hyps)
-    def outer(lx):
-      idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
-                          sequences = [lx], non_sequences=[T.max(lx) + 1])
-      return idx.dimshuffle(1,0)[:-1] # LB
-    self.idxs, _ = theano.map(outer,sequences=[self.lengths]) # TLB
-    self.output = self.hyp.dimshuffle('x',0,'x')
+    #def outer(lx,ml):
+    #  idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+    #                      sequences = [lx], non_sequences=[ml])
+    #  return idx # BL
+    #idxs, _ = theano.map(outer,sequences=[self.lengths], non_sequences=[T.max(self.lengths) + 1]) # TBL
+    #self.index = idxs.dimshuffle(1,0,2).reshape((idxs.shape[1],idxs.shape[0]*idxs.shape[2]))[:-1].dimshuffle(1,0)
+    #self.act = [ T.concatenate([s.act[i][::s.attrs['direction']].reshape((s.act[i].shape[0]*s.act[i].shape[1],s.act[i].shape[2])).dimshuffle('x',0,1)
+    #                            for s in self.sources], axis=2) for i in [0,1] ]
+    #self.output = hyp.dimshuffle('x',0,'x')
 
   def cost(self):
     return self.cost_val, None
@@ -1516,6 +1533,33 @@ class MultiLengthLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class MergeLengthLayer(_NoOpLayer):
+  layer_class = "mergelength"
+
+  def __init__(self, base, **kwargs):
+    assert base and len(base) == 1
+    kwargs['n_out'] = 1
+    super(MergeLengthLayer, self).__init__(**kwargs)
+    num_batches = base[0].hyps.shape[1]
+    num_pos = base[0].hyps.shape[0]
+    z = T.concatenate([s.output for s in self.sources], axis=2)
+    z = z.reshape((z.shape[0] * num_pos,num_batches,z.shape[2])).dimshuffle(1,0,2)  # BND
+    idx = base[0].index.reshape((z.shape[1], num_batches)).dimshuffle(1,0)  # BN
+    dx = T.sum(T.cast(idx,'int32'),axis=1)
+    def merge(zn,dxn,idxn,m):
+      zm = zn[(idxn>0).nonzero()].reshape((dxn,zn.shape[1]))
+      i = T.concatenate([T.ones((dxn,), 'int8'), T.zeros((m - dxn,), 'int8')],axis=0)
+      #x = T.concatenate([zm, T.zeros((m - dxn,zm.shape[1]), 'float32')],axis=0)
+      x = T.concatenate([zm, zm[-1].dimshuffle('x',0).repeat(m-dxn,axis=0)],axis=0)
+      return x,i
+    outputs, _ = theano.map(merge, sequences=[z,dx,idx], non_sequences=[T.max(dx) + T.cast(1,'int32')])
+    #self.output = outputs[0].dimshuffle(1,0,2)[:-1]
+    #self.index = outputs[1].dimshuffle(1,0)[:-1]
+    self.output = z.dimshuffle(1,0,2)
+    self.index = T.ones_like(idx.dimshuffle(1,0))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
 
 
 class AttentionLengthLayer(HiddenLayer):

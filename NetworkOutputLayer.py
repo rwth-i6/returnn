@@ -107,17 +107,16 @@ class OutputLayer(Layer):
       else:
         import theano.ifelse
         padx = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32') + self.z[-1]
-        pady = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int32') + y[-1]
+        pady = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int32') #+ y[-1]
+        padi = T.ones((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int8')
         self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
-                                      #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
-                                      T.concatenate([self.z,padx],axis=0),
-                                      self.z)
+                                      T.concatenate([self.z,padx],axis=0), self.z)
         #self.z = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),self.z[:self.index.shape[0]], self.z)
         self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0],self.index.shape[0]),
-                                                                     T.concatenate([y, pady], axis=0), y))
+                                                                     T.concatenate([y,pady], axis=0), y))
         #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
-        self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate(
-        [T.ones((self.z.shape[0] - self.index.shape[0], self.z.shape[1]), 'int8'), self.index], axis=0), self.index)
+        self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
+                                          T.concatenate([padi,self.index],axis=0),self.index)
       self.norm = num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
