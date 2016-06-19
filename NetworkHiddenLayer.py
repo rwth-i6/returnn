@@ -2560,6 +2560,9 @@ class NewConv(_NoOpLayer):
         dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from input
 
     # calculating the number of input columns
+    if d_row == -1: # assume quadratic patch
+      from math import sqrt
+      d_row = int(sqrt(dimension))
     d_col = dimension/d_row
 
     # number of output dimension validation based on the border_mode
