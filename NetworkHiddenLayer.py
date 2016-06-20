@@ -192,9 +192,13 @@ class DownsampleLayer(_NoOpLayer):
     z, z_dim = concat_sources(self.sources, unsparse=False)
     n_out = z_dim
     for f, a in zip(factor, axis):
-      z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      import theano.ifelse
+      cond = T.le(f,z.shape[a])
+      z = theano.ifelse.ifelse(cond, TheanoUtil.downsample(z, axis=a, factor=f, method=method), z)
       if a == 0:
-        self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
+        self.index = theano.ifelse.ifelse(cond,
+                                          TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min"),
+                                          self.index)
       elif a == 2:
         n_out = int(n_out / f)
     output = z
