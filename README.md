@@ -1,7 +1,9 @@
-CRNN development tree
-======================
+RETURNN development tree
+========================
 
-CRNN is theano-based implementation of modern recurrent neural network architectures. It is optimized for fast and reliable training of recurrent neural networks in a multi-GPU environment.
+RETURNN - RWTH extensible training framework for universal recurrent neural networks,
+is a Theano-based implementation of modern recurrent neural network architectures.
+It is optimized for fast and reliable training of recurrent neural networks in a multi-GPU environment.
 
 Features include:
 
