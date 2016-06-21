@@ -127,6 +127,14 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
       y_pad = h_filter - 1;
       x_pad = w_filter - 1;
     }
+    if(x_pad < w_filter - w_src)
+    {
+      x_pad = w_filter - w_src;
+    }
+    if(y_pad < h_filter - h_src)
+    {
+      y_pad = h_filter - h_src;
+    }
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, y_pad, x_pad, 1, 1, 1, 1, CUDNN_CONVOLUTION));
     checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, c_filter, c_src, h_filter, w_filter));
 
@@ -150,7 +158,7 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 2, 0
+    return 3, 0
 
 CuDNNConvHWBCOpGradValidNoInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=False)
 CuDNNConvHWBCOpGradValidInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=True)
@@ -264,6 +272,14 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
       y_pad = h_filter - 1;
       x_pad = w_filter - 1;
     }
+    if(x_pad < w_filter - w_src)
+    {
+      x_pad = w_filter - w_src;
+    }
+    if(y_pad < h_filter - h_src)
+    {
+      y_pad = h_filter - h_src;
+    }
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, y_pad, x_pad, 1, 1, 1, 1, CUDNN_CONVOLUTION));
 
     int n_out = 0, c_out = 0, h_out = 0, w_out = 0;
@@ -312,7 +328,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 2, 0
+    return 3, 0
 
 CuDNNConvHWBCOpValidInstance = CuDNNConvHWBCOp("valid")
 CuDNNConvHWBCOpFullInstance = CuDNNConvHWBCOp("full")

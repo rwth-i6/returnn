@@ -302,7 +302,7 @@ class AttentionBase(RecurrentTransformBase):
       dst = T.sum(self.W_T.dimshuffle('x','x',0).repeat(C.shape[0],axis=0).repeat(C.shape[1],axis=1) * T.tanh(C + H),axis=2)
     else:
       raise NotImplementedError()
-    return dst * T.constant(self.attrs['sharpening'], 'float32') #/ T.cast(H.shape[1],'float32')
+    return dst #/ T.cast(H.shape[1],'float32')
 
   def beam(self, X, beam_idx=None):
     if not beam_idx:
@@ -336,7 +336,7 @@ class AttentionBase(RecurrentTransformBase):
     return output[0], T.cast(output[1],'float32')
 
   def softmax(self, D, I):
-    D = D
+    D = D * T.constant(self.attrs['sharpening'], 'float32')
     if self.attrs['norm'] == 'exp':
       E = T.exp(-D)
     elif self.attrs['norm'] == 'sigmoid':

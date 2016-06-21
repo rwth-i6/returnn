@@ -192,10 +192,17 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     n_out = z_dim
+    import theano.ifelse
     for f, a in zip(factor, axis):
-      z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       if a == 0:
-        self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
+        z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      else:
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      if a == 0:
+        self.index = self.sources[0].index
+        self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
+        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
     output = z
@@ -204,7 +211,7 @@ class DownsampleLayer(_NoOpLayer):
     elif method == 'mlp':
       self.DP = self.add_param(self.create_forward_weights(n_out * numpy.prod(factor),z_dim,self.name + "_DP"))
       self.b = self.add_param(self.create_bias(z_dim))
-      output = T.nnet.relu(T.dot(output,self.DP) + self.b)
+      output = theano.ifelse.ifelse(cond, T.nnet.relu(T.dot(output,self.DP) + self.b), output)
     elif method == 'lstm':
       num_batches = z.shape[2]
       #z = theano.printing.Print("a", attrs=['shape'])(z)
@@ -1477,6 +1484,92 @@ class LengthProjectionLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class MultiLengthLayer(HiddenLayer):
+  layer_class = "multilength"
+  def __init__(self, avg=2.0, oracle=True, subsampling = 50, **kwargs):
+    kwargs['n_out'] = 1
+    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
+    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
+    super(MultiLengthLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output for s in self.sources], axis=2)[::subsampling]
+    dim = sum([s.attrs['n_out'] for s in self.sources])
+
+    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
+    self.W_a = self.add_param(self.create_forward_weights(dim, dim, 'A'))
+    self.ba = self.add_param(self.create_bias(dim, "ba_%s" % self.name))
+    #z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
+    z = T.tanh(T.dot(z, self.W_a) + self.ba)
+    self.W = self.add_param(self.create_forward_weights(dim, 1, name='W_%s' % self.name))
+    self.hyps = (T.dot(z,self.W)[:,:,0] + self.b[0] + T.constant(avg, 'float32')) # TB
+    #self.hyps = self.hyps.reshape((self.hyps.shape[0],self.hyps.shape[1])) # TB
+    self.hyps = T.ones((z.shape[0],z.shape[1]),'float32')
+    self.hyps = theano.printing.Print("hypin")(self.hyps)
+    hyp = T.sum(self.hyps,axis=0)
+    #real = theano.printing.Print("real")(real)
+    self.cost_val = T.constant(0,'float32') #T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    self.error_val = T.constant(0,'int32') #T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
+    #if self.train_flag or oracle:
+    #  self.hyps = T.maximum(self.hyps, T.ones_like(self.hyps))
+    #  self.hyps = self.hyps * T.cast(real / T.sum(self.hyps,axis=0),'float32').dimshuffle('x',0).repeat(self.hyps.shape[0],axis=0)
+    self.lengths = T.cast(T.maximum(T.round(self.hyps),T.ones_like(self.hyps)),'int32')
+    self.chunks = self.lengths.flatten()
+    self.chunks = theano.printing.Print("chunks")(self.chunks)
+    idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
+                       sequences=[self.chunks], non_sequences=[T.max(self.chunks) + T.cast(1,'int32')])
+    self.index = idx.dimshuffle(1,0)[::-1]
+    self.act = [T.concatenate([s.act[i][::s.attrs['direction'] * subsampling]
+                               for s in self.sources], axis=2) for i in [0, 1]]
+    self.act = [act.reshape((act.shape[0] * act.shape[1], act.shape[2])).dimshuffle('x', 0, 1) for act in self.act]
+    self.output = 0
+
+    #def outer(lx,ml):
+    #  idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+    #                      sequences = [lx], non_sequences=[ml])
+    #  return idx # BL
+    #idxs, _ = theano.map(outer,sequences=[self.lengths], non_sequences=[T.max(self.lengths) + 1]) # TBL
+    #self.index = idxs.dimshuffle(1,0,2).reshape((idxs.shape[1],idxs.shape[0]*idxs.shape[2]))[:-1].dimshuffle(1,0)
+    #self.act = [ T.concatenate([s.act[i][::s.attrs['direction']].reshape((s.act[i].shape[0]*s.act[i].shape[1],s.act[i].shape[2])).dimshuffle('x',0,1)
+    #                            for s in self.sources], axis=2) for i in [0,1] ]
+    #self.output = hyp.dimshuffle('x',0,'x')
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+  def cost_scale(self):
+    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class MergeLengthLayer(_NoOpLayer):
+  layer_class = "mergelength"
+
+  def __init__(self, base, **kwargs):
+    assert base and len(base) == 1
+    kwargs['n_out'] = 1
+    super(MergeLengthLayer, self).__init__(**kwargs)
+    num_batches = base[0].hyps.shape[1]
+    num_pos = base[0].hyps.shape[0]
+    z = T.concatenate([s.output for s in self.sources], axis=2)
+    z = z.reshape((z.shape[0] * num_pos,num_batches,z.shape[2])).dimshuffle(1,0,2)  # BND
+    idx = base[0].index.reshape((z.shape[1], num_batches)).dimshuffle(1,0)  # BN
+    dx = T.sum(T.cast(idx,'int32'),axis=1)
+    def merge(zn,dxn,idxn,m):
+      zm = zn[(idxn>0).nonzero()].reshape((dxn,zn.shape[1]))
+      i = T.concatenate([T.ones((dxn,), 'int8'), T.zeros((m - dxn,), 'int8')],axis=0)
+      #x = T.concatenate([zm, T.zeros((m - dxn,zm.shape[1]), 'float32')],axis=0)
+      x = T.concatenate([zm, zm[-1].dimshuffle('x',0).repeat(m-dxn,axis=0)],axis=0)
+      return x,i
+    outputs, _ = theano.map(merge, sequences=[z,dx,idx], non_sequences=[T.max(dx) + T.cast(1,'int32')])
+    #self.output = outputs[0].dimshuffle(1,0,2)[:-1]
+    #self.index = outputs[1].dimshuffle(1,0)[:-1]
+    self.output = z.dimshuffle(1,0,2)
+    self.index = T.ones_like(idx.dimshuffle(1,0))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+
+
 class AttentionLengthLayer(HiddenLayer):
   layer_class = "attention_length"
   def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=True, use_att=False, use_rbf=False, use_eos=False, **kwargs):
@@ -2484,6 +2577,9 @@ class NewConv(_NoOpLayer):
       assert n_sources == 1, 'Except CNN, the input is only one!'
 
     # calculating the number of input columns
+    if d_row == -1: # assume quadratic patch
+      from math import sqrt
+      d_row = int(sqrt(dimension))
     d_col = dimension/d_row
 
     if type(filter) == int:
