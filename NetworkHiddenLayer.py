@@ -191,14 +191,17 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     n_out = z_dim
+    import theano.ifelse
     for f, a in zip(factor, axis):
-      import theano.ifelse
-      cond = T.le(f,z.shape[a])
-      z = theano.ifelse.ifelse(cond, TheanoUtil.downsample(z, axis=a, factor=f, method=method), z)
       if a == 0:
-        self.index = theano.ifelse.ifelse(cond,
-                                          TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min"),
-                                          self.index)
+        z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      else:
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      if a == 0:
+        self.index = self.sources[0].index
+        self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
+        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
     output = z
@@ -207,7 +210,7 @@ class DownsampleLayer(_NoOpLayer):
     elif method == 'mlp':
       self.DP = self.add_param(self.create_forward_weights(n_out * numpy.prod(factor),z_dim,self.name + "_DP"))
       self.b = self.add_param(self.create_bias(z_dim))
-      output = T.nnet.relu(T.dot(output,self.DP) + self.b)
+      output = theano.ifelse.ifelse(cond, T.nnet.relu(T.dot(output,self.DP) + self.b), output)
     elif method == 'lstm':
       num_batches = z.shape[2]
       #z = theano.printing.Print("a", attrs=['shape'])(z)

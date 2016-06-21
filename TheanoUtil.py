@@ -92,6 +92,7 @@ def downsample(source, axis, factor, method="average"):
   assert factor == int(factor), "factor is expected to be an int"
   factor = int(factor)
   # make shape[axis] a multiple of factor
+  src = source
   source = source[slice_for_axis(axis=axis, s=slice(0, (source.shape[axis] / factor) * factor))]
   # Add a temporary dimension as the factor.
   added_dim_shape = [source.shape[i] for i in range(source.ndim)]
@@ -107,7 +108,8 @@ def downsample(source, axis, factor, method="average"):
   elif method == "min":
     return T.min(source, axis=axis + 1)
   elif method == "concat" or method == 'mlp': # concatenates in last dimension
-    return T.reshape(source, added_dim_shape[:axis+1] + added_dim_shape[axis+2:-1] + [added_dim_shape[-1] * factor])
+    #return T.reshape(source, added_dim_shape[:axis+1] + added_dim_shape[axis+2:-1] + [added_dim_shape[-1] * factor])
+    return source.swapaxes(axis+1,src.ndim-1).reshape([source.shape[0],src.shape[1]] + [factor * source.shape[3]])
   elif method == "batch":
     assert axis == 0
     return source.dimshuffle(1,0,2,3).reshape((source.shape[1],source.shape[0]*source.shape[2],source.shape[3]))
