@@ -706,3 +706,18 @@ class ClassificationTaskThread(TaskThread):
       assert len(batchess[0]) == 1
       assert batchess[0][0].get_num_seqs() == 1
       self.result[self.data.get_tag(batchess[0][0].start_seq)] = numpy.concatenate(results, axis=1)
+
+
+class PriorEstimationTaskThread(TaskThread):
+    def __init__(self, network, devices, data, batches):
+      super(PriorEstimationTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
+      self.result = {}
+
+    def evaluate(self, batchess, results, result_format, num_frames):
+      assert len(batchess) == 1
+      assert len(batchess[0]) == 1
+      assert batchess[0][0].get_num_seqs() == 1
+      print >> log.v1, "num frames: ", num_frames
+      #print >> log.v1, "shape of results: ", results.shape()
+      #self.result[self.data.get_tag(batchess[0][0].start_seq)] = numpy.concatenate(results, axis=1)
+      print >> log.v1, numpy.concatenate(results, axis=1).shape

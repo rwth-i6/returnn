@@ -7,7 +7,7 @@ from collections import OrderedDict
 import h5py
 import json
 from Network import LayerNetwork
-from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, ClassificationTaskThread
+from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, ClassificationTaskThread, PriorEstimationTaskThread
 import SprintCache
 from Log import log
 from Updater import Updater
@@ -729,3 +729,10 @@ class Engine:
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
       print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
+
+  def compute_priors(self, train_data, output_file):
+    batches = train_data.generate_batches(recurrent_net=self.network.recurrent,
+                                    batch_size=0, max_seqs=1)
+    softmax = []
+    forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches)
+    forwarder.join()

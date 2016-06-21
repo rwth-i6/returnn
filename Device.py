@@ -80,7 +80,7 @@ def get_device_attributes():
   if os.name != 'nt':
     if sys.platform == 'darwin':
       mhz = int(float(cmd("system_profiler  SPHardwareDataType | "
-                          "grep 'Processor Speed' | awk '{print $3}'")[0]) * 1024)
+                          "grep 'Processor Speed' | awk '{print $3}'")[0].replace(',','.')) * 1024)
       for i in range(get_num_devices()[0]):
         attributes["cpu" + str(cpu)] = (1, mhz, 2 * 1024 * 1024 * 1024)
         cpu += 1
@@ -427,7 +427,7 @@ class Device(object):
                                     no_default_updates=True,
                                     name="tester")
 
-    elif self.network_task in ['forward', 'daemon']:
+    elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       extractions = config.list('extract', ['log-posteriors'])
       source = []
       givens = self.make_input_givens(self.testnet)
