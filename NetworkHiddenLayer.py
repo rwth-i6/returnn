@@ -2678,21 +2678,20 @@ class NewConv(_NoOpLayer):
     self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
 
     # max pooling function
-    if pool_size == [1, 1]:
-      self.pooled_out = self.conv_out
-    else:
-      self.pooled_out = self._pooling(self.conv_out, pool_size, ignore_border, mode)
-    self.pooled_out.name = 'conv_layer_pooled_out'
+    if pool_size <> [1, 1]:
+      print >> sys.stderr, 'pooling!!!', mode
+      self.conv_out = self._pooling(self.conv_out, pool_size, ignore_border, mode)
 
     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
-    self.Output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
+    self.Output = T.tanh(self.conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
     self.Output.name = 'conv_layer_output_plus_bias'
+    self.Output = T.set_subtensor(self.Output[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.Output[0]))
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert the output back to 3D tensor
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.Output2 = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.make_output(self.Output2 * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'], axis=2), 'float32'))
+    self.make_output(self.Output2)
 
   # function for calculating the weight parameter of this class
   def _create_weights(self, filter_shape, pool_size, seeds):
