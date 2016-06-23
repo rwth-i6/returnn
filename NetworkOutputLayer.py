@@ -341,8 +341,8 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
-      sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
-      err, grad = sprint_error_op(log_probs, T.sum(self.index, axis=0))
+      self.sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
+      err, grad = self.sprint_error_op(log_probs, T.sum(self.index, axis=0))
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))

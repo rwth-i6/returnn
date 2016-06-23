@@ -755,12 +755,15 @@ class SeqTrainParallelControl:
   def __init__(self, engine):
     self.engine = engine
     self.output_dim = None
+    self.sprint_loss_op = None
+    self.sprint_instance = None
     self.train_started = None
     self.train_start_seq = 0
+    self.calc_loss_thread = None
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
-    self.forward_data_queue = []
-    self.loss_data_queue = []  # list of tuple (seq, loss, hat_y)
+    self.forward_data_queue = []  # list of tuple (seq, seq_tag, posteriors). posteriors is 2d array (T, output_dim)
+    self.loss_data_queue = []  # list of tuple (seq, seq_tag, loss, hat_y)
 
   def do_forward(self):
     """
@@ -774,6 +777,7 @@ class SeqTrainParallelControl:
       self.is_forwarding_finished = True
       return
     dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
+    seq_tag = dataset.get_tag(self.forward_current_seq)
     T = dataset.get_seq_length(self.forward_current_seq)
 
     device = self.engine.devices[0]
@@ -796,15 +800,36 @@ class SeqTrainParallelControl:
     # Posteriors are in format (time,emission).
     assert posteriors.shape == (T, self.output_dim)
 
-    self.forward_data_queue.append((self.forward_current_seq, posteriors))
+    self.forward_data_queue.append((self.forward_current_seq, seq_tag, posteriors))
     self.forward_current_seq += 1
+
+  def do_calc_loss(self, seq, seq_tag, posteriors):
+    from SprintErrorSignals import SprintSubprocessInstance
+    assert isinstance(self.sprint_instance, SprintSubprocessInstance)
+    self.sprint_instance.get_loss_and_error_signal__send(
+      seg_name=seq_tag, seg_len=posteriors.shape[0], posteriors=posteriors)
+    seg_name, loss, error_signal = self.sprint_instance.get_loss_and_error_signal__read()
+    assert seg_name == seq_tag
+    assert error_signal.shape == posteriors.shape
+    hat_y = posteriors - error_signal
+    self.loss_data_queue.append((seq, seq_tag, loss, hat_y))
+
+  def calc_loss_thread_loop(self):
+    while True:
+      if not self.forward_data_queue:
+        if self.is_forwarding_finished:
+          return  # finished
+        time.sleep(0.1)  # wait until we have some data
+        continue
+      seq, seq_tag, posteriors = self.forward_data_queue.pop(0)
+      self.do_calc_loss(seq=seq, seq_tag=seq_tag, posteriors=posteriors)
 
   def have_seqs_loss_data(self, start_seq, end_seq):
     assert start_seq >= end_seq
     if start_seq == end_seq: return True
     first_seq, last_seq = start_seq, end_seq - 1
     have_first, have_last = False, False
-    for seq, _, _ in self.loss_data_queue:
+    for seq, _, _, _ in self.loss_data_queue:
       if seq == first_seq: have_first = True
       if seq == last_seq: have_last = True
     if have_last:
@@ -813,7 +838,7 @@ class SeqTrainParallelControl:
 
   def remove_old_loss_data(self, current_start_seq):
     idx = 0
-    for i, (seq, _, _) in enumerate(list(self.loss_data_queue)):
+    for i, (seq, _, _, _) in enumerate(list(self.loss_data_queue)):
       if seq < current_start_seq:
         idx = i + 1
       else:
@@ -850,7 +875,20 @@ class SeqTrainParallelControl:
     self.train_start_seq = 0
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
-    self.output_dim = sorted(self.engine.network.output.items())[0][1].attrs['n_out']
+    output_layer = sorted(self.engine.network.output.items())[0][1]
+    self.output_dim = output_layer.attrs['n_out']
+    self.sprint_loss_op = output_layer.sprint_error_op
+    from SprintErrorSignals import SprintErrorSigOp
+    assert isinstance(self.sprint_loss_op, SprintErrorSigOp)
+    if not self.sprint_instance:
+      sprint_opts = self.sprint_loss_op.sprint_opts
+      from SprintErrorSignals import SprintSubprocessInstance
+      self.sprint_instance = SprintSubprocessInstance(**sprint_opts)
+    from threading import Thread
+    self.calc_loss_thread = Thread(
+      target=self.calc_loss_thread_loop, name="calc_loss_thread")
+    self.calc_loss_thread.daemon = True
+    self.calc_loss_thread.start()
 
   def train_finish_epoch(self):
     """
@@ -859,4 +897,5 @@ class SeqTrainParallelControl:
     assert self.train_started
     assert len(self.forward_data_queue) == 0, "Not all forwardings were used?"
     assert self.is_forwarding_finished, "Forwarding not finished?"
+    self.calc_loss_thread.join()
     self.train_started = False
