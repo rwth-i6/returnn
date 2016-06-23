@@ -183,6 +183,13 @@ class SprintSubprocessInstance:
     p = self.pipe_c2p[0]  # see _start_child
     return Unpickler(p).load()
 
+  def _poll(self):
+    assert os.getpid() == self.parent_pid
+    p = self.pipe_c2p[0]  # see _start_child
+    from select import select
+    ready, _, _ = select([p.fileno()], [], [], 0)
+    return bool(ready)
+
   def _join_child(self, wait=True, expected_exit_status=None):
     assert self.child_pid
     options = 0 if wait else os.WNOHANG
@@ -208,6 +215,9 @@ class SprintSubprocessInstance:
       self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
     except (IOError, EOFError):
       raise
+
+  def get_loss_and_error_signal__have_data(self):
+    return self._poll()
 
   def get_loss_and_error_signal__read(self):
     """
