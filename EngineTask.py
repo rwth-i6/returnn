@@ -53,6 +53,12 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches)
 
+    def maybe_wait_for_batches(self, batches):
+      """
+      :type batches: list[Batch]
+      """
+      pass
+
     def allocate_devices(self, selected_devices = None):
       """
       Sets the device data, i.e. the next batches, via self.batches.
@@ -73,6 +79,7 @@ class TaskThread(threading.Thread):
       for device in selected_devices:
         if not self.share_batches:
           batches = self.batches.peek_next_n(device.num_batches)
+        self.maybe_wait_for_batches(batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
         batch_idx = self.batches.get_current_batch_idx()
         assert success, "batches %s with seqs at %i failed to load" % \
@@ -467,7 +474,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, **kwargs):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, seq_train_parallel=None, **kwargs):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -475,9 +482,11 @@ class TrainTaskThread(TaskThread):
     :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
+    :type seq_train_parallel: Engine.SeqTrainParallelControl | None
     """
     self.updater = updater
     self.learning_rate = learning_rate
+    self.seq_train_parallel = seq_train_parallel
     self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
@@ -500,6 +509,18 @@ class TrainTaskThread(TaskThread):
     kwargs["updater"] = self.updater
     kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
+
+  def maybe_wait_for_batches(self, batches):
+    """
+    :type batches: list[Batch]
+    """
+    if not self.seq_train_parallel: return
+    if not batches: return
+    start_seq, end_seq = 0, 0
+    for batch in batches:
+      start_seq = min(start_seq, batch.start_seq)
+      end_seq = max(end_seq, batch.end_seq)
+    self.seq_train_parallel.train_wait_for_seqs(start_seq=start_seq, end_seq=end_seq)
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None

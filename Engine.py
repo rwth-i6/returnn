@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms, hdf5_dimension
+from Util import hms, hdf5_dimension, dict_joined
 import errno
 import time
 import SimpleHTTPServer
@@ -200,6 +200,11 @@ class Engine:
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxint
+    if config.is_typed("seq_train_parallel"):
+      self.seq_train_parallel = SeqTrainParallelControl(
+        **dict_joined(config.typed_value("seq_train_parallel"), dict(engine=self)))
+    else:
+      self.seq_train_parallel = None
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -452,6 +457,7 @@ class Engine:
                               eval_batch_size=self.update_batch_size,
                               start_batch=start_batch, share_batches=self.share_batches,
                               exclude=self.exclude,
+                              seq_train_parallel=self.seq_train_parallel,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch,
                               epoch=self.epoch)
     trainer.join()
@@ -729,3 +735,128 @@ class Engine:
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
       print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
+
+
+class SeqTrainParallelControl:
+  """
+  Idea: Parallelize some stuff in seq training (e.g. sprint loss). Use chunked training.
+  We have these steps:
+    (1) (forward:GPU) forward only, remember output
+    (2) (calc_loss:CPU) calculate loss based on data from (1), error signal. store hat_y = y - grad_L (for stability).
+    (3) (train:GPU) forward again, and backprop with data from (2).
+  (1) and (3) are on the same GPU, use the same shared params.
+  (2) is on CPU.
+  (3) is done via the usual loop via EngineTask.TrainTaskThread.
+    It calls self.train_wait_for_seqs().
+  """
+
+  forward_cache_limit = 5
+
+  def __init__(self, engine):
+    self.engine = engine
+    self.output_dim = None
+    self.train_started = None
+    self.train_start_seq = 0
+    self.forward_current_seq = 0
+    self.is_forwarding_finished = False
+    self.forward_data_queue = []
+    self.loss_data_queue = []  # list of tuple (seq, loss, hat_y)
+
+  def do_forward(self):
+    """
+    Full sequence forwarding, no chunking (at the moment).
+    """
+    assert self.train_started
+    assert not self.is_forwarding_finished
+    # Load next sequence for forwarding, keep all which are still needed for training.
+    dataset = self.engine.train_data
+    if not dataset.is_less_than_num_seqs(self.forward_current_seq):
+      self.is_forwarding_finished = True
+      return
+    dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
+    T = dataset.get_seq_length(self.forward_current_seq)
+
+    device = self.engine.devices[0]
+    from EngineUtil import assign_dev_data_single_seq
+    success = assign_dev_data_single_seq(device, dataset, self.forward_current_seq)
+    assert success, "failed to allocate & assign data for seq %i, %s" % (
+      self.forward_current_seq, dataset.get_tag(self.forward_current_seq))
+
+    # Do the actual forwarding and collect result.
+    device.run("extract")
+    result, _ = device.result()
+    assert result is not None, "Device crashed."
+    assert len(result) == 1
+    posteriors = result[0]
+
+    # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
+    if posteriors.ndim == 3:
+      assert posteriors.shape == (T, 1, self.output_dim)
+      posteriors = posteriors[:, 0]
+    # Posteriors are in format (time,emission).
+    assert posteriors.shape == (T, self.output_dim)
+
+    self.forward_data_queue.append((self.forward_current_seq, posteriors))
+    self.forward_current_seq += 1
+
+  def have_seqs_loss_data(self, start_seq, end_seq):
+    assert start_seq >= end_seq
+    if start_seq == end_seq: return True
+    first_seq, last_seq = start_seq, end_seq - 1
+    have_first, have_last = False, False
+    for seq, _, _ in self.loss_data_queue:
+      if seq == first_seq: have_first = True
+      if seq == last_seq: have_last = True
+    if have_last:
+      assert have_first  # otherwise, we removed the cache already although we still need it
+    return have_first and have_last
+
+  def remove_old_loss_data(self, current_start_seq):
+    idx = 0
+    for i, (seq, _, _) in enumerate(list(self.loss_data_queue)):
+      if seq < current_start_seq:
+        idx = i + 1
+      else:
+        break
+    del self.loss_data_queue[:idx]
+
+  def train_wait_for_seqs(self, start_seq, end_seq):
+    """
+    Called from TrainTaskThread while doing training (forward + backprop).
+    :param int start_seq: inclusive
+    :param int end_seq: exclusive
+    """
+    assert self.train_started
+    assert start_seq >= end_seq
+    if start_seq == end_seq: return
+    assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
+    self.train_start_seq = start_seq
+    self.remove_old_loss_data(start_seq)
+    if not self.is_forwarding_finished:
+      if not self.forward_data_queue:
+        self.do_forward()
+    while not self.have_seqs_loss_data(start_seq, end_seq):
+      if self.forward_cache_limit > len(self.forward_data_queue):
+        self.do_forward()
+      else:
+        time.sleep(0.1)  # wait until we have the data we need
+
+  def train_start_epoch(self):
+    """
+    Called from TrainTaskThread at the beginning of a new epoch.
+    """
+    assert not self.train_started
+    self.train_started = True
+    self.train_start_seq = 0
+    self.forward_current_seq = 0
+    self.is_forwarding_finished = False
+    self.output_dim = sorted(self.engine.network.output.items())[0][1].attrs['n_out']
+
+  def train_finish_epoch(self):
+    """
+    Called from TrainTaskThread at the end of an epoch.
+    """
+    assert self.train_started
+    assert len(self.forward_data_queue) == 0, "Not all forwardings were used?"
+    assert self.is_forwarding_finished, "Forwarding not finished?"
+    self.train_started = False
