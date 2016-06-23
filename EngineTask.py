@@ -53,13 +53,6 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches)
 
-    def allocate_device(self, device):
-      batches = self.batches.peek_next_n(device.num_batches)
-      success, batch_adv_idx = self.assign_dev_data(device, batches)
-      if not success: return []
-      self.batches.advance(batch_adv_idx)
-      return batches
-
     def allocate_devices(self, selected_devices = None):
       """
       Sets the device data, i.e. the next batches, via self.batches.
