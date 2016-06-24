@@ -859,3 +859,16 @@ def make_dll_name(basename):
 
 def escape_c_str(s):
   return '"%s"' % s.replace("\\\\", "\\").replace("\n", "\\n").replace("\"", "\\\"").replace("'", "\\'")
+
+
+def attr_chain(base, attribs):
+  if not isinstance(attribs, (list, tuple)):
+    assert isinstance(attribs, str)
+    attribs = [attribs]
+  else:
+    attribs = list(attribs)
+  while attribs:
+    base = getattr(base, attribs[0])
+    attribs.pop(0)
+  return base
+
