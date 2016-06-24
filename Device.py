@@ -1160,7 +1160,7 @@ class Device(object):
         print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
 
-  def forward(self, use_trainnet=True):
+  def forward(self, use_trainnet=False):
     assert self.is_device_proc()
     network = self.trainnet if use_trainnet else self.testnet
     import theano
