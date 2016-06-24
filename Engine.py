@@ -749,37 +749,8 @@ class SeqTrainParallelControl:
     It calls self.train_wait_for_seqs().
   """
 
-  class CalcLossState:
-    def __init__(self, forward_data, sprint_instance):
-      assert isinstance(forward_data, SeqTrainParallelControl.ForwardData)
-      from SprintErrorSignals import SprintSubprocessInstance
-      assert isinstance(sprint_instance, SprintSubprocessInstance)
-      self.seq_idx = forward_data.seq_idx
-      self.seq_tag = forward_data.seq_tag
-      self.sprint_instance = sprint_instance
-      self.posteriors = forward_data.posteriors
-      self.loss = None
-      self.hat_y = None
-
-  class ForwardData:
-    def __init__(self, seq_idx, seq_tag, posteriors):
-      self.seq_idx = seq_idx
-      self.seq_tag = seq_tag
-      self.posteriors = posteriors  # 2d array (T, output_dim)
-
-  class LossData:
-    def __init__(self, calc_loss_state):
-      assert isinstance(calc_loss_state, SeqTrainParallelControl.CalcLossState)
-      assert calc_loss_state.hat_y is not None
-      self.seq_idx = calc_loss_state.seq_idx
-      self.seq_tag = calc_loss_state.seq_tag
-      self.loss = calc_loss_state.loss
-      self.hat_y = calc_loss_state.hat_y
-
   def __init__(self, engine):
     self.engine = engine
-    self.output_dim = None
-    self.sprint_opts = None
     self.train_started = None
     self.train_device = None
     self.train_start_seq = 0
@@ -852,14 +823,6 @@ class SeqTrainParallelControl:
     self.is_forwarding_finished = False
     self._all_devices_exec("train_start_epoch")
 
-    output_layer = sorted(self.engine.network.output.items())[0][1]
-    self.output_dim = output_layer.attrs['n_out']
-    sprint_loss_op = output_layer.sprint_error_op
-    from SprintErrorSignals import SprintErrorSigOp
-    assert isinstance(sprint_loss_op, SprintErrorSigOp)
-    self.sprint_opts = sprint_loss_op.sprint_opts.copy()
-    self.sprint_max_num_instances = int(self.sprint_opts.pop("numInstances", 1))
-
   def train_finish_epoch(self):
     """
     Called from TrainTaskThread at the end of an epoch.
@@ -875,4 +838,5 @@ class SeqTrainParallelControl:
       self._device_exec(func, **kwargs)
 
   def _device_exec(self, func, **kwargs):
-    pass  # TODO...
+    assert isinstance(self.train_device, Device.Device)
+    return self.train_device._generic_exec_on_dev(("seq_train_parallel_control", func), **kwargs)
