@@ -460,11 +460,12 @@ class SeqTrainParallelControlDevHost:
       sprint = self.sprint_instance_pool.get_free_instance()
       if not sprint: break  # Nothing we can do at the moment.
       forward_data = self.forward_data_queue.pop(0)
+      assert isinstance(forward_data, self.ForwardData)
       calc_loss_state = self.CalcLossState(forward_data, sprint)
       calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
         seg_name=forward_data.seq_tag,
         seg_len=forward_data.posteriors.shape[0],
-        log_posteriors=forward_data.posteriors
+        log_posteriors=numpy.log(forward_data.posteriors)
       )
       self.calc_loss_states.append(calc_loss_state)
 
