@@ -753,12 +753,6 @@ class SeqTrainParallelControl:
   forward_cache_limit = 5
 
   class CalcLossState:
-    seq_idx = None
-    seq_tag = None
-    sprint_instance = None
-    posteriors = None
-    loss, hat_y = None, None
-
     def __init__(self, forward_data, sprint_instance):
       assert isinstance(forward_data, SeqTrainParallelControl.ForwardData)
       from SprintErrorSignals import SprintSubprocessInstance
@@ -767,27 +761,23 @@ class SeqTrainParallelControl:
       self.seq_tag = forward_data.seq_tag
       self.sprint_instance = sprint_instance
       self.posteriors = forward_data.posteriors
+      self.loss = None
+      self.hat_y = None
 
   class ForwardData:
-    seq_idx = None
-    seq_tag = None
-    posteriors = None  # 2d array (T, output_dim)
-
     def __init__(self, seq_idx, seq_tag, posteriors):
       self.seq_idx = seq_idx
       self.seq_tag = seq_tag
-      self.posteriors = posteriors
+      self.posteriors = posteriors  # 2d array (T, output_dim)
 
   class LossData:
-    seq_idx = None
-    seq_tag = None
-    loss, hat_y = None, None
-
-    def __init__(self, seq_idx, seq_tag, loss, hat_y):
-      self.seq_idx = seq_idx
-      self.seq_tag = seq_tag
-      self.loss = loss
-      self.hat_y = hat_y
+    def __init__(self, calc_loss_state):
+      assert isinstance(calc_loss_state, SeqTrainParallelControl.CalcLossState)
+      assert calc_loss_state.hat_y is not None
+      self.seq_idx = calc_loss_state.seq_idx
+      self.seq_tag = calc_loss_state.seq_tag
+      self.loss = calc_loss_state.loss
+      self.hat_y = calc_loss_state.hat_y
 
   def __init__(self, engine):
     self.engine = engine
@@ -868,7 +858,7 @@ class SeqTrainParallelControl:
       assert self.forward_data_queue[0].seq_tag == state.seq_tag
       del self.forward_data_queue[0]
       del self.calc_loss_states[self.calc_loss_states.index(state)]
-      self.loss_data_queue.append(self.LossData(state.seq_idx, state.seq_tag, state.loss, state.hat_y))
+      self.loss_data_queue.append(self.LossData(state))
 
     # Handle new data in forward_data_queue.
     for forward_data in self.forward_data_queue:
