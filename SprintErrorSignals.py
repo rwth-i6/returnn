@@ -202,19 +202,19 @@ class SprintSubprocessInstance:
       assert exit_status == expected_exit_status, "Sprint exit code is %i" % exit_status
     return True
 
-  def get_loss_and_error_signal__send(self, seg_name, seg_len, posteriors):
+  def get_loss_and_error_signal__send(self, seg_name, seg_len, log_posteriors):
     """
     :param str seg_name: the segment name (seq_tag)
     :param int seg_len: the segment length in frames
-    :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
+    :param numpy.ndarray log_posteriors: 2d (time,label) float array, log probs
     """
     assert not self.is_calculating
     assert seg_name
     self._cur_seg_name = seg_name
-    assert seg_len == posteriors.shape[0]
-    self._cur_posteriors_shape = posteriors.shape
+    assert seg_len == log_posteriors.shape[0]
+    self._cur_posteriors_shape = log_posteriors.shape
     try:
-      self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
+      self._send(("get_loss_and_error_signal", seg_name, seg_len, log_posteriors.astype("float32", copy=False)))
     except (IOError, EOFError):
       raise
     else:
@@ -253,6 +253,15 @@ class SprintSubprocessInstance:
 
 
 class SprintInstancePool:
+  """
+  This is a pool of Sprint instances.
+  First, for each unique sprint_opts, there is a singleton
+    which can be accessed via get_global_instance.
+  Then, this can be used in multiple ways.
+    (1) get_batch_loss_and_error_signal.
+    (2) ...
+  """
+
   global_instances = {}  # sprint_opts -> SprintInstancePool instance
 
   @classmethod
@@ -295,7 +304,9 @@ class SprintInstancePool:
 
     Note that this accesses some global references, like global current seg info,
     via the current Device instance.
-    Thus this is expected to be run from the Device host proc.
+    Thus this is expected to be run from the Device host proc,
+      inside from SprintErrorSigOp.perform.
+    This also expects that we don't have chunked seqs.
     """
     import Device
     assert Device.is_device_host_proc()
@@ -323,7 +334,7 @@ class SprintInstancePool:
         if b >= n_batch: break
         instance = self._get_instance(i)
         instance.get_loss_and_error_signal__send(
-          seg_name=tags[b], seg_len=seq_lengths[b], posteriors=log_posteriors[:seq_lengths[b], b])
+          seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
       for i in range(self.max_num_instances):
         b = bb + i
         if b >= n_batch: break
@@ -339,6 +350,81 @@ class SprintInstancePool:
       if not inst.is_calculating:
         return inst
     return self._maybe_create_new_instance()
+
+
+class SeqTrainParallelControlDevHost:
+
+  class CalcLossState:
+    def __init__(self, forward_data, sprint_instance):
+      assert isinstance(forward_data, SeqTrainParallelControlDevHost.ForwardData)
+      assert isinstance(sprint_instance, SprintSubprocessInstance)
+      self.seq_idx = forward_data.seq_idx
+      self.seq_tag = forward_data.seq_tag
+      self.sprint_instance = sprint_instance
+      self.posteriors = forward_data.posteriors
+      self.loss = None
+      self.hat_y = None
+
+  class ForwardData:
+    def __init__(self, seq_idx, seq_tag, posteriors):
+      self.seq_idx = seq_idx
+      self.seq_tag = seq_tag
+      self.posteriors = posteriors  # 2d array (T, output_dim)
+
+  class LossData:
+    def __init__(self, calc_loss_state):
+      assert isinstance(calc_loss_state, SeqTrainParallelControlDevHost.CalcLossState)
+      assert calc_loss_state.hat_y is not None
+      self.seq_idx = calc_loss_state.seq_idx
+      self.seq_tag = calc_loss_state.seq_tag
+      self.loss = calc_loss_state.loss
+      self.hat_y = calc_loss_state.hat_y
+
+  def __init__(self, sprint_instance_pool):
+    assert isinstance(sprint_instance_pool, SprintInstancePool)
+    import Device
+    assert Device.is_device_host_proc(), "SeqTrainParallelControlDevHost is expected to live in the Dev proc"
+    self.sprint_instance_pool = sprint_instance_pool
+    self.forward_data_queue = []; ":type: list[SeqTrainParallelControl.ForwardData]"
+    self.calc_loss_states = []; ":type: list[SeqTrainParallelControlDevHost.CalcLossState]"
+    self.loss_data_queue = []; ":type: list[SeqTrainParallelControl.LossData]"
+
+  def train_check_calc_loss(self):
+    # First go through all calc_loss_states and catch any available data.
+    for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
+      assert isinstance(state, self.CalcLossState)
+      if state.hat_y is None:
+        assert isinstance(state.sprint_instance, SprintSubprocessInstance)
+        if state.sprint_instance.get_loss_and_error_signal__have_data():
+          seg_name, loss, error_signal = state.sprint_instance.get_loss_and_error_signal__read()
+          assert seg_name == state.seq_tag
+          assert error_signal.shape == state.posteriors.shape
+          state.loss = loss
+          state.hat_y = state.posteriors - error_signal
+          state.sprint_instance = None
+
+    # Maybe cleanup some of calc_loss_states and move to loss_data_queue.
+    for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
+      assert isinstance(state, self.CalcLossState)
+      if state.hat_y is None: break  # break to keep loss_data_queue in order
+      del self.calc_loss_states[self.calc_loss_states.index(state)]
+      self.loss_data_queue.append(self.LossData(state))
+
+    # Handle new data in forward_data_queue.
+    while self.forward_data_queue:
+      sprint = self.sprint_instance_pool.get_free_instance()
+      if not sprint: break  # Nothing we can do at the moment.
+      forward_data = self.forward_data_queue.pop(0)
+      calc_loss_state = self.CalcLossState(forward_data, sprint)
+      calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
+        seg_name=forward_data.seq_tag,
+        seg_len=forward_data.posteriors.shape[0],
+        log_posteriors=forward_data.posteriors
+      )
+      self.calc_loss_states.append(calc_loss_state)
+
+  def add_forward_data(self, seq_idx, seq_tag, posteriors):
+    self.forward_data_queue.append(self.ForwardData(seq_idx, seq_tag, posteriors))
 
 
 class SprintErrorSigOp(theano.Op):

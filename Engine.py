@@ -868,7 +868,7 @@ class SeqTrainParallelControl:
       calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
         seg_name=forward_data.seq_tag,
         seg_len=forward_data.posteriors.shape[0],
-        posteriors=forward_data.posteriors
+        log_posteriors=forward_data.posteriors
       )
       self.calc_loss_states.append(calc_loss_state)
 
