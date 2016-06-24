@@ -226,9 +226,6 @@ class SprintSubprocessInstance:
 
   def get_loss_and_error_signal__read(self):
     """
-    :param str seg_name: the segment name (seq_tag)
-    :param int seg_len: the segment length in frames
-    :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
     :rtype (str, float, numpy.ndarray)
     :returns (seg_name, loss, error_signal). error_signal has the same shape as posteriors.
     """
