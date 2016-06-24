@@ -576,10 +576,10 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
     import Device
     if Device.is_device_host_proc():
       if Device.deviceInstance.config.is_typed("seq_train_parallel"):
+        assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
         control = \
           SeqTrainParallelControlDevHost(output_layer=output_layer, output_target=target, sprint_opts=sprint_opts)
-        assert output_layer.name not in Device.deviceInstance.seq_train_parallel_controls
-        Device.deviceInstance.seq_train_parallel_controls[output_layer.name] = control
+        Device.deviceInstance.seq_train_parallel_control = control
         loss = control.output_var_loss
         hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
         error_signal = T.exp(log_posteriors) - hat_y
