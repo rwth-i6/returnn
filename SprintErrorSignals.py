@@ -543,6 +543,7 @@ class SeqTrainParallelControlDevHost:
     assert n_time == seq_len
     outputs = self.device.forward()
     posteriors = outputs[self.output_layer.name]
+    assert (posteriors >= 0).all()
 
     # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
     if posteriors.ndim == 3:
