@@ -849,21 +849,12 @@ class SeqTrainParallelControl:
     # Maybe cleanup some of calc_loss_states and move to loss_data_queue.
     for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
       assert isinstance(state, self.CalcLossState)
-      if state.hat_y is None: break
-      assert self.forward_data_queue
-      assert self.forward_data_queue[0].seq_idx <= state.seq_idx
-      # Only cleanup if this is the first entry in forward_data_queue,
-      # so that we keep the same order in loss_data_queue.
-      if self.forward_data_queue[0].seq_idx < state.seq_idx: break
-      assert self.forward_data_queue[0].seq_tag == state.seq_tag
-      del self.forward_data_queue[0]
+      if state.hat_y is None: break  # break to keep loss_data_queue in order
       del self.calc_loss_states[self.calc_loss_states.index(state)]
       self.loss_data_queue.append(self.LossData(state))
 
     # Handle new data in forward_data_queue.
-    for forward_data in self.forward_data_queue:
-      # Check if maybe already handled.
-      if any([state.seq_idx == forward_data.seq_idx for state in self.calc_loss_states]): continue
+    while self.forward_data_queue:
       used_sprint_instances = set([state.sprint_instance for state in self.calc_loss_states])
       free_sprint_instances = set(self.sprint_instances).difference(used_sprint_instances)
       free_sprint_instances = sorted(free_sprint_instances, key=self.sprint_instances.index)  # deterministic
@@ -872,6 +863,7 @@ class SeqTrainParallelControl:
           self.sprint_instances.append(SprintSubprocessInstance(**self.sprint_opts))
           free_sprint_instances.append(self.sprint_instances[-1])
       if not free_sprint_instances: break  # Nothing we can do at the moment.
+      forward_data = self.forward_data_queue.pop(0)
       calc_loss_state = self.CalcLossState(forward_data, free_sprint_instances[0])
       calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
         seg_name=forward_data.seq_tag,
