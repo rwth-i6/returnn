@@ -867,8 +867,7 @@ def attr_chain(base, attribs):
     attribs = [attribs]
   else:
     attribs = list(attribs)
-  while attribs:
-    base = getattr(base, attribs[0])
-    attribs.pop(0)
+  for i in range(len(attribs)):
+    base = getattr(base, attribs[i])
   return base
 
