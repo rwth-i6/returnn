@@ -318,6 +318,7 @@ class SequenceOutputLayer(OutputLayer):
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    self.output = self.p_y_given_x.reshape(self.output.shape)
 
   def index_for_ctc(self):
     for source in self.sources:
