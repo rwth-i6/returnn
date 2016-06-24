@@ -801,6 +801,8 @@ class SeqTrainParallelControl:
     print >>log.v5, "SeqTrainParallelControl, train_wait_for_seqs start_seq:%i, end_seq:%i" % (start_seq, end_seq)
     assert start_seq < end_seq
     assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
+    while device.wait_for_result_call:
+      time.sleep(0.1)  # TaskThread.DeviceRun will call device.result()
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
     while self.should_do_forward():
