@@ -810,6 +810,7 @@ class SeqTrainParallelControl:
       else:
         time.sleep(0.1)  # wait until we have the data we need
       self._device_exec("train_check_calc_loss")
+    self._device_exec("train_set_loss_vars_for_cur_batches")
 
   def train_start_epoch(self):
     """
