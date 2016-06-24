@@ -605,7 +605,7 @@ class SprintErrorSigOp(theano.Op):
       print >> log.v1, 'SprintErrorSigOp: log_posteriors contain NaN!'
     if numpy.isinf(log_posteriors).any():
       print >> log.v1, 'SprintErrorSigOp: log_posteriors contain Inf!'
-      numpy.set_printoptions(threshold=numpy.nan)
+      #numpy.set_printoptions(threshold=numpy.nan)
       print >> log.v1, 'SprintErrorSigOp: log_posteriors:', log_posteriors
 
     if self.sprint_instance_pool is None:
