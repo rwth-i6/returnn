@@ -61,6 +61,7 @@ class SprintSubprocessInstance:
     atexit.register(self.exit_handler)
     self._cur_seg_name = None
     self._cur_posteriors_shape = None
+    self.is_calculating = False
     self.init()
 
   def _exit_child(self, should_interrupt=False):
@@ -207,6 +208,7 @@ class SprintSubprocessInstance:
     :param int seg_len: the segment length in frames
     :param numpy.ndarray posteriors: 2d (time,label) float array, log probs
     """
+    assert not self.is_calculating
     assert seg_name
     self._cur_seg_name = seg_name
     assert seg_len == posteriors.shape[0]
@@ -215,8 +217,11 @@ class SprintSubprocessInstance:
       self._send(("get_loss_and_error_signal", seg_name, seg_len, posteriors.astype("float32", copy=False)))
     except (IOError, EOFError):
       raise
+    else:
+      self.is_calculating = True
 
   def get_loss_and_error_signal__have_data(self):
+    assert self.is_calculating
     return self._poll()
 
   def get_loss_and_error_signal__read(self):
@@ -227,10 +232,13 @@ class SprintSubprocessInstance:
     :rtype (str, float, numpy.ndarray)
     :returns (seg_name, loss, error_signal). error_signal has the same shape as posteriors.
     """
+    assert self.is_calculating
     try:
       ret = self._read()
     except (IOError, EOFError):
       raise
+    else:
+      self.is_calculating = False
     assert ret[0] == "ok" and len(ret) == 3, "Got unexpected return: %r" % (ret,)
     loss = ret[1]
     error_signal = ret[2]
