@@ -5,7 +5,7 @@ import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from NetworkBaseLayer import Layer
-from SprintErrorSignals import SprintErrorSigOp
+from SprintErrorSignals import sprint_loss_and_error_signal
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 
 
@@ -341,8 +341,13 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
-      self.sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
-      err, grad = self.sprint_error_op(log_probs, T.sum(self.index, axis=0))
+      err, grad = sprint_loss_and_error_signal(
+        output_layer=self,
+        target=self.attrs.get("target", "classes"),
+        sprint_opts=self.sprint_opts,
+        log_posteriors=log_probs,
+        seq_lengths=T.sum(self.index, axis=0)
+      )
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
