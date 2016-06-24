@@ -53,15 +53,14 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches)
 
-    def maybe_wait_for_batches(self, device_run, device, batches):
+    def maybe_wait_for_batches(self, device, batches):
       """
-      :type device_run: TaskThread.DeviceRun
       :type device: Device
       :type batches: list[Batch]
       """
       pass
 
-    def allocate_devices(self, selected_devices=None, device_run=None):
+    def allocate_devices(self, selected_devices = None):
       """
       Sets the device data, i.e. the next batches, via self.batches.
       This calls Dataset.load_seqs() to get the data.
@@ -70,8 +69,6 @@ class TaskThread(threading.Thread):
         device.ctc_targets
         device.tags
         device.index
-      :type selected_devices: list[Device] | None
-      :type device_run: TaskThread.DeviceRun | None
       :rtype: list[list[EngineBatch.Batch]]
       :returns list of batches per device
       """
@@ -83,7 +80,7 @@ class TaskThread(threading.Thread):
       for device in selected_devices:
         if not self.share_batches:
           batches = self.batches.peek_next_n(device.num_batches)
-        self.maybe_wait_for_batches(device_run=device_run, device=device, batches=batches)
+        self.maybe_wait_for_batches(device=device, batches=batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
         batch_idx = self.batches.get_current_batch_idx()
         assert success, "batches %s with seqs at %i failed to load" % \
@@ -203,7 +200,7 @@ class TaskThread(threading.Thread):
 
       def allocate(self):
         self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
-        self.devices_batches = self.parent.allocate_devices(selected_devices=self.alloc_devices, device_run=self)
+        self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.run_frames = NumbersDict(0)
         for batches, device in zip(self.devices_batches,self.alloc_devices):
           assert batches
@@ -522,14 +519,13 @@ class TrainTaskThread(TaskThread):
     kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
 
-  def maybe_wait_for_batches(self, device_run, device, batches):
+  def maybe_wait_for_batches(self, device, batches):
     """
-    :type device_run: TaskThread.DeviceRun
     :type device: Device
     :type batches: list[Batch]
     """
     if self.seq_train_parallel:
-      self.seq_train_parallel.train_wait_for_seqs(device_run=device_run, device=device, batches=batches)
+      self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
