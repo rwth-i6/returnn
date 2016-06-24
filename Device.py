@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from Log import log
 from Network import LayerNetwork
 import numpy
@@ -275,7 +275,7 @@ class Device(object):
     import theano.tensor as T
     import h5py
     self.T = T
-    self.seq_train_parallel_controls = {}  # output_layer_name -> SeqTrainParallelControlDevHost
+    self.seq_train_parallel_control = None  # SeqTrainParallelControlDevHost
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     if json_content is not None:
@@ -900,7 +900,7 @@ class Device(object):
 
   def _generic_exec(self, func_name, args, kwargs):
     assert self.is_device_proc()
-    func = getattr(self, func_name)
+    func = attr_chain(self, func_name)
     ret = func(*args, **kwargs)
     return ret
 
