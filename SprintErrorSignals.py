@@ -353,6 +353,10 @@ class SprintInstancePool:
 
 
 class SeqTrainParallelControlDevHost:
+  """
+  Counterpart to Engine.SeqTrainParallelControl.
+  This does all the handling on the Device proc side.
+  """
 
   class CalcLossState:
     def __init__(self, forward_data, sprint_instance):
@@ -380,16 +384,44 @@ class SeqTrainParallelControlDevHost:
       self.loss = calc_loss_state.loss
       self.hat_y = calc_loss_state.hat_y
 
-  def __init__(self, sprint_instance_pool):
+  def __init__(self, output_layer, output_target, sprint_opts):
+    import NetworkOutputLayer
+    assert isinstance(output_layer, NetworkOutputLayer.SequenceOutputLayer)
+    self.output_layer = output_layer
+    self.output_target = output_target
+    self.output_var_loss = T.TensorType("float32", (False,))('loss')  # (batch,)
+    self.output_var_hat_y = T.TensorType("float32", ((False,) * 3))('hat_y')  # (time,batch,dim)
+    sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts)
     assert isinstance(sprint_instance_pool, SprintInstancePool)
     import Device
     assert Device.is_device_host_proc(), "SeqTrainParallelControlDevHost is expected to live in the Dev proc"
+    self.device = Device.deviceInstance
     self.sprint_instance_pool = sprint_instance_pool
+    self.train_started = False
+    self.train_start_seq = 0
+    self.train_end_seq = 0
     self.forward_data_queue = []; ":type: list[SeqTrainParallelControl.ForwardData]"
     self.calc_loss_states = []; ":type: list[SeqTrainParallelControlDevHost.CalcLossState]"
     self.loss_data_queue = []; ":type: list[SeqTrainParallelControl.LossData]"
 
+  def train_start_epoch(self):
+    assert not self.train_started
+    self.train_started = True
+    self.train_start_seq = 0
+    self.train_end_seq = 0
+    del self.forward_data_queue[:]
+    del self.loss_data_queue[:]
+    del self.calc_loss_states[:]
+
+  def train_finish_epoch(self):
+    assert self.train_started
+    assert not self.forward_data_queue, "Not all forwardings were used?"
+    assert not self.calc_loss_states, "Remaining loss calculations?"
+    self.train_started = False
+
   def train_check_calc_loss(self):
+    assert self.train_started
+
     # First go through all calc_loss_states and catch any available data.
     for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
       assert isinstance(state, self.CalcLossState)
@@ -423,8 +455,68 @@ class SeqTrainParallelControlDevHost:
       )
       self.calc_loss_states.append(calc_loss_state)
 
-  def add_forward_data(self, seq_idx, seq_tag, posteriors):
+  def train_set_cur_batches(self, batches):
+    """
+    :type batches: list[EngineBatch.Batch]
+    """
+    assert self.train_started
+    start_seq, end_seq = 0, 0
+    for batch in batches:
+      start_seq = min(start_seq, batch.start_seq)
+      end_seq = max(end_seq, batch.end_seq)
+    assert start_seq >= end_seq
+    if start_seq == end_seq: return
+    assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
+    self.train_start_seq = start_seq
+    self.train_end_seq = end_seq
+    self.remove_old_loss_data(start_seq)
+
+  def train_have_loss_for_cur_batches(self):
+    assert self.train_started
+    return self.have_seqs_loss_data(self.train_start_seq, self.train_end_seq)
+
+  def do_forward(self, seq_idx, seq_tag, seq_len):
+    import Device
+    device = Device.deviceInstance
+
+    # Do the actual forwarding and collect result.
+    outputs = device.forward()
+    posteriors = outputs[self.output_layer.name]
+
+    # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
+    if posteriors.ndim == 3:
+      assert posteriors.shape == (seq_len, 1, self.output_layer.attrs['n_out'])
+      posteriors = posteriors[:, 0]
+    # Posteriors are in format (time,emission).
+    assert posteriors.shape == (seq_len, self.output_layer.attrs['n_out'])
+
     self.forward_data_queue.append(self.ForwardData(seq_idx, seq_tag, posteriors))
+
+  forward_cache_limit = 5
+
+  def have_space_in_forward_data_queue(self):
+    return len(self.forward_data_queue) < self.forward_cache_limit
+
+  def remove_old_loss_data(self, current_start_seq):
+    idx = 0
+    for i, loss_data in enumerate(list(self.loss_data_queue)):
+      if loss_data.seq_idx < current_start_seq:
+        idx = i + 1
+      else:
+        break
+    del self.loss_data_queue[:idx]
+
+  def have_seqs_loss_data(self, start_seq, end_seq):
+    assert start_seq >= end_seq
+    if start_seq == end_seq: return True
+    first_seq, last_seq = start_seq, end_seq - 1
+    have_first, have_last = False, False
+    for loss_data in self.loss_data_queue:
+      if loss_data.seq_idx == first_seq: have_first = True
+      if loss_data.seq_idx == last_seq: have_last = True
+    if have_last:
+      assert have_first  # otherwise, we removed the cache already although we still need it
+    return have_first and have_last
 
 
 class SprintErrorSigOp(theano.Op):
@@ -466,3 +558,31 @@ class SprintErrorSigOp(theano.Op):
     output_storage[1][0] = errsig
 
     print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+
+
+def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
+  """
+  :param NetworkOutputLayer.SequenceOutputLayer output_layer: output layer
+  :param str target: e.g. "classes"
+  :param dict[str] sprint_opts: for SprintInstancePool
+  :param log_posteriors: 3d ndarray (time,batch,dim)
+  :param seq_lengths: 1d ndarray (batch,) -> seq len
+  :return: loss, error_signal.
+    loss is a 2d ndarray (batch,) -> loss.
+    error_signal has the same shape as log_posteriors.
+    error_signal is the grad w.r.t. z, i.e. before softmax is applied.
+  """
+  if output_layer and output_layer.train_flag:
+    import Device
+    if Device.is_device_host_proc():
+      if Device.deviceInstance.config.is_typed("seq_train_parallel"):
+        control = \
+          SeqTrainParallelControlDevHost(output_layer=output_layer, output_target=target, sprint_opts=sprint_opts)
+        assert output_layer.name not in Device.deviceInstance.seq_train_parallel_controls
+        Device.deviceInstance.seq_train_parallel_controls[output_layer.name] = control
+        loss = control.output_var_loss
+        hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
+        error_signal = T.exp(log_posteriors) - hat_y
+        return loss, error_signal
+  op = SprintErrorSigOp(target, sprint_opts)
+  return op(log_posteriors, seq_lengths)

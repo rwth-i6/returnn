@@ -53,8 +53,9 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches)
 
-    def maybe_wait_for_batches(self, batches):
+    def maybe_wait_for_batches(self, device, batches):
       """
+      :type device: Device
       :type batches: list[Batch]
       """
       pass
@@ -79,7 +80,7 @@ class TaskThread(threading.Thread):
       for device in selected_devices:
         if not self.share_batches:
           batches = self.batches.peek_next_n(device.num_batches)
-        self.maybe_wait_for_batches(batches)
+        self.maybe_wait_for_batches(device=device, batches=batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
         batch_idx = self.batches.get_current_batch_idx()
         assert success, "batches %s with seqs at %i failed to load" % \
@@ -510,17 +511,13 @@ class TrainTaskThread(TaskThread):
     kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
 
-  def maybe_wait_for_batches(self, batches):
+  def maybe_wait_for_batches(self, device, batches):
     """
+    :type device: Device
     :type batches: list[Batch]
     """
     if not self.seq_train_parallel: return
-    if not batches: return
-    start_seq, end_seq = 0, 0
-    for batch in batches:
-      start_seq = min(start_seq, batch.start_seq)
-      end_seq = max(end_seq, batch.end_seq)
-    self.seq_train_parallel.train_wait_for_seqs(start_seq=start_seq, end_seq=end_seq)
+    self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
