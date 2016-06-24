@@ -1221,10 +1221,14 @@ class Device(object):
     return self.make_givens(network) + [(network.c, self.c)]
 
 
+def is_device_host_proc():
+  if not deviceInstance: return False
+  return deviceInstance.is_device_proc()
+
 def get_current_seq_tags():
   assert deviceInstance, "get_current_seq_tags: deviceInstance not set"
   return deviceInstance.tags
 
-def get_current_seq_index(target):
+def get_current_seq_index_mask(target):
   assert deviceInstance, "get_current_seq_index: deviceInstance not set"
   return deviceInstance.output_index[target]

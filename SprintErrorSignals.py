@@ -293,18 +293,21 @@ class SprintInstancePool:
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     loss is a 1d-array (batch).
 
-    Note that this accesses some global references, like global current seg info.
+    Note that this accesses some global references, like global current seg info,
+    via the current Device instance.
+    Thus this is expected to be run from the Device host proc.
     """
+    import Device
+    assert Device.is_device_host_proc()
     assert seq_lengths.ndim == 1
     assert log_posteriors.ndim == 3
     n_batch = seq_lengths.shape[0]
     assert n_batch == log_posteriors.shape[1]
 
-    import Device
-    index = Device.get_current_seq_index(target)  # (time,batch)
-    assert index.ndim == 2
-    assert index.shape[1] == n_batch
-    assert (numpy.sum(index, axis=0) == seq_lengths).all()
+    index_mask = Device.get_current_seq_index_mask(target)  # (time,batch)
+    assert index_mask.ndim == 2
+    assert index_mask.shape[1] == n_batch
+    assert (numpy.sum(index_mask, axis=0) == seq_lengths).all()
     tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
 
