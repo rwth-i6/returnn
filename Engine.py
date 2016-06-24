@@ -777,7 +777,7 @@ class SeqTrainParallelControl:
     from EngineUtil import assign_dev_data_single_seq
     success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq)
     assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
-
+    self.train_device.update_data()
     self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
     self.forward_current_seq += 1
 

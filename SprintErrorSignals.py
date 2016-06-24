@@ -532,12 +532,11 @@ class SeqTrainParallelControlDevHost:
     Called via Engine.SeqTrainParallelControl.
     We expect that assign_dev_data was called before to set the right data.
     """
-
-    import Device
-    device = Device.deviceInstance
-
     # Do the actual forwarding and collect result.
-    outputs = device.forward()
+    n_time, n_batch = self.device.j["data"].get_value(borrow=True, return_internal_type=True).shape
+    assert n_batch == 1
+    assert n_time == seq_len
+    outputs = self.device.forward()
     posteriors = outputs[self.output_layer.name]
 
     # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
@@ -644,7 +643,8 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
         loss = control.output_var_loss
         hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
         error_signal = T.exp(log_posteriors) - hat_y
-        error_signal *= T.cast(output_layer.network.j["data"], "float32")
+        index_mask = T.cast(output_layer.network.j["data"], "float32").dimshuffle(0, 1, 'x')
+        error_signal *= index_mask
         return loss, error_signal
   op = SprintErrorSigOp(target, sprint_opts)
   return op(log_posteriors, seq_lengths)
