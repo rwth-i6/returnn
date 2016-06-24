@@ -98,7 +98,7 @@ def get_device_attributes():
 asyncChildGlobalDevice = None
 
 # Any Device instance.
-deviceInstance = None
+deviceInstance = None; ":type: Device"
 
 def str2int(txt):
   try:
@@ -275,6 +275,7 @@ class Device(object):
     import theano.tensor as T
     import h5py
     self.T = T
+    self.seq_train_parallel_controls = {}  # output_layer_name -> SeqTrainParallelControlDevHost
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     if json_content is not None:
@@ -350,6 +351,7 @@ class Device(object):
     self.block_end = T.lscalar()
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
 
+    self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_givens(self.trainnet)
@@ -1157,6 +1159,23 @@ class Device(object):
       except Exception as e:
         print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
+
+  def forward(self, use_trainnet=True):
+    assert self.is_device_proc()
+    network = self.trainnet if use_trainnet else self.testnet
+    import theano
+    if not self.forwarder:
+      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet
+      self.forwarder = theano.function(
+        inputs=[],
+        outputs=[layer.output for name, layer in sorted(network.output.items())],
+        givens=self.make_input_givens(network),
+        on_unused_input='warn',
+        name="forwarder")
+    from TheanoUtil import make_var_tuple
+    outputs = make_var_tuple(self.forwarder())
+    assert len(outputs) == len(network.output)
+    return {name: outputs[i] for i, (name, layer) in enumerate(sorted(network.output.items()))}
 
   def terminate(self):
     if self.blocking:
