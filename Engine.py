@@ -771,7 +771,7 @@ class SeqTrainParallelControl:
     dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
     seq_tag = dataset.get_tag(self.forward_current_seq)
     seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
-    print >>log.v3, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
+    print >>log.v4, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
       self.forward_current_seq, seq_tag, seq_len)
 
     from EngineUtil import assign_dev_data_single_seq
