@@ -143,6 +143,9 @@ class TaskThread(threading.Thread):
       #  assert False  # Should not get here.
       return eval_info
     def initialize(self):
+      """
+      Called at the beginning of an epoch.
+      """
       pass
     def reduce(self, num_frames):
       pass
@@ -160,6 +163,9 @@ class TaskThread(threading.Thread):
       target = self._get_target_for_key(key)
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
+      """
+      Called at the end of an epoch.
+      """
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
@@ -500,6 +506,8 @@ class TrainTaskThread(TaskThread):
     if not self.updater.isInitialized:
       self.updater.initVars(self.network, None)
       self.updater.setLearningRate(self.learning_rate)
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_start_epoch()
 
   def prepare_device_for_batch(self, device):
     """ :type device: Device.Device """
@@ -516,8 +524,8 @@ class TrainTaskThread(TaskThread):
     :type device: Device
     :type batches: list[Batch]
     """
-    if not self.seq_train_parallel: return
-    self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
@@ -618,6 +626,8 @@ class TrainTaskThread(TaskThread):
     super(TrainTaskThread, self).finalize()
     if self.do_ctc_priors:
       self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames["data"])
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_finish_epoch()
 
 
 class EvalTaskThread(TaskThread):
