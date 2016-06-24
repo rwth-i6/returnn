@@ -269,13 +269,19 @@ class SprintInstancePool:
     sprint_opts = sprint_opts.copy()
     self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
     self.sprint_opts = sprint_opts
-    self.instances = []
+    self.instances = []; ":type: list[SprintSubprocessInstance]"
+
+  def _maybe_create_new_instance(self):
+    if len(self.instances) < self.max_num_instances:
+      self.instances.append(SprintSubprocessInstance(**self.sprint_opts))
+      return self.instances[-1]
+    return None
 
   def _get_instance(self, i):
     assert i < self.max_num_instances
     if i >= len(self.instances):
       assert i == len(self.instances)
-      self.instances += [SprintSubprocessInstance(**self.sprint_opts)]
+      self._maybe_create_new_instance()
     return self.instances[i]
 
   def get_batch_loss_and_error_signal(self, target, log_posteriors, seq_lengths):
@@ -324,6 +330,12 @@ class SprintInstancePool:
         batch_loss[b] = loss
         batch_error_signal[:seq_lengths[b], b] = error_signal
     return batch_loss, batch_error_signal
+
+  def get_free_instance(self):
+    for inst in self.instances:
+      if not inst.is_calculating:
+        return inst
+    return self._maybe_create_new_instance()
 
 
 class SprintErrorSigOp(theano.Op):
