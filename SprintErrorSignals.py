@@ -479,8 +479,7 @@ class SeqTrainParallelControlDevHost:
     for batch in batches:
       start_seq = min(start_seq, batch.start_seq)
       end_seq = max(end_seq, batch.end_seq)
-    assert start_seq >= end_seq
-    if start_seq == end_seq: return
+    assert start_seq < end_seq
     assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
     self.train_start_seq = start_seq
     self.train_end_seq = end_seq
@@ -637,6 +636,7 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
     import Device
     if Device.is_device_host_proc():
       if Device.deviceInstance.config.is_typed("seq_train_parallel"):
+        print >>log.v3, "sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name
         assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
         control = \
           SeqTrainParallelControlDevHost(output_layer=output_layer, output_target=target, sprint_opts=sprint_opts)
