@@ -504,7 +504,8 @@ class SeqTrainParallelControlDevHost:
     """
     assert self.train_have_loss_for_cur_batches()
     # See EngineUtil.assign_dev_data for reference.
-    n_time, n_batch = self.device.output_index[self.output_target].shape
+    from Dataset import Dataset
+    n_time, n_batch = Dataset.index_shape_for_batches(self.train_batches)
     n_output_dim = self.output_layer.attrs['n_out']
     output_loss = numpy.zeros((n_batch,), "float32")
     output_hat_y = numpy.zeros((n_time, n_batch, n_output_dim), "float32")
