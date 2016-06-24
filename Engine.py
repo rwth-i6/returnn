@@ -752,17 +752,56 @@ class SeqTrainParallelControl:
 
   forward_cache_limit = 5
 
+  class CalcLossState:
+    seq_idx = None
+    seq_tag = None
+    sprint_instance = None
+    posteriors = None
+    loss, hat_y = None, None
+
+    def __init__(self, forward_data, sprint_instance):
+      assert isinstance(forward_data, SeqTrainParallelControl.ForwardData)
+      from SprintErrorSignals import SprintSubprocessInstance
+      assert isinstance(sprint_instance, SprintSubprocessInstance)
+      self.seq_idx = forward_data.seq_idx
+      self.seq_tag = forward_data.seq_tag
+      self.sprint_instance = sprint_instance
+      self.posteriors = forward_data.posteriors
+
+  class ForwardData:
+    seq_idx = None
+    seq_tag = None
+    posteriors = None  # 2d array (T, output_dim)
+
+    def __init__(self, seq_idx, seq_tag, posteriors):
+      self.seq_idx = seq_idx
+      self.seq_tag = seq_tag
+      self.posteriors = posteriors
+
+  class LossData:
+    seq_idx = None
+    seq_tag = None
+    loss, hat_y = None, None
+
+    def __init__(self, seq_idx, seq_tag, loss, hat_y):
+      self.seq_idx = seq_idx
+      self.seq_tag = seq_tag
+      self.loss = loss
+      self.hat_y = hat_y
+
   def __init__(self, engine):
     self.engine = engine
     self.output_dim = None
     self.sprint_opts = None
-    self.sprint_instance = None
+    self.sprint_max_num_instances = None
+    self.sprint_instances = []; ":type: list[SprintErrorSignals.SprintSubprocessInstance]"
+    self.calc_loss_states = []; ":type: list[SeqTrainParallelControl.CalcLossState]"
     self.train_started = None
     self.train_start_seq = 0
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
-    self.forward_data_queue = []  # list of tuple (seq, seq_tag, posteriors). posteriors is 2d array (T, output_dim)
-    self.loss_data_queue = []  # list of tuple (seq, seq_tag, loss, hat_y)
+    self.forward_data_queue = []; ":type: list[SeqTrainParallelControl.ForwardData]"
+    self.loss_data_queue = []; ":type: list[SeqTrainParallelControl.LossData]"
 
   def do_forward(self):
     """
@@ -782,8 +821,7 @@ class SeqTrainParallelControl:
     device = self.engine.devices[0]
     from EngineUtil import assign_dev_data_single_seq
     success = assign_dev_data_single_seq(device, dataset, self.forward_current_seq)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (
-      self.forward_current_seq, dataset.get_tag(self.forward_current_seq))
+    assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
 
     # Do the actual forwarding and collect result.
     device.run("extract")
@@ -799,60 +837,75 @@ class SeqTrainParallelControl:
     # Posteriors are in format (time,emission).
     assert posteriors.shape == (T, self.output_dim)
 
-    self.forward_data_queue.append((self.forward_current_seq, seq_tag, posteriors))
+    self.forward_data_queue.append(self.ForwardData(self.forward_current_seq, seq_tag, posteriors))
     self.forward_current_seq += 1
 
-  def do_calc_loss__start(self, seq_tag, posteriors):
-    pass
-
-  def do_calc_loss(self, seq, seq_tag, posteriors):
-
-    self.max_num_instances = int(self.sprint_opts.pop("numInstances", 1))
-    self.instances = []
-
-    if not self.sprint_instance:
-      from SprintErrorSignals import SprintSubprocessInstance
-      self.sprint_instance = SprintSubprocessInstance(**self.sprint_opts)
-
-    from SprintErrorSignals import SprintSubprocessInstance
-    assert isinstance(self.sprint_instance, SprintSubprocessInstance)
-    self.sprint_instance.get_loss_and_error_signal__send(
-      seg_name=seq_tag, seg_len=posteriors.shape[0], posteriors=posteriors)
-    seg_name, loss, error_signal = self.sprint_instance.get_loss_and_error_signal__read()
-    assert seg_name == seq_tag
-    assert error_signal.shape == posteriors.shape
-    hat_y = posteriors - error_signal
-    self.loss_data_queue.append((seq, seq_tag, loss, hat_y))
-
-  def calc_loss_thread_loop(self):
-    while True:
-      if not self.forward_data_queue:
-        if self.is_forwarding_finished:
-          return  # finished
-        time.sleep(0.1)  # wait until we have some data
-        continue
-      seq, seq_tag, posteriors = self.forward_data_queue.pop(0)
-      self.do_calc_loss(seq=seq, seq_tag=seq_tag, posteriors=posteriors)
-
   def train_check_calc_loss(self):
-    pass  # TODO
+    from SprintErrorSignals import SprintSubprocessInstance
+
+    # First go through all calc_loss_states and catch any available data.
+    for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
+      assert isinstance(state, self.CalcLossState)
+      if state.hat_y is None:
+        assert isinstance(state.sprint_instance, SprintSubprocessInstance)
+        if state.sprint_instance.get_loss_and_error_signal__have_data():
+          seg_name, loss, error_signal = state.sprint_instance.get_loss_and_error_signal__read()
+          assert seg_name == state.seq_tag
+          assert error_signal.shape == state.posteriors.shape
+          state.loss = loss
+          state.hat_y = state.posteriors - error_signal
+          state.sprint_instance = None
+
+    # Maybe cleanup some of calc_loss_states and move to loss_data_queue.
+    for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
+      assert isinstance(state, self.CalcLossState)
+      if state.hat_y is None: break
+      assert self.forward_data_queue
+      assert self.forward_data_queue[0].seq_idx <= state.seq_idx
+      # Only cleanup if this is the first entry in forward_data_queue,
+      # so that we keep the same order in loss_data_queue.
+      if self.forward_data_queue[0].seq_idx < state.seq_idx: break
+      assert self.forward_data_queue[0].seq_tag == state.seq_tag
+      del self.forward_data_queue[0]
+      del self.calc_loss_states[self.calc_loss_states.index(state)]
+      self.loss_data_queue.append(self.LossData(state.seq_idx, state.seq_tag, state.loss, state.hat_y))
+
+    # Handle new data in forward_data_queue.
+    for forward_data in self.forward_data_queue:
+      # Check if maybe already handled.
+      if any([state.seq_idx == forward_data.seq_idx for state in self.calc_loss_states]): continue
+      used_sprint_instances = set([state.sprint_instance for state in self.calc_loss_states])
+      free_sprint_instances = set(self.sprint_instances).difference(used_sprint_instances)
+      free_sprint_instances = sorted(free_sprint_instances, key=self.sprint_instances.index)  # deterministic
+      if not free_sprint_instances:
+        if len(self.sprint_instances) < self.sprint_max_num_instances:
+          self.sprint_instances.append(SprintSubprocessInstance(**self.sprint_opts))
+          free_sprint_instances.append(self.sprint_instances[-1])
+      if not free_sprint_instances: break  # Nothing we can do at the moment.
+      calc_loss_state = self.CalcLossState(forward_data, free_sprint_instances[0])
+      calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
+        seg_name=forward_data.seq_tag,
+        seg_len=forward_data.posteriors.shape[0],
+        posteriors=forward_data.posteriors
+      )
+      self.calc_loss_states.append(calc_loss_state)
 
   def have_seqs_loss_data(self, start_seq, end_seq):
     assert start_seq >= end_seq
     if start_seq == end_seq: return True
     first_seq, last_seq = start_seq, end_seq - 1
     have_first, have_last = False, False
-    for seq, _, _, _ in self.loss_data_queue:
-      if seq == first_seq: have_first = True
-      if seq == last_seq: have_last = True
+    for loss_data in self.loss_data_queue:
+      if loss_data.seq_idx == first_seq: have_first = True
+      if loss_data.seq_idx == last_seq: have_last = True
     if have_last:
       assert have_first  # otherwise, we removed the cache already although we still need it
     return have_first and have_last
 
   def remove_old_loss_data(self, current_start_seq):
     idx = 0
-    for i, (seq, _, _, _) in enumerate(list(self.loss_data_queue)):
-      if seq < current_start_seq:
+    for i, loss_data in enumerate(list(self.loss_data_queue)):
+      if loss_data.seq_idx < current_start_seq:
         idx = i + 1
       else:
         break
@@ -890,12 +943,16 @@ class SeqTrainParallelControl:
     self.train_start_seq = 0
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
+    del self.forward_data_queue[:]
+    del self.loss_data_queue[:]
+    del self.calc_loss_states[:]
     output_layer = sorted(self.engine.network.output.items())[0][1]
     self.output_dim = output_layer.attrs['n_out']
     sprint_loss_op = output_layer.sprint_error_op
     from SprintErrorSignals import SprintErrorSigOp
     assert isinstance(sprint_loss_op, SprintErrorSigOp)
-    self.sprint_opts = sprint_loss_op.sprint_opts
+    self.sprint_opts = sprint_loss_op.sprint_opts.copy()
+    self.sprint_max_num_instances = int(self.sprint_opts.pop("numInstances", 1))
 
   def train_finish_epoch(self):
     """
@@ -904,4 +961,5 @@ class SeqTrainParallelControl:
     assert self.train_started
     assert len(self.forward_data_queue) == 0, "Not all forwardings were used?"
     assert self.is_forwarding_finished, "Forwarding not finished?"
+    assert not self.calc_loss_states, "Remaining loss calculations?"
     self.train_started = False
