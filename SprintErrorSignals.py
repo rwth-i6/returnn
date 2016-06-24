@@ -566,7 +566,7 @@ class SeqTrainParallelControlDevHost:
     del self.loss_data_queue[:idx]
 
   def have_seqs_loss_data(self, start_seq, end_seq):
-    assert start_seq >= end_seq
+    assert start_seq <= end_seq
     if start_seq == end_seq: return True
     first_seq, last_seq = start_seq, end_seq - 1
     have_first, have_last = False, False
