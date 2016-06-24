@@ -785,9 +785,10 @@ class SeqTrainParallelControl:
     if self.is_forwarding_finished: return False
     return self._device_exec("have_space_in_forward_data_queue")
 
-  def train_wait_for_seqs(self, device, batches):
+  def train_wait_for_seqs(self, device_run, device, batches):
     """
     Called from TrainTaskThread while doing training (forward + backprop).
+    :type device_run: EngineTask.TaskThread.DeviceRun
     :type device: Device.Device
     :type batches: list[EngineBatch.Batch]
     """
@@ -801,6 +802,9 @@ class SeqTrainParallelControl:
     print >>log.v5, "SeqTrainParallelControl, train_wait_for_seqs start_seq:%i, end_seq:%i" % (start_seq, end_seq)
     assert start_seq < end_seq
     assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
+    assert device_run
+    while not device_run.finished:
+      time.sleep(0.1)  # wait until finished so that it has called device.result() after device.run()
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
     while self.should_do_forward():
