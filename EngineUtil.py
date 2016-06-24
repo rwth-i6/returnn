@@ -5,7 +5,7 @@ from Log import log
 from Util import NumbersDict
 
 
-def assign_dev_data(device, dataset, batches):
+def assign_dev_data(device, dataset, batches, load_seqs=True):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
@@ -20,7 +20,7 @@ def assign_dev_data(device, dataset, batches):
   offset_slice = 0
 
   for batch in batches:
-    dataset.load_seqs(batch.start_seq, batch.end_seq)
+    if load_seqs: dataset.load_seqs(batch.start_seq, batch.end_seq)
     device.num_frames += batch.get_total_num_frames()
     with dataset.lock:
       for seq in batch.seqs:
@@ -77,7 +77,7 @@ def _device_maybe_enlarge_data(device, key, needed_len):
   device.targets[key][0:cur_len] = old_targets
 
 
-def assign_dev_data_single_seq(device, dataset, seq):
+def assign_dev_data_single_seq(device, dataset, seq, load_seqs=True):
   """
   :type device: Device.Device
   :type dataset: Dataset.Dataset
@@ -87,7 +87,7 @@ def assign_dev_data_single_seq(device, dataset, seq):
   """
   batch = Batch()
   batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
-  success, _ = assign_dev_data(device, dataset, [batch])
+  success, _ = assign_dev_data(device, dataset, [batch], load_seqs=load_seqs)
   return success
 
 

@@ -768,8 +768,6 @@ class SeqTrainParallelControl:
     if not dataset.is_less_than_num_seqs(self.forward_current_seq):
       self.is_forwarding_finished = True
       return
-    print >>log.v5, "SeqTrainParallelControl, forward load seq idx:%i, train start seq %i" % (
-      self.forward_current_seq, self.train_start_seq)
     dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
     seq_tag = dataset.get_tag(self.forward_current_seq)
     seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
@@ -777,7 +775,7 @@ class SeqTrainParallelControl:
       self.forward_current_seq, seq_tag, seq_len)
 
     from EngineUtil import assign_dev_data_single_seq
-    success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq)
+    success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq, load_seqs=False)
     assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
     self.train_device.update_data()
     self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
