@@ -1129,7 +1129,6 @@ class Device(object):
     See self.initialize() where the list is defined.
     """
     assert self.wait_for_result_call
-    self.wait_for_result_call = False
     self.result_called_count += 1
     if self.blocking:
       assert self.result_called_count == self.run_called_count
@@ -1148,15 +1147,18 @@ class Device(object):
             r = self.output_queue.recv()
             if r == "error":
               print >> log.v5, "Dev %s proc reported error" % self.name
+              self.wait_for_result_call = False
               return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
             assert output is not None
+            self.wait_for_result_call = False
             return output, outputs_format
         except ProcConnectionDied as e:
           # The process is dying or died.
           print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
+          self.wait_for_result_call = False
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name)
