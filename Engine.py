@@ -798,6 +798,7 @@ class SeqTrainParallelControl:
     for batch in batches:
       start_seq = min(start_seq, batch.start_seq)
       end_seq = max(end_seq, batch.end_seq)
+    print >>log.v5, "SeqTrainParallelControl, train_wait_for_seqs start_seq:%i, end_seq:%i" % (start_seq, end_seq)
     assert start_seq < end_seq
     assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
     self._device_exec("train_set_cur_batches", batches=batches)
