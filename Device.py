@@ -139,6 +139,7 @@ class Device(object):
     self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
     self.run_called_count = 0
     self.result_called_count = 0
+    self.wait_for_result_call = False
     self.compute_total_time = 0
     self.update_total_time = 0
     self.num_frames = NumbersDict(0)
@@ -905,6 +906,7 @@ class Device(object):
     return ret
 
   def _generic_exec_on_dev(self, func_name, *args, **kwargs):
+    assert not self.wait_for_result_call
     if self.is_device_proc():
       return self._generic_exec(func_name, args, kwargs)
     self.input_queue.send("generic-exec")
@@ -1093,6 +1095,8 @@ class Device(object):
     self.task = task
     self.run_called_count += 1
     self.update_data()
+    assert not self.wait_for_result_call
+    self.wait_for_result_call = True
     if self.blocking:
       self.output, self.outputs_format = self.compute_run(task)
     else:
@@ -1124,6 +1128,8 @@ class Device(object):
     See self.make_result_dict() how to interpret this list.
     See self.initialize() where the list is defined.
     """
+    assert self.wait_for_result_call
+    self.wait_for_result_call = False
     self.result_called_count += 1
     if self.blocking:
       assert self.result_called_count == self.run_called_count
