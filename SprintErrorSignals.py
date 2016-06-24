@@ -644,7 +644,7 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
         loss = control.output_var_loss
         hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
         error_signal = T.exp(log_posteriors) - hat_y
-        error_signal *= T.cast(Device.deviceInstance.j["data"], "float32")
+        error_signal *= T.cast(output_layer.network.j["data"], "float32")
         return loss, error_signal
   op = SprintErrorSigOp(target, sprint_opts)
   return op(log_posteriors, seq_lengths)
