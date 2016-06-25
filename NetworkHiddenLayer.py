@@ -2499,248 +2499,248 @@ def my_print(op, x):
 
 
 ################################################# NEW AUTOMATIC CONVOLUTIONAL LAYER #######################################################
-class NewConv(_NoOpLayer):
-  layer_class = "conv"
-
-  """
-    This is class for Convolution Neural Networks
-    Get the reference from deeplearning.net/tutorial/lenet.html
-  """
-
-  def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), mode='max', border_mode='valid',
-                ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
-
-    """
-
-    :param n_features: integer
-        the number of feature map(s) / filter(S) that will be used for the filter shape
-
-    :param filter: integer or tuple of length 2
-        the number of row(s) or/and columns(s) from the filter shape
-        this filter supports either square or unsymmetric shape.
-        for the square shape, we only need one integer parameter that represents row and column
-        otherwise, we need to specify the tupple for (rows, cols)
-
-    :param d_row: integer
-        the number of row(s)/height from the input
-        this has to be filled only for the first convolutional neural network layer
-        the remaining layer will used the number of row from the previous layer
-
-    :param pool_size: tuple of length 2
-        factor by which to downscale (vertical, horizontal)
-        (default value is (2, 2))
-        Note:
-        for Fractional Max Pooling, the pool_size must be symmetry (e.g: (2, 2))
-        if value is (1, 1), there is no pooling layer
-
-    :param mode: string
-        mode of the pooling layer.
-        this mode supports:
-        'max' -- to apply the max pooling layer
-        'sum' -- to apply the sum pooling layer
-        'avg' -- to apply the average pooling layer without the padding
-        'fmp' -- to apply the fractional max pooling
-
-    :param border_mode: string
-        'valid'-- only apply filter to complete patches of the image. Generates
-                  output of shape: (image_shape - filter_shape + 1)
-        'full' -- zero-pads image to multiple of filter shape to generate output
-                  of shape: (image_shape + filter_shape - 1)
-        'same' -- the size of image will remain the same with the previous layer
-        (default value is 'valid')
-
-    :param ignore_border: boolean
-        True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
-        False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
-
-    """
-
-    super(NewConv, self).__init__(**kwargs)
-
-    n_sources = len(self.sources)   # calculate how many input
-    is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
-
-    # check whether the input is conv layer
-    if is_conv_layer:
-      d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
-      stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
-      dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
-
-      # check whether number of inputs are more than 1 for concatenating the inputs
-      if n_sources != 1:
-        # check the spatial dimension of all inputs
-        assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'The spatial dimension of all inputs have to be the same!'
-        stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
-    else:   # input is not conv layer
-      stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
-      dimension = self.sources[0].attrs['n_out']  # set the dimension of input
-      assert n_sources == 1, 'Except CNN, the input is only one!'
-
-    # calculating the number of input columns
-    if d_row == -1: # assume quadratic patch
-      from math import sqrt
-      d_row = int(sqrt(dimension))
-    d_col = dimension/d_row
-
-    if type(filter) == int:
-      filter=[filter, filter]
-
-    # number of output dimension validation based on the border_mode
-    if border_mode == 'valid':
-      d_row_new = (d_row - filter[0] + 1)/pool_size[0]
-      d_col_new = (d_col - filter[1] + 1)/pool_size[1]
-    elif border_mode == 'full':
-      d_row_new = (d_row + filter[0] - 1)/pool_size[0]
-      d_col_new = (d_col + filter[1] - 1)/pool_size[1]
-    elif border_mode == 'same':
-      d_row_new = d_row/pool_size[0]
-      d_col_new = d_col/pool_size[1]
-    else:
-      assert False, 'invalid border_mode %r' % border_mode
-
-    if mode == 'fmp':
-      d_row_new = int(ceil(d_row_new))
-      d_col_new = int(ceil(d_col_new))
-
-    assert ((d_row_new > 0) and (d_col_new > 0)), 'invalid spatial dimensions!'
-    assert (mode == 'max' or mode == 'sum' or mode == 'avg' or mode == 'fmp'), 'invalid pooling mode!'
-
-    n_out = (d_row_new * d_col_new) * n_features
-
-    # set all attributes of this class
-    self.set_attr('n_features', n_features)
-    self.set_attr('filter', filter)
-    self.set_attr('pool_size', pool_size)
-    self.set_attr('border_mode', border_mode)
-    self.set_attr('ignore_border', ignore_border)
-    self.set_attr('d_row', d_row_new)   # number of output row
-    self.set_attr('n_out', n_out)   # number of output dimension
-    self.set_attr('dropout', dropout)
-    self.set_attr('mode', mode)
-    self.set_attr('seeds', seeds)
-
-    # our CRNN input is 3D tensor that consists of (time, batch, dim)
-    # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
-    # therefore, we should convert our input into 4D tensor
-    input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
-    time = input.shape[0]
-    batch = input.shape[1]
-
-    if is_conv_layer:
-      self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
-    else:
-      input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
-      self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
-
-    self.input.name = 'conv_layer_input_final'
-    #self.input = theano.printing.Print(global_fn=my_print)(self.input)
-
-    # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
-    self.filter_shape = (n_features, stack_size, filter[0], filter[1])
-
-    # weight parameter
-    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
-
-    # bias parameter
-    self.b = self.add_param(self._create_bias(n_features=n_features))
-
-    if dropout > 0.0:
-      assert dropout < 1.0, 'Dropout have to be less than 1.0'
-      mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-
-      if self.train_flag:
-        self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
-      else:
-        self.input = self.input * mass
-
-    # when convolutional layer 1x1, it gave the same size even full or valid border mode
-    if filter[0] == 1 and filter[1] == 1:
-      border_mode = 'valid'
-
-    # convolutional function
-    # when border mode = same, remove width and height from beginning and last based on the filter size
-    if border_mode == 'same':
-      new_filter_size_row = (self.W.shape[2]-1)/2
-      new_filter_size_col = (self.W.shape[3]-1)/2
-      self.conv_out = conv.conv2d(
-        input=self.input,
-        filters=self.W,
-        border_mode='full'
-      )[:,:,new_filter_size_row:-new_filter_size_row,new_filter_size_col:-new_filter_size_col]
-    else:
-      self.conv_out = conv.conv2d(
-        input=self.input,
-        filters=self.W,
-        border_mode=border_mode
-      )
-    self.conv_out.name = 'conv_layer_conv_out'
-    self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
-
-    # max pooling function
-    if pool_size <> [1, 1]:
-      print >> sys.stderr, 'pooling!!!', mode
-      self.conv_out = self._pooling(self.conv_out, pool_size, ignore_border, mode)
-
-    # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
-    self.Output = T.tanh(self.conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
-    self.Output.name = 'conv_layer_output_plus_bias'
-    self.Output = T.set_subtensor(self.Output[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.Output[0]))
-
-    # our CRNN only accept 3D tensor (time, batch, dim)
-    # so, we have to convert the output back to 3D tensor
-    output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
-    self.Output2 = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.make_output(self.Output2)
-
-  # function for calculating the weight parameter of this class
-  def _create_weights(self, filter_shape, pool_size, seeds):
-    rng = numpy.random.RandomState(seeds)
-    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
-    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
-
-    W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return self.shared(
-      numpy.asarray(
-        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
-        dtype=theano.config.floatX
-      ),
-      borrow=True,
-      name="W_conv"
-    )
-
-  # function for calculating the bias parameter of this class
-  def _create_bias(self, n_features):
-    return self.shared(
-      numpy.zeros(
-        (n_features,),
-        dtype=theano.config.floatX
-      ),
-      borrow=True,
-      name="b_conv"
-    )
-
-  def _pooling(self, inputs, pool_size, ignore_border, modes):
-    if modes == 'avg':
-      modes = 'average_exc_pad'
-
-    if modes == 'fmp':
-      height = inputs.shape[2]
-      width = inputs.shape[3]
-      batch2 = inputs.shape[0]
-      X = inputs.dimshuffle(2, 3, 0, 1)  # (row, col, batchs, filters)
-      sizes = T.zeros((batch2, 2))
-      sizes = T.set_subtensor(sizes[:, 0], height)
-      sizes = T.set_subtensor(sizes[:, 1], width)
-      pooled_out, _ = fmp(X, sizes, pool_size[0])
-      return pooled_out.dimshuffle(2, 3, 0, 1)
-
-    return downsample.pool.pool_2d(
-      input=inputs,
-      ds=pool_size,
-      ignore_border=ignore_border,
-      mode=modes
-    )
+# class NewConv(_NoOpLayer):
+#   layer_class = "conv"
+#
+#   """
+#     This is class for Convolution Neural Networks
+#     Get the reference from deeplearning.net/tutorial/lenet.html
+#   """
+#
+#   def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), mode='max', border_mode='valid',
+#                 ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
+#
+#     """
+#
+#     :param n_features: integer
+#         the number of feature map(s) / filter(S) that will be used for the filter shape
+#
+#     :param filter: integer or tuple of length 2
+#         the number of row(s) or/and columns(s) from the filter shape
+#         this filter supports either square or unsymmetric shape.
+#         for the square shape, we only need one integer parameter that represents row and column
+#         otherwise, we need to specify the tupple for (rows, cols)
+#
+#     :param d_row: integer
+#         the number of row(s)/height from the input
+#         this has to be filled only for the first convolutional neural network layer
+#         the remaining layer will used the number of row from the previous layer
+#
+#     :param pool_size: tuple of length 2
+#         factor by which to downscale (vertical, horizontal)
+#         (default value is (2, 2))
+#         Note:
+#         for Fractional Max Pooling, the pool_size must be symmetry (e.g: (2, 2))
+#         if value is (1, 1), there is no pooling layer
+#
+#     :param mode: string
+#         mode of the pooling layer.
+#         this mode supports:
+#         'max' -- to apply the max pooling layer
+#         'sum' -- to apply the sum pooling layer
+#         'avg' -- to apply the average pooling layer without the padding
+#         'fmp' -- to apply the fractional max pooling
+#
+#     :param border_mode: string
+#         'valid'-- only apply filter to complete patches of the image. Generates
+#                   output of shape: (image_shape - filter_shape + 1)
+#         'full' -- zero-pads image to multiple of filter shape to generate output
+#                   of shape: (image_shape + filter_shape - 1)
+#         'same' -- the size of image will remain the same with the previous layer
+#         (default value is 'valid')
+#
+#     :param ignore_border: boolean
+#         True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
+#         False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
+#
+#     """
+#
+#     super(NewConv, self).__init__(**kwargs)
+#
+#     n_sources = len(self.sources)   # calculate how many input
+#     is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
+#
+#     # check whether the input is conv layer
+#     if is_conv_layer:
+#       d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
+#       stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
+#       dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
+#
+#       # check whether number of inputs are more than 1 for concatenating the inputs
+#       if n_sources != 1:
+#         # check the spatial dimension of all inputs
+#         assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'The spatial dimension of all inputs have to be the same!'
+#         stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
+#     else:   # input is not conv layer
+#       stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
+#       dimension = self.sources[0].attrs['n_out']  # set the dimension of input
+#       assert n_sources == 1, 'Except CNN, the input is only one!'
+#
+#     # calculating the number of input columns
+#     if d_row == -1: # assume quadratic patch
+#       from math import sqrt
+#       d_row = int(sqrt(dimension))
+#     d_col = dimension/d_row
+#
+#     if type(filter) == int:
+#       filter=[filter, filter]
+#
+#     # number of output dimension validation based on the border_mode
+#     if border_mode == 'valid':
+#       d_row_new = (d_row - filter[0] + 1)/pool_size[0]
+#       d_col_new = (d_col - filter[1] + 1)/pool_size[1]
+#     elif border_mode == 'full':
+#       d_row_new = (d_row + filter[0] - 1)/pool_size[0]
+#       d_col_new = (d_col + filter[1] - 1)/pool_size[1]
+#     elif border_mode == 'same':
+#       d_row_new = d_row/pool_size[0]
+#       d_col_new = d_col/pool_size[1]
+#     else:
+#       assert False, 'invalid border_mode %r' % border_mode
+#
+#     if mode == 'fmp':
+#       d_row_new = int(ceil(d_row_new))
+#       d_col_new = int(ceil(d_col_new))
+#
+#     assert ((d_row_new > 0) and (d_col_new > 0)), 'invalid spatial dimensions!'
+#     assert (mode == 'max' or mode == 'sum' or mode == 'avg' or mode == 'fmp'), 'invalid pooling mode!'
+#
+#     n_out = (d_row_new * d_col_new) * n_features
+#
+#     # set all attributes of this class
+#     self.set_attr('n_features', n_features)
+#     self.set_attr('filter', filter)
+#     self.set_attr('pool_size', pool_size)
+#     self.set_attr('border_mode', border_mode)
+#     self.set_attr('ignore_border', ignore_border)
+#     self.set_attr('d_row', d_row_new)   # number of output row
+#     self.set_attr('n_out', n_out)   # number of output dimension
+#     self.set_attr('dropout', dropout)
+#     self.set_attr('mode', mode)
+#     self.set_attr('seeds', seeds)
+#
+#     # our CRNN input is 3D tensor that consists of (time, batch, dim)
+#     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
+#     # therefore, we should convert our input into 4D tensor
+#     input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
+#     time = input.shape[0]
+#     batch = input.shape[1]
+#
+#     if is_conv_layer:
+#       self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
+#     else:
+#       input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
+#       self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
+#
+#     self.input.name = 'conv_layer_input_final'
+#     #self.input = theano.printing.Print(global_fn=my_print)(self.input)
+#
+#     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
+#     self.filter_shape = (n_features, stack_size, filter[0], filter[1])
+#
+#     # weight parameter
+#     self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
+#
+#     # bias parameter
+#     self.b = self.add_param(self._create_bias(n_features=n_features))
+#
+#     if dropout > 0.0:
+#       assert dropout < 1.0, 'Dropout have to be less than 1.0'
+#       mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
+#       srng = RandomStreams(self.rng.randint(1234) + 1)
+#
+#       if self.train_flag:
+#         self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
+#       else:
+#         self.input = self.input * mass
+#
+#     # when convolutional layer 1x1, it gave the same size even full or valid border mode
+#     if filter[0] == 1 and filter[1] == 1:
+#       border_mode = 'valid'
+#
+#     # convolutional function
+#     # when border mode = same, remove width and height from beginning and last based on the filter size
+#     if border_mode == 'same':
+#       new_filter_size_row = (self.W.shape[2]-1)/2
+#       new_filter_size_col = (self.W.shape[3]-1)/2
+#       self.conv_out = conv.conv2d(
+#         input=self.input,
+#         filters=self.W,
+#         border_mode='full'
+#       )[:,:,new_filter_size_row:-new_filter_size_row,new_filter_size_col:-new_filter_size_col]
+#     else:
+#       self.conv_out = conv.conv2d(
+#         input=self.input,
+#         filters=self.W,
+#         border_mode=border_mode
+#       )
+#     self.conv_out.name = 'conv_layer_conv_out'
+#     self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
+#
+#     # max pooling function
+#     if pool_size <> [1, 1]:
+#       print >> sys.stderr, 'pooling!!!', mode
+#       self.conv_out = self._pooling(self.conv_out, pool_size, ignore_border, mode)
+#
+#     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+#     self.Output = T.tanh(self.conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
+#     self.Output.name = 'conv_layer_output_plus_bias'
+#     self.Output = T.set_subtensor(self.Output[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.Output[0]))
+#
+#     # our CRNN only accept 3D tensor (time, batch, dim)
+#     # so, we have to convert the output back to 3D tensor
+#     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+#     self.Output2 = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+#     self.make_output(self.Output2)
+#
+#   # function for calculating the weight parameter of this class
+#   def _create_weights(self, filter_shape, pool_size, seeds):
+#     rng = numpy.random.RandomState(seeds)
+#     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+#     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+#
+#     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+#     return self.shared(
+#       numpy.asarray(
+#         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+#         dtype=theano.config.floatX
+#       ),
+#       borrow=True,
+#       name="W_conv"
+#     )
+#
+#   # function for calculating the bias parameter of this class
+#   def _create_bias(self, n_features):
+#     return self.shared(
+#       numpy.zeros(
+#         (n_features,),
+#         dtype=theano.config.floatX
+#       ),
+#       borrow=True,
+#       name="b_conv"
+#     )
+#
+#   def _pooling(self, inputs, pool_size, ignore_border, modes):
+#     if modes == 'avg':
+#       modes = 'average_exc_pad'
+#
+#     if modes == 'fmp':
+#       height = inputs.shape[2]
+#       width = inputs.shape[3]
+#       batch2 = inputs.shape[0]
+#       X = inputs.dimshuffle(2, 3, 0, 1)  # (row, col, batchs, filters)
+#       sizes = T.zeros((batch2, 2))
+#       sizes = T.set_subtensor(sizes[:, 0], height)
+#       sizes = T.set_subtensor(sizes[:, 1], width)
+#       pooled_out, _ = fmp(X, sizes, pool_size[0])
+#       return pooled_out.dimshuffle(2, 3, 0, 1)
+#
+#     return downsample.pool.pool_2d(
+#       input=inputs,
+#       ds=pool_size,
+#       ignore_border=ignore_border,
+#       mode=modes
+#     )
 
 ################################################# NEW WITH FRACTIONAL MAX POOLING #######################################################
 class ConvFMP(_NoOpLayer):
