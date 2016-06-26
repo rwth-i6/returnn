@@ -218,8 +218,8 @@ class CNN(_NoOpLayer):
     # convolution function
     # when border mode = same, remove width and height from beginning and last based on the filter size
     if border_mode == "same":
-      new_filter_size_row = (W.shape[2] - 1) / 2
-      new_filter_size_col = (W.shape[3] - 1) / 2
+      new_filter_size_row = (w.shape[2] - 1) / 2
+      new_filter_size_col = (w.shape[3] - 1) / 2
       conv_out = conv.conv2d(
         input=inputs,
         filters=w,
