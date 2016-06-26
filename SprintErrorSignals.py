@@ -519,7 +519,8 @@ class SeqTrainParallelControlDevHost:
         for k in [self.output_target]:
           if l[k] == 0: continue
           loss, hat_y = self.get_loss_and_hat_y(seq.seq_idx)
-          assert seq.seq_start_frame[k] < hat_y.shape[0] <= seq.seq_end_frame[k]
+          assert seq.seq_start_frame[k] < hat_y.shape[0]
+          assert seq.seq_end_frame[k] <= hat_y.shape[0]
           output_loss[q] += loss * float(l[k]) / hat_y.shape[0]
           output_hat_y[o[k]:o[k] + l[k], q] = hat_y[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
     self.output_var_loss.set_value(output_loss)
