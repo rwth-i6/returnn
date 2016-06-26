@@ -794,7 +794,7 @@ class SeqTrainParallelControl:
     assert self.train_started
     self.train_device = device
     if not batches: return
-    start_seq, end_seq = 0, 0
+    start_seq, end_seq = float("inf"), 0
     for batch in batches:
       start_seq = min(start_seq, batch.start_seq)
       end_seq = max(end_seq, batch.end_seq)
