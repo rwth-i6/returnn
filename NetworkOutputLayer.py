@@ -188,8 +188,7 @@ class FramewiseOutputLayer(OutputLayer):
 
   def initialize(self):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
-    nreps = T.switch(T.eq(self.output.shape[0], 1), self.index.shape[0], 1)
-    output = self.output.repeat(nreps,axis=0)
+    output = self.output
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
