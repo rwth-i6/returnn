@@ -749,7 +749,7 @@ class SeqTrainParallelControl:
     It calls self.train_wait_for_seqs().
   """
 
-  def __init__(self, engine):
+  def __init__(self, engine, **kwargs):
     self.engine = engine
     self.train_started = None
     self.train_device = None
@@ -809,12 +809,8 @@ class SeqTrainParallelControl:
       self.do_forward()
     self._device_exec("train_check_calc_loss")
     while not self._device_exec("train_have_loss_for_cur_batches"):
-      if self.should_do_forward():
-        while self.should_do_forward():
-          self.do_forward()
-      else:
+      if not self._device_exec("train_check_calc_loss"):
         time.sleep(0.1)  # wait until we have the data we need
-      self._device_exec("train_check_calc_loss")
     self._device_exec("train_set_loss_vars_for_cur_batches")
 
   def train_start_epoch(self):

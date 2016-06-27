@@ -386,7 +386,7 @@ class SeqTrainParallelControlDevHost:
     def __repr__(self):
       return "<LossData{seq_idx=%i, seq_tag=%r}>" % (self.seq_idx, self.seq_tag)
 
-  def __init__(self, output_layer, output_target, sprint_opts):
+  def __init__(self, output_layer, output_target, sprint_opts, forward_seq_delay=5):
     import NetworkOutputLayer
     assert isinstance(output_layer, NetworkOutputLayer.SequenceOutputLayer)
     self.output_layer = output_layer
@@ -395,14 +395,15 @@ class SeqTrainParallelControlDevHost:
     self.output_var_hat_y = theano.shared(numpy.zeros((1,1,1), "float32"), name='hat_y')  # (time,batch,dim)
     sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts)
     assert isinstance(sprint_instance_pool, SprintInstancePool)
+    self.sprint_instance_pool = sprint_instance_pool
     import Device
     assert Device.is_device_host_proc(), "SeqTrainParallelControlDevHost is expected to live in the Dev proc"
     self.device = Device.deviceInstance
-    self.sprint_instance_pool = sprint_instance_pool
     self.train_started = False
     self.train_start_seq = 0
     self.train_end_seq = 0
     self.train_batches = None
+    self.forward_seq_delay = forward_seq_delay
     self.forward_data_queue = []; ":type: list[SeqTrainParallelControl.ForwardData]"
     self.calc_loss_states = []; ":type: list[SeqTrainParallelControlDevHost.CalcLossState]"
     self.loss_data_queue = []; ":type: list[SeqTrainParallelControl.LossData]"
@@ -432,6 +433,7 @@ class SeqTrainParallelControlDevHost:
   def train_check_calc_loss(self):
     """
     Called via Engine.SeqTrainParallelControl.
+    :returns whether we added something to self.calc_loss_states.
     """
     assert self.train_started
 
@@ -456,6 +458,7 @@ class SeqTrainParallelControlDevHost:
       self.loss_data_queue.append(self.LossData(state))
 
     # Handle new data in forward_data_queue.
+    new_loss = False
     while self.forward_data_queue:
       sprint = self.sprint_instance_pool.get_free_instance()
       if not sprint: break  # Nothing we can do at the moment.
@@ -473,6 +476,9 @@ class SeqTrainParallelControlDevHost:
         log_posteriors=log_posteriors
       )
       self.calc_loss_states.append(calc_loss_state)
+      new_loss = True
+
+    return new_loss
 
   def train_set_cur_batches(self, batches):
     """
@@ -556,13 +562,13 @@ class SeqTrainParallelControlDevHost:
 
     self.forward_data_queue.append(self.ForwardData(seq_idx, seq_tag, posteriors))
 
-  forward_cache_limit = 5
-
   def have_space_in_forward_data_queue(self):
     """
     Called via Engine.SeqTrainParallelControl.
     """
-    return len(self.forward_data_queue) < self.forward_cache_limit
+    # This is called greedily until it returns False.
+    # It's important that we have this behavior deterministic so that the training itself is deterministic.
+    return len(self.forward_data_queue) + len(self.calc_loss_states) + len(self.loss_data_queue) < self.forward_seq_delay
 
   def remove_old_loss_data(self, current_start_seq):
     idx = 0
@@ -646,7 +652,9 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
         print >>log.v3, "sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name
         assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
         control = \
-          SeqTrainParallelControlDevHost(output_layer=output_layer, output_target=target, sprint_opts=sprint_opts)
+          SeqTrainParallelControlDevHost(
+            output_layer=output_layer, output_target=target, sprint_opts=sprint_opts,
+            **Device.deviceInstance.config.typed_value("seq_train_parallel"))
         Device.deviceInstance.seq_train_parallel_control = control
         loss = control.output_var_loss
         hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
