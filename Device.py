@@ -1235,6 +1235,7 @@ class Device(object):
       gs = [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
            [(network.j[k], self.j[k]) for k in self.used_data_keys]
     return gs + [(network.epoch, self.epoch_var)]
+
   def make_input_givens(self, network):
     # self.i == self.j["data"]
     gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
