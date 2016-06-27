@@ -730,9 +730,10 @@ class Engine:
     if "error" in statistics:
       print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
 
-  def compute_priors(self, train_data, output_file):
+  def compute_priors(self, train_data, output_file, num_outputs):
     batches = train_data.generate_batches(recurrent_net=self.network.recurrent,
                                     batch_size=0, max_seqs=1)
-    softmax = []
-    forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches)
+    priori_file = open(output_file, 'w')
+    forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches, priori_file, num_outputs)
     forwarder.join()
+    priori_file.close()

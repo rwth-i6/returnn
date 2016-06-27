@@ -377,8 +377,9 @@ def executeMainTask():
     assert train_data is not None, 'train data for priors should be provided'
     assert config.has('output_file'), 'output_file for priors numbers should be provided'
     output_file = config.value('output_file', '')
+    num_outputs = config.value('num_outputs', '')
     engine.init_network_from_config(config)
-    engine.compute_priors(train_data, output_file)
+    engine.compute_priors(train_data, output_file, num_outputs)
   elif task == 'theano_graph':
     import theano.printing
     import theano.compile.io
