@@ -1,6 +1,6 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from Log import log
 from Network import LayerNetwork
 import numpy
@@ -98,7 +98,7 @@ def get_device_attributes():
 asyncChildGlobalDevice = None
 
 # Any Device instance.
-deviceInstance = None
+deviceInstance = None; ":type: Device"
 
 def str2int(txt):
   try:
@@ -139,6 +139,7 @@ class Device(object):
     self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
     self.run_called_count = 0
     self.result_called_count = 0
+    self.wait_for_result_call = False
     self.compute_total_time = 0
     self.update_total_time = 0
     self.num_frames = NumbersDict(0)
@@ -275,6 +276,7 @@ class Device(object):
     import theano.tensor as T
     import h5py
     self.T = T
+    self.seq_train_parallel_control = None  # SeqTrainParallelControlDevHost
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     if json_content is not None:
@@ -350,6 +352,7 @@ class Device(object):
     self.block_end = T.lscalar()
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
 
+    self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss == 'ctc':
         train_givens = self.make_givens(self.trainnet)
@@ -898,11 +901,12 @@ class Device(object):
 
   def _generic_exec(self, func_name, args, kwargs):
     assert self.is_device_proc()
-    func = getattr(self, func_name)
+    func = attr_chain(self, func_name)
     ret = func(*args, **kwargs)
     return ret
 
   def _generic_exec_on_dev(self, func_name, *args, **kwargs):
+    assert not self.wait_for_result_call
     if self.is_device_proc():
       return self._generic_exec(func_name, args, kwargs)
     self.input_queue.send("generic-exec")
@@ -1091,6 +1095,8 @@ class Device(object):
     self.task = task
     self.run_called_count += 1
     self.update_data()
+    assert not self.wait_for_result_call
+    self.wait_for_result_call = True
     if self.blocking:
       self.output, self.outputs_format = self.compute_run(task)
     else:
@@ -1122,6 +1128,7 @@ class Device(object):
     See self.make_result_dict() how to interpret this list.
     See self.initialize() where the list is defined.
     """
+    assert self.wait_for_result_call
     self.result_called_count += 1
     if self.blocking:
       assert self.result_called_count == self.run_called_count
@@ -1140,15 +1147,18 @@ class Device(object):
             r = self.output_queue.recv()
             if r == "error":
               print >> log.v5, "Dev %s proc reported error" % self.name
+              self.wait_for_result_call = False
               return None, None
             assert r == "task-result"
             output = self.output_queue.recv()
             outputs_format = self.output_queue.recv()
             assert output is not None
+            self.wait_for_result_call = False
             return output, outputs_format
         except ProcConnectionDied as e:
           # The process is dying or died.
           print >> log.v4, "Dev %s proc died: %s" % (self.name, e)
+          self.wait_for_result_call = False
           return None, None
         timeout -= 1
       print >> log.v3, "Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name)
@@ -1157,6 +1167,23 @@ class Device(object):
       except Exception as e:
         print >> log.v3, "os.kill SIGUSR1 exception: %s" % e
       return None, None
+
+  def forward(self, use_trainnet=False):
+    assert self.is_device_proc()
+    network = self.trainnet if use_trainnet else self.testnet
+    import theano
+    if not self.forwarder:
+      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet
+      self.forwarder = theano.function(
+        inputs=[],
+        outputs=[layer.output for name, layer in sorted(network.output.items())],
+        givens=self.make_input_givens(network),
+        on_unused_input='warn',
+        name="forwarder")
+    from TheanoUtil import make_var_tuple
+    outputs = make_var_tuple(self.forwarder())
+    assert len(outputs) == len(network.output)
+    return {name: outputs[i] for i, (name, layer) in enumerate(sorted(network.output.items()))}
 
   def terminate(self):
     if self.blocking:
@@ -1208,6 +1235,7 @@ class Device(object):
       gs = [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
            [(network.j[k], self.j[k]) for k in self.used_data_keys]
     return gs + [(network.epoch, self.epoch_var)]
+
   def make_input_givens(self, network):
     # self.i == self.j["data"]
     gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
@@ -1221,10 +1249,14 @@ class Device(object):
     return self.make_givens(network) + [(network.c, self.c)]
 
 
+def is_device_host_proc():
+  if not deviceInstance: return False
+  return deviceInstance.is_device_proc()
+
 def get_current_seq_tags():
   assert deviceInstance, "get_current_seq_tags: deviceInstance not set"
   return deviceInstance.tags
 
-def get_current_seq_index(target):
+def get_current_seq_index_mask(target):
   assert deviceInstance, "get_current_seq_index: deviceInstance not set"
   return deviceInstance.output_index[target]

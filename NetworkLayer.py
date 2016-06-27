@@ -9,7 +9,8 @@ def _initLayerClasses():
   import NetworkLstmLayer
   import NetworkTwoDLayer
   import NetworkBaseLayer
-  mods = [NetworkHiddenLayer, NetworkRecurrentLayer, NetworkLstmLayer, NetworkTwoDLayer, NetworkBaseLayer]
+  import NetworkCNNLayer
+  mods = [NetworkHiddenLayer, NetworkRecurrentLayer, NetworkLstmLayer, NetworkTwoDLayer, NetworkBaseLayer, NetworkCNNLayer]
   for mod in mods:
     for _, clazz in vars(mod).items():
       if not isclass(clazz): continue

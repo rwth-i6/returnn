@@ -152,9 +152,11 @@ void levenshtein_kernel(long n_batch,
 		batch_idx < n_batch;
 		batch_idx += gridDim.x * blockDim.x)
 	{
+		// initial
 		for(long j = 0; j <= str2len; ++j)
 			row1[j * n_batch + batch_idx] = (float) j;
 
+		// row1 was the last row
 		for(long i = 0; i < str1len; ++i) {
 			long idx1 = i * n_batch + batch_idx;
 			if(str1index[idx1] < 0.1)
@@ -162,6 +164,7 @@ void levenshtein_kernel(long n_batch,
 
 			{ float* tmp = row0; row0 = v1; row1 = tmp; }  // swap row0/row1
 
+			// row1 is the current row, row0 the last
 			float str1c = str1[idx1];
 			row1[batch_idx] = float(i + 1); // delete (i+1) chars from str1
 
@@ -180,6 +183,7 @@ void levenshtein_kernel(long n_batch,
 				row1[idx2 + n_batch] = v;
 			}
 		}
+		// row1 was the last row
 
 		if(original_row1 != row1) {
 			for(long j = 0; j <= str2len; ++j)
@@ -202,7 +206,7 @@ void levenshtein(long n_batch,
 			lev_{a,b}(i, j - 1) + 1,
 			lev_{a,b}(i - 1, j - 1) + 1_(a_i != b_j))
 	If str1/str2 were single strings, we would have:
-	 levenstein(str1, str2) = lev_{str1,str2}(str1len, str2len)
+	 levenshtein(str1, str2) = lev_{str1,str2}(str1len, str2len)
 	In this implementation, we support multiple batches.
 	 */
 	Ndarray_memset(row0, 0, (str2len + 1) * n_batch * sizeof(float)); // previous row
@@ -214,7 +218,9 @@ void levenshtein(long n_batch,
 		str2, str2index, str2len,
 		row0, row1
 	));
+}
 
+void levenshtein_loss_estimation(Ndarray* posteriors, Ndarray* loss, Ndarray* error_signal) {
 
 }
 

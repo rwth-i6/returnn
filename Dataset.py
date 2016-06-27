@@ -543,6 +543,13 @@ class Dataset(object):
       d[k] += self.get_data_shape(k)
     return d
 
+  @classmethod
+  def index_shape_for_batches(cls, batches, data_key="data"):
+    shape = [0, 0]  # time,batch
+    for batch in batches:
+      shape = [max(shape[0], batch.max_num_frames_per_slice[data_key]), shape[1] + batch.num_slices]
+    return shape
+
 
 class DatasetSeq:
   def __init__(self, seq_idx, features, targets, ctc_targets=None, seq_tag=None):

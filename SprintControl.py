@@ -71,6 +71,9 @@ class SprintNnPythonLayer:
     self.input_size = None
     self.output_size = None
 
+  def finalize(self):
+    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize: %r" % (os.getpid()))
+
   def setInputDimension(self, stream, size):
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (os.getpid(), stream, size))
     assert stream == 0, "we only support a single input stream (for now)"

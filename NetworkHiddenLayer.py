@@ -3,6 +3,7 @@ import theano
 import numpy
 import json
 import h5py
+import sys
 from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
@@ -191,10 +192,17 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     n_out = z_dim
+    import theano.ifelse
     for f, a in zip(factor, axis):
-      z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       if a == 0:
-        self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=f, method="min")
+        z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      else:
+        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+      if a == 0:
+        self.index = self.sources[0].index
+        self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
+        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
     output = z
@@ -203,7 +211,7 @@ class DownsampleLayer(_NoOpLayer):
     elif method == 'mlp':
       self.DP = self.add_param(self.create_forward_weights(n_out * numpy.prod(factor),z_dim,self.name + "_DP"))
       self.b = self.add_param(self.create_bias(z_dim))
-      output = T.nnet.relu(T.dot(output,self.DP) + self.b)
+      output = theano.ifelse.ifelse(cond, T.nnet.relu(T.dot(output,self.DP) + self.b), output)
     elif method == 'lstm':
       num_batches = z.shape[2]
       #z = theano.printing.Print("a", attrs=['shape'])(z)
@@ -1478,35 +1486,52 @@ class LengthProjectionLayer(HiddenLayer):
 
 class MultiLengthLayer(HiddenLayer):
   layer_class = "multilength"
-  def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
+  def __init__(self, avg=2.0, oracle=True, subsampling = 50, **kwargs):
     kwargs['n_out'] = 1
     real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
     kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
-    super(LengthProjectionLayer, self).__init__(**kwargs)
+    super(MultiLengthLayer, self).__init__(**kwargs)
     self.params = {}
-    self.set_attr('method',method)
-    self.set_attr('pad', pad)
-    self.set_attr('smo', smo)
-    z = T.concatenate([s.output[::s.attrs['direction']] for s in self.sources], axis=2)
+    z = T.concatenate([s.output for s in self.sources], axis=2)[::subsampling]
     dim = sum([s.attrs['n_out'] for s in self.sources])
 
     self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    self.W_a = self.add_param(self.create_forward_weights(dim, dim*4, 'A'))
-    self.ba = self.add_param(self.create_bias(dim*4, "ba_%s" % self.name))
-    z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
-    self.W = self.add_param(self.create_random_uniform_weights(dim*4, 1, l=0.001, name='W_%s' % self.name))
-    hyps = T.dot(self.W,z) + self.b + T.constant(avg, 'float32') # TB
-    hyp = T.sum(hyps,axis=0)
-    self.cost_val = T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    self.W_a = self.add_param(self.create_forward_weights(dim, dim, 'A'))
+    self.ba = self.add_param(self.create_bias(dim, "ba_%s" % self.name))
+    #z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
+    z = T.tanh(T.dot(z, self.W_a) + self.ba)
+    self.W = self.add_param(self.create_forward_weights(dim, 1, name='W_%s' % self.name))
+    self.hyps = (T.dot(z,self.W)[:,:,0] + self.b[0] + T.constant(avg, 'float32')) # TB
+    #self.hyps = self.hyps.reshape((self.hyps.shape[0],self.hyps.shape[1])) # TB
+    self.hyps = T.ones((z.shape[0],z.shape[1]),'float32')
+    self.hyps = theano.printing.Print("hypin")(self.hyps)
+    hyp = T.sum(self.hyps,axis=0)
+    #real = theano.printing.Print("real")(real)
+    self.cost_val = T.constant(0,'float32') #T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
+    self.error_val = T.constant(0,'int32') #T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
+    #if self.train_flag or oracle:
+    #  self.hyps = T.maximum(self.hyps, T.ones_like(self.hyps))
+    #  self.hyps = self.hyps * T.cast(real / T.sum(self.hyps,axis=0),'float32').dimshuffle('x',0).repeat(self.hyps.shape[0],axis=0)
+    self.lengths = T.cast(T.maximum(T.round(self.hyps),T.ones_like(self.hyps)),'int32')
+    self.chunks = self.lengths.flatten()
+    self.chunks = theano.printing.Print("chunks")(self.chunks)
+    idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
+                       sequences=[self.chunks], non_sequences=[T.max(self.chunks) + T.cast(1,'int32')])
+    self.index = idx.dimshuffle(1,0)[::-1]
+    self.act = [T.concatenate([s.act[i][::s.attrs['direction'] * subsampling]
+                               for s in self.sources], axis=2) for i in [0, 1]]
+    self.act = [act.reshape((act.shape[0] * act.shape[1], act.shape[2])).dimshuffle('x', 0, 1) for act in self.act]
+    self.output = 0
 
-    self.error_val = T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
-    self.lengths = T.round(hyps)
-    def outer(lx):
-      idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
-                          sequences = [lx], non_sequences=[T.max(lx) + 1])
-      return idx.dimshuffle(1,0)[:-1] # LB
-    self.idxs, _ = theano.map(outer,sequences=[self.lengths]) # TLB
-    self.output = self.hyp.dimshuffle('x',0,'x')
+    #def outer(lx,ml):
+    #  idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
+    #                      sequences = [lx], non_sequences=[ml])
+    #  return idx # BL
+    #idxs, _ = theano.map(outer,sequences=[self.lengths], non_sequences=[T.max(self.lengths) + 1]) # TBL
+    #self.index = idxs.dimshuffle(1,0,2).reshape((idxs.shape[1],idxs.shape[0]*idxs.shape[2]))[:-1].dimshuffle(1,0)
+    #self.act = [ T.concatenate([s.act[i][::s.attrs['direction']].reshape((s.act[i].shape[0]*s.act[i].shape[1],s.act[i].shape[2])).dimshuffle('x',0,1)
+    #                            for s in self.sources], axis=2) for i in [0,1] ]
+    #self.output = hyp.dimshuffle('x',0,'x')
 
   def cost(self):
     return self.cost_val, None
@@ -1516,6 +1541,33 @@ class MultiLengthLayer(HiddenLayer):
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+
+class MergeLengthLayer(_NoOpLayer):
+  layer_class = "mergelength"
+
+  def __init__(self, base, **kwargs):
+    assert base and len(base) == 1
+    kwargs['n_out'] = 1
+    super(MergeLengthLayer, self).__init__(**kwargs)
+    num_batches = base[0].hyps.shape[1]
+    num_pos = base[0].hyps.shape[0]
+    z = T.concatenate([s.output for s in self.sources], axis=2)
+    z = z.reshape((z.shape[0] * num_pos,num_batches,z.shape[2])).dimshuffle(1,0,2)  # BND
+    idx = base[0].index.reshape((z.shape[1], num_batches)).dimshuffle(1,0)  # BN
+    dx = T.sum(T.cast(idx,'int32'),axis=1)
+    def merge(zn,dxn,idxn,m):
+      zm = zn[(idxn>0).nonzero()].reshape((dxn,zn.shape[1]))
+      i = T.concatenate([T.ones((dxn,), 'int8'), T.zeros((m - dxn,), 'int8')],axis=0)
+      #x = T.concatenate([zm, T.zeros((m - dxn,zm.shape[1]), 'float32')],axis=0)
+      x = T.concatenate([zm, zm[-1].dimshuffle('x',0).repeat(m-dxn,axis=0)],axis=0)
+      return x,i
+    outputs, _ = theano.map(merge, sequences=[z,dx,idx], non_sequences=[T.max(dx) + T.cast(1,'int32')])
+    #self.output = outputs[0].dimshuffle(1,0,2)[:-1]
+    #self.index = outputs[1].dimshuffle(1,0)[:-1]
+    self.output = z.dimshuffle(1,0,2)
+    self.index = T.ones_like(idx.dimshuffle(1,0))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
 
 
 class AttentionLengthLayer(HiddenLayer):
@@ -2441,222 +2493,254 @@ class NewConvLayer(_NoOpLayer):
 
 
 def my_print(op, x):
-  with open('w_conv.txt', 'a') as f:
-    f.write(str(x))
+  print 'masuk!!!!!!!'
+  with open('/u/suryani/x.txt', 'a') as f:
+    f.write('----->'+str(x.shape)+'\n')
 
 
 ################################################# NEW AUTOMATIC CONVOLUTIONAL LAYER #######################################################
-class NewConv(_NoOpLayer):
-  layer_class = "conv"
-
-  """
-    This is class for Convolution Neural Networks
-    Get the reference from deeplearning.net/tutorial/lenet.html
-  """
-
-  def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), border_mode='valid',
-                ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
-
-    """
-
-    :param n_features: integer
-        the number of feature map(s) / filter(S) that will be used for the filter shape
-
-    :param filter: integer
-        the number of row(s) or columns(s) from the filter shape
-        this filter is the square, therefore we only need one parameter that represents row and column
-
-    :param d_row: integer
-        the number of row(s) from the input
-        this has to be filled only for the first convolutional neural network layer
-        the remaining layer will used the number of row from the previous layer
-
-    :param pool_size: tuple of length 2
-        Factor by which to downscale (vertical, horizontal)
-        (default value is (2, 2))
-
-    :param border_mode: string
-        'valid'-- only apply filter to complete patches of the image. Generates
-                  output of shape: (image_shape - filter_shape + 1)
-        'full' -- zero-pads image to multiple of filter shape to generate output
-                  of shape: (image_shape + filter_shape - 1)
-        'same' -- the size of image will remain the same with the previous layer
-        (default value is 'valid')
-
-    :param ignore_border: boolean
-        True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
-        False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
-
-    """
-
-    super(NewConv, self).__init__(**kwargs)
-
-    n_sources = len(self.sources)   # calculate how many input
-    is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
-
-    # check whether the input is conv layer
-    if is_conv_layer:
-      d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
-      stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
-      dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
-
-      # check whether number of inputs are more than 1 for concatenating the inputs
-      if n_sources != 1:
-        # check the spatial dimension of all inputs
-        assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'Sorry, the spatial dimension of all inputs have to be the same'
-        stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
-    else:   # input is not conv layer
-      stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
-      dimension = self.sources[0].attrs['n_out']  # set the dimension of input
-
-      # whether number of inputs are more than 1 for concatenating the inputs
-      if n_sources != 1:
-        # check the number of layer unit
-        assert all(s.attrs['n_out'] == self.sources[0].attrs['n_out'] for s in self.sources), 'Sorry, the units of all inputs have to be the same'
-        dimension = sum([s.attrs['n_out'] for s in self.sources])   # set the dimension by concatenating the number of output from input
-
-    # calculating the number of input columns
-    d_col = dimension/d_row
-
-    # number of output dimension validation based on the border_mode
-    if border_mode == 'valid':
-      d_row_new = (d_row - filter + 1)/pool_size[0]
-      d_col_new = (d_col - filter + 1)/pool_size[1]
-    elif border_mode == 'full':
-      d_row_new = (d_row + filter - 1)/pool_size[0]
-      d_col_new = (d_col + filter - 1)/pool_size[1]
-    elif border_mode == 'same':
-      d_row_new = d_row/pool_size[0]
-      d_col_new = d_col/pool_size[1]
-    else:
-      assert False, 'invalid border_mode %r' % border_mode
-
-    assert ((d_row_new > 0) and (d_col_new > 0)), 'invalid spatial dimensions!'
-    n_out = (d_row_new * d_col_new) * n_features
-
-    # set all attributes of this class
-    self.set_attr('n_features', n_features)
-    self.set_attr('filter', filter)
-    self.set_attr('pool_size', pool_size)
-    self.set_attr('border_mode', border_mode)
-    self.set_attr('ignore_border', ignore_border)
-    self.set_attr('d_row', d_row_new)   # number of output row
-    self.set_attr('n_out', n_out)   # number of output dimension
-    self.set_attr('dropout', dropout)
-    self.set_attr('seeds', seeds)
-
-    # our CRNN input is 3D tensor that consists of (time, batch, dim)
-    # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
-    # therefore, we should convert our input into 4D tensor
-    if n_sources != 1:
-      if is_conv_layer:
-        input = T.concatenate([s.tempOutput for s in self.sources], axis=3)   # (time, batch, input-dim = row * col, stack_size)
-        #input = tempInput.reshape((tempInput.shape[0], tempInput.shape[1], tempInput.shape[2] * tempInput.shape[3])) # (time, batch, input-dim = row * col * stack_size)
-      else:
-        input = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * col * stack_size)
-    else:
-      input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
-
-    input.name = 'conv_layer_input_concat'
-    time = input.shape[0]
-    batch = input.shape[1]
-    input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
-    self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
-    self.input.name = 'conv_layer_input_final'
-
-    # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
-    self.filter_shape = (n_features, stack_size, filter, filter)
-
-    # weight parameter
-    self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
-    #self.W = theano.printing.Print(global_fn=my_print)(self.W)
-
-    # bias parameter
-    self.b = self.add_param(self._create_bias(n_features=n_features))
-
-
-    if dropout > 0.0:
-      assert dropout < 1.0, 'Dropout have to be less than 1.0'
-      mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-
-      if self.train_flag:
-        self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
-      else:
-        self.input = self.input * mass
-
-
-    # when convolutional layer 1x1, it gave the same size even full or valid border mode
-    if filter == 1:
-      border_mode = 'valid'
-
-    # convolutional function
-    # when border mode = same, remove width and height from beginning and last based on the filter size
-    if border_mode == 'same':
-      new_filter_size = (self.W.shape[2]-1)/2
-      self.conv_out = conv.conv2d(
-        input=self.input,
-        filters=self.W,
-        border_mode='full'
-      )[:,:,new_filter_size:-new_filter_size,new_filter_size:-new_filter_size]
-    else:
-      self.conv_out = conv.conv2d(
-        input=self.input,
-        filters=self.W,
-        border_mode=border_mode
-      )
-    self.conv_out.name = 'conv_layer_conv_out'
-    #self.conv_out = self.conv_out * T.cast(self.index.flatten(),'float32').dimshuffle(0,'x','x','x').repeat(self.conv_out.shape[1],axis=1).repeat(self.conv_out.shape[2],axis=2).repeat(self.conv_out.shape[3],axis=3)
-    self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
-    # max pooling function
-    self.pooled_out = downsample.max_pool_2d(
-      input=self.conv_out,
-      ds=pool_size,
-      ignore_border=ignore_border
-    )
-    self.pooled_out.name = 'conv_layer_pooled_out'
-
-    # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
-    output = T.tanh(self.pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
-    output.name = 'conv_layer_output_plus_bias'
-
-    # our CRNN only accept 3D tensor (time, batch, dim)
-    # so, we have to convert the output back to 3D tensor
-    output2 = output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
-    output2 = T.set_subtensor(output2[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(output2[0]))
-    self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3])) * T.cast(self.index.dimshuffle(0,1,'x','x').repeat(output2.shape[1] * output2.shape[2], axis=2).repeat(output2.shape[3], axis=3),'float32')
-    self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
-    self.make_output(self.output)
-    #self.tempOutput = output2.reshape((time, batch, output2.shape[1] * output2.shape[2], output2.shape[3]))
-    #self.make_output(self.output)
-
-  # function for calculating the weight parameter of this class
-  def _create_weights(self, filter_shape, pool_size, seeds):
-    rng = numpy.random.RandomState(seeds)
-    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
-    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
-
-    W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    return self.shared(
-      numpy.asarray(
-        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
-        dtype=theano.config.floatX
-      ),
-      borrow=True,
-      name="W_conv"
-    )
-
-  # function for calculating the bias parameter of this class
-  def _create_bias(self, n_features):
-    return self.shared(
-      numpy.zeros(
-        (n_features,),
-        dtype=theano.config.floatX
-      ),
-      borrow=True,
-      name="b_conv"
-    )
+# class NewConv(_NoOpLayer):
+#   layer_class = "conv"
+#
+#   """
+#     This is class for Convolution Neural Networks
+#     Get the reference from deeplearning.net/tutorial/lenet.html
+#   """
+#
+#   def __init__( self, n_features, filter, d_row=1, pool_size=(2, 2), mode='max', border_mode='valid',
+#                 ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
+#
+#     """
+#
+#     :param n_features: integer
+#         the number of feature map(s) / filter(S) that will be used for the filter shape
+#
+#     :param filter: integer or tuple of length 2
+#         the number of row(s) or/and columns(s) from the filter shape
+#         this filter supports either square or unsymmetric shape.
+#         for the square shape, we only need one integer parameter that represents row and column
+#         otherwise, we need to specify the tupple for (rows, cols)
+#
+#     :param d_row: integer
+#         the number of row(s)/height from the input
+#         this has to be filled only for the first convolutional neural network layer
+#         the remaining layer will used the number of row from the previous layer
+#
+#     :param pool_size: tuple of length 2
+#         factor by which to downscale (vertical, horizontal)
+#         (default value is (2, 2))
+#         Note:
+#         for Fractional Max Pooling, the pool_size must be symmetry (e.g: (2, 2))
+#         if value is (1, 1), there is no pooling layer
+#
+#     :param mode: string
+#         mode of the pooling layer.
+#         this mode supports:
+#         'max' -- to apply the max pooling layer
+#         'sum' -- to apply the sum pooling layer
+#         'avg' -- to apply the average pooling layer without the padding
+#         'fmp' -- to apply the fractional max pooling
+#
+#     :param border_mode: string
+#         'valid'-- only apply filter to complete patches of the image. Generates
+#                   output of shape: (image_shape - filter_shape + 1)
+#         'full' -- zero-pads image to multiple of filter shape to generate output
+#                   of shape: (image_shape + filter_shape - 1)
+#         'same' -- the size of image will remain the same with the previous layer
+#         (default value is 'valid')
+#
+#     :param ignore_border: boolean
+#         True  -- (5, 5) input with pool_size = (2, 2), will generate a (2, 2) output.
+#         False -- (5, 5) input with pool_size = (2, 2), will generate a (3, 3) output.
+#
+#     """
+#
+#     super(NewConv, self).__init__(**kwargs)
+#
+#     n_sources = len(self.sources)   # calculate how many input
+#     is_conv_layer = all(s.layer_class in ('conv','frac_conv') for s in self.sources)  # check whether all inputs are conv layers
+#
+#     # check whether the input is conv layer
+#     if is_conv_layer:
+#       d_row = self.sources[0].attrs['d_row']  # set number of input row from the previous conv layer
+#       stack_size = self.sources[0].attrs['n_features']  # set stack_size from the number of previous layer feature maps
+#       dimension = self.sources[0].attrs['n_out']/stack_size   # calculate the input dimension
+#
+#       # check whether number of inputs are more than 1 for concatenating the inputs
+#       if n_sources != 1:
+#         # check the spatial dimension of all inputs
+#         assert all((s.attrs['n_out']/s.attrs['n_features']) == (self.sources[0].attrs['n_out']/self.sources[0].attrs['n_features']) for s in self.sources), 'The spatial dimension of all inputs have to be the same!'
+#         stack_size = sum([s.attrs['n_features'] for s in self.sources])   # set the stack_size from concatenating the input feature maps
+#     else:   # input is not conv layer
+#       stack_size = 1  # set stack_size of first conv layer as channel of the image (grayscale image)
+#       dimension = self.sources[0].attrs['n_out']  # set the dimension of input
+#       assert n_sources == 1, 'Except CNN, the input is only one!'
+#
+#     # calculating the number of input columns
+#     if d_row == -1: # assume quadratic patch
+#       from math import sqrt
+#       d_row = int(sqrt(dimension))
+#     d_col = dimension/d_row
+#
+#     if type(filter) == int:
+#       filter=[filter, filter]
+#
+#     # number of output dimension validation based on the border_mode
+#     if border_mode == 'valid':
+#       d_row_new = (d_row - filter[0] + 1)/pool_size[0]
+#       d_col_new = (d_col - filter[1] + 1)/pool_size[1]
+#     elif border_mode == 'full':
+#       d_row_new = (d_row + filter[0] - 1)/pool_size[0]
+#       d_col_new = (d_col + filter[1] - 1)/pool_size[1]
+#     elif border_mode == 'same':
+#       d_row_new = d_row/pool_size[0]
+#       d_col_new = d_col/pool_size[1]
+#     else:
+#       assert False, 'invalid border_mode %r' % border_mode
+#
+#     if mode == 'fmp':
+#       d_row_new = int(ceil(d_row_new))
+#       d_col_new = int(ceil(d_col_new))
+#
+#     assert ((d_row_new > 0) and (d_col_new > 0)), 'invalid spatial dimensions!'
+#     assert (mode == 'max' or mode == 'sum' or mode == 'avg' or mode == 'fmp'), 'invalid pooling mode!'
+#
+#     n_out = (d_row_new * d_col_new) * n_features
+#
+#     # set all attributes of this class
+#     self.set_attr('n_features', n_features)
+#     self.set_attr('filter', filter)
+#     self.set_attr('pool_size', pool_size)
+#     self.set_attr('border_mode', border_mode)
+#     self.set_attr('ignore_border', ignore_border)
+#     self.set_attr('d_row', d_row_new)   # number of output row
+#     self.set_attr('n_out', n_out)   # number of output dimension
+#     self.set_attr('dropout', dropout)
+#     self.set_attr('mode', mode)
+#     self.set_attr('seeds', seeds)
+#
+#     # our CRNN input is 3D tensor that consists of (time, batch, dim)
+#     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
+#     # therefore, we should convert our input into 4D tensor
+#     input = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
+#     time = input.shape[0]
+#     batch = input.shape[1]
+#
+#     if is_conv_layer:
+#       self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
+#     else:
+#       input2 = input.reshape((time * batch, d_row, d_col, stack_size))  # (time * batch, row, col, stack_size)
+#       self.input = input2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
+#
+#     self.input.name = 'conv_layer_input_final'
+#     #self.input = theano.printing.Print(global_fn=my_print)(self.input)
+#
+#     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
+#     self.filter_shape = (n_features, stack_size, filter[0], filter[1])
+#
+#     # weight parameter
+#     self.W = self.add_param(self._create_weights(filter_shape=self.filter_shape, pool_size=pool_size, seeds=seeds))
+#
+#     # bias parameter
+#     self.b = self.add_param(self._create_bias(n_features=n_features))
+#
+#     if dropout > 0.0:
+#       assert dropout < 1.0, 'Dropout have to be less than 1.0'
+#       mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
+#       srng = RandomStreams(self.rng.randint(1234) + 1)
+#
+#       if self.train_flag:
+#         self.input = self.input * T.cast(srng.binomial(n=1, p=1 - dropout, size=self.input.shape), theano.config.floatX)
+#       else:
+#         self.input = self.input * mass
+#
+#     # when convolutional layer 1x1, it gave the same size even full or valid border mode
+#     if filter[0] == 1 and filter[1] == 1:
+#       border_mode = 'valid'
+#
+#     # convolutional function
+#     # when border mode = same, remove width and height from beginning and last based on the filter size
+#     if border_mode == 'same':
+#       new_filter_size_row = (self.W.shape[2]-1)/2
+#       new_filter_size_col = (self.W.shape[3]-1)/2
+#       self.conv_out = conv.conv2d(
+#         input=self.input,
+#         filters=self.W,
+#         border_mode='full'
+#       )[:,:,new_filter_size_row:-new_filter_size_row,new_filter_size_col:-new_filter_size_col]
+#     else:
+#       self.conv_out = conv.conv2d(
+#         input=self.input,
+#         filters=self.W,
+#         border_mode=border_mode
+#       )
+#     self.conv_out.name = 'conv_layer_conv_out'
+#     self.conv_out = T.set_subtensor(self.conv_out[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.conv_out[0]))
+#
+#     # max pooling function
+#     if pool_size <> [1, 1]:
+#       print >> sys.stderr, 'pooling!!!', mode
+#       self.conv_out = self._pooling(self.conv_out, pool_size, ignore_border, mode)
+#
+#     # calculate the convolution output which returns (batch, nb filters, nb row, nb col)
+#     self.Output = T.tanh(self.conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))  # (time*batch, filter, out-row, out-col)
+#     self.Output.name = 'conv_layer_output_plus_bias'
+#     self.Output = T.set_subtensor(self.Output[((numpy.int8(1)-self.index.flatten())>0).nonzero()],T.zeros_like(self.Output[0]))
+#
+#     # our CRNN only accept 3D tensor (time, batch, dim)
+#     # so, we have to convert the output back to 3D tensor
+#     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+#     self.Output2 = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+#     self.make_output(self.Output2)
+#
+#   # function for calculating the weight parameter of this class
+#   def _create_weights(self, filter_shape, pool_size, seeds):
+#     rng = numpy.random.RandomState(seeds)
+#     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+#     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))  # (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+#
+#     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+#     return self.shared(
+#       numpy.asarray(
+#         rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+#         dtype=theano.config.floatX
+#       ),
+#       borrow=True,
+#       name="W_conv"
+#     )
+#
+#   # function for calculating the bias parameter of this class
+#   def _create_bias(self, n_features):
+#     return self.shared(
+#       numpy.zeros(
+#         (n_features,),
+#         dtype=theano.config.floatX
+#       ),
+#       borrow=True,
+#       name="b_conv"
+#     )
+#
+#   def _pooling(self, inputs, pool_size, ignore_border, modes):
+#     if modes == 'avg':
+#       modes = 'average_exc_pad'
+#
+#     if modes == 'fmp':
+#       height = inputs.shape[2]
+#       width = inputs.shape[3]
+#       batch2 = inputs.shape[0]
+#       X = inputs.dimshuffle(2, 3, 0, 1)  # (row, col, batchs, filters)
+#       sizes = T.zeros((batch2, 2))
+#       sizes = T.set_subtensor(sizes[:, 0], height)
+#       sizes = T.set_subtensor(sizes[:, 1], width)
+#       pooled_out, _ = fmp(X, sizes, pool_size[0])
+#       return pooled_out.dimshuffle(2, 3, 0, 1)
+#
+#     return downsample.pool.pool_2d(
+#       input=inputs,
+#       ds=pool_size,
+#       ignore_border=ignore_border,
+#       mode=modes
+#     )
 
 ################################################# NEW WITH FRACTIONAL MAX POOLING #######################################################
 class ConvFMP(_NoOpLayer):

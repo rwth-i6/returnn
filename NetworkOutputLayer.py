@@ -5,7 +5,7 @@ import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from NetworkBaseLayer import Layer
-from SprintErrorSignals import SprintErrorSigOp
+from SprintErrorSignals import sprint_loss_and_error_signal
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 
 
@@ -107,17 +107,16 @@ class OutputLayer(Layer):
       else:
         import theano.ifelse
         padx = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]), 'float32') + self.z[-1]
-        pady = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int32') + y[-1]
+        pady = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int32') #+ y[-1]
+        padi = T.ones((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int8')
         self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
-                                      #T.concatenate([self.z,self.z[-1].dimshuffle('x',0,1).repeat(self.index.shape[0] - self.z.shape[0], axis=0)],axis=0),
-                                      T.concatenate([self.z,padx],axis=0),
-                                      self.z)
+                                      T.concatenate([self.z,padx],axis=0), self.z)
         #self.z = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),self.z[:self.index.shape[0]], self.z)
         self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0],self.index.shape[0]),
-                                                                     T.concatenate([y, pady], axis=0), y))
+                                                                     T.concatenate([y,pady], axis=0), y))
         #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
-        self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate(
-        [T.ones((self.z.shape[0] - self.index.shape[0], self.z.shape[1]), 'int8'), self.index], axis=0), self.index)
+        self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
+                                          T.concatenate([padi,self.index],axis=0),self.index)
       self.norm = num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
@@ -189,8 +188,7 @@ class FramewiseOutputLayer(OutputLayer):
 
   def initialize(self):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
-    nreps = T.switch(T.eq(self.output.shape[0], 1), self.index.shape[0], 1)
-    output = self.output.repeat(nreps,axis=0)
+    output = self.output
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
@@ -319,6 +317,7 @@ class SequenceOutputLayer(OutputLayer):
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    self.output = self.p_y_given_x.reshape(self.output.shape)
 
   def index_for_ctc(self):
     for source in self.sources:
@@ -342,8 +341,13 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
-      sprint_error_op = SprintErrorSigOp(self.attrs.get("target", "classes"), self.sprint_opts)
-      err, grad = sprint_error_op(log_probs, T.sum(self.index, axis=0))
+      err, grad = sprint_loss_and_error_signal(
+        output_layer=self,
+        target=self.attrs.get("target", "classes"),
+        sprint_opts=self.sprint_opts,
+        log_posteriors=log_probs,
+        seq_lengths=T.sum(self.index, axis=0)
+      )
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))

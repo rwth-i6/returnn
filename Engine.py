@@ -200,6 +200,10 @@ class Engine:
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxint
+    if config.is_typed("seq_train_parallel"):
+      self.seq_train_parallel = SeqTrainParallelControl(engine=self, **config.typed_value("seq_train_parallel"))
+    else:
+      self.seq_train_parallel = None
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -452,6 +456,7 @@ class Engine:
                               eval_batch_size=self.update_batch_size,
                               start_batch=start_batch, share_batches=self.share_batches,
                               exclude=self.exclude,
+                              seq_train_parallel=self.seq_train_parallel,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch,
                               epoch=self.epoch)
     trainer.join()
@@ -737,3 +742,111 @@ class Engine:
     forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches, priori_file, num_outputs)
     forwarder.join()
     priori_file.close()
+
+
+class SeqTrainParallelControl:
+  """
+  Idea: Parallelize some stuff in seq training (e.g. sprint loss). Use chunked training.
+  We have these steps:
+    (1) (forward:GPU) forward only, remember output
+    (2) (calc_loss:CPU) calculate loss based on data from (1), error signal. store hat_y = y - grad_L (for stability).
+    (3) (train:GPU) forward again, and backprop with data from (2).
+  (1) and (3) are on the same GPU, use the same shared params.
+  (2) is on CPU.
+  (3) is done via the usual loop via EngineTask.TrainTaskThread.
+    It calls self.train_wait_for_seqs().
+  """
+
+  def __init__(self, engine, **kwargs):
+    self.engine = engine
+    self.train_started = None
+    self.train_device = None
+    self.train_start_seq = 0
+    self.forward_current_seq = 0
+    self.is_forwarding_finished = False
+
+  def do_forward(self):
+    """
+    Full sequence forwarding, no chunking (at the moment).
+    """
+    assert self.train_started
+    assert not self.is_forwarding_finished
+    # Load next sequence for forwarding, keep all which are still needed for training.
+    dataset = self.engine.train_data
+    if not dataset.is_less_than_num_seqs(self.forward_current_seq):
+      self.is_forwarding_finished = True
+      return
+    dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
+    seq_tag = dataset.get_tag(self.forward_current_seq)
+    seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
+    print >>log.v4, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
+      self.forward_current_seq, seq_tag, seq_len)
+
+    from EngineUtil import assign_dev_data_single_seq
+    success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq, load_seqs=False)
+    assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
+    self.train_device.update_data()
+    self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
+    self.forward_current_seq += 1
+
+  def should_do_forward(self):
+    if self.is_forwarding_finished: return False
+    return self._device_exec("have_space_in_forward_data_queue")
+
+  def train_wait_for_seqs(self, device, batches):
+    """
+    Called from TrainTaskThread while doing training (forward + backprop).
+    :type device: Device.Device
+    :type batches: list[EngineBatch.Batch]
+    """
+    assert self.train_started
+    self.train_device = device
+    if not batches: return
+    start_seq, end_seq = float("inf"), 0
+    for batch in batches:
+      start_seq = min(start_seq, batch.start_seq)
+      end_seq = max(end_seq, batch.end_seq)
+    print >>log.v5, "SeqTrainParallelControl, train_wait_for_seqs start_seq:%i, end_seq:%i" % (start_seq, end_seq)
+    assert start_seq < end_seq
+    assert start_seq >= self.train_start_seq, "non monotonic seq idx increase"
+    while device.wait_for_result_call:
+      time.sleep(0.1)  # TaskThread.DeviceRun will call device.result()
+    self._device_exec("train_set_cur_batches", batches=batches)
+    self.train_start_seq = start_seq
+    while self.should_do_forward():
+      self.do_forward()
+    self._device_exec("train_check_calc_loss")
+    while not self._device_exec("train_have_loss_for_cur_batches"):
+      if not self._device_exec("train_check_calc_loss"):
+        time.sleep(0.1)  # wait until we have the data we need
+    self._device_exec("train_set_loss_vars_for_cur_batches")
+
+  def train_start_epoch(self):
+    """
+    Called from TrainTaskThread at the beginning of a new epoch.
+    """
+    assert not self.train_started
+    self.train_started = True
+    self.train_start_seq = 0
+    self.train_device = None
+    self.forward_current_seq = 0
+    self.is_forwarding_finished = False
+    self._all_devices_exec("train_start_epoch")
+
+  def train_finish_epoch(self):
+    """
+    Called from TrainTaskThread at the end of an epoch.
+    """
+    assert self.train_started
+    assert self.is_forwarding_finished, "Forwarding not finished?"
+    self._all_devices_exec("train_finish_epoch")
+    self.train_started = False
+
+  def _all_devices_exec(self, func, **kwargs):
+    for dev in self.engine.devices:
+      self.train_device = dev
+      self._device_exec(func, **kwargs)
+
+  def _device_exec(self, func, **kwargs):
+    assert isinstance(self.train_device, Device.Device)
+    return self.train_device._generic_exec_on_dev(("seq_train_parallel_control", func), **kwargs)

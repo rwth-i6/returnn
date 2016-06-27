@@ -172,7 +172,7 @@ class BatchSetGenerator:
 
   def peek_next_n(self, n):
     """
-    :type: list[Batch]
+    :rtype: list[Batch]
     :returns it might return less. There is no way to know in advance.
     If self.has_more() is True, it will at least return one.
     """

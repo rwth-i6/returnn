@@ -53,12 +53,12 @@ class TaskThread(threading.Thread):
     def assign_dev_data(self, device, batches):
       return assign_dev_data(device, self.data, batches)
 
-    def allocate_device(self, device):
-      batches = self.batches.peek_next_n(device.num_batches)
-      success, batch_adv_idx = self.assign_dev_data(device, batches)
-      if not success: return []
-      self.batches.advance(batch_adv_idx)
-      return batches
+    def maybe_wait_for_batches(self, device, batches):
+      """
+      :type device: Device
+      :type batches: list[Batch]
+      """
+      pass
 
     def allocate_devices(self, selected_devices = None):
       """
@@ -80,6 +80,7 @@ class TaskThread(threading.Thread):
       for device in selected_devices:
         if not self.share_batches:
           batches = self.batches.peek_next_n(device.num_batches)
+        self.maybe_wait_for_batches(device=device, batches=batches)
         success, batch_adv_idx = self.assign_dev_data(device, batches)
         batch_idx = self.batches.get_current_batch_idx()
         assert success, "batches %s with seqs at %i failed to load" % \
@@ -142,6 +143,9 @@ class TaskThread(threading.Thread):
       #  assert False  # Should not get here.
       return eval_info
     def initialize(self):
+      """
+      Called at the beginning of an epoch.
+      """
       pass
     def reduce(self, num_frames):
       pass
@@ -159,6 +163,9 @@ class TaskThread(threading.Thread):
       target = self._get_target_for_key(key)
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
+      """
+      Called at the end of an epoch.
+      """
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
@@ -474,7 +481,7 @@ class ModelBrokenError(Exception):
 
 
 class TrainTaskThread(TaskThread):
-  def __init__(self, network, devices, data, batches, learning_rate, updater, **kwargs):
+  def __init__(self, network, devices, data, batches, learning_rate, updater, seq_train_parallel=None, **kwargs):
     """
     :type network: Network.LayerNetwork
     :type devices: list[Device.Device]
@@ -482,9 +489,11 @@ class TrainTaskThread(TaskThread):
     :type batches: EngineBatch.BatchSetGenerator
     :type learning_rate: float
     :type updater: Updater.Updater
+    :type seq_train_parallel: Engine.SeqTrainParallelControl | None
     """
     self.updater = updater
     self.learning_rate = learning_rate
+    self.seq_train_parallel = seq_train_parallel
     self.do_ctc_priors = network.ctc_priors is not None
     self.ctc_priors = None
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
@@ -497,6 +506,8 @@ class TrainTaskThread(TaskThread):
     if not self.updater.isInitialized:
       self.updater.initVars(self.network, None)
       self.updater.setLearningRate(self.learning_rate)
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_start_epoch()
 
   def prepare_device_for_batch(self, device):
     """ :type device: Device.Device """
@@ -507,6 +518,14 @@ class TrainTaskThread(TaskThread):
     kwargs["updater"] = self.updater
     kwargs["train_param_args"] = self.network.train_param_args
     return kwargs
+
+  def maybe_wait_for_batches(self, device, batches):
+    """
+    :type device: Device
+    :type batches: list[Batch]
+    """
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
@@ -607,6 +626,8 @@ class TrainTaskThread(TaskThread):
     super(TrainTaskThread, self).finalize()
     if self.do_ctc_priors:
       self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames["data"])
+    if self.seq_train_parallel:
+      self.seq_train_parallel.train_finish_epoch()
 
 
 class EvalTaskThread(TaskThread):
