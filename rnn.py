@@ -373,6 +373,13 @@ def executeMainTask():
     output_file = config.value('output_file', '')
     engine.init_network_from_config(config)
     engine.forward_to_hdf(eval_data, output_file, combine_labels)
+  elif task == 'compute_priors':
+    assert train_data is not None, 'train data for priors should be provided'
+    assert config.has('output_file'), 'output_file for priors numbers should be provided'
+    output_file = config.value('output_file', '')
+    num_outputs = config.value('num_outputs', '')
+    engine.init_network_from_config(config)
+    engine.compute_priors(train_data, output_file, num_outputs)
   elif task == 'theano_graph':
     import theano.printing
     import theano.compile.io
