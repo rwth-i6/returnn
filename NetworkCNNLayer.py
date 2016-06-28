@@ -1,10 +1,7 @@
 
 import theano
 import numpy
-import json
 import TheanoUtil
-import sys
-
 from theano import tensor as T
 from theano.tensor.nnet import conv
 from theano.tensor.signal import downsample
@@ -12,6 +9,14 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from NetworkHiddenLayer import _NoOpLayer
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil, sqrt
+
+import sys
+def my_print(op, x):
+  print '===>', x.shape
+
+  with open('/u/suryani/x.txt', 'a') as f:
+    f.write('==>' + str(x) + '\n')
+
 
 class CNN(_NoOpLayer):
 
@@ -200,8 +205,8 @@ class CNN(_NoOpLayer):
       name="b_conv"
     )
 
-  def calculate_index(self, inputs):
-    return T.set_subtensor(inputs[((numpy.int8(1) - self.index.flatten()) > 0).nonzero()], T.zeros_like(inputs[0]))
+  def calculate_index(self, inputs, index):
+    return T.set_subtensor(inputs[((numpy.int8(1) - self.index.flatten()) > 0).nonzero()], T.zeros_like(inputs[index]))
 
   def calculate_dropout(self, dropout, inputs):
     assert dropout < 1.0, "Dropout have to be less than 1.0"
@@ -232,7 +237,8 @@ class CNN(_NoOpLayer):
         border_mode=border_mode
       )
     conv_out.name = "conv_layer_conv_out"
-    conv_out = self.calculate_index(conv_out)
+    if not self.is_1d:
+      conv_out = self.calculate_index(conv_out, 0)
     return conv_out
 
   def pooling(self, inputs, pool_size, ignore_border, modes):
@@ -280,7 +286,9 @@ class CNN(_NoOpLayer):
     # calculate the output with bias parameters
     output = T.tanh(pool_out + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
     output.name = "conv_layer_output_plus_bias"
-    output = self.calculate_index(output)
+
+    if not self.is_1d:
+      output = self.calculate_index(output, 0)
     return output
 
 
@@ -334,6 +342,10 @@ class ConcatConv(CNN):
     time = inputs.shape[0]
     batch = inputs.shape[1]
 
+    self.index = TheanoUtil.downsample(self.index, axis=0, factor=self.pool_size[1], method="max")
+    self.index = T.concatenate([self.index, T.zeros((time-self.index.shape[0], self.index.shape[1]), 'int8')], axis=0)
+    self.index = theano.printing.Print(global_fn=my_print)(self.index)
+
     if self.status[0]:
       self.input = T.concatenate([s.tmp_Output for s in self.sources], axis=1)  # (batch, stack_size, row, time)
     else:
@@ -349,4 +361,8 @@ class ConcatConv(CNN):
     # so, we have to convert back the output to 3D tensor
     output2 = self.tmp_Output.dimshuffle(3, 0, 1, 2)  # (time, batch, features, out-row)
     self.Output2 = output2.reshape((output2.shape[0], output2.shape[1], output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+    #self.Output2 = self.calculate_index(self.Output2, 0)
+    #self.Output2 = T.concatenate([self.Output2, T.zeros((self.input.shape[3] - self.index.shape[0], self.Output2.shape[1], self.Output2.shape[2]), 'int8')], axis=0)
+    #self.Output2 = T.set_subtensor(self.Output2[((numpy.int8(1) - self.index.flatten()) > 0).nonzero()], T.zeros_like(self.Output2[0]))
+    #self.Output2 = theano.printing.Print(global_fn=my_print)(self.Output2)
     self.make_output(self.Output2)
