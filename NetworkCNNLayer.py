@@ -277,11 +277,23 @@ class CNN(_NoOpLayer):
     if dropout > 0.0:
       inputs = self.calculate_dropout(dropout, inputs)
 
+    if border_mode == 'valid':
+      self.index = self.index[filter_shape[1] / 2:-filter_shape[1] / 2 + 1]
+
     # convolutions function
     conv_out = self.convolution(border_mode, w, inputs)  # (batch, nb filters, nb row, nb col)
 
     # max pooling function
+
     pool_out = self.pooling(conv_out, pool_size, ignore_border, mode)
+    self.index = downsample.pool.pool_2d(
+      input=self.index.dimshuffle(1,'x',0),
+      ds=[1,pool_size[1]],
+      ignore_border=ignore_border,
+      mode=mode
+    ).dimshuffle(2,0,1).flatten(ndim=2)
+    #self.index = theano.printing.Print("i", attrs=['shape'])(self.index)
+    #pool_out = theano.printing.Print("p", attrs=['shape'])(pool_out)
 
     # calculate the output with bias parameters
     output = T.tanh(pool_out + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
@@ -338,25 +350,25 @@ class ConcatConv(CNN):
   def __init__(self, **kwargs):
     super(ConcatConv, self).__init__(**kwargs)
 
-    inputs = T.concatenate([s.output for s in self.sources], axis=0)  # (time, batch, input-dim = row * features)
+    inputs = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * features)
     time = inputs.shape[0]
     batch = inputs.shape[1]
-
-    self.index = TheanoUtil.downsample(self.index, axis=0, factor=self.pool_size[1], method="max")
-    self.index = T.concatenate([self.index, T.zeros((time-self.index.shape[0], self.index.shape[1]), 'int8')], axis=0)
-    self.index = theano.printing.Print(global_fn=my_print)(self.index)
+    #self.index = T.concatenate([self.index, T.zeros((time-self.index.shape[0], self.index.shape[1]), 'int8')], axis=0)
+    #self.index = theano.printing.Print(global_fn=my_print)(self.index)
 
     if self.status[0]:
-      self.input = T.concatenate([s.tmp_Output for s in self.sources], axis=1)  # (batch, stack_size, row, time)
+      self.input = T.concatenate([s.tmp_Output for s in self.sources], axis=3)  # (batch, stack_size, row, time)
     else:
-      inputs2 = inputs.reshape((time, batch, self.d_row, self.stack_size))  # (time, batch, row, stack)
+      inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.stack_size))  # (time, batch, row, stack)
       self.input = inputs2.dimshuffle(1, 3, 2, 0)  # (batch, stack_size, row, time)
 
     self.input.name = "conv_layer_input_final"
 
-    self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size, self.seeds, self.n_features, self.input, self.dropout,
-                               self.border_mode, self.ignore_border, self.mode)  # (batch, features, out-row, out-col)
+    self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size, self.seeds,
+                                   self.n_features, self.input, self.dropout,
+                                   self.border_mode, self.ignore_border, self.mode)  # (batch, features, out-row, out-col)
 
+    #self.index = TheanoUtil.downsample(self.index, axis=0, factor=self.pool_size[1], method="min")[:self.tmp_Output.shape[3]]
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
     output2 = self.tmp_Output.dimshuffle(3, 0, 1, 2)  # (time, batch, features, out-row)
