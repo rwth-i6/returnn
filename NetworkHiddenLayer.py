@@ -211,7 +211,7 @@ class DownsampleLayer(_NoOpLayer):
     elif method == 'mlp':
       self.DP = self.add_param(self.create_forward_weights(n_out * numpy.prod(factor),z_dim,self.name + "_DP"))
       self.b = self.add_param(self.create_bias(z_dim))
-      output = theano.ifelse.ifelse(cond, T.nnet.relu(T.dot(output,self.DP) + self.b), output)
+      output = T.nnet.relu(T.dot(output,self.DP) + self.b)
     elif method == 'lstm':
       num_batches = z.shape[2]
       #z = theano.printing.Print("a", attrs=['shape'])(z)

@@ -361,8 +361,13 @@ class ConcatConv(CNN):
     else:
       inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.stack_size))  # (time, batch, row, stack)
       self.input = inputs2.dimshuffle(1, 3, 2, 0)  # (batch, stack_size, row, time)
-
     self.input.name = "conv_layer_input_final"
+
+    if self.pool_size[1] > 1:
+      xp = self.pool_size[1]
+      self.input = T.concatenate([self.input, T.zeros((batch,self.stack_size,self.input.shape[2],
+                                                       xp - T.mod(self.input.shape[3], xp)), 'float32')], axis=3)
+      self.index = T.concatenate([self.index, T.zeros((xp - T.mod(self.index.shape[0], xp), batch), 'int8')], axis=0)
 
     self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size, self.seeds,
                                    self.n_features, self.input, self.dropout,
