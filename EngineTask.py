@@ -730,18 +730,52 @@ class ClassificationTaskThread(TaskThread):
 
 
 class PriorEstimationTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, priori_file, num_outputs):
-      super(PriorEstimationTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
-      self.sum_posteriors = numpy.zeros(int(num_outputs))
+    def __init__(self, network, devices, data, batches, priori_file, target, extract_type):
+      from Network import LayerNetwork
+      assert isinstance(network, LayerNetwork)
+      super(PriorEstimationTaskThread, self).__init__('extract', network=network, devices=devices, data=data, batches=batches)
       self.priori_file = priori_file
+      self.target = target  # e.g. "classes"
+      self.extract_type = extract_type
+      assert extract_type in ["log-posteriors", "log-posteriors-sum", "posteriors", "posteriors-sum"]
+      self.num_outputs = network.n_out[target][0]
+      self.sum_posteriors = numpy.zeros(int(self.num_outputs))
+      print >> log.v1, "Prior estimation via posteriors of %r. output dimension = %i" % (target, self.num_outputs)
+      if not extract_type.endswith("-sum"):
+        print >>log.v1, "HINT: You can set extract=posteriors-sum in your config to speed up the estimation."
+      if extract_type.startswith("log-"):
+        print >>log.v1, "NOTE: Posteriors are averaged in log-space. std-space might be better. Set extract=posteriors-sum."
+      if data.chunk_size > 0:
+        print >>log.v1, "WARNING: Dataset uses chunking. You might want to disable that."
 
     def evaluate(self, batchess, results, result_format, num_frames):
-      assert len(batchess) == 1
-      assert len(batchess[0]) == 1
-      assert batchess[0][0].get_num_seqs() == 1
-      self.sum_posteriors += numpy.sum(results[0][0], axis=0)
+      if self.extract_type.endswith("-sum"):
+        for ress in results:
+          for res in ress:
+            assert isinstance(res, numpy.ndarray)
+            assert res.ndim == 1
+            # Index-masked frames are zero, so this sum works.
+            self.sum_posteriors += res
+      else:
+        for ress in results:
+          for res in ress:
+            assert isinstance(res, numpy.ndarray)
+            assert res.ndim == 3
+            # Index-masked frames are zero, so this sum works.
+            self.sum_posteriors += numpy.sum(res, axis=(0, 1))
 
     def finalize(self):
-      average_posterior = self.sum_posteriors / self.num_frames["data"]
+      print >>log.v1, "Dumping priors in +log-space to file", self.priori_file
+      print >>log.v1, "Frames in total:", self.num_frames
+      average_posterior = self.sum_posteriors / self.num_frames[self.target]
+      if self.extract_type.startswith("log-"):
+        print >>log.v1, "Posterior average was calculated in log-space"
+        # We need to renormalize.
+        average_posterior -= numpy.log(numpy.sum(numpy.exp(average_posterior)))
+      else:
+        average_posterior = numpy.log(average_posterior)
+        print >>log.v1, "Posterior average was calculated in std-space"
       numpy.savetxt(self.priori_file, average_posterior, delimiter=' ')
+      avg_sum = numpy.sum(numpy.exp(average_posterior))
+      print >>log.v1, "Prior sum in std-space (should be close to 1.0):", avg_sum
 
