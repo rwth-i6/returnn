@@ -737,7 +737,9 @@ class Engine:
 
   def compute_priors(self, train_data, output_file, num_outputs):
     batches = train_data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=0, max_seqs=1)
+                                          batch_size=self.batch_size,
+                                          max_seq_length=self.max_seq_length,
+                                          max_seqs=self.max_seqs)
     priori_file = open(output_file, 'w')
     forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches, priori_file, num_outputs)
     forwarder.join()
