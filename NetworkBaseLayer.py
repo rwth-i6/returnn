@@ -553,13 +553,16 @@ class Layer(Container):
   def output_index(self):
     return self.index
 
-  def add_param(self, param, name="", constraints=True):
+  def add_param(self, param, name="", constraints=True, custom_gradient=None, custom_gradient_normalized=False):
     """
     :type param: theano.SharedVariable
     :type name: str
     :rtype: theano.SharedVariable
     """
     param = super(Layer, self).add_param(param, name)
+    if custom_gradient:
+      param.custom_gradient = custom_gradient
+      param.custom_gradient_normalized = custom_gradient_normalized
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
         self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()

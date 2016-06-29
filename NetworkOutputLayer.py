@@ -140,6 +140,7 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
+
     #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
@@ -196,6 +197,9 @@ class FramewiseOutputLayer(OutputLayer):
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
+    self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
+                                 custom_gradient=T.mean(self.p_y_given_x[self.i], axis=0),
+                                 custom_gradient_normalized=True)
 
   def cost(self):
     """
