@@ -471,6 +471,14 @@ class Device(object):
           assert p_y_given_x.ndim == 3
           source.append(
             T.switch(T.cast(layer.index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)))
+        elif extract == "posteriors-sum":
+          layer = self.testnet.get_layer('output')
+          p_y_given_x = layer.p_y_given_x
+          if p_y_given_x.ndim == 2:
+            p_y_given_x = p_y_given_x.reshape((layer.index.shape[0], layer.index.shape[1], p_y_given_x.shape[1]))
+          assert p_y_given_x.ndim == 3
+          source.append(
+            T.sum(T.switch(T.cast(layer.index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)), axis=(0, 1)))
         elif extract == "filters":
           # for more than one layer
           for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
