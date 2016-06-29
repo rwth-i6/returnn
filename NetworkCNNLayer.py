@@ -205,8 +205,14 @@ class CNN(_NoOpLayer):
       name="b_conv"
     )
 
-  def calculate_index(self, inputs, index):
-    return T.set_subtensor(inputs[((numpy.int8(1) - self.index.flatten()) > 0).nonzero()], T.zeros_like(inputs[index]))
+  def calculate_index(self, inputs):
+    if inputs.ndim == 3:
+      return T.set_subtensor(inputs[((numpy.int8(1) - self.index.flatten()) > 0).nonzero()], T.zeros_like(inputs[0]))
+    else: # assume BFHW
+      B = inputs.shape[0]
+      inputs = inputs.dimshuffle(3,0,1,2) # WBFH
+      inputs = self.calculate_index(inputs.reshape((inputs.shape[0]*inputs.shape[1],inputs.shape[2],inputs.shape[3])))
+      return inputs.reshape((inputs.shape[0]/B,B,inputs.shape[1],inputs.shape[2])).dimshuffle(1,2,3,0)
 
   def calculate_dropout(self, dropout, inputs):
     assert dropout < 1.0, "Dropout have to be less than 1.0"
@@ -237,8 +243,7 @@ class CNN(_NoOpLayer):
         border_mode=border_mode
       )
     conv_out.name = "conv_layer_conv_out"
-    if not self.is_1d:
-      conv_out = self.calculate_index(conv_out, 0)
+    conv_out = self.calculate_index(conv_out)
     return conv_out
 
   def pooling(self, inputs, pool_size, ignore_border, modes):
@@ -299,8 +304,8 @@ class CNN(_NoOpLayer):
     output = T.tanh(pool_out + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
     output.name = "conv_layer_output_plus_bias"
 
-    if not self.is_1d:
-      output = self.calculate_index(output, 0)
+    #if not self.is_1d:
+    output = self.calculate_index(output)
     return output
 
 
@@ -364,7 +369,7 @@ class ConcatConv(CNN):
     self.input.name = "conv_layer_input_final"
 
     if self.pool_size[1] > 1:
-      xp = self.pool_size[1]
+      xp = T.constant(self.pool_size[1],'int32')
       self.input = T.concatenate([self.input, T.zeros((batch,self.stack_size,self.input.shape[2],
                                                        xp - T.mod(self.input.shape[3], xp)), 'float32')], axis=3)
       self.index = T.concatenate([self.index, T.zeros((xp - T.mod(self.index.shape[0], xp), batch), 'int8')], axis=0)
