@@ -23,7 +23,7 @@ from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
                grad_clip_z=None, grad_discard_out_of_bound_z=None,
                **kwargs):
     """
@@ -138,6 +138,7 @@ class OutputLayer(Layer):
     self.j = ((1 - self.index.flatten()) > 0).nonzero()
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
+    self.attrs['compute_priors'] = compute_priors
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
@@ -197,9 +198,10 @@ class FramewiseOutputLayer(OutputLayer):
     else: assert False, "invalid loss: " + self.loss
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
-    self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                 custom_gradient=T.mean(self.p_y_given_x[self.i], axis=0),
-                                 custom_gradient_normalized=True)
+    if self.attrs['compute_priors']:
+      self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
+                                   custom_gradient=T.mean(self.p_y_given_x[self.i], axis=0),
+                                   custom_gradient_normalized=True)
 
   def cost(self):
     """
