@@ -449,6 +449,16 @@ class Device(object):
           if p_y_given_x.ndim == 2:
             p_y_given_x = p_y_given_x.reshape((index.shape[0],index.shape[1],p_y_given_x.shape[1]))
           source.append(T.log(p_y_given_x) * T.cast(index.dimshuffle(0,1,'x').repeat(p_y_given_x.shape[2],axis=2),'float32'))
+        elif extract == "log-posteriors-sum":
+          if not param:
+            param = 'output'
+          p_y_given_x = self.testnet.get_layer(param).p_y_given_x
+          index = self.testnet.get_layer(param).index
+          if p_y_given_x.ndim == 2:
+            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
+          assert p_y_given_x.ndim == 3
+          source.append(
+            T.sum(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), T.log(p_y_given_x), numpy.float32(0)), axis=(0, 1)))
         elif extract == "log-posteriors-hacked":
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
