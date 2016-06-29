@@ -735,11 +735,33 @@ class Engine:
     if "error" in statistics:
       print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
 
-  def compute_priors(self, train_data, output_file, num_outputs):
-    batches = train_data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=0, max_seqs=1)
+  def compute_priors(self, dataset, config):
+    from Dataset import Dataset
+    assert isinstance(dataset, Dataset)
+    from Config import Config
+    assert isinstance(config, Config)
+
+    assert config.has('output_file'), 'output_file for priors numbers should be provided'
+    output_file = config.value('output_file', '')
+    target = config.value('target', 'classes')
+    extract_type = config.list('extract', ['log-posteriors'])
+    assert len(extract_type) == 1
+    extract_type = extract_type[0]
+    batch_size = config.int('batch_size', 1)
+    max_seqs = config.int('max_seqs', -1)
+    epoch = config.int('epoch', 1)
+    max_seq_length = config.float('max_seq_length', 0)
+    if max_seq_length <= 0:
+      max_seq_length = sys.maxint
+
+    dataset.init_seq_order(epoch=epoch)
+    batches = dataset.generate_batches(recurrent_net=self.network.recurrent,
+                                       batch_size=batch_size,
+                                       max_seq_length=max_seq_length,
+                                       max_seqs=max_seqs)
     priori_file = open(output_file, 'w')
-    forwarder = PriorEstimationTaskThread(self.network, self.devices, train_data, batches, priori_file, num_outputs)
+    forwarder = PriorEstimationTaskThread(network=self.network, devices=self.devices, data=dataset, batches=batches,
+                                          priori_file=priori_file, target=target, extract_type=extract_type)
     forwarder.join()
     priori_file.close()
 

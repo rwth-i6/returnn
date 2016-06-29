@@ -551,7 +551,13 @@ class Layer(Container):
     if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
   def output_index(self):
-    return self.index
+    from theano.ifelse import ifelse
+    index = self.index
+    if self.network:
+      # In some cases, e.g. forwarding, the target index (for "classes") might have shape[0]==0.
+      # Use data index in that case.
+      index = ifelse(T.gt(index.shape[0], 0), index, self.network.j["data"])
+    return index
 
   def add_param(self, param, name="", constraints=True, custom_gradient=None, custom_gradient_normalized=False):
     """
