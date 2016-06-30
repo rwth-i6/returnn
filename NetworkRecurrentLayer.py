@@ -173,7 +173,7 @@ class LSTMR(Unit):
   Same as LSTMC but without recurrent matrix multiplication
   """
   def __init__(self, n_units, **kwargs):
-    super(LSTMC, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
+    super(LSTMR, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
 
   def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
@@ -378,6 +378,7 @@ class RecurrentUnitLayer(Layer):
     W_re = None
     if unit.n_re > 0:
       W_re = self.add_param(self.create_recurrent_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
+    self.W_re = W_re
     # initialize forward weights
     bias_init_value = self.create_bias(unit.n_in).get_value()
     if bias_random_init_forget_shift:
@@ -529,6 +530,10 @@ class RecurrentUnitLayer(Layer):
                              outputs_info=[T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
         aln = theano.printing.Print("aln")(aln)
         self.alignment.append(aln) # TB
+
+    if recurrent_transform == 'batch_norm':
+      self.params['sample_mean_batch_norm'].custom_gradient = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
+      self.params['sample_mean_batch_norm'].custom_gradient_normalized = True
 
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)

@@ -88,11 +88,11 @@ class RecurrentTransformBase(object):
     """
     pass
 
-  def add_param(self, v, name = None):
+  def add_param(self, v, name = None, **kwargs):
     if name: v.name = name
     assert v.name
     if not self.for_custom:
-      self.layer.add_param(v, v.name + "_" + self.name)
+      self.layer.add_param(v, v.name + "_" + self.name,**kwargs)
     self.add_var(v)
     return v
 
@@ -184,6 +184,37 @@ class DynamicTransform(RecurrentTransformBase):
   def step(self, y_p):
     return T.dot(y_p,self.W_re), {}
 
+
+class BatchNormTransform(RecurrentTransformBase):
+  name = "batch_norm"
+  def create_vars(self):
+    self.W_re = self.add_var(self.layer.W_re, name="W_re")
+    dim = self.layer.unit.n_in
+    self.sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32')), "sample_mean")
+    self.gamma = self.add_param(self.layer.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "gamma"))
+    #self.beta = self.add_param(self.layer.shared(numpy.zeros((dim,), 'float32'), "beta"))
+
+  def batch_norm(self, h, use_shift=True, use_std=True, use_sample=0.0):
+    x = h
+    mean = T.mean(x, axis=0)
+    std = T.std(x, axis=0)
+    sample_std = T.sqrt(T.mean((x - self.sample_mean) ** 2, axis=0))
+    if not self.layer.train_flag:
+      use_sample = 1.0
+    mean = T.constant(1. - use_sample, 'float32') * mean + T.constant(use_sample, 'float32') * self.sample_mean
+    std = T.constant(1. - use_sample, 'float32') * std + T.constant(use_sample, 'float32') * sample_std
+    mean = mean.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
+    std = std.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
+    bn = (h - mean) #/ (std + numpy.float32(1e-10))
+    if use_std:
+      bn *= self.gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
+    #if use_shift:
+    #  bn += self.beta
+    return bn
+
+  def step(self, y_p):
+    #return T.dot(y_p,self.W_re), {}
+    return self.batch_norm(T.dot(y_p,self.W_re)), {}
 
 class LM(RecurrentTransformBase):
   name = "lm"
@@ -393,6 +424,7 @@ class AttentionList(AttentionBase):
     super(AttentionList, self).create_vars()
     n_tmp = self.attrs['template']
     direction = self.layer.attrs['direction']
+    #self.W_re = self.add_var(self.layer.W_re, name="W_re")
     for i,e in enumerate(self.base):
       # base output
       B = e.output[::direction]
@@ -467,6 +499,7 @@ class AttentionList(AttentionBase):
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
+    #inp, updates = T.dot(y_p,self.W_re), {}
     inp, updates = 0, {}
     for i in xrange(len(self.base)):
       for g in xrange(self.n_glm):
