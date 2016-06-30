@@ -20,6 +20,35 @@ def have_gpu():
   return gpus > 0
 
 
+def _consider_check_for_gpu():
+  """
+  There are cases where nvidia-smi could hang.
+  (Any read of /proc/modules might hang in that case, maybe caused
+   by trying to `modprobe nvidia` to check if there is a Nvidia card.)
+  This sometimes happens in our SGE cluster on nodes without Nvidia cards.
+  Maybe it's also a Linux Kernel bug.
+  Anyway, just avoid any such check if we don't asked for a GPU.
+  """
+  try:
+    from Config import get_global_config
+    config = get_global_config()
+  except Exception:
+    config = None
+  if config:
+    for dev in config.list('device', []):
+      if dev.startswith("gpu") or dev.startswith("cuda"):
+        return True
+      if dev == "all":
+        return True
+  theano_flags = {key: value for (key, value)
+                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+  if "device" in theano_flags:
+    dev = theano_flags["device"]
+    if dev.startswith("gpu") or dev.startswith("cuda"):
+      return True
+  return False
+
+
 def get_num_devices():
   if os.name == 'nt':
     return 1, 1 #TODO
@@ -29,14 +58,18 @@ def get_num_devices():
                len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat"))
   else:
     num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
-    try:
-      num_gpus = len(cmd('nvidia-smi -L'))
-    except CalledProcessError:
-      num_gpus = 0
+    num_gpus = 0
+    if _consider_check_for_gpu():
+      try:
+        num_gpus = len(cmd('nvidia-smi -L'))
+      except CalledProcessError:
+        pass
     return num_cpus, num_gpus
 
 
 def get_gpu_names():
+  if not _consider_check_for_gpu():
+    return []
   if os.name == 'nt':
     return "GeForce GTX 770" #TODO
   elif sys.platform == 'darwin':
