@@ -306,9 +306,9 @@ class AttentionBase(RecurrentTransformBase):
       if self.layer.attrs['droplm'] < 1.0:
         mask = self.drop_mask[T.cast(self.n[0],'int32')]
         if self.attrs['lm'] == "hard":
-          result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+          result += self.W_lm_out[T.argmax(p_re, axis=1)] * (1. - mask) + self.cls[T.cast(self.n[0],'int32')] * mask
         else:
-          result += T.dot(p_re,self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.t[0],'int32')] * mask
+          result += T.dot(p_re,self.W_lm_out) * (1. - mask) + self.cls[T.cast(self.n[0],'int32')] * mask
       else:
         if self.attrs['lm'] == "hard":
           result += self.W_lm_out[T.argmax(p_re, axis=1)]
