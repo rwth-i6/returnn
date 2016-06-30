@@ -94,10 +94,10 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     seq_state_var_names = remaining_inputs[self._get_num_custom_vars():]
     custom_inputs_str = ",".join(custom_inputs)
     seq_state_var_names_str = ", ".join(seq_state_var_names)
-    (DZ, Dc, Dy0, DW_re), remaining_outpus = output_names[:4], output_names[4:]
-    assert len(remaining_outpus) == self._get_num_custom_vars() + self._get_num_state_vars()
-    custom_output_names = remaining_outpus[:self._get_num_custom_vars()]
-    initial_state_var_grad_names = remaining_outpus[self._get_num_custom_vars():]
+    (DZ, Dc, Dy0, DW_re), remaining_outputs = output_names[:4], output_names[4:]
+    assert len(remaining_outputs) == self._get_num_custom_vars() + self._get_num_state_vars()
+    custom_output_names = remaining_outputs[:self._get_num_custom_vars()]
+    initial_state_var_grad_names = remaining_outputs[self._get_num_custom_vars():]
     custom_outputs_str = ", ".join(["&" + grad for grad in custom_output_names])
     initial_state_var_grad_names_str = ", ".join(["&" + grad for grad in initial_state_var_grad_names])
     bwd_fun = "%s_%i_fun_bwd" % (self.fun_name, id(self.recurrent_transform))
