@@ -386,6 +386,8 @@ class RecurrentUnitLayer(Layer):
         z += T.dot(x_t.output, W)
       else:
         z += self.dot(self.mass * m * x_t.output, W)
+    #if self.attrs['batch_norm']:
+    #  z = self.batch_norm(z, unit.n_in)
     num_batches = self.index.shape[1]
     self.num_batches = num_batches
     non_sequences = []

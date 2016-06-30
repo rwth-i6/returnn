@@ -648,21 +648,20 @@ class Layer(Container):
     else:
       assert False, "consensus method unknown: " + cns
 
-  def batch_norm(self, h, dim, use_shift=True, use_std=True):
-    mean = T.mean(h,axis=[0,1],keepdims=True)
-    std = T.std(h,axis=[0,1],keepdims=True)
-    sample_mean = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'mean_%s' % self.name),
-                                 custom_gradient=mean[0,0],
+  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0):
+    x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(self.index.flatten()>0).nonzero()]
+    mean = T.mean(x,axis=0)
+    std = T.std(x,axis=0)
+    sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), 'mean_%s' % self.name),
+                                 custom_gradient=mean,
                                  custom_gradient_normalized=True)
-    sample_std = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'std_%s' % self.name),
-                                 custom_gradient=T.mean((h-mean)*(h-sample_mean)),
-                                 custom_gradient_normalized=False)
-    n = self.add_param(theano.shared(numpy.zeros((1,), 'float32'), 'cnt_%s' % self.name),
-                       custom_gradient=T.constant(1,'float32'))
-
+    sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
     if not self.train_flag:
-      mean = sample_mean.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
-      std = T.sqrt(sample_std.dimshuffle('x', 'x', 0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1) / n[0])
+      use_sample=1.0
+    mean = T.constant(1.-use_sample,'float32') * mean + T.constant(use_sample,'float32') * sample_mean
+    std = T.constant(1.-use_sample,'float32') * std + T.constant(use_sample,'float32') * sample_std
+    mean = mean.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
+    std = std.dimshuffle('x', 'x', 0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
 
     bn = (h - mean) / (std + numpy.float32(1e-10))
     if use_std:

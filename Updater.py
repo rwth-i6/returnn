@@ -157,6 +157,7 @@ class Updater:
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
     self.i = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_i")
+    self.e = self.var(numpy.float32(0), name="updater_epoch")
 
     if self.momentum > 0:
       self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
@@ -294,8 +295,12 @@ class Updater:
     eps = 1e-7
     self.counter = self.var(0, name="counter", dtype="int64")
     updates.append((self.counter, self.counter + 1))
-    dt = 1. #T.cast(T.max(T.sum(self.network.output.values()[0].index,axis=0)), 'float32')
+    dt = T.cast(1.,'float32') #T.cast(T.max(T.sum(self.network.output.values()[0].index,axis=0)), 'float32')
     i_t = self.i + dt #1.
+    prev_epoch = self.var(numpy.zeros((), dtype="int32"),'prev_epoch',dtype='int32')
+    updates.append((prev_epoch, self.network.epoch))
+    e_t = T.switch(T.eq(self.network.epoch,prev_epoch), self.e + dt, numpy.float32(1))
+    updates.append((self.e, e_t))
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
@@ -308,7 +313,7 @@ class Updater:
     for param in grads.keys():
       if hasattr(param,'custom_gradient'):
         if param.custom_gradient_normalized:
-          upd[param] = (grads[param] - param) / i_t
+          upd[param] = (grads[param] - param) / e_t
         else:
           upd[param] = grads[param]
         continue
