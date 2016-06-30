@@ -177,6 +177,14 @@ class DummyTransform(RecurrentTransformBase):
     return T.zeros((y_p.shape[0],y_p.shape[1]*4),dtype='float32'), {}
 
 
+class DynamicTransform(RecurrentTransformBase):
+  name = "rnn"
+  def create_vars(self):
+    self.W_re = self.add_var(self.layer.W_re, name="W_re")
+  def step(self, y_p):
+    return T.dot(y_p,self.W_re), {}
+
+
 class LM(RecurrentTransformBase):
   name = "lm"
 
