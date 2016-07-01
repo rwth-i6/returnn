@@ -295,8 +295,10 @@ class RecurrentUnitLayer(Layer):
     :param droplm: probability to take the expected output as predecessor instead of the real one when LM=true
     :param bias_random_init_forget_shift: initialize forget gate bias of lstm networks with this value
     """
+    source_index = None
     if len(kwargs['sources']) == 1 and (kwargs['sources'][0].layer_class.endswith('length') or kwargs['sources'][0].layer_class.startswith('length')):
       kwargs['sources'] = []
+      source_index = kwargs['index']
     unit_given = unit
     if unit == 'lstm':  # auto selection
       if str(theano.config.device).startswith('cpu'):
@@ -349,7 +351,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_lm', attention_lm)
     self.set_attr('attention_bn', attention_bn)
     self.set_attr('n_dec', n_dec)
-    if encoder:
+    if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
       self.set_attr('base', ",".join([b.name for b in base]))
@@ -364,7 +366,8 @@ class RecurrentUnitLayer(Layer):
     if n_dec != 0:
       self.target_index = self.index
       if isinstance(n_dec,float):
-        source_index = encoder[0].index if encoder else base[0].index
+        if not source_index:
+          source_index = encoder[0].index if encoder else base[0].index
         lengths = T.cast(T.ceil(T.sum(T.cast(source_index,'float32'),axis=0) * n_dec), 'int32')
         idx, _ = theano.map(lambda l_i, l_m:T.concatenate([T.ones((l_i,),'int8'),T.zeros((l_m-l_i,),'int8')]),
                             [lengths], [T.max(lengths)+1])
@@ -375,10 +378,9 @@ class RecurrentUnitLayer(Layer):
     else:
       n_dec = self.index.shape[0]
     # initialize recurrent weights
-    W_re = None
+    self.W_re = None
     if unit.n_re > 0:
-      W_re = self.add_param(self.create_recurrent_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
-    self.W_re = W_re
+      self.W_re = self.add_param(self.create_recurrent_weights(unit.n_out, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
     bias_init_value = self.create_bias(unit.n_in).get_value()
     if bias_random_init_forget_shift:
@@ -466,7 +468,10 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if encoder:
-        outputs_info = [ T.concatenate([e.act[i][-1] * self.attention_weight for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+        if hasattr(encoder[0],'act'):
+          outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+        else:
+          outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
@@ -491,7 +496,7 @@ class RecurrentUnitLayer(Layer):
                           non_sequences=non_sequences,
                           i=index_f,
                           outputs_info=outputs_info,
-                          W_re=W_re,
+                          W_re=self.W_re,
                           W_in=self.W_in,
                           b=self.b,
                           go_backwards=direction == -1,
@@ -546,6 +551,25 @@ class RecurrentUnitLayer(Layer):
     if self.unit.recurrent_transform:
       return self.unit.recurrent_transform.cost(), None
     return None, None
+
+
+class RecurrentUpsampleLayer(RecurrentUnitLayer):
+  layer_class = 'recurrent_upsample'
+  
+  def __init__(self, factor, **kwargs):
+    h = T.concatenate([s.act[0] for s in kwargs['sources']],axis=2)
+    time = h.shape[0]
+    batch = h.shape[1]
+    src = Layer([],sum([s.attrs['n_out'] for s in kwargs['sources']]),kwargs['index'])
+    src.output = h.reshape((1,h.shape[0] * h.shape[1], h.shape[2]))
+    src.index = kwargs['sources'][0].index
+    src.layer_class = ''
+    kwargs['sources'] = [ src ]
+    kwargs['index'] = kwargs['index'].flatten().dimshuffle('x',0)
+    kwargs['n_dec'] = factor
+    super(RecurrentUpsampleLayer, self).__init__(**kwargs)
+    self.index = self.index.reshape((self.index.shape[0]*time,batch))
+    self.output = self.output.reshape((self.output.shape[0]*time,batch,self.output.shape[2]))
 
 
 class LinearRecurrentLayer(HiddenLayer):
