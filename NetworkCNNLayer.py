@@ -135,9 +135,7 @@ class CNN(_NoOpLayer):
       new_d_col = int(ceil(new_d_col))
 
     assert (new_d_row > 0), "invalid spatial dimensions!"
-    self.n_out = new_d_row
-    if activation != 'maxout':
-      self.n_out *= n_features
+    self.n_out = new_d_row * n_features
 
     if not self.is_1d:
       assert (new_d_col > 0), "invalid spatial dimensions!"
@@ -333,6 +331,8 @@ class NewConv(CNN):
         self.attrs['n_out']).reshape(self.Output.shape)
     if self.attrs['activation'] == 'maxout':
       self.Output = T.max(self.Output,axis=1).dimshuffle(0,'x',1,2)
+      self.attrs['n_out'] /= self.attrs['n_features']
+      self.attrs['n_features'] = 1
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.Output2 = output2.reshape(
       (time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
