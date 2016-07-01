@@ -6,10 +6,11 @@ from theano.tensor.signal import downsample
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from NetworkHiddenLayer import _NoOpLayer
 from cuda_implementation.FractionalMaxPoolingOp import fmp
+from ActivationFunctions import strtoact
 from math import ceil, sqrt
 
 class CNN(_NoOpLayer):
-  def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2), mode="max",
+  def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2), mode="max", activation='tanh',
                border_mode="valid", ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
 
     """
@@ -134,7 +135,9 @@ class CNN(_NoOpLayer):
       new_d_col = int(ceil(new_d_col))
 
     assert (new_d_row > 0), "invalid spatial dimensions!"
-    self.n_out = new_d_row * n_features
+    self.n_out = new_d_row
+    if activation != 'maxout':
+      self.n_out *= n_features
 
     if not self.is_1d:
       assert (new_d_col > 0), "invalid spatial dimensions!"
@@ -159,6 +162,7 @@ class CNN(_NoOpLayer):
     self.set_attr("ignore_border", self.ignore_border)
     self.set_attr("dropout", self.dropout)
     self.set_attr("seeds", self.seeds)
+    self.set_attr("activation", activation)
     self.set_attr("n_out", self.n_out)  # number of output dimension
 
   def get_status(self, sources):
@@ -284,7 +288,8 @@ class CNN(_NoOpLayer):
                                 mode).dimshuffle(2, 0, 1).flatten(2)
 
     # calculate the output with bias parameters
-    output = T.tanh(pool_out + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
+    act = strtoact('identity') if self.attrs['activation'] == 'maxout' else strtoact(self.attrs['activation'])
+    output = act(pool_out + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
     output.name = "conv_layer_output_plus_bias"
     output = self.calculate_index(output)
     return output
@@ -321,15 +326,18 @@ class NewConv(CNN):
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
-    output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
-    self.Output2 = output2.reshape(
-      (time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.output = self.Output2
     #self.make_output(self.Output2)
     if self.attrs['batch_norm']:
       self.Output = self.batch_norm(self.Output.reshape(
         (self.Output.shape[0],self.Output.shape[1]*self.Output.shape[2]*self.Output.shape[3])),
         self.attrs['n_out']).reshape(self.Output.shape)
+    if self.attrs['activation'] == 'maxout':
+      self.Output = T.max(self.Output,axis=1).dimshuffle(0,'x',1,2)
+    output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    self.Output2 = output2.reshape(
+      (time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+    self.output = self.Output2
+
 
 
 class ConcatConv(CNN):
