@@ -324,7 +324,12 @@ class NewConv(CNN):
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.Output2 = output2.reshape(
       (time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.make_output(self.Output2)
+    self.output = self.Output2
+    #self.make_output(self.Output2)
+    if self.attrs['batch_norm']:
+      self.Output = self.batch_norm(self.Output.reshape(
+        (self.Output.shape[0],self.Output.shape[1]*self.Output.shape[2]*self.Output.shape[3])),
+        self.attrs['n_out']).reshape(self.Output.shape)
 
 
 class ConcatConv(CNN):

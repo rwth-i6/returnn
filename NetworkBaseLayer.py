@@ -654,7 +654,7 @@ class Layer(Container):
       x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(self.index.flatten()>0).nonzero()]
     mean = T.mean(x,axis=0)
     std = T.std(x,axis=0)
-    sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), 'mean_%s' % self.name),
+    sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
                                  custom_gradient=mean,
                                  custom_gradient_normalized=True)
     sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
@@ -671,13 +671,13 @@ class Layer(Container):
 
     bn = (h - mean) / (std + numpy.float32(1e-10))
     if use_std:
-      gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_gamma" % self.name))
+      gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
       if h.ndim == 3:
         bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
       else:
         bn *= gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
     if use_shift:
-      beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_beta" % self.name))
+      beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_%s_beta" % (self.name,h.name)))
       bn += beta
     return bn
 
