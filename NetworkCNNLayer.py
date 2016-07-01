@@ -378,9 +378,14 @@ class ConcatConv(CNN):
                                    self.border_mode, self.ignore_border,
                                    self.mode)   # (batch, features, out-row, out-col)
 
+    if self.attrs['batch_norm']:
+      self.tmp_Output = self.batch_norm(self.tmp_Output.dimshuffle(0,2,3,1).reshape(
+        (self.tmp_Output.shape[0] * self.tmp_Output.shape[2] * self.tmp_Output.shape[3], self.tmp_Output.shape[1])),
+        self.attrs['n_features']).reshape(self.tmp_Output.shape).dimshuffle(0,3,1,2)
+
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
     output2 = self.tmp_Output.dimshuffle(3, 0, 1, 2)  # (time, batch, features, out-row)
     self.Output2 = output2.reshape((output2.shape[0], output2.shape[1],
                                     output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-    self.make_output(self.Output2)
+    self.output = self.Output2
