@@ -116,10 +116,12 @@ class TwoDLSTMLayer(TwoDBaseLayer):
                                                           V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
       Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
 
+    Y.name = 'Y'
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y.reshape(Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3]), self.attrs['n_out']).reshape(Y.shape)
+      Y = self.batch_norm(Y.reshape((Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3])),
+                          self.attrs['n_out'], force_sample=True).reshape(Y.shape)
     if collapse_output == 'sum':
       Y = Y.sum(axis=0)
       self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')

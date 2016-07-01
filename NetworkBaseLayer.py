@@ -648,7 +648,7 @@ class Layer(Container):
     else:
       assert False, "consensus method unknown: " + cns
 
-  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0):
+  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False):
     x = h
     if h.ndim == 3:
       x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(self.index.flatten()>0).nonzero()]
@@ -658,7 +658,7 @@ class Layer(Container):
                                  custom_gradient=mean,
                                  custom_gradient_normalized=True)
     sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
-    if not self.train_flag:
+    if not self.train_flag and not force_sample:
       use_sample=1.0
     mean = T.constant(1.-use_sample,'float32') * mean + T.constant(use_sample,'float32') * sample_mean
     std = T.constant(1.-use_sample,'float32') * std + T.constant(use_sample,'float32') * sample_std
