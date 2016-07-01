@@ -555,17 +555,17 @@ class RecurrentUnitLayer(Layer):
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):
   layer_class = 'recurrent_upsample'
-  
+
   def __init__(self, factor, **kwargs):
     h = T.concatenate([s.act[0] for s in kwargs['sources']],axis=2)
     time = h.shape[0]
     batch = h.shape[1]
     src = Layer([],sum([s.attrs['n_out'] for s in kwargs['sources']]),kwargs['index'])
-    src.output = h.reshape((1,h.shape[0] * h.shape[1], h.shape[2]))
+    src.output = h.reshape((1,h.shape[0] * h.shape[1], h.shape[2])).repeat(factor,axis=0)
     src.index = kwargs['sources'][0].index
     src.layer_class = ''
     kwargs['sources'] = [ src ]
-    kwargs['index'] = kwargs['index'].flatten().dimshuffle('x',0)
+    kwargs['index'] = kwargs['index'].flatten().dimshuffle('x',0).repeat(factor,axis=0)
     kwargs['n_dec'] = factor
     super(RecurrentUpsampleLayer, self).__init__(**kwargs)
     self.index = self.index.reshape((self.index.shape[0]*time,batch))

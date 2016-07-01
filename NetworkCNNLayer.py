@@ -292,6 +292,7 @@ class CNN(_NoOpLayer):
 
 class NewConv(CNN):
   layer_class = "conv"
+  recurrent = True # to force same behavior in feed-forward networks
 
   """
       This is class for Convolution Neural Networks
