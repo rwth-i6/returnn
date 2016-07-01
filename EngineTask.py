@@ -646,6 +646,7 @@ class HDFForwardTaskThread(TaskThread):
       self.merge = merge
       self.cache = cache
       self.network = network
+      self.num_seqs = 0
       target = network.get_layer('output').attrs['target']
       cache.attrs['numTimesteps'] = 0
       cache.attrs['inputPattSize'] = data.num_inputs
@@ -654,15 +655,17 @@ class HDFForwardTaskThread(TaskThread):
       if target in data.labels:
         hdf5_strings(cache, 'labels', data.labels[target])
       try:
-        num_seqs = data.num_seqs
+        cache.attrs['numSeqs'] = data.num_seqs
       except Exception:
         cache.attrs['numSeqs'] = 1
         self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
       else:
-        cache.attrs['numSeqs'] = data.num_seqs
-        self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.targets }
-        self.seq_lengths = cache.create_dataset("seqLengths", (data.num_seqs,), dtype='i')
-        self.seq_dims = cache.create_dataset("seqDims", (data.num_seqs, 1), dtype='i')
+        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i')
+        self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i')
+      try:
+        self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.get_target_list() }
+      except Exception:
+        self.targets = None
       self.times = []
 
     def initialize(self):
@@ -673,6 +676,7 @@ class HDFForwardTaskThread(TaskThread):
       if self.times:
         times = self.cache.create_dataset("times", (len(self.times), 2), dtype='f')
         times[...] = self.times
+      self.cache.attrs['numSeqs'] = self.num_seqs
 
     def evaluate(self, batchess, results, result_format, num_frames):
       features = numpy.concatenate(results, axis=1)[0]
@@ -684,6 +688,7 @@ class HDFForwardTaskThread(TaskThread):
       batch = batchess[0][0]
       tt = 0
       feats = []
+      self.num_seqs += batch.get_num_seqs()
       for seq_idx in range(batch.start_seq,batch.end_seq):
         if self.network.recurrent:
           seqfeats = features[:,seq_idx - batch.start_seq,:]
