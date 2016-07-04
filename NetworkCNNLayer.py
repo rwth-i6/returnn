@@ -10,6 +10,7 @@ from ActivationFunctions import strtoact
 from math import ceil, sqrt
 
 class CNN(_NoOpLayer):
+  recurrent = True # to force same behavior in feed-forward networks
   def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2), mode="max", activation='tanh',
                border_mode="valid", ignore_border=True, dropout=0.0, seeds=23455, **kwargs):
 
@@ -295,7 +296,6 @@ class CNN(_NoOpLayer):
 
 class NewConv(CNN):
   layer_class = "conv"
-  recurrent = True # to force same behavior in feed-forward networks
 
   """
       This is class for Convolution Neural Networks
