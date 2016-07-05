@@ -260,8 +260,7 @@ class LayerNetwork(object):
       network.default_target = target
       network.train_flag = train_flag
       network.eval_flag = eval_flag
-    n_in = network.n_in
-    n_out = network.n_out
+    templates = {}
     assert isinstance(json_content, dict)
     network.y['data'].n_out = network.n_out['data'][0]
     if hasattr(LstmLayer, 'sharpgates'):
@@ -273,16 +272,24 @@ class LayerNetwork(object):
         return network.output[layer_name].index
       source = []
       obj = content[layer_name].copy()
+      if 'inherit' in obj:
+        if not obj['inherit'] in templates:
+          traverse(content, obj['inherit'], target, output_index)
+        template = templates[obj['inherit']].copy()
+        for key in template.keys():
+          if not key in obj:
+            obj[key] = template[key]
+        del obj['inherit']
       cl = obj.pop('class', None)
       index = output_index
       if 'target' in obj:
         target = obj['target']
       dtype = obj.get("dtype", "int32")
       network.use_target(target, dtype=dtype)
-      if not 'from' in obj:
+      if not 'from' in obj and 'class' in obj:
         source = [SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i)]
         index = network.i
-      elif obj['from']:
+      elif 'from' in obj and obj['from']:
         if not isinstance(obj['from'], list):
           obj['from'] = [ obj['from'] ]
         for prev in obj['from']:
@@ -333,6 +340,9 @@ class LayerNetwork(object):
       params["mask"] = mask # overwrite
       params['index'] = index
       params['y_in'] = network.y
+      templates[layer_name] = obj.copy()
+      if cl:
+        templates[layer_name]['class'] = cl
       if cl == 'softmax' or cl == 'decoder':
         if not 'target' in params:
           params['target'] = target
@@ -341,7 +351,7 @@ class LayerNetwork(object):
         else:
           params['index'] = network.j[target] #output_index
         return network.make_classifier(**params)
-      else:
+      elif cl is not None:
         layer_class = get_layer_class(cl)
         params.update({'name': layer_name})
         if layer_class.recurrent:
