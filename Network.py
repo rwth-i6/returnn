@@ -265,7 +265,7 @@ class LayerNetwork(object):
     network.y['data'].n_out = network.n_out['data'][0]
     if hasattr(LstmLayer, 'sharpgates'):
       del LstmLayer.sharpgates
-    def traverse(content, layer_name, target, output_index):
+    def traverse(content, layer_name, target, output_index, inherit=False):
       if layer_name in network.hidden:
         return network.hidden[layer_name].index
       if layer_name in network.output:
@@ -274,12 +274,15 @@ class LayerNetwork(object):
       obj = content[layer_name].copy()
       if 'inherit' in obj:
         if not obj['inherit'] in templates:
-          traverse(content, obj['inherit'], target, output_index)
+          traverse(content, obj['inherit'], target, output_index, True)
         template = templates[obj['inherit']].copy()
         for key in template.keys():
-          if not key in obj:
+          if not key in obj.keys():
             obj[key] = template[key]
         del obj['inherit']
+      templates[layer_name] = obj.copy()
+      if inherit:
+        return output_index
       cl = obj.pop('class', None)
       index = output_index
       if 'target' in obj:
@@ -340,7 +343,6 @@ class LayerNetwork(object):
       params["mask"] = mask # overwrite
       params['index'] = index
       params['y_in'] = network.y
-      templates[layer_name] = obj.copy()
       if cl:
         templates[layer_name]['class'] = cl
       if cl == 'softmax' or cl == 'decoder':
