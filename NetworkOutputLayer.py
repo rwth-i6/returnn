@@ -7,6 +7,7 @@ from CTC import CTCOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
+from Log import log
 
 
 #from Accumulator import AccumulatorOpInstance
@@ -24,7 +25,7 @@ class OutputLayer(Layer):
   layer_class = "softmax"
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
-               grad_clip_z=None, grad_discard_out_of_bound_z=None,
+               softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -139,6 +140,9 @@ class OutputLayer(Layer):
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     self.attrs['compute_priors'] = compute_priors
+    if softmax_smoothing != 1.0:
+      self.attrs['softmax_smoothing'] = softmax_smoothing
+      print >> log.v3, "Logits before the softmax scaled with factor ", softmax_smoothing
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
@@ -192,7 +196,7 @@ class FramewiseOutputLayer(OutputLayer):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     output = self.output
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
+    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m * self.attrs['softmax_smoothing']) # by default just self.y_m*1
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
