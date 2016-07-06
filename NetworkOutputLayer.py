@@ -140,8 +140,8 @@ class OutputLayer(Layer):
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     self.attrs['compute_priors'] = compute_priors
+    self.attrs['softmax_smoothing'] = softmax_smoothing
     if softmax_smoothing != 1.0:
-      self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v3, "Logits before the softmax scaled with factor ", softmax_smoothing
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
