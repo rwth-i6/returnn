@@ -289,7 +289,7 @@ class LayerNetwork(object):
         target = obj['target']
       dtype = obj.get("dtype", "int32")
       network.use_target(target, dtype=dtype)
-      if not 'from' in obj and 'class' in obj:
+      if not 'from' in obj and cl is not None:
         source = [SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i)]
         index = network.i
       elif 'from' in obj and obj['from']:
