@@ -140,9 +140,10 @@ class OutputLayer(Layer):
     self.loss = loss.encode("utf8")
     self.attrs['loss'] = self.loss
     self.attrs['compute_priors'] = compute_priors
-    self.attrs['softmax_smoothing'] = softmax_smoothing
     if softmax_smoothing != 1.0:
+      self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v3, "Logits before the softmax scaled with factor ", softmax_smoothing
+      self.z *= numpy.float32(softmax_smoothing)
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
@@ -196,7 +197,7 @@ class FramewiseOutputLayer(OutputLayer):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     output = self.output
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m * self.attrs['softmax_smoothing']) # by default just self.y_m*1
+    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
