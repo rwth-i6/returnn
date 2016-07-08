@@ -335,7 +335,9 @@ class NewConv(CNN):
       self.Output = T.max(self.Output,axis=1).dimshuffle(0,'x',1,2)
       self.attrs['n_out'] /= self.attrs['n_features']
       self.attrs['n_features'] = 1
-    self.output = self.Output.reshape((time, batch, self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3]))  # (time, batch, out-dim)
+    # self.output = self.Output.reshape((time, batch, self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3]))  # (time, batch, out-dim)
+    output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
+    self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
 
 
 class ConcatConv(CNN):
