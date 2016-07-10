@@ -108,6 +108,25 @@ private:
             }
         }
         err = -totalSum.logVal();
+        
+        if(err > 1e10)
+        {
+            static bool printedWarning = false;
+            if(!printedWarning)
+            {
+                std::cout << "Warning, CTC error of " << err << ", probably output sequence is too short. This warning is only printed once, even if the problem occurs multiple times." << std::endl;
+                printedWarning = true;
+            }
+            err = 0;
+            for(int t = 0; t < T_; ++t)
+            {
+                for(int c = 0; c < nLabelsInclBlank_; ++c)
+                {
+                    errSigs(t, c) = 0;
+                    priors(c) = 0;
+                }
+            }
+        }
     }
 
     int calcLen(CSArrayI& labellings)
