@@ -136,17 +136,17 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
       y_pad = h_filter - h_src;
     }
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, y_pad, x_pad, 1, 1, 1, 1, CUDNN_CONVOLUTION));
-    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, c_filter, c_src, h_filter, w_filter));
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, c_filter, c_src, h_filter, w_filter));
 
     //do the actual computations
     float alpha = 1.0;
     float beta = 0.0;
     checkCUDNN(cudnnConvolutionBackwardBias(cudnnHandle, &alpha, diffTensorDesc, diffData, &beta,
                                             biasGradTensorDesc, biasGradData));
-    checkCUDNN(cudnnConvolutionBackwardFilter_v3(cudnnHandle, &alpha, srcTensorDesc, srcData, diffTensorDesc, diffData,
+    checkCUDNN(cudnnConvolutionBackwardFilter(cudnnHandle, &alpha, srcTensorDesc, srcData, diffTensorDesc, diffData,
                                                  convDesc, CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0, 0, 0, &beta, filterDesc,
                                                  filterGradData));
-    checkCUDNN(cudnnConvolutionBackwardData_v3(cudnnHandle, &alpha, filterDesc, filterData, diffTensorDesc, diffData,
+    checkCUDNN(cudnnConvolutionBackwardData(cudnnHandle, &alpha, filterDesc, filterData, diffTensorDesc, diffData,
                                                convDesc, CUDNN_CONVOLUTION_BWD_DATA_ALGO_0, 0, 0, &beta, srcTensorDesc,
                                                inputGradData));
     """ % locals()
@@ -262,7 +262,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
                                             n, c_src, h_src, w_src,
                                             n_src_stride, c_src_stride, h_src_stride, w_src_stride));
 
-    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, c_filter, c_src, h_filter, w_filter));
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, c_filter, c_src, h_filter, w_filter));
 
     //here we add padding to support "full" convolution mode
     int y_pad = 0;
@@ -306,7 +306,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
 
     //add bias
     beta = 1.0f;
-    checkCUDNN(cudnnAddTensor_v3(cudnnHandle, &alpha, biasTensorDesc, biasData, &beta,
+    checkCUDNN(cudnnAddTensor(cudnnHandle, &alpha, biasTensorDesc, biasData, &beta,
                                dstTensorDesc, dstData));
     """ % locals()
 
