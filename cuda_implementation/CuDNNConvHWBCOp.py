@@ -328,7 +328,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 3, 0
+    return 3, 1
 
 CuDNNConvHWBCOpValidInstance = CuDNNConvHWBCOp("valid")
 CuDNNConvHWBCOpFullInstance = CuDNNConvHWBCOp("full")
