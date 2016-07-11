@@ -1,6 +1,7 @@
 import os
 import theano.sandbox.cuda
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable, gpu_contiguous)
+import theano.sandbox.cuda.dnn
 from theano import gof
 from theano.gof.opt import OpSub
 from theano.compile import optdb
@@ -50,11 +51,18 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   def c_code(self, node, name, input_names, output_names, sub):
     X, W, b, DY = input_names
     DX, DW, Db = output_names
+    cudnn_version = theano.sandbox.cuda.dnn.version()[0]/1000
+    if cudnn_version < 5:
+      cudnn_version_macro = "#define CUDNN_SMALLER_5"
+    else:
+      cudnn_version_macro = ""
     full_conv = "true" if self.border_mode == "full" else "false"
     inplace = "true" if self.inplace else "false"
     fail = sub['fail']
     return """
     //cout << "inplace: " << %(inplace)s << endl;
+
+    %(cudnn_version_macro)s
 
     if(cudnnHandle == 0)
     {
@@ -136,7 +144,11 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
       y_pad = h_filter - h_src;
     }
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, y_pad, x_pad, 1, 1, 1, 1, CUDNN_CONVOLUTION));
+    #ifdef CUDNN_SMALLER_5
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, c_filter, c_src, h_filter, w_filter));
+    #else
     checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, c_filter, c_src, h_filter, w_filter));
+    #endif
 
     //do the actual computations
     float alpha = 1.0;
@@ -158,7 +170,7 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 3, 0
+    return 3, 2
 
 CuDNNConvHWBCOpGradValidNoInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=False)
 CuDNNConvHWBCOpGradValidInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=True)
@@ -221,9 +233,16 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   def c_code(self, node, name, input_names, output_names, sub):
     X, W, b = input_names
     Y, = output_names
+    cudnn_version = theano.sandbox.cuda.dnn.version()[0]/1000
+    if cudnn_version < 5:
+      cudnn_version_macro = "#define CUDNN_SMALLER_5"
+    else:
+      cudnn_version_macro = ""
     full_conv = "true" if self.border_mode == "full" else "false"
     fail = sub['fail']
     return """
+    %(cudnn_version_macro)s
+    
     if(cudnnHandle == 0)
     {
       checkCUDNN(cudnnCreate(&cudnnHandle));
@@ -262,7 +281,11 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
                                             n, c_src, h_src, w_src,
                                             n_src_stride, c_src_stride, h_src_stride, w_src_stride));
 
+    #ifdef CUDNN_SMALLER_5
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, c_filter, c_src, h_filter, w_filter));
+    #else
     checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, c_filter, c_src, h_filter, w_filter));
+    #endif
 
     //here we add padding to support "full" convolution mode
     int y_pad = 0;
@@ -328,7 +351,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 3, 1
+    return 3, 2
 
 CuDNNConvHWBCOpValidInstance = CuDNNConvHWBCOp("valid")
 CuDNNConvHWBCOpFullInstance = CuDNNConvHWBCOp("full")
