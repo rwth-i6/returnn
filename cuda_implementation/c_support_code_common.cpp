@@ -12,6 +12,8 @@ using namespace std;
 #define DIM_GRID 128
 #define DIM_BLOCK 512
 
+PyObject * MyCudaNdarray_NewDims(int nd, const int * dims);
+
 static const char *_cudaGetErrorEnum(cublasStatus_t error)
 {
   switch (error)
@@ -98,7 +100,7 @@ void check_gpu_ptr(const float ** ptr, int size)
 CudaNdarray * CudaNdarray_zeros_like(CudaNdarray* a)
 {
   const int * dim = CudaNdarray_HOST_DIMS(a);
-  CudaNdarray * res = (CudaNdarray*) CudaNdarray_NewDims(a->nd, dim);
+  CudaNdarray * res = (CudaNdarray*) MyCudaNdarray_NewDims(a->nd, dim);
   int n = CudaNdarray_SIZE(a);
   HANDLE_ERROR(cudaMemset(CudaNdarray_DEV_DATA(res), 0, sizeof(float) * n));
   return res;
@@ -107,7 +109,7 @@ CudaNdarray * CudaNdarray_zeros_like(CudaNdarray* a)
 CudaNdarray * CudaNdarray_uninitialized_like(CudaNdarray* a)
 {
   const int * dim = CudaNdarray_HOST_DIMS(a);
-  CudaNdarray * res = (CudaNdarray*)CudaNdarray_NewDims(a->nd, dim);
+  CudaNdarray * res = (CudaNdarray*) MyCudaNdarray_NewDims(a->nd, dim);
   return res;
 }
 
@@ -170,3 +172,12 @@ void CudaNdarray_fill(CudaNdarray * a, float val)
   CHECK_KERNEL_ERROR();
 }
 
+PyObject * MyCudaNdarray_NewDims(int nd, const int * dims)
+{
+  PyObject * res = CudaNdarray_NewDims(nd, dims);
+  if(!res)
+  {
+    PyErr_Format(PyExc_RuntimeError, "Out of GPU memory");
+  }
+  return res;
+}

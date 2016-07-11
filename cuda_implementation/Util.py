@@ -13,8 +13,12 @@ def get_c_support_code_common():
   with open(base_path + "/c_support_code_common.cpp") as f:
     return f.read()
 
-
 def get_c_support_code_mdlstm():
   base_path = os.path.dirname(__file__)
   with open(base_path + "/c_support_code_mdlstm.cpp") as f:
+    return f.read()
+
+def get_c_support_code_cudnn():
+  base_path = os.path.dirname(__file__)
+  with open(base_path + "/c_support_code_cudnn.cpp") as f:
     return f.read()

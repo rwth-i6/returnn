@@ -5,6 +5,7 @@ import theano.sandbox.cuda.dnn
 from theano import gof
 from theano.gof.opt import OpSub
 from theano.compile import optdb
+from .Util import get_c_support_code_common, get_c_support_code_cudnn
 
 
 class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
@@ -35,9 +36,7 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [X, W, b, DY], [X.type(), W.type(), b.type()])
 
   def c_support_code(self):
-    base_path = os.path.dirname(__file__)
-    with open(base_path + "/c_support_code_cudnn.cpp") as f:
-      support_code = f.read()
+    support_code = get_c_support_code_common() + get_c_support_code_cudnn()
     return support_code + """
     static cudnnHandle_t cudnnHandle = 0;
     static cudnnTensorDescriptor_t srcTensorDesc = 0;
@@ -108,10 +107,13 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
     }
     else
     {
-      %(DX)s = (CudaNdarray*) CudaNdarray_NewDims(4, X_dim);
+      %(DX)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, X_dim);
+      assert(%(DX)s);
     }
-    %(DW)s = (CudaNdarray*) CudaNdarray_NewDims(4, W_dim);
-    %(Db)s = (CudaNdarray*) CudaNdarray_NewDims(1, b_dim);
+    %(DW)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, W_dim);
+    assert(%(DW)s);
+    %(Db)s = (CudaNdarray*) MyCudaNdarray_NewDims(1, b_dim);
+    assert(%(Db)s);
 
     const float * srcData = CudaNdarray_DEV_DATA(%(X)s);
     const float * filterData = CudaNdarray_DEV_DATA(%(W)s);
@@ -170,7 +172,7 @@ class CuDNNConvHWBCOpGrad(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 3, 2
+    return 3, 3
 
 CuDNNConvHWBCOpGradValidNoInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=False)
 CuDNNConvHWBCOpGradValidInplaceInstance = CuDNNConvHWBCOpGrad("valid", inplace=True)
@@ -218,9 +220,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
     return theano.Apply(self, [X, W, b], [X.type()])
 
   def c_support_code(self):
-    base_path = os.path.dirname(__file__)
-    with open(base_path + "/c_support_code_cudnn.cpp") as f:
-      support_code = f.read()
+    support_code = get_c_support_code_common() + get_c_support_code_cudnn()
     return support_code + """
     static cudnnHandle_t cudnnHandle = 0;
     static cudnnTensorDescriptor_t srcTensorDesc = 0;
@@ -318,7 +318,8 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
     checkCUDNN(cudnnSetTensor4dDescriptor(biasTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, c_out, 1, 1));
 
     int Y_dims[] = {h_out, w_out, n_out, c_out};
-    %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dims);
+    %(Y)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dims);
+    assert(%(Y)s);
     float * dstData = CudaNdarray_DEV_DATA(%(Y)s);
 
     //do the actual computations
@@ -351,7 +352,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
   #  pass
 
   def c_code_cache_version(self):
-    return 3, 2
+    return 3, 3
 
 CuDNNConvHWBCOpValidInstance = CuDNNConvHWBCOp("valid")
 CuDNNConvHWBCOpFullInstance = CuDNNConvHWBCOp("full")

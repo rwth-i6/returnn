@@ -296,7 +296,8 @@ class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
       {
         //CudaNdarray is always float, but we use 2-byte unsigned shorts, so divide by 2
         int argmax_dims[] = {(CudaNdarray_SIZE(%(DY)s) + 1) / 2};
-        CudaNdarray * argmax = (CudaNdarray*) CudaNdarray_NewDims(1, argmax_dims);
+        CudaNdarray * argmax = (CudaNdarray*) MyCudaNdarray_NewDims(1, argmax_dims);
+	assert(argmax);
         unsigned short * argmax_data = reinterpret_cast<unsigned short*>(CudaNdarray_DEV_DATA(argmax));
         pool_kernel_bwd_create_argmax<<<DIM_GRID, DIM_BLOCK>>>(DX_data, DY_data, argmax_data,
                                                                           h, w, n, c, %(poolHeight)s, %(poolWidth)s);
@@ -334,7 +335,7 @@ class PoolHWBCOpGrad(theano.sandbox.cuda.GpuOp):
     return input_shapes[:1]
 
   def c_code_cache_version(self):
-    return 2, 2
+    return 2, 3
 
 
 class RemoveConvGradDimshuffle(gof.Optimizer):
@@ -428,7 +429,8 @@ class PoolHWBCOp(theano.sandbox.cuda.GpuOp):
     int n = X_dim[2];
     int c = X_dim[3];
     int Y_dim[] = {h / %(poolHeight)s, w / %(poolWidth)s, n, c};
-    %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+    %(Y)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
+    assert(%(Y)s);
     const float * X_data = CudaNdarray_DEV_DATA(%(X)s);
     float * Y_data = CudaNdarray_DEV_DATA(%(Y)s);
     pool_kernel<<<DIM_GRID, DIM_BLOCK>>>(X_data, Y_data, h, w, n, c, %(poolHeight)s, %(poolWidth)s);
@@ -450,4 +452,4 @@ class PoolHWBCOp(theano.sandbox.cuda.GpuOp):
     return [(h, w, n, c)]
 
   def c_code_cache_version(self):
-    return 2, 0
+    return 2, 3

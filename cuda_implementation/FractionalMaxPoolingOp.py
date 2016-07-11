@@ -178,7 +178,7 @@ class FractionalMaxPoolingOpGrad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   def c_code_cache_version(self):
-    return 1, 0
+    return 1, 2
 
 
 class FractionalMaxPoolingOp(theano.sandbox.cuda.GpuOp):
@@ -279,7 +279,8 @@ class FractionalMaxPoolingOp(theano.sandbox.cuda.GpuOp):
       int n_regions_x = regions_x_dim[1];
       
       int Y_dim[] = {h_out, w_out, n, c};
-      %(Y)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+      %(Y)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
+      assert(%(Y)s);
       CudaNdarray_fill(%(Y)s, -1e20);
       
       float * Y_data = CudaNdarray_DEV_DATA(%(Y)s);
@@ -303,7 +304,7 @@ class FractionalMaxPoolingOp(theano.sandbox.cuda.GpuOp):
     return [DX, Dregions_y, Dregions_x, Dout_size]
 
   def c_code_cache_version(self):
-    return 1, 1
+    return 1, 2
 
 
 #use this function to do fmp!

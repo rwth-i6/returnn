@@ -132,24 +132,24 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     CudaNdarray * epsilon4 = (CudaNdarray *) CudaNdarray_Copy(%(DY4)s);
 
     const int workmem1_dims[] = {2, Y_dim[0], Y_dim[1], Y_dim[2], Y_dim[3]};
-    CudaNdarray * workmem1_1 = (CudaNdarray*) CudaNdarray_NewDims(5, workmem1_dims);
+    CudaNdarray * workmem1_1 = (CudaNdarray*) MyCudaNdarray_NewDims(5, workmem1_dims);
     assert(workmem1_1);
-    CudaNdarray * workmem1_2 = (CudaNdarray*) CudaNdarray_NewDims(5, workmem1_dims);
+    CudaNdarray * workmem1_2 = (CudaNdarray*) MyCudaNdarray_NewDims(5, workmem1_dims);
     assert(workmem1_2);
-    CudaNdarray * workmem1_3 = (CudaNdarray*) CudaNdarray_NewDims(5, workmem1_dims);
+    CudaNdarray * workmem1_3 = (CudaNdarray*) MyCudaNdarray_NewDims(5, workmem1_dims);
     assert(workmem1_3);
-    CudaNdarray * workmem1_4 = (CudaNdarray*) CudaNdarray_NewDims(5, workmem1_dims);
+    CudaNdarray * workmem1_4 = (CudaNdarray*) MyCudaNdarray_NewDims(5, workmem1_dims);
     assert(workmem1_4);
 
     //we use floats to store float*'s, as CudaNdarray only supports floats. factor 10 for lstm bwd kernel
     int ptr_storage_dims[] = {4 * 10 * max_diag_size * sizeof(float*) / sizeof(float)};
-    CudaNdarray * ptr_storage = (CudaNdarray*) CudaNdarray_NewDims(1, ptr_storage_dims);
+    CudaNdarray * ptr_storage = (CudaNdarray*) MyCudaNdarray_NewDims(1, ptr_storage_dims);
     assert(ptr_storage);
 
     //valid: float tensor of 1s and 0s indicating the size of the image
     //4 dirs * max_diag_size * n_minibatch
     int valid_dims[] = {4 * max_diag_size * n_minibatch};
-    CudaNdarray * valid_storage = (CudaNdarray*) CudaNdarray_NewDims(1, valid_dims);
+    CudaNdarray * valid_storage = (CudaNdarray*) MyCudaNdarray_NewDims(1, valid_dims);
     assert(valid_storage);
 
     for(int diag = n_diags-1; diag >= 0; --diag)
@@ -227,13 +227,13 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     const int * H_dim = CudaNdarray_HOST_DIMS(%(H1)s);
     const int workmem2_dims[] = {H_dim[0], H_dim[2], H_dim[3]};
     const int block_size = H_dim[2] * H_dim[3];
-    CudaNdarray * workmem2_1 = (CudaNdarray*) CudaNdarray_NewDims(3, workmem2_dims);
+    CudaNdarray * workmem2_1 = (CudaNdarray*) MyCudaNdarray_NewDims(3, workmem2_dims);
     assert(workmem2_1);
-    CudaNdarray * workmem2_2 = (CudaNdarray*) CudaNdarray_NewDims(3, workmem2_dims);
+    CudaNdarray * workmem2_2 = (CudaNdarray*) MyCudaNdarray_NewDims(3, workmem2_dims);
     assert(workmem2_2);
-    CudaNdarray * workmem2_3 = (CudaNdarray*) CudaNdarray_NewDims(3, workmem2_dims);
+    CudaNdarray * workmem2_3 = (CudaNdarray*) MyCudaNdarray_NewDims(3, workmem2_dims);
     assert(workmem2_3);
-    CudaNdarray * workmem2_4 = (CudaNdarray*) CudaNdarray_NewDims(3, workmem2_dims);
+    CudaNdarray * workmem2_4 = (CudaNdarray*) MyCudaNdarray_NewDims(3, workmem2_dims);
     assert(workmem2_4);
     for(int y = 0; y < Y_dim[0]; ++y)
     {
@@ -338,8 +338,8 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 2, 7
+  def c_code_cache_version(self):
+    return 2, 9
 
 MultiDirectionalTwoDLSTMOpGradNoInplaceInstance = MultiDirectionalTwoDLSTMOpGrad(inplace=False)
 MultiDirectionalTwoDLSTMOpGradInplaceInstance = MultiDirectionalTwoDLSTMOpGrad(inplace=True)
@@ -435,23 +435,23 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     const int n_diags = width + height - 1;
 
     //init Ys
-    %(Y1)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+    %(Y1)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
     assert(%(Y1)s);
-    %(Y2)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+    %(Y2)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
     assert(%(Y2)s);
-    %(Y3)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+    %(Y3)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
     assert(%(Y3)s);
-    %(Y4)s = (CudaNdarray*) CudaNdarray_NewDims(4, Y_dim);
+    %(Y4)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, Y_dim);
     assert(%(Y4)s);
 
     //init Hs
-    %(H1)s = (CudaNdarray*) CudaNdarray_NewDims(4, H_dim);
+    %(H1)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, H_dim);
     assert(%(H1)s);
-    %(H2)s = (CudaNdarray*) CudaNdarray_NewDims(4, H_dim);
+    %(H2)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, H_dim);
     assert(%(H2)s);
-    %(H3)s = (CudaNdarray*) CudaNdarray_NewDims(4, H_dim);
+    %(H3)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, H_dim);
     assert(%(H3)s);
-    %(H4)s = (CudaNdarray*) CudaNdarray_NewDims(4, H_dim);
+    %(H4)s = (CudaNdarray*) MyCudaNdarray_NewDims(4, H_dim);
     assert(%(H4)s);
 
     //init Hs with bs
@@ -469,13 +469,13 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     //we use floats to store float*'s, as CudaNdarray only supports floats. factor 5 for lstm kernel,
     //additional factor 4 for 4 directions
     int ptr_storage_dims[] = {4 * 5 * max_diag_size * sizeof(float*) / sizeof(float)};
-    CudaNdarray * ptr_storage = (CudaNdarray*) CudaNdarray_NewDims(1, ptr_storage_dims);
+    CudaNdarray * ptr_storage = (CudaNdarray*) MyCudaNdarray_NewDims(1, ptr_storage_dims);
     assert(ptr_storage);
 
     //valid: float tensor of 1s and 0s indicating the size of the image
     //4 dirs * max_diag_size * n_minibatch
     int valid_dims[] = {4 * max_diag_size * n_minibatch};
-    CudaNdarray * valid_storage = (CudaNdarray*) CudaNdarray_NewDims(1, valid_dims);
+    CudaNdarray * valid_storage = (CudaNdarray*) MyCudaNdarray_NewDims(1, valid_dims);
     assert(valid_storage);
 
     for(int diag = 0; diag < n_diags; ++diag)
@@ -538,7 +538,7 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     return [Y_shape, Y_shape, Y_shape, Y_shape, H_shape, H_shape, H_shape, H_shape]
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 2, 8
+  def c_code_cache_version(self):
+    return 2, 9
 
 MultiDirectionalTwoDLSTMOpInstance = MultiDirectionalTwoDLSTMOp()
