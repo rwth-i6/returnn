@@ -125,12 +125,21 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     if self.attrs['batch_norm']:
       Y = self.batch_norm(Y.reshape((Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3])),
                           self.attrs['n_out'], force_sample=True).reshape(Y.shape)
+
+
+    #index handling
+    def index_fn(index, size):
+      return T.set_subtensor(index[:size], numpy.cast['int8'](1))
+    index_init = T.zeros((Y.shape[2],Y.shape[1]), dtype='int8')
+    self.index, _ = theano.scan(index_fn, [index_init, T.cast(sizes[:,1],"int32")])
+    self.index = self.index.dimshuffle(1, 0)
+
     if collapse_output == 'sum':
       Y = Y.sum(axis=0)
-      self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
+      #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':
       Y = Y.mean(axis=0)
-      self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
+      #self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
     elif collapse_output == 'flatten':
       Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
       self.index = T.ones((Y.shape[0] * Y.shape[1],Y.shape[2]), dtype='int8')
@@ -253,7 +262,7 @@ def print_pad_warning(_, x):
 
 class ConvPoolLayer2(ConvBaseLayer):
   layer_class = "conv2"
-  recurrent = False
+  recurrent = True
 
   def __init__(self, pool_size, **kwargs):
     super(ConvPoolLayer2, self).__init__(**kwargs)
@@ -283,6 +292,14 @@ class ConvPoolLayer2(ConvBaseLayer):
     Y = self.activation(Z)
     self.output = Y
     self.output_sizes = self.output_size_from_input_size(sizes)
+
+    #index handling
+    def index_fn(index, size):
+      return T.set_subtensor(index[:size], numpy.cast['int8'](1))
+    index_init = T.zeros((Y.shape[2],Y.shape[1]), dtype='int8')
+    self.index, _ = theano.scan(index_fn, [index_init, T.cast(self.output_sizes[:,1],"int32")])
+    self.index = self.index.dimshuffle(1, 0)
+
 
   def output_size_from_input_size(self, sizes):
     heights = sizes[:, 0]

@@ -336,6 +336,12 @@ class SequenceOutputLayer(OutputLayer):
         return T.cast(source.output_sizes[:, 1], "int32")
     return T.cast(T.sum(self.sources[0].index, axis=0), 'int32')
 
+  def output_index(self):
+    for source in self.sources:
+      if hasattr(source, "output_sizes"):
+        return source.index
+    return super(SequenceOutputLayer, self).output_index()
+
   def cost(self):
     """
     :param y: shape (time*batch,) -> label
