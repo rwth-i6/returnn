@@ -14,6 +14,9 @@ import numpy
 from math import sqrt
 from ActivationFunctions import strtoact
 
+import theano.printing
+from theano.ifelse import ifelse
+
 
 class TwoDBaseLayer(Layer):
   def __init__(self, n_out, **kwargs):
@@ -241,6 +244,12 @@ class ConvBaseLayer(TwoDBaseLayer):
     widths = widths - self.filter_width + 1
     return T.concatenate((heights[:, None], widths[:, None]), axis=1)
 
+printed_pad_warning = False
+def print_pad_warning(_, x):
+  global printed_pad_warning
+  if not printed_pad_warning:
+    print >> log.v2, "Warning, input for conv layer too small, applying padding on the fly, this can cause increased memory usage, longer runtimes and worse results. Consider padding your input data manually. This warning is only printed once, even if the problem occurs multiple times."
+    printed_pad_warning = True
 
 class ConvPoolLayer2(ConvBaseLayer):
   layer_class = "conv2"
@@ -249,7 +258,25 @@ class ConvPoolLayer2(ConvBaseLayer):
   def __init__(self, pool_size, **kwargs):
     super(ConvPoolLayer2, self).__init__(**kwargs)
     self.pool_size = pool_size
-    sizes = self.source.output_sizes
+    sizes_raw = self.source.output_sizes
+
+    #handle size problems
+    self.output_sizes = self.output_size_from_input_size(sizes_raw)
+    size_problem = T.min(self.output_sizes) <= 0
+    fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
+
+    fixed_sizes = theano.printing.Print(global_fn=print_pad_warning)(fixed_sizes)
+
+    sizes = ifelse(size_problem, fixed_sizes, sizes_raw)
+    X_size = T.cast(T.max(sizes, axis=0), "int32")
+    def pad_fn(x_t, s):
+      x = T.alloc(numpy.cast["float32"](0), X_size[0], X_size[1], self.X.shape[3])
+      x = T.set_subtensor(x[:s[0], :s[1]], x_t[:s[0], :s[1]])
+      return x
+    fixed_X, _ = theano.scan(pad_fn, [self.X.dimshuffle(2,0,1,3), T.cast(sizes_raw, "int32")])
+    fixed_X = fixed_X.dimshuffle(1,2,0,3)
+    self.X = ifelse(size_problem, fixed_X, self.X)
+    #end handle size problems
 
     Z = conv_crop_pool_op(self.X, sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
                           self.filter_width, pool_size)
