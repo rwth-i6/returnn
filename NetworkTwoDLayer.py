@@ -1,7 +1,7 @@
 from NetworkHiddenLayer import Layer
 from Log import log
 from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
-from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance
+from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance, CropToBatchImageSizeZeroInstance
 from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
 from cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
 from cuda_implementation.PoolHWBCOp import PoolHWBCOp
@@ -166,7 +166,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 printed_cudnn_warning = False
 
 
-def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
+def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
   global printed_cudnn_warning
   import theano.sandbox.cuda as theano_cuda
   have_cudnn = theano_cuda.cuda_enabled and theano.sandbox.cuda.dnn.dnn_available()
@@ -180,6 +180,7 @@ def conv_crop_pool_op(X, sizes, W, b, n_in, n_maps, filter_height, filter_width,
     conv_out = conv_op(X, W, b)
     crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
     Y = pool_op(crop_out)
+    Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
     return Y
   else:
     #note: this solution uses alot of dimshuffles and so also alot of memory
@@ -254,9 +255,9 @@ class ConvBaseLayer(TwoDBaseLayer):
     return T.concatenate((heights[:, None], widths[:, None]), axis=1)
 
 printed_pad_warning = False
-def print_pad_warning(_, x):
+def maybe_print_pad_warning(_, x):
   global printed_pad_warning
-  if not printed_pad_warning:
+  if x != 0 and not printed_pad_warning:
     print >> log.v2, "Warning, input for conv layer too small, applying padding on the fly, this can cause increased memory usage, longer runtimes and worse results. Consider padding your input data manually. This warning is only printed once, even if the problem occurs multiple times."
     printed_pad_warning = True
 
@@ -272,9 +273,8 @@ class ConvPoolLayer2(ConvBaseLayer):
     #handle size problems
     self.output_sizes = self.output_size_from_input_size(sizes_raw)
     size_problem = T.min(self.output_sizes) <= 0
+    size_problem = theano.printing.Print(global_fn=maybe_print_pad_warning)(size_problem)
     fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
-
-    fixed_sizes = theano.printing.Print(global_fn=print_pad_warning)(fixed_sizes)
 
     sizes = ifelse(size_problem, fixed_sizes, sizes_raw)
     X_size = T.cast(T.max(sizes, axis=0), "int32")
@@ -287,11 +287,11 @@ class ConvPoolLayer2(ConvBaseLayer):
     self.X = ifelse(size_problem, fixed_X, self.X)
     #end handle size problems
 
-    Z = conv_crop_pool_op(self.X, sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
+    self.output_sizes = self.output_size_from_input_size(sizes)
+    Z = conv_crop_pool_op(self.X, sizes, self.output_sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
                           self.filter_width, pool_size)
     Y = self.activation(Z)
     self.output = Y
-    self.output_sizes = self.output_size_from_input_size(sizes)
 
     #index handling
     def index_fn(index, size):
