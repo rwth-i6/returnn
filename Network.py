@@ -169,8 +169,10 @@ class LayerNetwork(object):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    return cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=eval_flag,
-                         **cls.init_args_from_config(config))
+    network = cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=eval_flag,
+                            **cls.init_args_from_config(config))
+    network.recurrent = network.recurrent or config.bool('recurrent','False')
+    return network
 
   @classmethod
   def from_base_network(cls, base_network, json_content=None, share_params=False, base_as_calc_step=False, **kwargs):
