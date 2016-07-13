@@ -23,16 +23,16 @@ InitTypes = set()
 Verbose = False  # disables all per-segment log messages
 Quiet = False # disables all but error messages
 
+def print(str):
+  import __builtin__
+  if not Quiet:
+    __builtin__.print(str)
+
+print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
+
 rnn.initBetterExchook()
 Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
 rnn.initThreadJoinHack()
-
-def print(str):
-    import __builtin__
-    if not Quiet:
-      __builtin__.print(str)
-
-print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
 # Start Sprint PythonControl interface. {
 
