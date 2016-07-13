@@ -19,8 +19,6 @@ import numpy
 from TaskSystem import Pickler, Unpickler
 from threading import Condition
 
-print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
-
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages
 Quiet = False # disables all but error messages
@@ -33,6 +31,8 @@ def print(str):
     import __builtin__
     if not Quiet:
       __builtin__.print(str)
+
+print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
 # Start Sprint PythonControl interface. {
 
