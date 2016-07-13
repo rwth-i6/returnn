@@ -11,6 +11,7 @@ It can also be used as a PythonSegmentOrdering interface.
 It also supports SprintNnPythonLayer.
 """
 
+from __future__ import print_function
 import rnn
 import Debug
 import os
@@ -22,10 +23,16 @@ print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages
+Quiet = False # disables all but error messages
 
 rnn.initBetterExchook()
 Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
 rnn.initThreadJoinHack()
+
+def print(str):
+    import __builtin__
+    if not Quiet:
+      __builtin__.print(str)
 
 # Start Sprint PythonControl interface. {
 
@@ -50,12 +57,17 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   In this specific module, we expect that there is "c2p_fd" and "p2c_fd" in the config string
   to communicate with the parent process, which is usually handled by SprintErrorSignals.
   """
-  print("CRNN SprintControl[pid %i] init: name=%r, sprint_unit=%r, version_number=%r, callback=%r, ref=%r, config=%r, kwargs=%r" % (
-    os.getpid(), name, sprint_unit, version_number, callback, reference, config, kwargs))
-  InitTypes.add(name)
 
   config = config.split(",")
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
+
+  global Quiet
+  if bool(config.get("quiet", False)):
+    Quiet = True
+
+  print("CRNN SprintControl[pid %i] init: name=%r, sprint_unit=%r, version_number=%r, callback=%r, ref=%r, config=%r, kwargs=%r" % (
+    os.getpid(), name, sprint_unit, version_number, callback, reference, config, kwargs))
+  InitTypes.add(name)
 
   global Verbose
   if bool(config.get("verbose", False)):
@@ -188,7 +200,7 @@ class PythonControl:
     if cls.instance:
       cls.instance._additional_init(**kwargs)
       return cls.instance
-    print "CRNN SprintControl[pid %i] PythonControl create %r" %(os.getpid(), kwargs)
+    print("CRNN SprintControl[pid %i] PythonControl create %r" %(os.getpid(), kwargs))
     return PythonControl(**kwargs)
 
   def __init__(self, c2p_fd, p2c_fd, **kwargs):
@@ -196,7 +208,7 @@ class PythonControl:
     :param int c2p_fd: child-to-parent file descriptor
     :param int p2c_fd: parent-to-child file descriptor
     """
-    print "CRNN SprintControl[pid %i] PythonControl init %r" % (os.getpid(), kwargs)
+    print("CRNN SprintControl[pid %i] PythonControl init %r" % (os.getpid(), kwargs))
     assert not self.__class__.instance, "only one instance expected"
     self.__class__.instance = self
     self.cond = Condition()
@@ -228,12 +240,12 @@ class PythonControl:
     self._init(**kwargs)
 
   def _additional_init(self, **kwargs):
-    print "CRNN SprintControl[pid %i] PythonControl additional_init %r" %(os.getpid(), kwargs)
+    print("CRNN SprintControl[pid %i] PythonControl additional_init %r" %(os.getpid(), kwargs))
     self._init(**kwargs)
 
   def _init(self, name, sprint_unit=None, callback=None, version_number=None, min_version_number=None, **kwargs):
     if name == "Sprint.PythonControl":
-      print "CRNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs)
+      print("CRNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs))
       assert min_version_number
       assert (version_number or 0) >= min_version_number, "need new Sprint"
       self.sprint_version_number = version_number
@@ -248,8 +260,8 @@ class PythonControl:
     This is called on the first segment.
     input_dim/output_dim are set iff we extract features/alignments.
     """
-    print "CRNN SprintControl[pid %i] init_processing input_dim=%r, output_dim=%r" % (os.getpid(), input_dim, output_dim)
-    print "CRNN SprintControl[pid %i] loss_and_error_signal_via_sprint_callback enabled" % (os.getpid(),)
+    print("CRNN SprintControl[pid %i] init_processing input_dim=%r, output_dim=%r" % (os.getpid(), input_dim, output_dim))
+    print("CRNN SprintControl[pid %i] loss_and_error_signal_via_sprint_callback enabled" % (os.getpid(),))
     self.loss_and_error_signal_via_sprint_callback = True
     assert self.sprint_callback
 
@@ -259,7 +271,7 @@ class PythonControl:
     :param str name: segment name
     :param str orthography: segment orth
     """
-    if Verbose: print "CRNN SprintControl[pid %i] process_segment name=%r orth=%r" % (os.getpid(), name, orthography[:10] + "...")
+    if Verbose: print("CRNN SprintControl[pid %i] process_segment name=%r orth=%r" % (os.getpid(), name, orthography[:10] + "..."))
     assert self.loss_and_error_signal_via_sprint_callback
     assert self.seg_name == name  # via self.handle_cmd_get_loss_and_error_signal()
     assert self.posteriors.ndim == 2  # (time,dim)
