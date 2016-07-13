@@ -36,9 +36,10 @@ class SprintSubprocessInstance:
 
   Version = 1  # increase when some protocol changes
 
-  def __init__(self, sprintExecPath, sprintConfigStr="", sprintControlConfig=None):
+  def __init__(self, sprintExecPath, minPythonControlVersion=2, sprintConfigStr="", sprintControlConfig=None):
     """
     :param str sprintExecPath: this executable will be called for the sub proc.
+    :param int minPythonControlVersion: will be checked in the subprocess. via Sprint PythonControl
     :param str sprintConfigStr: passed to Sprint as command line args.
       can have "config:" prefix - in that case, looked up in config.
       handled via eval_shell_str(), can thus have lazy content (if it is callable, will be called).
@@ -46,6 +47,7 @@ class SprintSubprocessInstance:
     """
     assert os.path.exists(sprintExecPath)
     self.sprintExecPath = sprintExecPath
+    self.minPythonControlVersion = minPythonControlVersion
     if sprintConfigStr.startswith("config:"):
       from Config import get_global_config
       config = get_global_config()
@@ -152,6 +154,7 @@ class SprintSubprocessInstance:
   def _build_sprint_args(self):
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
+    config_str += ",minPythonControlVersion:%i" % self.minPythonControlVersion
     if self.sprintControlConfig:
       config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
     my_mod_name = "SprintControl"

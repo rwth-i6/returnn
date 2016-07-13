@@ -64,7 +64,10 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   # Remaining Sprint interface is in this PythonControl instance.
   return PythonControl.create(c2p_fd=int(config["c2p_fd"]), p2c_fd=int(config["p2c_fd"]),
                               name=name, reference=reference, config=config,
-                              sprint_unit=sprint_unit, version_number=version_number, callback=callback,
+                              sprint_unit=sprint_unit,
+                              version_number=version_number,
+                              min_version_number=int(config["minPythonControlVersion"]),
+                              callback=callback,
                               **kwargs)
 
 # End Sprint PythonControl interface. }
@@ -228,10 +231,11 @@ class PythonControl:
     print "CRNN SprintControl[pid %i] PythonControl additional_init %r" %(os.getpid(), kwargs)
     self._init(**kwargs)
 
-  def _init(self, name, sprint_unit=None, callback=None, version_number=None, **kwargs):
+  def _init(self, name, sprint_unit=None, callback=None, version_number=None, min_version_number=None, **kwargs):
     if name == "Sprint.PythonControl":
       print "CRNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs)
-      assert (version_number or 0) >= 2, "need new Sprint"
+      assert min_version_number
+      assert (version_number or 0) >= min_version_number, "need new Sprint"
       self.sprint_version_number = version_number
       if callback:
         self.sprint_callback = callback
