@@ -67,7 +67,11 @@ class Config:
       value = [value]
     if key in self.typed_dict:
       del self.typed_dict[key]
-    self.dict[key] = value
+    if key == 'include':
+      for f in value:
+        self.load_file(f)
+    else:
+      self.dict[key] = value
 
   def has(self, key):
     """
