@@ -430,7 +430,7 @@ def analyze_data(config):
   assert not ds.is_data_sparse(data_key), "needed for mean/var estimation"
   from Util import inplace_increment, progress_bar_with_time, NumbersDict
 
-  priori = numpy.zeros((ds.get_data_dim(target),), dtype=dtype)
+  priors = numpy.zeros((ds.get_data_dim(target),), dtype=dtype)
   mean = numpy.zeros((ds.get_data_dim(data_key),), dtype=dtype)
   mean_sq = numpy.zeros((ds.get_data_dim(data_key),), dtype=dtype)
   total_targets_len = 0
@@ -441,7 +441,7 @@ def analyze_data(config):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))
     ds.load_seqs(seq_idx, seq_idx + 1)
     targets = ds.get_data(seq_idx, target)
-    inplace_increment(priori, targets, 1)
+    inplace_increment(priors, targets, 1)
     total_targets_len += targets.shape[0]
     data = ds.get_data(seq_idx, data_key)
     new_total_data_len = total_data_len + data.shape[0]
@@ -450,14 +450,15 @@ def analyze_data(config):
     mean_sq = mean_sq * f + numpy.sum(data * data, axis=0) * (1.0 - f)
     total_data_len = new_total_data_len
     seq_idx += 1
-  priori /= NumbersDict(ds.get_num_timesteps())[target]
+  log_priors = numpy.log(priors)
+  log_priors -= numpy.log(NumbersDict(ds.get_num_timesteps())[target])
   var = numpy.sqrt(mean_sq - mean * mean)
   print >> log.v1, "Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len)
-  priori_fn = stat_prefix + ".priori.txt"
+  priors_fn = stat_prefix + ".log_priors.txt"
   mean_fn = stat_prefix + ".mean.txt"
   var_fn = stat_prefix + ".var.txt"
-  print >> log.v1, "Dump prioris to", priori_fn
-  numpy.savetxt(priori_fn, priori)
+  print >> log.v1, "Dump priors to", priors_fn
+  numpy.savetxt(priors_fn, log_priors)
   print >> log.v1, "Dump mean to", mean_fn
   numpy.savetxt(mean_fn, mean)
   print >> log.v1, "Dump var to", var_fn
