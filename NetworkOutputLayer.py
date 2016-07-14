@@ -329,6 +329,11 @@ class SequenceOutputLayer(OutputLayer):
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
     self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     self.output = self.p_y_given_x.reshape(self.output.shape)
+    if self.attrs['compute_priors']:
+      self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
+                                   custom_gradient=T.mean(p_y_given_x[self.i], axis=0),
+                                   custom_gradient_normalized=True)
+      self.log_prior = T.log(self.priors)
 
   def index_for_ctc(self):
     for source in self.sources:
@@ -358,6 +363,8 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
+      if self.attrs['compute_priors']: # use own priors, assume prior scale in sprint config to be 0.0
+        log_probs -= T.constant(self.prior_scale, 'flaot32') * self.log_prior
       err, grad = sprint_loss_and_error_signal(
         output_layer=self,
         target=self.attrs.get("target", "classes"),
