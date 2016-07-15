@@ -154,7 +154,7 @@ class CNN(_NoOpLayer):
 
     # set attributes
     self.set_attr("n_features", self.n_features)
-    self.set_attr("filters", self.filters)
+    self.set_attr("filter", self.filters)
     self.set_attr("d_row", new_d_row)  # number of output row
     self.set_attr("pool_size", self.pool_size)
     self.set_attr("mode", self.mode)
