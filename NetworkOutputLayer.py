@@ -364,7 +364,7 @@ class SequenceOutputLayer(OutputLayer):
       else:
         log_probs = self.z
       if self.attrs['compute_priors']: # use own priors, assume prior scale in sprint config to be 0.0
-        log_probs -= T.constant(self.prior_scale, 'flaot32') * self.log_prior
+        log_probs -= T.constant(self.prior_scale, 'float32') * self.log_prior
       err, grad = sprint_loss_and_error_signal(
         output_layer=self,
         target=self.attrs.get("target", "classes"),
