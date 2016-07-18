@@ -15,7 +15,7 @@ import os
 import time
 import atexit
 import signal
-from TaskSystem import Pickler, Unpickler
+from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable
 from Log import log
 
@@ -346,6 +346,7 @@ class SprintInstancePool:
         assert seg_name == tags[b]
         batch_loss[b] = loss
         batch_error_signal[:seq_lengths[b], b] = error_signal
+        numpy_set_unused(error_signal)
     return batch_loss, batch_error_signal
 
   def get_free_instance(self):

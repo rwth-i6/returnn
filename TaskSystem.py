@@ -239,6 +239,14 @@ class SharedNumpyArray:
     return mem_size
 
   @classmethod
+  def as_shared(cls, array):
+    import numpy
+    assert isinstance(array, numpy.ndarray)
+    if isinstance(array.base, SharedNumpyArray):
+      return array.base
+    return cls.create_copy(array)
+
+  @classmethod
   def create_copy(cls, array):
     import numpy
     assert isinstance(array, numpy.ndarray)
@@ -333,6 +341,7 @@ class SharedNumpyArray:
     return self._get_in_use_flag_ref().value > 0
 
   def set_unused(self):
+    if self.is_server: return
     if self.mem:
       self._set_is_used(0)
       self.mem.remove()
@@ -414,6 +423,48 @@ def make_numpy_ndarray_fromstring(s, dtype, shape):
 
 EnableAutoNumpySharedMemPickling = False
 AutoNumpySharedMemPicklingMinSize = 8 * 1024 * 1024  # 8MB
+
+def use_shared_mem_for_numpy_array(obj):
+  assert isinstance(obj, numpy.ndarray)
+  if isinstance(obj.base, SharedNumpyArray):
+    return True
+  if not EnableAutoNumpySharedMemPickling:
+    return False
+  return obj.nbytes >= AutoNumpySharedMemPicklingMinSize
+
+def numpy_set_unused(v):
+  """
+  :param numpy.ndarray v: array which will be marked as not-used-anymore
+  This will tell mechanisms like SharedNumpyArray that it can reuse the memory.
+  On the client side, this will even unmap the memory, so any further access
+  to it will cause a SEGFAULT.
+  """
+  if v is None: return
+  assert isinstance(v, numpy.ndarray)
+  if isinstance(v.base, SharedNumpyArray):
+    v.base.set_unused()
+
+def numpy_alloc(shape, dtype, fortran_for_shared=False):
+  """
+  If EnableAutoNumpySharedMemPickling is True, this will allocate a Numpy array
+  in shared memory so we avoid a copy later on when this Numpy array would
+  be transferred to another process via pickling.
+  """
+  if EnableAutoNumpySharedMemPickling:
+    dtype = numpy.dtype(dtype)
+    typestr = dtype.str
+    strides = None
+    if fortran_for_shared:
+      strides = [dtype.itemsize]
+      for s in shape:
+        strides += [strides[-1] * s]
+      strides = strides[:-1]
+    try:
+      return SharedNumpyArray.create_new(shape=shape, strides=strides, typestr=typestr)
+    except SharedMem.ShmException as e:
+      print("numpy_alloc: SharedMem exception: %s" % e)
+  # Fallback.
+  return numpy.ndarray(shape, dtype=dtype)
 
 
 class Pickler(pickle.Pickler):
@@ -509,9 +560,9 @@ class Pickler(pickle.Pickler):
   dispatch[types.BufferType] = save_buffer
 
   def save_ndarray(self, obj):
-    if EnableAutoNumpySharedMemPickling and obj.nbytes >= AutoNumpySharedMemPicklingMinSize:
+    if use_shared_mem_for_numpy_array(obj):
       try:
-        shared = SharedNumpyArray.create_copy(obj)
+        shared = SharedNumpyArray.as_shared(obj)
       except SharedMem.ShmException as e:
         print("SharedNumpyArray exception: %s" % e)
         # fallback to default

@@ -16,7 +16,7 @@ import rnn
 import Debug
 import os
 import numpy
-from TaskSystem import Pickler, Unpickler
+from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from threading import Condition
 
 InitTypes = set()
@@ -355,7 +355,9 @@ class PythonControl:
     assert error_signal.shape == posteriors.shape
     with self.cond:
       self.control_thread__have_new_error_signal = True
+      self.posteriors = None
       self.cond.notifyAll()
+    numpy_set_unused(posteriors)
     error_signal = error_signal.astype('float32', copy=False)
     return loss, error_signal
 
