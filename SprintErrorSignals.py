@@ -12,6 +12,7 @@ import theano.tensor as T
 import numpy
 import sys
 import os
+import time
 import atexit
 import signal
 from TaskSystem import Pickler, Unpickler
@@ -180,7 +181,6 @@ class SprintSubprocessInstance:
     assert os.getpid() == self.parent_pid
     p = self.pipe_p2c[1]  # see _start_child
     Pickler(p).dump(v)
-    p.flush()
 
   def _read(self):
     assert os.getpid() == self.parent_pid
@@ -607,6 +607,9 @@ class SprintErrorSigOp(theano.Op):
     self.target = target  # default is "classes"
     self.sprint_opts = make_hashable(sprint_opts)
     self.sprint_instance_pool = None
+    from Config import get_global_config
+    config = get_global_config()
+    self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
 
   def make_node(self, log_posteriors, seq_lengths):
     log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
@@ -615,6 +618,7 @@ class SprintErrorSigOp(theano.Op):
     return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
   def perform(self, node, inputs, output_storage):
+    start_time = time.time()
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
@@ -634,6 +638,9 @@ class SprintErrorSigOp(theano.Op):
     output_storage[1][0] = errsig
 
     print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+    end_time = time.time()
+    if self.debug_perform_time:
+      print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
 
 
 def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
