@@ -11,6 +11,7 @@ from StringIO import StringIO
 from contextlib import contextmanager
 import pickle
 import types
+import struct
 import marshal
 from importlib import import_module
 import errno
@@ -602,6 +603,14 @@ class Pickler(pickle.Pickler):
     self.save((str(obj),))
     self.write(pickle.REDUCE)
   dispatch[types.BufferType] = save_buffer
+
+  def save_string(self, obj, pack=struct.pack):
+    # Difference to base: We just always use BINSTRING (simpler)
+    # and use a separate write for the obj itself.
+    # For a huge obj, this avoids one unnecessary copy of the data.
+    self.write(pickle.BINSTRING + pack("<i", len(obj)))
+    self.write(obj)
+  dispatch[str] = save_string
 
   def save_ndarray(self, obj):
     if use_shared_mem_for_numpy_array(obj):
