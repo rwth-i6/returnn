@@ -84,6 +84,11 @@ def initConfig(configFilename, commandLineOptions):
     key, value = args[i:i+2]
     assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
     config.add_line(key=key[2:], value=value)
+  # I really don't know where to put this otherwise:
+  if config.bool("EnableAutoNumpySharedMemPickling", False):
+    import TaskSystem
+    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+
 
 def initLog():
   logs = config.list('log', [])

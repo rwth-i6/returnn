@@ -16,7 +16,9 @@ import rnn
 import Debug
 import os
 import numpy
+import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
+from Util import to_bool
 from threading import Condition
 
 InitTypes = set()
@@ -62,7 +64,7 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
 
   global Quiet
-  if bool(config.get("quiet", False)):
+  if to_bool(config.get("quiet", False)):
     Quiet = True
 
   print("CRNN SprintControl[pid %i] init: name=%r, sprint_unit=%r, version_number=%r, callback=%r, ref=%r, config=%r, kwargs=%r" % (
@@ -70,8 +72,12 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   InitTypes.add(name)
 
   global Verbose
-  if bool(config.get("verbose", False)):
+  if to_bool(config.get("verbose", False)):
     Verbose = True
+
+  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not TaskSystem.SharedMemNumpyConfig["enabled"]:
+    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+    print("CRNN SprintControl[pid %i] EnableAutoNumpySharedMemPickling = True" % (os.getpid(),))
 
   # Remaining Sprint interface is in this PythonControl instance.
   return PythonControl.create(c2p_fd=int(config["c2p_fd"]), p2c_fd=int(config["p2c_fd"]),
@@ -420,6 +426,7 @@ class PythonControl:
     print("CRNN SprintControl[pid %i] PythonControl run_threaded_control_loop" % (os.getpid(),))
     from threading import Thread
     def control_loop():
+      rnn.initBetterExchook()
       self.run_control_loop(self.own_threaded_callback)
     t = Thread(target=control_loop, name="SprintControl.PythonControl.threaded_control_loop")
     t.daemon = True

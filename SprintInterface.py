@@ -30,7 +30,8 @@ from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
 from Network import LayerNetwork
 import Debug
-from Util import interrupt_main
+from Util import interrupt_main, to_bool
+import TaskSystem
 
 DefaultSprintCrnnConfig = "config/crnn.config"
 
@@ -134,7 +135,7 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   :param str config: config string, passed by Sprint. assumed to be ","-separated
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
   """
-  print "Python train init()"
+  print("SprintInterface[pid %i] init()" % (os.getpid(),))
   print "inputDim:", inputDim
   print "outputDim:", outputDim
   print "config:", config
@@ -146,6 +147,10 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
 
   config = config.split(",")
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
+
+  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not TaskSystem.SharedMemNumpyConfig["enabled"]:
+    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+    print("SprintInterface[pid %i] EnableAutoNumpySharedMemPickling = True" % (os.getpid(),))
 
   epoch = config.get("epoch", None)
   if epoch is not None:

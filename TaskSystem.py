@@ -183,7 +183,7 @@ class SharedMem:
       self.is_creator = True
       self.shmid = self.shmget(self.IPC_PRIVATE, self.size, 0o600)
       self.check_ccall_error(self.shmid > 0, "shmget")
-      print("SharedMem: New shmid: %i" % self.shmid)
+      print("SharedMem[pid %i]: New shmid: %i (size %i)" % (os.getpid(), self.shmid, self.size))
       import atexit
       atexit.register(self.remove)
     else:
@@ -199,8 +199,8 @@ class SharedMem:
       self.shmdt(self.ptr)
       self.ptr = None
     if self.shmid and self.is_creator:
+      print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
       self.shmctl(self.shmid, self.IPC_RMID, 0)
-      print("SharedMem: Removed shmid %i" % self.shmid)
       self.shmid = None
 
   def __del__(self):
@@ -223,7 +223,6 @@ def next_power_of_two(n):
 class SharedNumpyArray:
   # cls members
   ServerInstances = set()
-  MaxServerInstances = 2
   class TooMuchInstances(SharedMem.ShmException): pass
   ExtraSpaceBytes = 4048
   # local members
@@ -231,16 +230,29 @@ class SharedNumpyArray:
   mem = None
   shape, strides, typestr = None, None, None
 
+  @staticmethod
+  def numpy_strides_for_fortran(shape, typestr):
+    itemsize = numpy.dtype(typestr).itemsize
+    strides = [itemsize]
+    for s in shape:
+      strides += [strides[-1] * s]
+    strides = strides[:-1]
+    return tuple(strides)
+
+  @staticmethod
+  def numpy_strides_for_c_contiguous(shape, typestr):
+    itemsize = numpy.dtype(typestr).itemsize
+    strides = [numpy.prod(shape[i + 1:], dtype="int") * itemsize for i in range(len(shape))]
+    return tuple(strides)
+
   @classmethod
   def needed_mem_size(cls, shape, typestr):
-    import numpy
-    itemsize = int(typestr[2:])
+    itemsize = numpy.dtype(typestr).itemsize
     mem_size = cls.ExtraSpaceBytes + itemsize * numpy.prod(shape)
     return mem_size
 
   @classmethod
   def as_shared(cls, array):
-    import numpy
     assert isinstance(array, numpy.ndarray)
     if isinstance(array.base, SharedNumpyArray):
       return array.base
@@ -248,14 +260,22 @@ class SharedNumpyArray:
 
   @classmethod
   def create_copy(cls, array):
-    import numpy
     assert isinstance(array, numpy.ndarray)
     array_intf = array.__array_interface__
     shape = array_intf["shape"]
     strides = array_intf["strides"]
     typestr = array_intf["typestr"]
+    if array.flags.c_contiguous or array.flags.f_contiguous:
+      pass  # ok, we can reuse it like that
+    else:
+      assert strides
+      # Use some similar strides so that the copying might be faster.
+      if strides[0] == array.itemsize:
+        strides = cls.numpy_strides_for_fortran(shape=shape, typestr=typestr)
+      else:
+        strides = None  # C-contiguous
     inst = cls.create_new(shape=shape, strides=strides, typestr=typestr)
-    SharedMem.memcpy(inst.get_numpy_array_data_ptr(), array.ctypes.data, array.nbytes)
+    inst.create_numpy_array()[...] = array
     return inst
 
   @classmethod
@@ -277,7 +297,7 @@ class SharedNumpyArray:
 
   def __init__(self, shape, strides, typestr, mem=None):
     if not mem:
-      if len(self.ServerInstances) >= self.MaxServerInstances:
+      if len(self.ServerInstances) >= SharedMemNumpyConfig["max_server_instances"]:
         raise self.TooMuchInstances("too much instances (%i)" % len(self.ServerInstances))
       self.is_server = True
       self._init_mem(shape=shape, typestr=typestr)
@@ -294,6 +314,9 @@ class SharedNumpyArray:
     self._set_numpy_format(shape=shape, strides=strides, typestr=typestr)
 
   def _set_numpy_format(self, shape, strides, typestr):
+    itemsize = numpy.dtype(typestr).itemsize
+    if strides:
+      assert sum([st * (sh - 1) for (st, sh) in zip(strides, shape)]) + itemsize == numpy.prod(shape) * itemsize
     self.shape = shape
     self.strides = strides
     self.typestr = typestr
@@ -327,6 +350,8 @@ class SharedNumpyArray:
     a = numpy.array(self, copy=False)
     assert not a.flags.owndata
     assert a.base is self
+    assert a.nbytes + self.ExtraSpaceBytes <= self.mem.size
+    assert sum([st * (sh - 1) for (st, sh) in zip(a.strides, a.shape)]) < a.nbytes
     return a
 
   def _get_in_use_flag_ref(self):
@@ -421,16 +446,19 @@ def make_numpy_ndarray_fromstring(s, dtype, shape):
   return numpy.fromstring(s, dtype=dtype).reshape(shape)
 
 
-EnableAutoNumpySharedMemPickling = False
-AutoNumpySharedMemPicklingMinSize = 8 * 1024 * 1024  # 8MB
+SharedMemNumpyConfig = {
+  "enabled": False,
+  "auto_pickling_min_size": 8 * 1024 * 1024,  # 8MB
+  "max_server_instances": 10,
+}
 
 def use_shared_mem_for_numpy_array(obj):
   assert isinstance(obj, numpy.ndarray)
   if isinstance(obj.base, SharedNumpyArray):
     return True
-  if not EnableAutoNumpySharedMemPickling:
+  if not SharedMemNumpyConfig["enabled"]:
     return False
-  return obj.nbytes >= AutoNumpySharedMemPicklingMinSize
+  return obj.nbytes >= SharedMemNumpyConfig["auto_pickling_min_size"]
 
 def numpy_set_unused(v):
   """
@@ -444,21 +472,37 @@ def numpy_set_unused(v):
   if isinstance(v.base, SharedNumpyArray):
     v.base.set_unused()
 
+def numpy_copy_and_set_unused(v):
+  """
+  :param dict[str,numpy.ndarray|object] | numpy.ndarray | object v: object to be handled
+  If v is a dict, we will return a new copied dict where every value is mapped through numpy_copy_and_set_unused.
+  If v is a numpy.ndarray and its base is a SharedNumpyArray, we will copy it and
+    call numpy_set_unused on the old value.
+  If v is a numpy.ndarray and its base is not a SharedNumpyArray, we will just return it as it is and do nothing.
+  In all other cases, we will also just return the object as it is and do nothing.
+  """
+  if isinstance(v, numpy.ndarray):
+    if isinstance(v.base, SharedNumpyArray):
+      newv = v.copy(order="A")
+      numpy_set_unused(v)
+      return newv
+    return v
+  if isinstance(v, dict):
+    return {k: numpy_copy_and_set_unused(vv) for (k, vv) in v.items()}
+  return v
+
 def numpy_alloc(shape, dtype, fortran_for_shared=False):
   """
   If EnableAutoNumpySharedMemPickling is True, this will allocate a Numpy array
   in shared memory so we avoid a copy later on when this Numpy array would
   be transferred to another process via pickling.
   """
-  if EnableAutoNumpySharedMemPickling:
+  if SharedMemNumpyConfig["enabled"]:
     dtype = numpy.dtype(dtype)
     typestr = dtype.str
     strides = None
     if fortran_for_shared:
-      strides = [dtype.itemsize]
-      for s in shape:
-        strides += [strides[-1] * s]
-      strides = strides[:-1]
+      strides = SharedNumpyArray.numpy_strides_for_fortran(shape=shape, typestr=typestr)
     try:
       return SharedNumpyArray.create_new(shape=shape, strides=strides, typestr=typestr)
     except SharedMem.ShmException as e:
@@ -992,6 +1036,7 @@ class AsyncTask:
     self.mustExec = mustExec
     self.env_update = env_update
     self.parent_pid = os.getpid()
+    self.SharedMemNumpyConfig = SharedMemNumpyConfig
     proc_args = {
       "target": funcCall,
       "args": ((AsyncTask, "_asyncCall"), (self,)),
@@ -1026,6 +1071,8 @@ class AsyncTask:
       isFork = True
     global isMainProcess
     isMainProcess = False
+    global SharedMemNumpyConfig
+    SharedMemNumpyConfig = self.SharedMemNumpyConfig
     try:
       self.func(self)
     except KeyboardInterrupt:

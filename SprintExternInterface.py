@@ -6,7 +6,9 @@ This Sprint interface is to be used for ExternSprintDataset, which should automa
 """
 
 import os
+import TaskSystem
 from TaskSystem import Pickler, Unpickler
+from Util import to_bool
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.
@@ -58,6 +60,11 @@ def _parse_config_str(config_str):
   config = {key: value for (key, value) in [s.split(":", 1) for s in config_list if s]}
   return config
 
+def _common_init(config):
+  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not TaskSystem.SharedMemNumpyConfig["enabled"]:
+    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+    print("SprintExternInterface[pid %i] EnableAutoNumpySharedMemPickling = True" % (os.getpid(),))
+
 def init_PythonTrainer(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
@@ -70,7 +77,7 @@ def init_PythonTrainer(inputDim, outputDim, config, targetMode, **kwargs):
   :param str config: config string, passed by Sprint. assumed to be ","-separated
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
   """
-  print "SprintExternInterface: PythonTrainer init_PythonTrainer()"
+  print("SprintExternInterface[pid %i]: PythonTrainer init_PythonTrainer()" % (os.getpid(),))
   print "inputDim:", inputDim
   print "outputDim:", outputDim
   print "config:", config
@@ -84,6 +91,7 @@ def init_PythonTrainer(inputDim, outputDim, config, targetMode, **kwargs):
   assert targetMode != "criterion-by-sprint"
   config = _parse_config_str(config)
   assert config["action"] == "ExternSprintDataset"
+  _common_init(config)
 
   _init_global_sprintDataset(inputDim=inputDim, outputDim=outputDim, config=config)
 
@@ -134,7 +142,7 @@ class PythonControl:
 
   @classmethod
   def init(cls, **kwargs):  # called by global init().
-    print("SprintExternInterface: PythonControl init %r" % kwargs)
+    print("SprintExternInterface[pid %i]: PythonControl init %r" % (os.getpid(), kwargs))
     if cls.instance:
       return cls.instance
     cls.instance = cls(**kwargs)
@@ -142,6 +150,7 @@ class PythonControl:
 
   def __init__(self, config, **kwargs):
     self.config = _parse_config_str(config)
+    _common_init(self.config)
 
   def init_processing(self, input_dim, output_dim, **kwargs):
     print("SprintExternInterface: PythonControl init_processing inputDim=%i, outputDim=%i, other:%r" % (input_dim, output_dim, kwargs))

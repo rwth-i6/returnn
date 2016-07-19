@@ -15,6 +15,7 @@ import os
 import time
 import atexit
 import signal
+import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable
 from Log import log
@@ -156,6 +157,8 @@ class SprintSubprocessInstance:
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
     config_str += ",minPythonControlVersion:%i" % self.minPythonControlVersion
+    if TaskSystem.SharedMemNumpyConfig["enabled"]:
+      config_str += ",EnableAutoNumpySharedMemPickling:True"
     if self.sprintControlConfig:
       config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
     my_mod_name = "SprintControl"
