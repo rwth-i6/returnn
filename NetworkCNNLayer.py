@@ -9,10 +9,12 @@ from cuda_implementation.FractionalMaxPoolingOp import fmp
 from ActivationFunctions import strtoact
 from math import ceil, sqrt
 
+
 class CNN(_NoOpLayer):
-  recurrent = True # to force same behavior in feed-forward networks
+  recurrent = True  # to force same behavior in feed-forward networks
+
   def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2), mode="max", activation='tanh',
-               border_mode="valid", ignore_border=True, dropout=0.0, seeds=23455, factor=0.5, **kwargs):
+               border_mode="valid", ignore_border=True, dropout=0.0, factor=0.5, **kwargs):
 
     """
 
@@ -65,10 +67,6 @@ class CNN(_NoOpLayer):
         :param dropout: float or double
             dropout value for regularization
             default: 0.0
-
-        :param seeds: integer
-            seeds value for random stream
-            default: 23455
 
     """
 
@@ -146,7 +144,6 @@ class CNN(_NoOpLayer):
     self.mode = mode
     self.ignore_border = ignore_border
     self.dropout = dropout
-    self.seeds = seeds
     self.factor = factor
 
     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
@@ -161,7 +158,6 @@ class CNN(_NoOpLayer):
     self.set_attr("border_mode", self.border_mode)
     self.set_attr("ignore_border", self.ignore_border)
     self.set_attr("dropout", self.dropout)
-    self.set_attr("seeds", self.seeds)
     self.set_attr("activation", activation)
     self.set_attr("factor", self.factor)
     self.set_attr("n_out", self.n_out)  # number of output dimension
@@ -172,8 +168,7 @@ class CNN(_NoOpLayer):
     return [is_conv_layer, n_sources]
 
   # function for calculating the weight parameter of convolution layer
-  def create_weights(self, filter_shape, pool_size, seeds, factor):
-    rng = numpy.random.RandomState(seeds)
+  def create_weights(self, filter_shape, pool_size, factor):
     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))
     #         (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
@@ -181,7 +176,7 @@ class CNN(_NoOpLayer):
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
     return self.shared(
       numpy.asarray(
-        rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+        self.rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
         dtype=theano.config.floatX
       ),
       borrow=True,
@@ -266,9 +261,9 @@ class CNN(_NoOpLayer):
       mode=modes
     )
 
-  def run_cnn(self, filter_shape, pool_size, seeds, n_features, inputs, dropout, border_mode, ignore_border, mode, factor):
+  def run_cnn(self, filter_shape, pool_size, n_features, inputs, dropout, border_mode, ignore_border, mode, factor):
     # weight parameter
-    w = self.add_param(self.create_weights(filter_shape, pool_size, seeds, factor))
+    w = self.add_param(self.create_weights(filter_shape, pool_size, factor))
 
     # bias parameter
     b = self.add_param(self.create_bias(n_features))
@@ -321,7 +316,7 @@ class NewConv(CNN):
       self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
     self.input.name = "conv_layer_input_final"
 
-    self.Output = self.run_cnn(self.filter_shape, self.pool_size, self.seeds, self.n_features, self.input, self.dropout,
+    self.Output = self.run_cnn(self.filter_shape, self.pool_size, self.n_features, self.input, self.dropout,
                                self.border_mode, self.ignore_border, self.mode, self.factor)  # (time*batch, maps, out-row, out-col)
 
     # our CRNN only accept 3D tensor (time, batch, dim)
@@ -373,7 +368,7 @@ class ConcatConv(CNN):
         idx = int(self.filters[1] / 2)
         self.index = self.index[idx:-idx]
 
-    self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size, self.seeds,
+    self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size,
                                    self.n_features, self.input, self.dropout,
                                    self.border_mode, self.ignore_border,
                                    self.mode, self.factor)   # (batch, features, out-row, out-col)

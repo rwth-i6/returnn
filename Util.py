@@ -871,3 +871,14 @@ def attr_chain(base, attribs):
     base = getattr(base, attribs[i])
   return base
 
+
+def to_bool(v):
+  try:
+    return bool(int(v))
+  except ValueError:
+    pass
+  if isinstance(v, (str, unicode)):
+    v = v.lower()
+    if v in ["true", "yes", "on"]: return True
+    if v in ["false", "no", "off"]: return False
+  raise ValueError("to_bool cannot handle %r" % v)

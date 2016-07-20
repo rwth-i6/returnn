@@ -10,7 +10,8 @@ import atexit
 import signal
 from threading import Thread
 from SprintDataset import SprintDataset
-from TaskSystem import Pickler, Unpickler
+import TaskSystem
+from TaskSystem import Pickler, Unpickler, numpy_copy_and_set_unused
 from Util import eval_shell_str, interrupt_main
 from Log import log
 
@@ -124,6 +125,10 @@ class ExternSprintDataset(SprintDataset):
     return os.path.dirname(os.path.abspath(__file__))
 
   def _build_sprint_args(self):
+    config_str = "action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (
+      self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
+    if TaskSystem.SharedMemNumpyConfig["enabled"]:
+      config_str += ",EnableAutoNumpySharedMemPickling:True"
     epoch = self.crnnEpoch or 1
     args = [
       self.sprintTrainerExecPath,
@@ -140,8 +145,7 @@ class ExternSprintDataset(SprintDataset):
       "--*.trainer=python-trainer",
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=SprintExternInterface",
-      "--*.pymod-config=action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (
-        self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())]
+      "--*.pymod-config=%s" % config_str]
     if self.predefined_seq_list_order:
       import tempfile
       self.seq_list_file = tempfile.mktemp(prefix="crnn-sprint-predefined-seq-list")
@@ -196,7 +200,7 @@ class ExternSprintDataset(SprintDataset):
 
           if dataType == "data":
             segmentName, features, targets = args
-            self.addNewData(features, targets, segmentName=segmentName)
+            self.addNewData(numpy_copy_and_set_unused(features), numpy_copy_and_set_unused(targets), segmentName=segmentName)
           elif dataType == "exit":
             haveSeenTheWhole = True
             break

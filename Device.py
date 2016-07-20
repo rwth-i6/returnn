@@ -646,6 +646,8 @@ class Device(object):
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
+    if self.config.bool("debug_batch_compute_time", False):
+      print >>log.v1, "batch compute time:", compute_end_time - compute_start_time
     self.compute_total_time += compute_end_time - compute_start_time
     # output is a list the outputs which we specified when creating the Theano function in self.initialize().
     assert len(output) > 0  # In all cases, we have some output.

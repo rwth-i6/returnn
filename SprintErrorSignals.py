@@ -12,9 +12,11 @@ import theano.tensor as T
 import numpy
 import sys
 import os
+import time
 import atexit
 import signal
-from TaskSystem import Pickler, Unpickler
+import TaskSystem
+from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable
 from Log import log
 
@@ -155,6 +157,8 @@ class SprintSubprocessInstance:
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
     config_str += ",minPythonControlVersion:%i" % self.minPythonControlVersion
+    if TaskSystem.SharedMemNumpyConfig["enabled"]:
+      config_str += ",EnableAutoNumpySharedMemPickling:True"
     if self.sprintControlConfig:
       config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
     my_mod_name = "SprintControl"
@@ -180,7 +184,6 @@ class SprintSubprocessInstance:
     assert os.getpid() == self.parent_pid
     p = self.pipe_p2c[1]  # see _start_child
     Pickler(p).dump(v)
-    p.flush()
 
   def _read(self):
     assert os.getpid() == self.parent_pid
@@ -346,6 +349,7 @@ class SprintInstancePool:
         assert seg_name == tags[b]
         batch_loss[b] = loss
         batch_error_signal[:seq_lengths[b], b] = error_signal
+        numpy_set_unused(error_signal)
     return batch_loss, batch_error_signal
 
   def get_free_instance(self):
@@ -607,6 +611,9 @@ class SprintErrorSigOp(theano.Op):
     self.target = target  # default is "classes"
     self.sprint_opts = make_hashable(sprint_opts)
     self.sprint_instance_pool = None
+    from Config import get_global_config
+    config = get_global_config()
+    self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
 
   def make_node(self, log_posteriors, seq_lengths):
     log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
@@ -615,6 +622,7 @@ class SprintErrorSigOp(theano.Op):
     return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
   def perform(self, node, inputs, output_storage):
+    start_time = time.time()
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
@@ -634,6 +642,9 @@ class SprintErrorSigOp(theano.Op):
     output_storage[1][0] = errsig
 
     print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+    end_time = time.time()
+    if self.debug_perform_time:
+      print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
 
 
 def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
