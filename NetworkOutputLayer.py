@@ -4,6 +4,7 @@ from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
+from OpNumpyAlign import NumpyAlignOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
@@ -323,7 +324,7 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
@@ -414,11 +415,24 @@ class SequenceOutputLayer(OutputLayer):
       log_pcx = self.z - log_sum(self.z, axis=0, keepdims=True)
       err = ctc_cost(log_pcx, time_mask, targets, seq_lens)
       return err, known_grads
+    elif self.loss == 'viterbi':
+      y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+      scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = NumpyAlignOp()(self.sources[0].index,self.index,scores,self.y)
+      self.y_data_flat = y.flatten()
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
+      return T.sum(nll), known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+    elif self.loss == 'viterbi':
+      scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = NumpyAlignOp()(self.sources[0].index, self.index, scores, self.y)
+      #self.y_m = y.flatten()
+      self.y_data_flat = y.flatten()
+      return super(SequenceOutputLayer, self).errors()
     else:
       return super(SequenceOutputLayer, self).errors()
 
