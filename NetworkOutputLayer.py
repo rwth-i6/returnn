@@ -431,7 +431,7 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
-      y = NumpyAlignOp()(self.sources[0].index, self.index, scores, self.y)
+      y = NumpyAlignOp(False)(self.sources[0].index, self.index, scores, self.y)
       #self.y_m = y.flatten()
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
