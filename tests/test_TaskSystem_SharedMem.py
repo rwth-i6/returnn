@@ -48,20 +48,30 @@ def test_pickle_numpy():
   assert shared_client.mem is None
 
 
-def test_pickle_unpickle_async():
+def test_pickle_unpickle_auto_unused():
+  old_num_servers = None
   for i in range(10):
-    m = numpy.random.randn(10, 10)
+    m = numpy.random.randn(10, 10)[2:3, 4:5]
     p = pickle_dumps((m, m, m))
+    new_num_servers = len(SharedNumpyArray.ServerInstances)
+    if old_num_servers is not None:
+      assert old_num_servers == new_num_servers
+    old_num_servers = new_num_servers
     m2, m3, m4 = pickle_loads(p)
     assert numpy.allclose(m, m2)
     assert numpy.allclose(m, m3)
     assert numpy.allclose(m, m4)
-    ss = list([find_numpy_shared_by_shmid(m.base.mem.shmid) for m in (m2, m3, m4)])
+    assert not m4.base.is_server
+    m4.base._get_in_use_flag_ref().value = 42
+    assert m4.base._get_in_use_flag_ref().value == 42
+    assert find_numpy_shared_by_shmid(m4.base.mem.shmid)._get_in_use_flag_ref().value == 42
+    assert numpy.allclose(m, m4)
+    ss = list([find_numpy_shared_by_shmid(_m.base.mem.shmid) for _m in (m2, m3, m4)])
+    _m = None
     m2 = m3 = m4 = None
-    gc.collect()
-    gc.collect()
     gc.collect()
     for s in ss:
       assert isinstance(s, SharedNumpyArray)
       assert s.is_server
       assert not s.is_in_use()
+      assert numpy.allclose(m, s.create_numpy_array())
