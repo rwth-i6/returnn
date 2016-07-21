@@ -18,10 +18,10 @@ class NumpyAlignOp(theano.Op):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
       if self.inverse:
-        alignment[:length_x,b] = self._fullAlignmentSequence(0, length_x, scores[:length_x,b],
+        alignment[:length_x,b] = self._fullAlignmentSequenceInv(0, length_x, scores[:length_x,b],
                                                              transcriptions[:length_y,b])
       else:
-        alignment[:length_x,b] = self._fullAlignmentSequenceInv(0, length_x, scores[:length_x,b],
+        alignment[:length_x,b] = self._fullAlignmentSequence(0, length_x, scores[:length_x,b],
                                                                 transcriptions[:length_y,b])
     output_storage[0][0] = alignment
 
@@ -30,6 +30,7 @@ class NumpyAlignOp(theano.Op):
 
   def __init__(self, inverse): # TODO
     self.numStates = 3
+    self.inverse = inverse
     self.repetitions = 1
     self.silence = False
     self.pruningThreshold = 500.
@@ -246,12 +247,10 @@ class NumpyAlignOp(theano.Op):
     # backtrack alignment
     result = [0] * lengthT
     t = lengthT - 1
-    global tdp_counts_inv
     for s in range(lengthS - 1, -1, -1):
       for span in range(0, bt[s][t]):
           result[start + t - span] = int((hmm[s]/self.numStates + 1) / self.repetitions)
       t = t - bt[s][t]
-      tdp_counts_inv[bt[s][t]] += 1
       assert t >= 0, "invalid alignment"
 
     # handle remaining timeframes -> silence
