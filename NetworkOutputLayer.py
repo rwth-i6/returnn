@@ -420,7 +420,7 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'viterbi':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
-      y = NumpyAlignOp()(self.sources[0].index,self.index,scores,self.y)
+      y = NumpyAlignOp(False)(self.sources[0].index,self.index,scores,self.y)
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
