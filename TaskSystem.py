@@ -225,7 +225,7 @@ class SharedNumpyArray:
   # cls members
   ServerInstances = set()
   class TooMuchInstances(SharedMem.ShmException): pass
-  ExtraSpaceBytes = 4048
+  ExtraSpaceBytes = 4096
   # local members
   is_server = False
   mem = None
@@ -256,6 +256,7 @@ class SharedNumpyArray:
   def as_shared(cls, array):
     assert isinstance(array, numpy.ndarray)
     if isinstance(array.base, SharedNumpyArray):
+      assert array.base.is_in_use()
       return array.base
     return cls.create_copy(array)
 
@@ -456,6 +457,7 @@ SharedMemNumpyConfig = {
 def use_shared_mem_for_numpy_array(obj):
   assert isinstance(obj, numpy.ndarray)
   if isinstance(obj.base, SharedNumpyArray):
+    assert obj.base.is_in_use()
     return True
   if not SharedMemNumpyConfig["enabled"]:
     return False
@@ -471,6 +473,7 @@ def numpy_set_unused(v):
   if v is None: return
   assert isinstance(v, numpy.ndarray)
   if isinstance(v.base, SharedNumpyArray):
+    assert v.base.is_in_use()  # must not be called multiple times
     v.base.set_unused()
 
 def numpy_copy_and_set_unused(v):
