@@ -259,4 +259,4 @@ class NumpyAlignOp(theano.Op):
       result[start + span] = int((hmm[s]/self.numStates + 1) / self.repetitions)
     return result
 
-numpyAlignOp = NumpyAlignOp()
+numpyAlignOp = NumpyAlignOp(False)
