@@ -1118,6 +1118,22 @@ class StateToAct(ForwardLayer):
     self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
 
 
+class StateVector(ForwardLayer):
+  layer_class = "state_vector"
+
+  def __init__(self, output_activation='identity', **kwargs):
+    kwargs['n_out'] = 1
+    super(StateVector, self).__init__(**kwargs)
+    self.params = {}
+    f = strtoact_single_joined(output_activation)
+
+    self.act = [T.concatenate([f(s.act[1][-1]) for s in self.sources], axis=1).dimshuffle('x', 0, 1)]
+    self.act.append(T.zeros_like(self.act[0]))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
+    self.make_output(self.act[0])
+    self.index = T.ones((1, self.index.shape[1]), dtype='int8')
+
+
 class TimeConcatLayer(HiddenLayer):
   layer_class = "time_concat"
 
@@ -1736,8 +1752,34 @@ class AttentionLayer(_NoOpLayer):
     att, _ = theano.map(lambda att,base: T.sum(base*att.dimshuffle(1,0,'x').repeat(base.shape[2],axis=2),axis=0),
                         sequences=[attention], non_sequences=[base])
     self.make_output(att)
+    self.act = [ att, T.zeros_like(att) ]
     #attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
     #self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+
+
+class AttentionVectorLayer(_NoOpLayer):
+  layer_class = 'attention_vector'
+
+  def __init__(self, base, template, **kwargs):
+    super(AttentionVectorLayer, self).__init__(**kwargs)
+    self.set_attr('base', ",".join([b.name for b in base]))
+    self.set_attr('template',template)
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in base])
+    memory = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
+    W_base = self.add_param(self.create_forward_weights(self.attrs['n_out'], template), 'W_base')
+    b_base = self.add_param(self.create_bias(template), 'b_base')
+    base = T.tanh(T.dot(memory, W_base) + b_base)
+
+    state = T.concatenate([s.output[-1] for s in self.sources], axis=1)
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    W_state = self.add_param(self.create_forward_weights(n_in, template), 'W_state')
+    b_state = self.add_param(self.create_bias(template), 'b_state')
+    state = T.tanh(T.dot(state, W_state) + b_state)
+
+    sim = T.exp(-T.sqrt(T.sqr(base - state).sum(axis=2)))
+    alpha = (sim / T.sum(sim,axis=0,keepdims=True)).dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2)
+    self.make_output(T.sum(alpha * memory,axis=0,keepdims=True))
+    self.act = [self.output, T.zeros_like(self.output)]
 
 
 class SignalSplittingLayer(HiddenLayer):

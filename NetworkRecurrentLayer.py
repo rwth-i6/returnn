@@ -174,6 +174,7 @@ class LSTMR(Unit):
   """
   def __init__(self, n_units, **kwargs):
     super(LSTMR, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
+    self.n_re = 0
 
   def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
