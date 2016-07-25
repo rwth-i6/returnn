@@ -312,19 +312,20 @@ class Device(object):
     self.seq_train_parallel_control = None  # SeqTrainParallelControlDevHost
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
+    testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True, eval_flag=False)
-      self.testnet = LayerNetwork.from_json_and_config(json_content, config, mask="unity", train_flag=False, eval_flag=eval_flag)
+      self.testnet = LayerNetwork.from_json_and_config(json_content, config, **testnet_kwargs)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True, eval_flag=False,
                                                            **LayerNetwork.init_args_from_config(config))
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, input_mask="unity", train_flag=False, eval_flag=eval_flag,
-                                                          **LayerNetwork.init_args_from_config(config))
+      self.testnet = LayerNetwork.from_hdf_model_topology(model, **dict_joined(testnet_kwargs,
+                                                          LayerNetwork.init_args_from_config(config)))
       model.close()
     else:
       self.trainnet = LayerNetwork.from_config_topology(config, train_flag=True, eval_flag=False)
-      self.testnet = LayerNetwork.from_config_topology(config, mask="unity", train_flag=False, eval_flag=eval_flag)
+      self.testnet = LayerNetwork.from_config_topology(config, **testnet_kwargs)
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     if config.has('load'):
