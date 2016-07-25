@@ -199,9 +199,10 @@ class SharedMem:
     if self.ptr:
       self.shmdt(self.ptr)
       self.ptr = None
-    if self.shmid and self.is_creator:
-      print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
-      self.shmctl(self.shmid, self.IPC_RMID, 0)
+    if self.shmid:
+      if self.is_creator:
+        print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
+        self.shmctl(self.shmid, self.IPC_RMID, 0)
       self.shmid = None
 
   def __del__(self):
@@ -223,7 +224,9 @@ def next_power_of_two(n):
 
 class SharedNumpyArray:
   # cls members
+  ServerLock = Lock()
   ServerInstances = set()
+  ServerArrayId = 0
   class TooMuchInstances(SharedMem.ShmException): pass
   ExtraSpaceBytes = 4096
   # local members
@@ -278,46 +281,70 @@ class SharedNumpyArray:
         strides = None  # C-contiguous
     inst = cls.create_new(shape=shape, strides=strides, typestr=typestr)
     inst.create_numpy_array()[...] = array
+    assert inst._get_sanity_check_flag_ref().value == 42
+    assert inst.is_in_use()
     return inst
 
   @classmethod
   def create_new(cls, shape, strides, typestr):
     needed_mem_size = cls.needed_mem_size(shape=shape, typestr=typestr)
-    for inst in cls.ServerInstances:
-      assert isinstance(inst, SharedNumpyArray)
-      if inst.is_in_use(): continue
-      if inst.mem.size < needed_mem_size:
-        inst._init_mem(shape=shape, typestr=typestr)
-      inst._set_numpy_format(shape=shape, strides=strides, typestr=typestr)
-      inst._set_is_used(1)
-      return inst
+    with cls.ServerLock:
+      for inst in cls.ServerInstances:
+        assert isinstance(inst, SharedNumpyArray)
+        assert inst._get_sanity_check_flag_ref().value == 42
+        if inst.is_in_use(): continue
+        if inst.mem.size < needed_mem_size:
+          inst._init_mem(shape=shape, typestr=typestr)
+        # We can reuse it.
+        inst._set_new_array_id()
+        inst._set_is_used(1)
+        inst._set_numpy_format(shape=shape, strides=strides, typestr=typestr)
+        return inst
     return cls(shape=shape, strides=strides, typestr=typestr)
 
   @classmethod
-  def create_from_shared(cls, shape, strides, typestr, mem):
-    return cls(shape=shape, strides=strides, typestr=typestr, mem=mem)
+  def _get_new_array_id(cls):
+    array_id = cls.ServerArrayId
+    cls.ServerArrayId += 1
+    return array_id
 
-  def __init__(self, shape, strides, typestr, mem=None):
+  def _set_new_array_id(self):
+    assert self.is_server
+    self.array_id = self._get_new_array_id()
+    self._get_array_id_ref().value = self.array_id
+
+  def __init__(self, shape, strides, typestr, mem=None, array_id=None):
     if not mem:
+      assert array_id is None
       if len(self.ServerInstances) >= SharedMemNumpyConfig["max_server_instances"]:
         raise self.TooMuchInstances("too much instances (%i)" % len(self.ServerInstances))
       self.is_server = True
       self._init_mem(shape=shape, typestr=typestr)
+      self._get_sanity_check_flag_ref().value = 42
+      self._set_new_array_id()
       self._set_is_used(1)
-      self.ServerInstances.add(self)
     else:
+      assert array_id is not None
       self.is_server = False
+      self.array_id = array_id
       mem_size = self.needed_mem_size(shape=shape, typestr=typestr)
       assert isinstance(mem, SharedMem)
       assert mem.size >= mem_size
       assert mem.shmid > 0
       assert mem.ptr > 0
       self.mem = mem
+      assert self._get_sanity_check_flag_ref().value == 42
+      assert self._get_array_id_ref().value == self.array_id
+      assert self.is_in_use()
     self._set_numpy_format(shape=shape, strides=strides, typestr=typestr)
+    if self.is_server:
+      with self.ServerLock:
+        self.ServerInstances.add(self)
 
   def _set_numpy_format(self, shape, strides, typestr):
     itemsize = numpy.dtype(typestr).itemsize
     if strides:
+      assert all([st > 0 for st in strides])
       assert sum([st * (sh - 1) for (st, sh) in zip(strides, shape)]) + itemsize == numpy.prod(shape) * itemsize
     self.shape = shape
     self.strides = strides
@@ -328,7 +355,9 @@ class SharedNumpyArray:
     if self.mem:
       self.mem.remove()
       self.mem = None
+    assert numpy.prod(shape) > 0
     mem_size = next_power_of_two(self.needed_mem_size(shape=shape, typestr=typestr))
+    mem_size = max(SharedMemNumpyConfig["min_shared_mem_size"], mem_size)
     self.mem = SharedMem(size=mem_size)
 
   def get_numpy_array_data_ptr(self):
@@ -348,18 +377,31 @@ class SharedNumpyArray:
     }
 
   def create_numpy_array(self):
-    import numpy
+    assert self._get_sanity_check_flag_ref().value == 42
+    assert self._get_array_id_ref().value == self.array_id
+    assert self.is_in_use()
     a = numpy.array(self, copy=False)
-    assert not a.flags.owndata
+    assert a.__array_interface__["data"][0] == self.get_numpy_array_data_ptr()
+    assert not a.flags.owndata, "a.__array_interface__ = %r" % a.__array_interface__
     assert a.base is self
     assert a.nbytes + self.ExtraSpaceBytes <= self.mem.size
-    assert sum([st * (sh - 1) for (st, sh) in zip(a.strides, a.shape)]) < a.nbytes
+    assert sum([st * (sh - 1) for (st, sh) in zip(a.strides, a.shape)]) + a.itemsize == numpy.prod(a.shape) * a.itemsize == a.nbytes
     return a
+
+  def _get_sanity_check_flag_ref(self):
+    assert self.mem.ptr > 0
+    import ctypes
+    return ctypes.cast(ctypes.c_void_p(self.mem.ptr), ctypes.POINTER(ctypes.c_uint64)).contents
+
+  def _get_array_id_ref(self):
+    assert self.mem.ptr > 0
+    import ctypes
+    return ctypes.cast(ctypes.c_void_p(self.mem.ptr + 8), ctypes.POINTER(ctypes.c_uint64)).contents
 
   def _get_in_use_flag_ref(self):
     assert self.mem.ptr > 0
     import ctypes
-    return ctypes.cast(ctypes.c_void_p(self.mem.ptr), ctypes.POINTER(ctypes.c_uint64)).contents
+    return ctypes.cast(ctypes.c_void_p(self.mem.ptr + 16), ctypes.POINTER(ctypes.c_uint64)).contents
 
   def _set_is_used(self, n):
     self._get_in_use_flag_ref().value = n
@@ -377,7 +419,7 @@ class SharedNumpyArray:
   def __getstate__(self):
     return {
       "shape": self.shape, "strides": self.strides, "typestr": self.typestr,
-      "mem": self.mem
+      "mem": self.mem, "array_id": self.array_id
     }
 
   def __setstate__(self, state):
@@ -451,11 +493,14 @@ def make_numpy_ndarray_fromstring(s, dtype, shape):
 SharedMemNumpyConfig = {
   "enabled": False,
   "auto_pickling_min_size": 8 * 1024 * 1024,  # 8MB
+  "min_shared_mem_size": 32 * 1024 * 1024,  # 32MB
   "max_server_instances": 10,
 }
 
 def use_shared_mem_for_numpy_array(obj):
   assert isinstance(obj, numpy.ndarray)
+  if obj.shape == ():  # scalar
+    return False  # cannot use shared memory because it will always use its own memory
   if isinstance(obj.base, SharedNumpyArray):
     assert obj.base.is_in_use()
     return True

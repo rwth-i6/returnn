@@ -48,10 +48,62 @@ def test_pickle_numpy():
   assert shared_client.mem is None
 
 
+def test_pickle_numpy_scalar():
+  # Note that a scalar really does not work because numpy.array(float) will always own its data.
+  m = numpy.array([numpy.random.randn()])
+  assert isinstance(m, numpy.ndarray)
+  assert m.shape == (1,)
+  assert m.nbytes >= 1
+  p = pickle_dumps(m)
+  m2 = pickle_loads(p)
+  assert isinstance(m2, numpy.ndarray)
+  assert numpy.allclose(m, m2)
+  assert isinstance(m2.base, SharedNumpyArray)
+  shared_client = m2.base
+  assert not shared_client.is_server
+  shared_server = find_numpy_shared_by_shmid(m2.base.mem.shmid)
+  assert shared_server.is_server
+  assert numpy.allclose(m, shared_server.create_numpy_array())
+  assert numpy.allclose(m, shared_client.create_numpy_array())
+  assert shared_server.is_in_use()
+  assert shared_client.is_in_use()
+  numpy_set_unused(m2)
+  assert not shared_server.is_in_use()
+  assert shared_client.mem is None
+
+
+def test_pickle_gc_aggressive():
+  m = numpy.random.randn(10, 10)
+  p = pickle_dumps(m)
+  m2 = pickle_loads(p)
+  assert isinstance(m2, numpy.ndarray)
+  assert numpy.allclose(m, m2)
+  assert isinstance(m2.base, SharedNumpyArray)
+  print("refcount: %i" % sys.getrefcount(m2.base))
+  gc.collect()
+  gc.collect()
+  print("refcount: %i" % sys.getrefcount(m2.base))
+  assert m2.base.is_in_use()
+  server = find_numpy_shared_by_shmid(m2.base.mem.shmid)
+  m2 = None
+  gc.collect()
+
+
+def test_pickle_multiple():
+  for i in range(20):
+    ms = [numpy.random.randn(10, 10) for i in range(i % 3 + 1)]
+    p = pickle_dumps(ms)
+    ms2 = pickle_loads(p)
+    assert len(ms) == len(ms2)
+    for m, m2 in zip(ms, ms2):
+      assert numpy.allclose(m, m2)
+      assert isinstance(m2.base, SharedNumpyArray)
+
+
 def test_pickle_unpickle_auto_unused():
   old_num_servers = None
   for i in range(10):
-    m = numpy.random.randn(10, 10)[2:3, 4:5]
+    m = numpy.random.randn(i * 2 + 1, i * 3 + 2)
     p = pickle_dumps((m, m, m))
     new_num_servers = len(SharedNumpyArray.ServerInstances)
     if old_num_servers is not None:
@@ -74,4 +126,3 @@ def test_pickle_unpickle_auto_unused():
       assert isinstance(s, SharedNumpyArray)
       assert s.is_server
       assert not s.is_in_use()
-      assert numpy.allclose(m, s.create_numpy_array())
