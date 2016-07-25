@@ -223,6 +223,19 @@ def next_power_of_two(n):
 
 
 class SharedNumpyArray:
+  """
+  This class provides a way to create Numpy arrays in shared memory.
+  It adds some logic to mark whether some shared memory segment can be reused
+  - that is when the client marks it as unused.
+
+  Note that there are a few similar Python modules:
+    https://pypi.python.org/pypi/SharedArray
+    http://parad0x.org/git/python/shared-array/about
+    https://bitbucket.org/cleemesser/numpy-sharedmem/src
+    http://stackoverflow.com/questions/5033799/how-do-i-pass-large-numpy-arrays
+    http://stackoverflow.com/questions/7894791/use-numpy-array-in-shared-memory
+  """
+
   # cls members
   ServerLock = Lock()
   ServerInstances = set()
