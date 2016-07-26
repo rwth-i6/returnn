@@ -1266,7 +1266,7 @@ class Device(object):
     network = self.trainnet if use_trainnet else self.testnet
     import theano
     if not self.forwarder:
-      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet
+      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet, ", testnet_share_params:", self.testnet_share_params
       self.forwarder = theano.function(
         inputs=[],
         outputs=[layer.output for name, layer in sorted(network.output.items())],

@@ -547,35 +547,44 @@ class SeqTrainParallelControlDevHost:
     assert self.train_started
     return self.have_seqs_loss_data(self.train_start_seq, self.train_end_seq)
 
-  def do_forward(self, seq_idx, seq_tag, seq_len):
+  def do_forward(self, batch):
     """
     Called via Engine.SeqTrainParallelControl.
     We expect that assign_dev_data was called before to set the right data.
+    :param EngineUtil.Batch batch: the current batch, containing one or more seqs
     """
     # Do the actual forwarding and collect result.
     n_time, n_batch = self.device.j["data"].get_value(borrow=True, return_internal_type=True).shape
-    assert n_batch == 1
-    assert n_time == seq_len
+    assert n_batch == batch.num_slices
+    assert n_time == batch.max_num_frames_per_slice["data"]
+    assert n_batch == len(self.device.tags)
+    assert n_batch == len(batch.seqs)
     outputs = self.device.forward()
-    posteriors = outputs[self.output_layer.name]
-    assert (posteriors >= 0).all()
+    batch_posteriors = outputs[self.output_layer.name]
+    assert (batch_posteriors >= 0).all()
 
     # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
-    if posteriors.ndim == 3:
-      assert posteriors.shape == (seq_len, 1, self.output_layer.attrs['n_out'])
-      posteriors = posteriors[:, 0]
+    if batch_posteriors.ndim == 2:
+      assert batch_posteriors.shape == (batch.max_num_frames_per_slice[self.output_target] * batch.num_slices, self.output_layer.attrs['n_out'])
+      batch_posteriors = batch_posteriors.reshape((batch.max_num_frames_per_slice[self.output_target], batch.num_slices, self.output_layer.attrs['n_out']))
     # Posteriors are in format (time,emission).
-    assert posteriors.shape == (seq_len, self.output_layer.attrs['n_out'])
+    assert batch_posteriors.shape == (batch.max_num_frames_per_slice[self.output_target], batch.num_slices, self.output_layer.attrs['n_out'])
 
-    self.forward_data_queue.append(self.ForwardData(seq_idx, seq_tag, posteriors))
+    for i in range(n_batch):
+      assert batch.seqs[i].batch_slice == i
+      seq_idx = batch.seqs[i].seq_idx
+      seq_tag = self.device.tags[i]
+      seq_len = batch.seqs[i].frame_length[self.output_target]
+      posteriors = batch_posteriors[:seq_len, i]
+      self.forward_data_queue.append(self.ForwardData(seq_idx=seq_idx, seq_tag=seq_tag, posteriors=posteriors))
 
-  def have_space_in_forward_data_queue(self):
+  def have_space_in_forward_data_queue(self, num_seqs=0):
     """
     Called via Engine.SeqTrainParallelControl.
     """
     # This is called greedily until it returns False.
     # It's important that we have this behavior deterministic so that the training itself is deterministic.
-    return len(self.forward_data_queue) + len(self.calc_loss_states) + len(self.loss_data_queue) < self.forward_seq_delay
+    return len(self.forward_data_queue) + len(self.calc_loss_states) + len(self.loss_data_queue) + num_seqs < self.forward_seq_delay
 
   def remove_old_loss_data(self, current_start_seq):
     idx = 0

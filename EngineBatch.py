@@ -51,7 +51,7 @@ class Batch:
     self.seqs = []; " :type: list[BatchSeqCopyPart] "
 
   def __repr__(self):
-    return "<Batch start_seq:%r>" % self.start_seq
+    return "<Batch start_seq:%r, #seqs:%i>" % (self.start_seq, len(self.seqs))
 
   def try_sequence_as_slice(self, length):
     """
