@@ -8,19 +8,30 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
-from Util import collect_class_init_kwargs
+from Util import collect_class_init_kwargs, dict_joined
 from Log import log
 
+
 class LayerNetwork(object):
-  def __init__(self, n_in=None, n_out=None, base_network=None, data_map=None, data_map_i=None):
+  def __init__(self, n_in=None, n_out=None,
+               base_network=None, data_map=None, data_map_i=None,
+               shared_params_network=None,
+               mask=None, sparse_input=False, target='classes', train_flag=False, eval_flag=False):
     """
     :param int n_in: input dim of the network
     :param dict[str,(int,int)] n_out: output dim of the network.
       first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
     :param dict[str,theano.Variable] data_map: if specified, this will be used for x/y (and it expects data_map_i)
     :param dict[str,theano.Variable] data_map_i: if specified, this will be used for i/j
-    :param LayerNetwork base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
+    :param LayerNetwork|None base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
       data_map will have precedence over base_network.
+    :param LayerNetwork|()->LayerNetwork|None shared_params_network: optional network where we will share params with.
+      we will error if there is a param which cannot be shared.
+    :param str mask: e.g. "unity" or None ("dropout")
+    :param bool sparse_input: for SourceLayer
+    :param str target: default target
+    :param bool train_flag: marks that we are used for training
+    :param bool eval_flag: marks that we are used for evaluation
     """
     if n_out is None:
       assert base_network is not None
@@ -67,6 +78,11 @@ class LayerNetwork(object):
     self.description = None; """ :type: LayerNetworkDescription | None """
     self.train_param_args = None; """ :type: dict[str] """
     self.recurrent = False  # any of the from_...() functions will set this
+    self.default_mask = mask
+    self.sparse_input = sparse_input
+    self.default_target = target
+    self.train_flag = train_flag
+    self.eval_flag = eval_flag
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.known_grads = {}; " :type: dict[theano.Variable,theano.Variable]"
     self.json_content = "{}"
@@ -76,24 +92,20 @@ class LayerNetwork(object):
     self.errors = {}
     self.loss = None
     self.ctc_priors = None
-    self.default_mask = None  # any of the from_...() functions will set this
-    self.sparse_input = None  # any of the from_...() functions will set this
-    self.default_target = None  # any of the from_...() functions will set this
-    self.train_flag = None  # any of the from_...() functions will set this
-    self.get_layer_param = None  # used by Container.add_param()
     self.calc_step_base = None
     self.calc_steps = []
     self.base_network = base_network
+    self.shared_params_network = shared_params_network
 
   @classmethod
-  def from_config_topology(cls, config, mask=None, train_flag=False, eval_flag=False):
+  def from_config_topology(cls, config, mask=None, **kwargs):
     """
     :type config: Config.Config
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
     json_content = cls.json_from_config(config, mask=mask)
-    return cls.from_json_and_config(json_content, config, mask=mask, train_flag=train_flag, eval_flag=eval_flag)
+    return cls.from_json_and_config(json_content, config, mask=mask, **kwargs)
 
   @classmethod
   def json_from_config(cls, config, mask=None):
@@ -137,15 +149,14 @@ class LayerNetwork(object):
     return json_content
 
   @classmethod
-  def from_description(cls, description, mask=None, train_flag = False):
+  def from_description(cls, description, mask=None, **kwargs):
     """
     :type description: NetworkDescription.LayerNetworkDescription
     :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     json_content = description.to_json_content(mask=mask)
-    network = cls.from_json(json_content, mask=mask, train_flag=train_flag,
-                            n_in=description.num_inputs, n_out=description.num_outputs)
+    network = cls.from_json(json_content, n_in=description.num_inputs, n_out=description.num_outputs, mask=mask, **kwargs)
     return network
 
   @classmethod
@@ -161,18 +172,47 @@ class LayerNetwork(object):
       "target": config.value('target', 'classes')
     }
 
+  def init_args(self):
+    return {
+      "n_in": self.n_in,
+      "n_out": self.n_out,
+      "mask": self.default_mask,
+      "sparse_input": self.sparse_input,
+      "target": self.default_target,
+      "train_flag": self.train_flag,
+      "eval_flag": self.eval_flag
+    }
+
   @classmethod
-  def from_json_and_config(cls, json_content, config, mask=None, train_flag=False, eval_flag=False):
+  def from_json_and_config(cls, json_content, config, **kwargs):
     """
     :type config: Config.Config
     :type json_content: str | dict
-    :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    network = cls.from_json(json_content, mask=mask, train_flag=train_flag, eval_flag=eval_flag,
-                            **cls.init_args_from_config(config))
-    network.recurrent = network.recurrent or config.bool('recurrent','False')
+    network = cls.from_json(json_content, **dict_joined(kwargs, cls.init_args_from_config(config)))
+    network.recurrent = network.recurrent or config.bool('recurrent', False)
     return network
+
+  def get_layer_param(self, layer_name, param_name, param):
+    """
+    Used by Container.add_param() to maybe substitute a parameter instead of creating a new shared var.
+    :param str layer_name: the layer name where this param will be added
+    :param str param_name: the name of the param
+    :param theano.SharedVariable param: the already created shared var
+    :rtype None | theano.Variable
+    If we return None, Container.add_param() will continue as usual.
+    """
+    if self.shared_params_network:
+      network = self.shared_params_network
+      if callable(network):
+        network = network()
+      base_substitute = network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+      if base_substitute: return base_substitute
+      base_layer = network.get_layer(layer_name)
+      assert base_layer, "%s not found in shared_params_network" % layer_name
+      return base_layer.params.get(param_name, None)
+    return None
 
   @classmethod
   def from_base_network(cls, base_network, json_content=None, share_params=False, base_as_calc_step=False, **kwargs):
@@ -184,25 +224,15 @@ class LayerNetwork(object):
     :param dict[str] kwargs: kwargs for __init__
     :rtype: LayerNetwork
     """
-    network = cls(base_network=base_network, **kwargs)
-    network.default_mask = base_network.default_mask
-    network.sparse_input = base_network.sparse_input
-    network.default_target = base_network.default_target
-    network.train_flag = base_network.train_flag
+    network = cls(
+      base_network=base_network,
+      shared_params_network=base_network if share_params else None,
+      **dict_joined(base_network.init_args(), kwargs))
     if base_as_calc_step:
       network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
-    if share_params:
-      def shared_get_layer_param(layer_name, param_name, param):
-        if base_network.get_layer_param:
-          substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
-          if substitute: return substitute
-        base_layer = base_network.get_layer(layer_name)
-        assert base_layer, "%s not found in base_network" % layer_name
-        return base_layer.params.get(param_name, None)
-      network.get_layer_param = shared_get_layer_param
     if json_content is None:
       json_content = base_network.to_json_content()
-    cls.from_json(json_content, network=network, train_flag=base_network.train_flag, eval_flag=base_network.eval_flag)
+    cls.from_json(json_content, network=network)
     if share_params:
       trainable_params = network.get_all_params_vars()
       assert len(trainable_params) == 0
@@ -243,25 +273,22 @@ class LayerNetwork(object):
                                   n_out=n_out, data_map=data_map, data_map_i=data_map_i)
 
   @classmethod
-  def from_json(cls, json_content, n_in=None, n_out=None, network=None,
-                mask=None, sparse_input=False, target='classes', train_flag=False, eval_flag=False):
+  def from_json(cls, json_content, n_in=None, n_out=None, network=None, **kwargs):
     """
     :type json_content: dict[str]
     :type n_in: int | None
     :type n_out: dict[str,(int,int)] | None
     :param LayerNetwork | None network: optional already existing instance
-    :param str mask: e.g. "unity" or None ("dropout")
     :rtype: LayerNetwork
     """
     if network is None:
-      network = cls(n_in=n_in, n_out=n_out)
+      network = cls(n_in=n_in, n_out=n_out, **kwargs)
       network.json_content = json.dumps(json_content, sort_keys=True)
-      network.recurrent = False
-      network.default_mask = mask
-      network.sparse_input = sparse_input
-      network.default_target = target
-      network.train_flag = train_flag
-      network.eval_flag = eval_flag
+    mask = network.default_mask
+    sparse_input = network.sparse_input
+    target = network.default_target
+    train_flag = network.train_flag
+    eval_flag = network.eval_flag
     templates = {}
     assert isinstance(json_content, dict)
     network.y['data'].n_out = network.n_out['data'][0]
@@ -381,8 +408,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, mask=None, sparse_input=False, target='classes',
-                              train_flag=False, eval_flag=False):
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, **kwargs):
     """
     :type model: h5py.File
     :param str mask: e.g. "unity"
@@ -402,13 +428,11 @@ class LayerNetwork(object):
       print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
     if n_out and n_out != n_out_model:
       print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
-    network = cls(n_in_model, n_out_model)
-    network.recurrent = False
-    network.default_mask = mask
-    network.sparse_input = sparse_input
-    network.default_target = target
-    network.train_flag = train_flag
-    network.eval_flag = eval_flag
+    network = cls(n_in=n_in_model, n_out=n_out_model, **kwargs)
+    sparse_input = network.sparse_input
+    target = network.default_target
+    train_flag = network.train_flag
+    eval_flag = network.eval_flag
 
     if 'target' in model['n_out'].attrs:
       target = model['n_out'].attrs['target']

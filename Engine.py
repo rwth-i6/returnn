@@ -201,7 +201,7 @@ class Engine:
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxint
     if config.is_typed("seq_train_parallel"):
-      self.seq_train_parallel = SeqTrainParallelControl(engine=self, **config.typed_value("seq_train_parallel"))
+      self.seq_train_parallel = SeqTrainParallelControl(engine=self, config=config, **config.typed_value("seq_train_parallel"))
     else:
       self.seq_train_parallel = None
     # And also initialize the network. That depends on some vars here such as pretrain.
@@ -779,41 +779,63 @@ class SeqTrainParallelControl:
     It calls self.train_wait_for_seqs().
   """
 
-  def __init__(self, engine, **kwargs):
+  def __init__(self, engine, config, **kwargs):
+    """
+    :type engine: Engine
+    :type config: Config.Config
+    """
     self.engine = engine
+    self.config = config
     self.train_started = None
     self.train_device = None
     self.train_start_seq = 0
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
 
-  def do_forward(self):
+  def forward_fill_queue(self):
     """
     Full sequence forwarding, no chunking (at the moment).
     """
     assert self.train_started
-    assert not self.is_forwarding_finished
-    # Load next sequence for forwarding, keep all which are still needed for training.
+    if self.is_forwarding_finished: return
+
+    # We will ignore max_seq_length.
+    batch_size = self.config.int('batch_size', 1)
+    max_seqs = self.config.int('max_seqs', -1)
+    if max_seqs <= 0: max_seqs = float('inf')
     dataset = self.engine.train_data
-    if not dataset.is_less_than_num_seqs(self.forward_current_seq):
-      self.is_forwarding_finished = True
-      return
-    dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
-    seq_tag = dataset.get_tag(self.forward_current_seq)
-    seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
-    print >>log.v4, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
-      self.forward_current_seq, seq_tag, seq_len)
+    from EngineBatch import Batch
 
-    from EngineUtil import assign_dev_data_single_seq
-    success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq, load_seqs=False)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
-    self.train_device.update_data()
-    self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
-    self.forward_current_seq += 1
+    # Collect all batches.
+    forward_batches = []; ":type: list[EngineBatch.Batch]"
+    num_seqs = 0
+    while self._device_exec("have_space_in_forward_data_queue", num_seqs=num_seqs):
+      # Load next sequence for forwarding, keep all which are still needed for training.
+      if not dataset.is_less_than_num_seqs(self.forward_current_seq):
+        self.is_forwarding_finished = True
+        break
+      dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
+      seq_len = dataset.get_seq_length(self.forward_current_seq)
 
-  def should_do_forward(self):
-    if self.is_forwarding_finished: return False
-    return self._device_exec("have_space_in_forward_data_queue")
+      if not forward_batches:
+        forward_batches.append(Batch())
+      batch = forward_batches[-1]
+      dt, ds = batch.try_sequence_as_slice(seq_len)
+      if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
+        batch = Batch()
+        forward_batches.append(batch)
+      batch.add_sequence_as_slice(seq_idx=self.forward_current_seq, seq_start_frame=0, length=seq_len)
+      num_seqs += 1
+      self.forward_current_seq += 1
+
+    # Forward the batches.
+    from EngineUtil import assign_dev_data
+    for batch in forward_batches:
+      print >> log.v4, "SeqTrainParallelControl, forward %r" % batch
+      success = assign_dev_data(self.train_device, dataset, [batch], load_seqs=False)
+      assert success, "failed to allocate & assign data"
+      self.train_device.update_data()
+      self._device_exec("do_forward", batch=batch)
 
   def train_wait_for_seqs(self, device, batches):
     """
@@ -835,8 +857,7 @@ class SeqTrainParallelControl:
       time.sleep(0.1)  # TaskThread.DeviceRun will call device.result()
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
-    while self.should_do_forward():
-      self.do_forward()
+    self.forward_fill_queue()
     self._device_exec("train_check_calc_loss")
     while not self._device_exec("train_have_loss_for_cur_batches"):
       if not self._device_exec("train_check_calc_loss"):

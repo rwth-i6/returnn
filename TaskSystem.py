@@ -333,7 +333,6 @@ class SharedNumpyArray:
         raise self.TooMuchInstances("too much instances (%i)" % len(self.ServerInstances))
       self.is_server = True
       self._init_mem(shape=shape, typestr=typestr)
-      self._get_sanity_check_flag_ref().value = 42
       self._set_new_array_id()
       self._set_is_used(1)
     else:
@@ -372,6 +371,7 @@ class SharedNumpyArray:
     mem_size = next_power_of_two(self.needed_mem_size(shape=shape, typestr=typestr))
     mem_size = max(SharedMemNumpyConfig["min_shared_mem_size"], mem_size)
     self.mem = SharedMem(size=mem_size)
+    self._get_sanity_check_flag_ref().value = 42
 
   def get_numpy_array_data_ptr(self):
     assert self.mem.ptr > 0

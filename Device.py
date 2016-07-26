@@ -313,6 +313,9 @@ class Device(object):
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
+    self.testnet_share_params = config.bool("testnet_share_params", False)
+    if self.testnet_share_params:
+      testnet_kwargs["shared_params_network"] = lambda: self.trainnet
     if json_content is not None:
       self.trainnet = LayerNetwork.from_json_and_config(json_content, config, train_flag=True, eval_flag=False)
       self.testnet = LayerNetwork.from_json_and_config(json_content, config, **testnet_kwargs)
@@ -328,6 +331,9 @@ class Device(object):
       self.testnet = LayerNetwork.from_config_topology(config, **testnet_kwargs)
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
+    if self.testnet_share_params:
+      testnet_all_params = self.testnet.get_all_params_vars()
+      assert len(testnet_all_params) == 0
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       if 'update_step'in model.attrs:
@@ -870,19 +876,27 @@ class Device(object):
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         our_params_trainnet = self.trainnet.get_all_params_vars()
+        our_params_testnet = self.testnet.get_all_params_vars()
+        assert isinstance(our_params_trainnet, list)
         params_len = input_queue.recv()
         params = [input_queue.recv_bytes() for i in range(params_len)]
         assert input_queue.recv() == "end-set-net-params"
-        our_params_testnet = self.testnet.get_all_params_vars()
-        assert len(params) == len(our_params_trainnet) == len(our_params_testnet)
-        for param_str, our_p_train, our_p_test in zip(params, our_params_trainnet, our_params_testnet):
+        assert len(params) == len(our_params_trainnet)
+        if self.testnet_share_params:
+          assert len(our_params_testnet) == 0
+        else:
+          assert len(params) == len(our_params_testnet)
+        for i in range(params_len):
+          param_str = params[i]
           param = numpy.fromstring(param_str, dtype='float32')
+          our_p_train = our_params_trainnet[i]
           our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
           assert numpy.prod(our_param_shape) == numpy.prod(param.shape)
           #assert numpy.isfinite(param).all()
           converted = param.reshape(our_param_shape)
           our_p_train.set_value(converted)
-          our_p_test.set_value(converted)
+          if not self.testnet_share_params:
+            our_params_testnet[i].set_value(converted)
       elif cmd == 'get-num-updates':
         if self.updater:
           output_queue.send(int(self.updater.i.get_value()))
@@ -964,7 +978,8 @@ class Device(object):
     """
     if self.blocking:
       self.trainnet.set_params_by_dict(network.get_params_dict())
-      self.testnet.set_params_by_dict(network.get_params_dict())
+      if not self.testnet_share_params:
+        self.testnet.set_params_by_dict(network.get_params_dict())
     else:
       assert self.main_pid == os.getpid()
       self.set_net_encoded_params([
@@ -1251,7 +1266,7 @@ class Device(object):
     network = self.trainnet if use_trainnet else self.testnet
     import theano
     if not self.forwarder:
-      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet
+      print >>log.v3, "Device: Create forwarder, use trainnet:", use_trainnet, ", testnet_share_params:", self.testnet_share_params
       self.forwarder = theano.function(
         inputs=[],
         outputs=[layer.output for name, layer in sorted(network.output.items())],
