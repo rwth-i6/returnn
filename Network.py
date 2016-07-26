@@ -376,7 +376,7 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, input_mask=None, sparse_input=False, target='classes',
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, mask=None, sparse_input=False, target='classes',
                               train_flag=False, eval_flag=False):
     """
     :type model: h5py.File
@@ -399,7 +399,7 @@ class LayerNetwork(object):
       print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
     network = cls(n_in_model, n_out_model)
     network.recurrent = False
-    network.default_mask = input_mask
+    network.default_mask = mask
     network.sparse_input = sparse_input
     network.default_target = target
     network.train_flag = train_flag
@@ -413,8 +413,8 @@ class LayerNetwork(object):
     network.y['data'].n_out = network.n_out['data'][0]
     def traverse(model, layer_name, output_index):
       index = output_index
-      mask = input_mask
-      if not input_mask and 'mask' in model[layer_name].attrs:
+      mask = network.default_mask
+      if not mask and 'mask' in model[layer_name].attrs:
         mask = model[layer_name].attrs['mask']
       if 'from' in model[layer_name].attrs:
         x_in = []

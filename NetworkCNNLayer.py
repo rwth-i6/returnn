@@ -310,7 +310,7 @@ class NewConv(CNN):
     batch = inputs.shape[1]
 
     if self.status[0]:
-      self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
+      self.input = T.concatenate([s.Output for s in self.sources], axis=3)  # (batch, stack size, row, col)
     else:
       inputs2 = inputs.reshape((time * batch, self.d_row, self.d_col, self.stack_size))  # (time*batch, row, col, stack)
       self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)

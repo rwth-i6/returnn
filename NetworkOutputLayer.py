@@ -378,7 +378,9 @@ class SequenceOutputLayer(OutputLayer):
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
-        err = -T.sum(T.log(T.pow(self.p_y_given_x, y_ref)) * T.cast(self.index, "float32").dimshuffle(0, 1, 'x'))
+        err = -T.sum(T.switch(T.cast(self.index, "float32").dimshuffle(0, 1, 'x'),
+                              y_ref * T.log(self.p_y_given_x),
+                              numpy.float32(0)))
       if self.ce_smoothing:
         err *= numpy.float32(1.0 - self.ce_smoothing)
         grad *= numpy.float32(1.0 - self.ce_smoothing)
