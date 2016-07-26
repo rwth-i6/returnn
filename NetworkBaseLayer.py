@@ -409,7 +409,7 @@ class SourceLayer(Container):
       assert dtype
       network.use_target(target=data_key, dtype=dtype)
       x_out = network.y[data_key]
-      n_out = network.y[data_key].n_out
+      n_out = network.n_out[data_key][0]
       index = network.j[data_key]
     if x_out is None:
       assert network is not None
