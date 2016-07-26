@@ -301,6 +301,11 @@ class LayerNetwork(object):
           if prev == 'data':
             source.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
             index = network.i
+          elif not prev in content.keys() and prev != "null":
+            sparse = obj.pop('sparse_input', False)
+            dtype = 'int32' if sparse else 'float32'
+            source.append(SourceLayer(0, None, sparse=sparse, dtype=dtype, name='data', network=network, data_key=prev))
+            index = source[-1].index
           elif prev != "null":
             index = traverse(content, prev, target, index)
             source.append(network.get_layer(prev))

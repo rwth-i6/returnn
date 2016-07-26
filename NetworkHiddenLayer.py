@@ -1156,10 +1156,22 @@ class CollapseLayer(HiddenLayer):
     super(CollapseLayer, self).__init__(**kwargs)
     self.set_attr('axis', axis)
     self.params = {}
-    z = T.concatenate([x.output for x in self.sources], axis=2).dimshuffle('x',1,0,2)
-    z = z.reshape((1,z.shape[1],z.shape[2]*z.shape[3]))
-    self.make_output(z)
-    self.index = T.ones((1,z.shape[1]),'int8')
+    xin = []
+    sin = []
+    for s in self.sources:
+      if hasattr(s,'act'):
+        xin.append(s.act[0])
+        sin.append(s.act[1])
+      else:
+        xin.append(s.output)
+        sin.append(T.zeros_like(xin[-1]))
+    xin = T.concatenate(xin,axis=2).dimshuffle('x',1,0,2)
+    sin = T.concatenate(sin,axis=2).dimshuffle('x',1,0,2)
+    xin = xin.reshape((1,xin.shape[1],xin.shape[2] * xin.shape[3]))
+    sin = sin.reshape((1,sin.shape[1],sin.shape[2] * sin.shape[3]))
+    self.make_output(xin)
+    self.index = T.ones((1,xin.shape[1]),'int8')
+    self.act = [xin,sin]
 
 
 class HDF5DataLayer(Layer):
