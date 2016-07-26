@@ -1121,13 +1121,18 @@ class StateToAct(ForwardLayer):
 class StateVector(ForwardLayer):
   layer_class = "state_vector"
 
-  def __init__(self, output_activation='identity', **kwargs):
+  def __init__(self, output_activation='identity', idx=-1, **kwargs):
     kwargs['n_out'] = 1
     super(StateVector, self).__init__(**kwargs)
     self.params = {}
     f = strtoact_single_joined(output_activation)
-
-    self.act = [T.concatenate([f(s.act[1][-1]) for s in self.sources], axis=1).dimshuffle('x', 0, 1)]
+    xin = []
+    for s in self.sources:
+      if hasattr(s,'act'):
+        xin.append(f(s.act[1][idx]))
+      else:
+        xin.append(f(s.output[idx]))
+    self.act = [T.concatenate(xin, axis=1).dimshuffle('x', 0, 1)]
     self.act.append(T.zeros_like(self.act[0]))
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
     self.make_output(self.act[0])
@@ -1142,6 +1147,19 @@ class TimeConcatLayer(HiddenLayer):
     super(TimeConcatLayer, self).__init__(**kwargs)
     self.make_output(T.concatenate([x.output for x in self.sources],axis=0))
     self.index = T.concatenate([x.index for x in self.sources],axis=0)
+
+
+class CollapseLayer(HiddenLayer):
+  layer_class = "collapse"
+
+  def __init__(self, axis=0, **kwargs):
+    super(CollapseLayer, self).__init__(**kwargs)
+    self.set_attr('axis', axis)
+    self.params = {}
+    z = T.concatenate([x.output for x in self.sources], axis=2).dimshuffle('x',1,0,2)
+    z = z.reshape((1,z.shape[1],z.shape[2]*z.shape[3]))
+    self.make_output(z)
+    self.index = T.ones((1,z.shape[1]),'int8')
 
 
 class HDF5DataLayer(Layer):
@@ -1762,24 +1780,42 @@ class AttentionVectorLayer(_NoOpLayer):
 
   def __init__(self, base, template, **kwargs):
     super(AttentionVectorLayer, self).__init__(**kwargs)
+    target = None if not 'target' in kwargs else kwargs['target']
     self.set_attr('base', ",".join([b.name for b in base]))
     self.set_attr('template',template)
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in base])
+    self.params = {}
     memory = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
-    W_base = self.add_param(self.create_forward_weights(self.attrs['n_out'], template), 'W_base')
-    b_base = self.add_param(self.create_bias(template), 'b_base')
-    base = T.tanh(T.dot(memory, W_base) + b_base)
+    W_base = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], template, l=0.01, name='W_base'), 'W_base')
+    b_base = self.add_param(self.create_bias(template,name='b_base'), 'b_base')
+    base = T.tanh(T.dot(memory, W_base) + b_base) #/ T.constant(template,'float32')
 
-    state = T.concatenate([s.output[-1] for s in self.sources], axis=1)
+    state = T.concatenate([s.output for s in self.sources], axis=2).repeat(memory.shape[0],axis=0)
     n_in = sum([s.attrs['n_out'] for s in self.sources])
-    W_state = self.add_param(self.create_forward_weights(n_in, template), 'W_state')
-    b_state = self.add_param(self.create_bias(template), 'b_state')
-    state = T.tanh(T.dot(state, W_state) + b_state)
+    W_state = self.add_param(self.create_random_uniform_weights(n_in, template, l=0.1, name='W_state'), 'W_state')
+    b_state = self.add_param(self.create_bias(template,name='b_state'), 'b_state')
+    state = T.tanh(T.dot(state, W_state) + b_state) #/ T.constant(template,'float32')
 
-    sim = T.exp(-T.sqrt(T.sqr(base - state).sum(axis=2)))
-    alpha = (sim / T.sum(sim,axis=0,keepdims=True)).dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2)
-    self.make_output(T.sum(alpha * memory,axis=0,keepdims=True))
+    #base = self.batch_norm(base,template,use_shift=False)
+    #state = self.batch_norm(state,template,use_shift=False)
+    #state = state / T.sqrt(T.sum(state**2))
+    #base = base / T.sqrt(T.sum(base ** 2))
+    #sim = T.exp(-T.sqrt(T.sqr(base - state).sum(axis=2)))
+    sim = T.exp(-T.sqr(base - state).sum(axis=2) / T.constant(template,'float32'))
+    #sim = T.exp(T.sum(state * base,axis=2)) # / T.constant(template,'float32'))
+    alpha = (sim / T.sum(sim,axis=0,keepdims=True))
+    self.make_output(T.sum(alpha.dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2) * memory,axis=0,keepdims=True))
     self.act = [self.output, T.zeros_like(self.output)]
+
+    self.cost_val = 0
+    if target:
+      trg = self.y_in[target].flatten()
+      #idx = T.sum(T.arange(0,base.shape[0],dtype='float32').dimshuffle(0,'x').repeat(base.shape[1],axis=1) * alpha,axis=0)
+      self.cost_val = -T.sum(T.log(alpha[trg,T.arange(base.shape[1],dtype='int32')]))
+      self.error_val = T.cast(T.argmax(alpha,axis=0) - trg,'float32')**2
+
+  def cost(self):
+    return self.cost_val, None
 
 
 class SignalSplittingLayer(HiddenLayer):
