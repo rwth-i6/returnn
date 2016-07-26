@@ -787,33 +787,30 @@ class SeqTrainParallelControl:
     self.forward_current_seq = 0
     self.is_forwarding_finished = False
 
-  def do_forward(self):
+  def forward_fill_queue(self):
     """
     Full sequence forwarding, no chunking (at the moment).
     """
     assert self.train_started
-    assert not self.is_forwarding_finished
-    # Load next sequence for forwarding, keep all which are still needed for training.
-    dataset = self.engine.train_data
-    if not dataset.is_less_than_num_seqs(self.forward_current_seq):
-      self.is_forwarding_finished = True
-      return
-    dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
-    seq_tag = dataset.get_tag(self.forward_current_seq)
-    seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
-    print >>log.v4, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
-      self.forward_current_seq, seq_tag, seq_len)
+    if self.is_forwarding_finished: return
+    while self._device_exec("have_space_in_forward_data_queue"):
+      # Load next sequence for forwarding, keep all which are still needed for training.
+      dataset = self.engine.train_data
+      if not dataset.is_less_than_num_seqs(self.forward_current_seq):
+        self.is_forwarding_finished = True
+        return
+      dataset.load_seqs(self.train_start_seq, self.forward_current_seq + 1)
+      seq_tag = dataset.get_tag(self.forward_current_seq)
+      seq_len = dataset.get_seq_length(self.forward_current_seq)["data"]
+      print >>log.v4, "SeqTrainParallelControl, forward seq idx:%i, tag:%r, len:%i" % (
+        self.forward_current_seq, seq_tag, seq_len)
 
-    from EngineUtil import assign_dev_data_single_seq
-    success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq, load_seqs=False)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
-    self.train_device.update_data()
-    self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
-    self.forward_current_seq += 1
-
-  def should_do_forward(self):
-    if self.is_forwarding_finished: return False
-    return self._device_exec("have_space_in_forward_data_queue")
+      from EngineUtil import assign_dev_data_single_seq
+      success = assign_dev_data_single_seq(self.train_device, dataset, self.forward_current_seq, load_seqs=False)
+      assert success, "failed to allocate & assign data for seq %i, %s" % (self.forward_current_seq, seq_tag)
+      self.train_device.update_data()
+      self._device_exec("do_forward", seq_idx=self.forward_current_seq, seq_tag=seq_tag, seq_len=seq_len)
+      self.forward_current_seq += 1
 
   def train_wait_for_seqs(self, device, batches):
     """
@@ -835,8 +832,7 @@ class SeqTrainParallelControl:
       time.sleep(0.1)  # TaskThread.DeviceRun will call device.result()
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
-    while self.should_do_forward():
-      self.do_forward()
+    self.forward_fill_queue()
     self._device_exec("train_check_calc_loss")
     while not self._device_exec("train_have_loss_for_cur_batches"):
       if not self._device_exec("train_check_calc_loss"):
