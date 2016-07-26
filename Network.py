@@ -25,7 +25,7 @@ class LayerNetwork(object):
     :param dict[str,theano.Variable] data_map_i: if specified, this will be used for i/j
     :param LayerNetwork|None base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
       data_map will have precedence over base_network.
-    :param LayerNetwork|None shared_params_network: optional network where we will share params with.
+    :param LayerNetwork|()->LayerNetwork|None shared_params_network: optional network where we will share params with.
       we will error if there is a param which cannot be shared.
     :param str mask: e.g. "unity" or None ("dropout")
     :param bool sparse_input: for SourceLayer
@@ -204,9 +204,12 @@ class LayerNetwork(object):
     If we return None, Container.add_param() will continue as usual.
     """
     if self.shared_params_network:
-      base_substitute = self.shared_params_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+      network = self.shared_params_network
+      if callable(network):
+        network = network()
+      base_substitute = network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
       if base_substitute: return base_substitute
-      base_layer = self.shared_params_network.get_layer(layer_name)
+      base_layer = network.get_layer(layer_name)
       assert base_layer, "%s not found in shared_params_network" % layer_name
       return base_layer.params.get(param_name, None)
     return None
