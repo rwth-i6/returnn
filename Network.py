@@ -80,7 +80,6 @@ class LayerNetwork(object):
     self.sparse_input = None  # any of the from_...() functions will set this
     self.default_target = None  # any of the from_...() functions will set this
     self.train_flag = None  # any of the from_...() functions will set this
-    self.get_layer_param = None  # used by Container.add_param()
     self.calc_step_base = None
     self.calc_steps = []
     self.base_network = base_network
@@ -174,6 +173,17 @@ class LayerNetwork(object):
     network.recurrent = network.recurrent or config.bool('recurrent','False')
     return network
 
+  def get_layer_param(self, layer_name, param_name, param):
+    """
+    Used by Container.add_param() to maybe substitute a parameter instead of creating a new shared var.
+    :param str layer_name: the layer name where this param will be added
+    :param str param_name: the name of the param
+    :param theano.SharedVariable param: the already created shared var
+    :rtype None | theano.Variable
+    If we return None, Container.add_param() will continue as usual.
+    """
+    return None
+
   @classmethod
   def from_base_network(cls, base_network, json_content=None, share_params=False, base_as_calc_step=False, **kwargs):
     """
@@ -193,9 +203,8 @@ class LayerNetwork(object):
       network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
     if share_params:
       def shared_get_layer_param(layer_name, param_name, param):
-        if base_network.get_layer_param:
-          substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
-          if substitute: return substitute
+        base_substitute = base_network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
+        if base_substitute: return base_substitute
         base_layer = base_network.get_layer(layer_name)
         assert base_layer, "%s not found in base_network" % layer_name
         return base_layer.params.get(param_name, None)

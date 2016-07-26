@@ -158,7 +158,7 @@ class Container(object):
       name = getattr(param, "name", None)
     if not name:
       name = "param_%d" % len(self.params)
-    if self.network and self.network.get_layer_param:
+    if self.network:
       substitute = self.network.get_layer_param(layer_name=self.name, param_name=name, param=param)
       if substitute:
         return substitute
