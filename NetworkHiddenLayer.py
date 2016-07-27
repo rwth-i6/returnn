@@ -2583,7 +2583,7 @@ class NewConvLayer(_NoOpLayer):
 
 
 def my_print(op, x):
-  print 'masuk!!!!!!!'
+  print('masuk!!!!!!!')
   with open('/u/suryani/x.txt', 'a') as f:
     f.write('----->'+str(x.shape)+'\n')
 
