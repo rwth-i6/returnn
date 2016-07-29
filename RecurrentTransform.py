@@ -398,7 +398,7 @@ class AttentionList(AttentionBase):
   def init(self, i):
     if self.attrs['beam'] > 0:
       img = 0
-      for b in xrange(self.attrs['beam']):
+      for b in range(self.attrs['beam']):
         img += T.eye(self.custom_vars['C_%d' % i].shape[0],self.custom_vars['C_%d' % i].shape[0],b,dtype='float32')
       self.__setattr__("P_%d" % i, self.add_input(img, 'P_%d' %i))
     self.__setattr__("B_%d" % i, self.custom_vars['B_%d' % i])
@@ -501,8 +501,8 @@ class AttentionList(AttentionBase):
   def attend(self, y_p):
     #inp, updates = T.dot(y_p,self.W_re), {}
     inp, updates = 0, {}
-    for i in xrange(len(self.base)):
-      for g in xrange(self.n_glm):
+    for i in range(len(self.base)):
+      for g in range(self.n_glm):
         B, C, I, H, W_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, H)
         w_i = self.softmax(z_i, I)
@@ -559,9 +559,9 @@ class AttentionTree(AttentionList):
   name = "attention_tree"
   def attend(self, y_p):
     B = self.custom_vars['B_0']
-    for g in xrange(self.n_glm):
+    for g in range(self.n_glm):
       prev = []
-      for i in xrange(len(self.base)-1,-1,-1):
+      for i in range(len(self.base)-1,-1,-1):
         _, C, I, h_p, _ = self.get(y_p, i, g)
         h_p = sum([h_p] + prev) / T.constant(len(self.base)-i,'float32')
         w = self.softmax(self.distance(C, h_p), I)
@@ -578,8 +578,8 @@ class AttentionBin(AttentionList):
 
   def attend(self, y_p):
     updates = self.default_updates()
-    for g in xrange(self.attrs['glimpse']):
-      for i in xrange(len(self.base)-1,-1,-1):
+    for g in range(self.attrs['glimpse']):
+      for i in range(len(self.base)-1,-1,-1):
         factor = T.constant(self.base[i].attrs['factor'][0], 'int32') if i > 0 else 1
         B, C, I, h_p, _ = self.get(y_p, i, g)
         if i == len(self.base) - 1:
@@ -602,7 +602,7 @@ class AttentionBin(AttentionList):
           w_i = self.softmax(z_i,I)
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[idx].reshape((ext,B.shape[1],B.shape[2]))
       proto = T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0)
-      for i in xrange(len(self.base)):
+      for i in range(len(self.base)):
         self.glimpses[i].append(proto)
     return T.dot(proto, self.custom_vars['W_att_in_0']), updates
 

@@ -204,8 +204,12 @@ class Container(object):
     def random_uniform(l, loc=0.0):
       return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
     import Config, Util
-    config = Config.get_global_config()
-    if config: config = Util.DictAsObj(config.typed_dict)
+    try:
+      config = Config.get_global_config()
+    except Exception:
+      config = None
+    else:
+      config = Util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
       "rng": self.rng,
@@ -306,8 +310,12 @@ class Container(object):
     """
     if not name: name = "%s_%s_%i" % (default_name_prefix, self.name, len(self.params))
     import Config, Util
-    config = Config.get_global_config()
-    if config: config = Util.DictAsObj(config.typed_dict)
+    try:
+      config = Config.get_global_config()
+    except Exception:
+      config = None
+    else:
+      config = Util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
       "theano": theano,

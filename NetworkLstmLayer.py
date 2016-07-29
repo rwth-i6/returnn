@@ -337,7 +337,7 @@ class OptimizedLstmLayer(RecurrentLayer):
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
-    for s in xrange(self.attrs['sampling']):
+    for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
       if encoder:
@@ -1318,7 +1318,7 @@ class GRULayer(RecurrentLayer):
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
-    for s in xrange(self.attrs['sampling']):
+    for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
       if encoder:
@@ -1389,7 +1389,7 @@ class SRULayer(RecurrentLayer):
     self.Wp = []
     if psize:
       self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name, depth=1), name = "Wp_0_%s"%self.name) ]
-      for i in xrange(1, pdepth):
+      for i in range(1, pdepth):
         self.Wp.append(self.add_param(self.create_random_uniform_weights(psize, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name), depth=1), name = "Wp_%d_%s"%(i, self.name)))
       W_re = self.create_random_uniform_weights(psize, n_out * 3, n_re + n_out * 3, name="W_re_%s" % self.name)
     else:
@@ -1452,7 +1452,7 @@ class SRULayer(RecurrentLayer):
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
-    for s in xrange(self.attrs['sampling']):
+    for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
       if encoder:
@@ -1521,7 +1521,7 @@ class SRALayer(RecurrentLayer):
     self.Wp = []
     if psize:
       self.Wp = [ self.add_param(self.create_random_uniform_weights(n_re, psize, n_re + psize, name = "Wp_0_%s"%self.name), name = "Wp_0_%s"%self.name) ]
-      for i in xrange(1, pdepth):
+      for i in range(1, pdepth):
         self.Wp.append(self.add_param(self.create_random_uniform_weights(psize * self.depth, psize, psize + psize, name = "Wp_%d_%s"%(i, self.name)), name = "Wp_%d_%s"%(i, self.name)))
       W_re = self.create_random_uniform_weights(psize * self.depth, n_out * 2, n_re + n_out * 2, name="W_re_%s" % self.name)
     else:
@@ -1578,7 +1578,7 @@ class SRALayer(RecurrentLayer):
     self.out_dec = self.index.shape[0]
     if encoder and 'n_dec' in encoder[0].attrs:
       self.out_dec = encoder[0].out_dec
-    for s in xrange(self.attrs['sampling']):
+    for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z #T.unbroadcast(z, 3)
       if encoder:

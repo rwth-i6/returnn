@@ -8,6 +8,7 @@ from OpNumpyAlign import NumpyAlignOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
+from Util import as_str
 from Log import log
 
 
@@ -138,7 +139,7 @@ class OutputLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.i = (self.index.flatten() > 0).nonzero()
     self.j = ((1 - self.index.flatten()) > 0).nonzero()
-    self.loss = loss.encode("utf8")
+    self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
     self.attrs['compute_priors'] = compute_priors
     if softmax_smoothing != 1.0:

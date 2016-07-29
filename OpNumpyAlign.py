@@ -14,7 +14,7 @@ class NumpyAlignOp(theano.Op):
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
     alignment = np.zeros(index_in.shape,'int32')
-    for b in xrange(scores.shape[1]):
+    for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
       if self.inverse:
@@ -58,7 +58,7 @@ class NumpyAlignOp(theano.Op):
     for i in range(0, transcriptionLength):
       startState = transcription[i] * self.numStates + 1
       for s in range(0, self.numStates):
-        for r in xrange(self.repetitions):
+        for r in range(self.repetitions):
           hmm[self.silence + i * self.numStates * self.repetitions + s * self.repetitions + r] = \
             self.repetitions * (startState + s) - 1
 

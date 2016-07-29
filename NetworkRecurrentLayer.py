@@ -118,7 +118,7 @@ class LSTME(Unit):
       for v in self.recurrent_transform.get_sorted_state_vars():
         other_outputs += [r_updates[v]]
     z_t += T.dot(y_p, self.W_re)
-    partition = z_t.shape[1] / 4
+    partition = z_t.shape[1] // 4
     ingate = T.nnet.sigmoid(z_t[:,:partition])
     forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
     outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
@@ -464,18 +464,18 @@ class RecurrentUnitLayer(Layer):
     self.recurrent_transform = recurrent_transform_inst
 
     # scan over sequence
-    for s in xrange(self.attrs['sampling']):
+    for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
       sequences = z
       sources = self.sources
       if encoder:
         if hasattr(encoder[0],'act'):
-          outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+          outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
-          outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in xrange(unit.n_act) ]
+          outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
       else:
-        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in xrange(unit.n_act) ]
+        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_out) for a in range(unit.n_act) ]
 
       if self.attrs['lm'] and self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         if self.network.y[self.attrs['target']].ndim == 3:
@@ -521,7 +521,7 @@ class RecurrentUnitLayer(Layer):
           self.aux = outputs[unit.n_act:]
     if self.attrs['attention_store']:
       self.attention = [ self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
-      for i in xrange(len(self.attention)):
+      for i in range(len(self.attention)):
         vec = T.eye(self.attention[i].shape[2], 1, -direction * (self.attention[i].shape[2] - 1))
         last = vec.dimshuffle(1,'x', 0).repeat(self.index.shape[1], axis=1)
         self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)[::direction]

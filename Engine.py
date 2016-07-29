@@ -710,7 +710,7 @@ class Engine:
           real_c = device.targets[:,device.batch_start[batch] : device.batch_start[batch + 1]].flatten()
         else:
           real_c = device.targets[device.batch_start[batch] : device.batch_start[batch + 1]].flatten()
-        for i in xrange(max_c.shape[0]):
+        for i in range(max_c.shape[0]):
           #print real_c[i], max_c[i], len(confusion_matrix[0])
           if "mle" in statistics:
             confusion_matrix[mle_map[int(real_c[i])], mle_map[int(max_c[i])]] += 1
@@ -719,26 +719,26 @@ class Engine:
       num_batches += len(alloc_devices)
     if "confusion_matrix" in statistics:
       print >> log.v1, "confusion matrix:"
-      for i in xrange(confusion_matrix.shape[0]):
-        for j in xrange(confusion_matrix.shape[1]):
+      for i in range(confusion_matrix.shape[0]):
+        for j in range(confusion_matrix.shape[1]):
           print >> log.v1, str(confusion_matrix[i,j]).rjust(3),
         print >> log.v1, ''
     if "confusion_list" in statistics:
       n = 30
       print >> log.v1, "confusion top" + str(n) + ":"
       top = []
-      for i in xrange(confusion_matrix.shape[0]):
-        for j in xrange(confusion_matrix.shape[1]):
+      for i in range(confusion_matrix.shape[0]):
+        for j in range(confusion_matrix.shape[1]):
           if i != j:
             if "mle" in statistics:
               top.append([mle_labels[i] + " -> " + mle_labels[j], confusion_matrix[i,j]])
             else:
               top.append([data.labels[i] + " -> " + data.labels[j], confusion_matrix[i,j]])
       top.sort(key = lambda x: x[1], reverse = True)
-      for i in xrange(n):
+      for i in range(n):
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
-      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
+      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in range(confusion_matrix.shape[0])]) / float(data.num_timesteps)
 
   def compute_priors(self, dataset, config):
     from Dataset import Dataset

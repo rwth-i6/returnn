@@ -1,3 +1,4 @@
+
 import subprocess
 from subprocess import CalledProcessError
 import h5py
@@ -9,6 +10,12 @@ import shlex
 import numpy as np
 import re
 import time
+
+PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  unicode = str
+  long = int
 
 
 def cmd(s):

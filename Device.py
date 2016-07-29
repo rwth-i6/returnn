@@ -243,7 +243,7 @@ class Device(object):
     theano_flags.setdefault("compiledir_format",
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
     #theano_flags.setdefault("contexts",
-    #                        ";".join(["gpu%d->cuda%d" % (i,i) for i in xrange(4)]))
+    #                        ";".join(["gpu%d->cuda%d" % (i,i) for i in range(4)]))
     # print theano_flags
     # Extend compile dir for this device.
     theano_flags["compiledir_format"] += "--dev-%s" % self.name
@@ -646,7 +646,7 @@ class Device(object):
         if not output:
           output = block_output
         else:
-          for j in xrange(len(block_output)):
+          for j in range(len(block_output)):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
       output = self.extractor()

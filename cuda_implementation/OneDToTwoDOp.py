@@ -24,7 +24,7 @@ class OneDToTwoDOp(theano.Op):
     batches = X.shape[1]
     feat = X.shape[2]
     Y = numpy.zeros((max_height, max_width, batches, feat), dtype="float32")
-    for b in xrange(batches):
+    for b in range(batches):
       height, width = sizes[b]
       height = int(height)
       width = int(width)
