@@ -408,22 +408,26 @@ class LayerNetwork(object):
     return network
 
   @classmethod
-  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, **kwargs):
-    """
-    :type model: h5py.File
-    :param str mask: e.g. "unity"
-    :rtype: LayerNetwork
-    """
-    grp = model['training']
+  def _n_in_out_from_hdf_model(cls, model):
     n_out_model = {}
     try:
       for k in model['n_out'].attrs:
         dim = 1 if not 'dim' in model['n_out'] else model['n_out/dim'].attrs[k]
         n_out_model[k] = [model['n_out'].attrs[k], dim]
     except Exception:
-      n_out_model = {'classes':[model.attrs['n_out'],1]}
+      n_out_model = {'classes': [model.attrs['n_out'], 1]}
     n_in_model = model.attrs['n_in']
     n_out_model.pop('data')
+    return n_in_model, n_out_model
+
+  @classmethod
+  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, **kwargs):
+    """
+    :type model: h5py.File
+    :param str mask: e.g. "unity"
+    :rtype: LayerNetwork
+    """
+    n_in_model, n_out_model = cls._n_in_out_from_hdf_model(model)
     if n_in and n_in != n_in_model:
       print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
     if n_out and n_out != n_out_model:
@@ -564,6 +568,28 @@ class LayerNetwork(object):
         network.use_target(target, dtype=dtype)
       if layer_name == 'output' or 'target' in model[layer_name].attrs:
         traverse(model, layer_name, network.j[target])
+    return network
+
+  @classmethod
+  def from_hdf(cls, filename, load_params=True, **kwargs):
+    """
+    Gets the JSON from the hdf file, initializes the network and loads the network params.
+    :param str filename: filename of hdf
+    :param bool load_params: whether to load the params
+    """
+    model = h5py.File(filename, "r")
+    json_content_s = model.attrs['json']
+    assert json_content_s and json_content_s != "{}"
+    json_content = json.loads(json_content_s)
+    kwargs = kwargs.copy()
+    if "n_out" not in kwargs:
+      n_in, n_out = cls._n_in_out_from_hdf_model(model)
+      kwargs["n_in"] = n_in
+      kwargs["n_out"] = n_out
+    network = cls.from_json(json_content, **kwargs)
+    if load_params:
+      network.load_hdf(model)
+    model.close()
     return network
 
   def use_target(self, target, dtype):
