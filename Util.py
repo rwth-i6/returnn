@@ -882,3 +882,11 @@ def to_bool(v):
     if v in ["true", "yes", "on"]: return True
     if v in ["false", "no", "off"]: return False
   raise ValueError("to_bool cannot handle %r" % v)
+
+
+def as_str(s):
+  if isinstance(s, str):
+    return s
+  if isinstance(s, bytes):
+    return s.decode("utf8")
+  assert False, "unknown type %s" % type(s)

@@ -21,7 +21,7 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
   import threading
 
   if hasattr(sys, "_current_frames"):
-    print ""
+    print("")
     threads = {t.ident: t for t in threading.enumerate()}
     for tid, stack in sys._current_frames().items():
       if tid in exclude_thread_ids: continue
@@ -29,14 +29,14 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       # http://bugs.python.org/issue17094
       # Note that this leaves out all threads not created via the threading module.
       if tid not in threads: continue
-      print "Thread %s:" % threads.get(tid, "unnamed with id %i" % tid)
+      print("Thread %s:" % threads.get(tid, "unnamed with id %i" % tid))
       if tid in global_exclude_thread_ids:
-        print "(Auto-ignored traceback.)"
+        print("(Auto-ignored traceback.)")
       else:
         better_exchook.print_tb(stack)
-      print ""
+      print("")
   else:
-    print "Does not have sys._current_frames, cannot get thread tracebacks."
+    print("Does not have sys._current_frames, cannot get thread tracebacks.")
 
 
 def initBetterExchook():
@@ -58,7 +58,7 @@ def initBetterExchook():
           return
         # An unhandled exception in the main thread. This means that we are going to quit now.
         sys.exited = True
-    print "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid())
+    print("Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid()))
     if exc_type is KeyboardInterrupt:
       return
 
@@ -81,8 +81,8 @@ def initFaulthandler(sigusr1_chain=False):
   """
   try:
     import faulthandler
-  except ImportError, e:
-    print "faulthandler import error. %s" % e
+  except ImportError as e:
+    print("faulthandler import error. %s" % e)
     return
   # Only enable if not yet enabled -- otherwise, leave it in its current state.
   if not faulthandler.is_enabled():
@@ -105,8 +105,8 @@ def initIPythonKernel():
     from zmq.eventloop import ioloop
     from zmq.eventloop.zmqstream import ZMQStream
     IPython.kernel.zmq.ipkernel.signal = lambda sig, f: None  # Overwrite.
-  except ImportError, e:
-    print "IPython import error, cannot start IPython kernel. %s" % e
+  except ImportError as e:
+    print("IPython import error, cannot start IPython kernel. %s" % e)
     return
   import atexit
   import socket
@@ -159,8 +159,8 @@ def initIPythonKernel():
 
     #print "To connect another client to this IPython kernel, use:", \
     #      "ipython console --existing %s" % connection_file
-  except Exception, e:
-    print "Exception while initializing IPython ZMQ kernel. %s" % e
+  except Exception as e:
+    print("Exception while initializing IPython ZMQ kernel. %s" % e)
     return
 
   def ipython_thread():
@@ -179,11 +179,11 @@ def initCudaNotInMainProcCheck():
   import TaskSystem
   import theano.sandbox.cuda as cuda
   if cuda.use.device_number is not None:
-    print "CUDA already initialized in proc", os.getpid()
+    print("CUDA already initialized in proc %i" % os.getpid())
     return
   use_original = cuda.use
   def use_wrapped(device, **kwargs):
-    print "CUDA.use", device, "in proc", os.getpid()
+    print("CUDA.use %s in proc %i" % (device, os.getpid()))
     #assert not TaskSystem.isMainProcess, "multiprocessing is set to True in your config but the main proc tries to use CUDA"
     use_original(device=device, **kwargs)
   cuda.use = use_wrapped
@@ -191,27 +191,27 @@ def initCudaNotInMainProcCheck():
 
 
 def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
-  print "Debug shell:"
+  print("Debug shell:")
   from Util import ObjAsDict
   import DebugHelpers
   user_global_ns_new = dict(ObjAsDict(DebugHelpers).items())
   if user_global_ns:
     user_global_ns_new.update(user_global_ns)  # may overwrite vars from DebugHelpers
   user_global_ns_new["debug"] = DebugHelpers  # make this available always
-  print "Available debug functions/utils (via DebugHelpers):"
+  print("Available debug functions/utils (via DebugHelpers):")
   for k, v in sorted(vars(DebugHelpers).items()):
     if k[:1] == "_": continue
-    print "  %s (%s)" % (k, type(v))
-  print "Also DebugHelpers available as 'debug'."
+    print("  %s (%s)" % (k, type(v)))
+  print("Also DebugHelpers available as 'debug'.")
   if not user_ns:
     user_ns = {}
   if user_ns:
-    print "Locals:"
+    print("Locals:")
     for k, v in sorted(user_ns.items()):
-      print "  %s (%s)" % (k, type(v))
+      print("  %s (%s)" % (k, type(v)))
   import better_exchook
   better_exchook.debug_shell(user_ns, user_global_ns_new)
   if exit_afterwards:
-    print "Debug shell exit. Exit now."
+    print("Debug shell exit. Exit now.")
     sys.exit(1)
 

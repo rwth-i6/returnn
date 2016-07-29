@@ -9,7 +9,11 @@ import os
 import signal
 import time
 import pickle
-from thread import start_new_thread
+try:
+  from thread import start_new_thread
+except ImportError:
+  # noinspection PyUnresolvedReferences
+  from _thread import start_new_thread
 import Debug
 import re
 
@@ -158,7 +162,7 @@ class Device(object):
     try:
       import pynvml
     except ImportError:
-      print "pynvml not available, memory information missing"
+      print("pynvml not available, memory information missing")
     else:
       try:
         pynvml.nvmlInit()
@@ -283,8 +287,8 @@ class Device(object):
     for output in fn.outputs:
       if numpy.isnan(output[0]).any():
         #theano.printing.debugprint(node)
-        print 'Inputs : %s' % [input[0] for input in fn.inputs]
-        print 'Outputs: %s' % [output[0] for output in fn.outputs]
+        print('Inputs : %s' % [input[0] for input in fn.inputs])
+        print('Outputs: %s' % [output[0] for output in fn.outputs])
         assert False, '*** NaN detected ***'
 
   def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
@@ -543,7 +547,7 @@ class Device(object):
             if self.testnet.hidden[hidden].layer_class == "conv":
               source.append(self.testnet.hidden[hidden].output)
             else:
-              print str(self.testnet.hidden[hidden])
+              print(str(self.testnet.hidden[hidden]))
           # for single layer only
           #if self.testnet.hidden["c1"].layer_class == "conv":
           #  source.append(self.testnet.hidden["c1"].output)
@@ -711,7 +715,7 @@ class Device(object):
         dump_file_name = "%s.%i" % (dump_file_name, i)
       f = open(dump_file_name, "w")
       print >> log.v1, "Dumping model broken info to file %r." % dump_file_name
-    except Exception, e:
+    except Exception as e:
       print >> log.v3, "Exception while opening model broken dump file. %s" % e
       return
     collected_info = {"info_str": str(info)}
@@ -719,17 +723,17 @@ class Device(object):
       collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
       collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value())
       collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
-    except Exception, e:
+    except Exception as e:
       print >> log.v3, "Exception when getting device data. %s" % e
     try:
       train_params = [numpy.asarray(v.get_value()) for v in self.trainnet.train_params_vars]
       collected_info["train_params"] = train_params
-    except Exception, e:
+    except Exception as e:
       print >> log.v3, "Exception when getting train params. %s" % e
     try:
       pickle.dump(collected_info, f)
       f.close()
-    except Exception, e:
+    except Exception as e:
       print >> log.v3, "Exception when writing model broken info dump. %s" % e
 
   def _checkGpuFuncs(self, device, device_id):

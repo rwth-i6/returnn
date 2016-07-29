@@ -25,7 +25,7 @@ class TaskThread(threading.Thread):
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       if eval_batch_size == 0:
-        eval_batch_size = sys.maxint
+        eval_batch_size = sys.maxsize
       self.share_batches = share_batches
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
@@ -372,7 +372,7 @@ class TaskThread(threading.Thread):
           print >> log.v1, "%s failed" % self.name
           if log.v[4]:
             sys.excepthook(*sys.exc_info())
-            print ""
+            print("")
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()

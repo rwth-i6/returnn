@@ -8,7 +8,7 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
-from Util import collect_class_init_kwargs, dict_joined
+from Util import collect_class_init_kwargs, dict_joined, as_str
 from Log import log
 
 
@@ -578,7 +578,7 @@ class LayerNetwork(object):
     :param bool load_params: whether to load the params
     """
     model = h5py.File(filename, "r")
-    json_content_s = model.attrs['json']
+    json_content_s = as_str(model.attrs['json'])
     assert json_content_s and json_content_s != "{}"
     json_content = json.loads(json_content_s)
     kwargs = kwargs.copy()

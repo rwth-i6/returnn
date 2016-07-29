@@ -6,8 +6,13 @@ most of them quite low level.
 
 from threading import Lock, currentThread
 import sys
+PY3 = sys.version_info[0] >= 3
 import os
-from StringIO import StringIO
+if PY3:
+  from io import BytesIO
+else:
+  # noinspection PyUnresolvedReferences
+  from StringIO import StringIO as BytesIO
 from contextlib import contextmanager
 import pickle
 import types
@@ -78,7 +83,7 @@ class _AsyncCallQueue:
       name = repr(func)
       res = func()
     except Exception as exc:
-      print "Exception in asyncExecHost", name, exc
+      print("Exception in asyncExecHost %s %s" % (name, exc))
       q.put((clazz.Types.exception, exc))
     else:
       try:
@@ -105,16 +110,16 @@ def asyncCall(func, name=None, mustExec=False):
       try:
         res = func()
       except KeyboardInterrupt as exc:
-        print "Exception in asyncCall", name, ": KeyboardInterrupt"
+        print("Exception in asyncCall %s: KeyboardInterrupt" % name)
         q.put(q.Types.exception, ForwardedKeyboardInterrupt(exc))
       except BaseException as exc:
-        print "Exception in asyncCall", name
+        print("Exception in asyncCall %s" % name)
         sys.excepthook(*sys.exc_info())
         q.put(q.Types.exception, exc)
       else:
         q.put(q.Types.result, res)
     except (KeyboardInterrupt, ForwardedKeyboardInterrupt):
-      print "asyncCall: SIGINT in put, probably the parent died"
+      print("asyncCall: SIGINT in put, probably the parent died")
     # ignore
 
   task = AsyncTask(func=doCall, name=name, mustExec=mustExec)
@@ -466,11 +471,58 @@ def funcCall(attrChainArgs, args=()):
 
 
 Unpickler = pickle.Unpickler
-CellType = type((lambda x: lambda: x)(0).func_closure[0])
+if PY3:
+  def get_func_closure(f): return f.__closure__
+  # (code, globals[, name[, argdefs[, closure]]])
+  def get_func_tuple(f):
+    return (
+      f.__code__,
+      f.__globals__,
+      f.__name__,
+      f.__defaults__,
+      f.__closure__,
+    )
+else:
+  def get_func_closure(f): return f.func_closure
+  def get_func_tuple(f):
+    return (
+      f.func_code,
+      f.func_globals,
+      f.func_name,
+      f.func_defaults,
+      f.func_closure,
+    )
+_closure = (lambda x: lambda: x)(0)
+# noinspection PyUnresolvedReferences
+_cell = get_func_closure(_closure)[0]
+CellType = type(_cell)
 ModuleType = type(sys)
+# noinspection PyUnresolvedReferences
+DictType = dict if PY3 else types.DictionaryType
+
+if PY3:
+  class BufferType: "Dummy"
+  def make_buffer(*args): assert False
+else:
+  # noinspection PyUnresolvedReferences
+  make_buffer = buffer
+  # noinspection PyUnresolvedReferences
+  BufferType = types.BufferType
+  def bytes(x, *args): return str(x)
+
+if PY3:
+  _old_style_class = None
+  class OldStyleClass: "Dummy"
+  class _new_style_class: pass
+  NewStyleClass = type
+else:
+  class _old_style_class: pass
+  class _new_style_class(object): pass
+  OldStyleClass = type(_old_style_class)  # == types.ClassType (classobj)
+  NewStyleClass = type(_new_style_class)  # (type)
 
 def makeFuncCell(value):
-  return (lambda: value).func_closure[0]
+  return get_func_closure((lambda: value))[0]
 
 def getModuleDict(modname):
   mod = import_module(modname)
@@ -573,7 +625,9 @@ def numpy_alloc(shape, dtype, fortran_for_shared=False):
   return numpy.ndarray(shape, dtype=dtype)
 
 
-class Pickler(pickle.Pickler):
+_BasePickler = getattr(pickle, "_Pickler", pickle.Pickler)
+
+class Pickler(_BasePickler):
   """
   We extend the standard Pickler to be able to pickle some more types,
   such as lambdas and functions, code, func cells, buffer and more.
@@ -583,7 +637,7 @@ class Pickler(pickle.Pickler):
     if not "protocol" in kwargs:
       kwargs["protocol"] = pickle.HIGHEST_PROTOCOL
     pickle.Pickler.__init__(self, *args, **kwargs)
-  dispatch = pickle.Pickler.dispatch.copy()
+  dispatch = _BasePickler.dispatch.copy()
 
   def save_func(self, obj):
     try:
@@ -593,13 +647,7 @@ class Pickler(pickle.Pickler):
       pass
     assert type(obj) is types.FunctionType
     self.save(types.FunctionType)
-    self.save((
-      obj.func_code,
-      obj.func_globals,
-      obj.func_name,
-      obj.func_defaults,
-      obj.func_closure,
-    ))
+    self.save(get_func_tuple(obj))
     self.write(pickle.REDUCE)
     if id(obj) not in self.memo:  # Could be if we recursively landed here. See also pickle.save_tuple().
       self.memoize(obj)
@@ -645,7 +693,7 @@ class Pickler(pickle.Pickler):
       self.memoize(obj)
       return
     self.save_dict(obj)
-  dispatch[types.DictionaryType] = intellisave_dict
+  dispatch[DictType] = intellisave_dict
 
   def save_module(self, obj):
     modname = getModNameForModDict(obj.__dict__)
@@ -663,7 +711,7 @@ class Pickler(pickle.Pickler):
     self.save(buffer)
     self.save((str(obj),))
     self.write(pickle.REDUCE)
-  dispatch[types.BufferType] = save_buffer
+  dispatch[BufferType] = save_buffer
 
   def save_string(self, obj, pack=struct.pack):
     # Difference to base: We just always use BINSTRING (simpler)
@@ -692,7 +740,7 @@ class Pickler(pickle.Pickler):
   dispatch[numpy.ndarray] = save_ndarray
 
   # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
-  def save_global(self, obj, name=None, pack=pickle.struct.pack):
+  def save_global(self, obj, name=None):
     assert obj
     assert id(obj) not in self.memo
     if name is None:
@@ -742,7 +790,7 @@ class Pickler(pickle.Pickler):
     self.save((obj.__name__, obj.__bases__, getNormalDict(obj.__dict__)))
     self.write(pickle.REDUCE)
     self.memoize(obj)
-  dispatch[types.TypeType] = save_type
+  dispatch[NewStyleClass] = save_type
 
   # This is about old-style classes.
   def save_class(self, cls):
@@ -760,7 +808,7 @@ class Pickler(pickle.Pickler):
     self.write(pickle.REDUCE)
     self.memoize(cls)
     return
-  dispatch[types.ClassType] = save_class
+  dispatch[OldStyleClass] = save_class
 
   # avoid pickling instances of ourself. this mostly doesn't make sense and leads to trouble.
   # however, also doesn't break. it mostly makes sense to just ignore.
@@ -828,7 +876,7 @@ class ExecingProcess:
           os.environ.update(self.env_update)
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
-        print "ExecingProcess: Error at initialization."
+        print("ExecingProcess: Error at initialization.")
         sys.excepthook(*sys.exc_info())
         sys.exit(1)
       finally:
@@ -899,12 +947,12 @@ class ExecingProcess:
       writeend = os.fdopen(writeFileNo, "w")
       unpickler = Unpickler(readend)
       name = unpickler.load()
-      if ExecingProcess.Verbose: print "ExecingProcess child %s (pid %i)" % (name, os.getpid())
+      if ExecingProcess.Verbose: print("ExecingProcess child %s (pid %i)" % (name, os.getpid()))
       try:
         target = unpickler.load()
         args = unpickler.load()
       except EOFError:
-        print "Error: unpickle incomplete"
+        print("Error: unpickle incomplete")
         raise SystemExit
       ret = target(*args)
       sys.exited = True
@@ -915,7 +963,7 @@ class ExecingProcess:
       except IOError: pass
       try: writeend.close()
       except IOError: pass
-      if ExecingProcess.Verbose: print "ExecingProcess child %s (pid %i) finished" % (name, os.getpid())
+      if ExecingProcess.Verbose: print("ExecingProcess child %s (pid %i) finished" % (name, os.getpid()))
       raise SystemExit
 
 
@@ -980,7 +1028,7 @@ class ExecingProcess_ConnectionWrapper(object):
   def send(self, value):
     self._check_closed()
     self._check_writable()
-    buf = StringIO()
+    buf = BytesIO()
     Pickler(buf).dump(value)
     self.send_bytes(buf.getvalue())
 
@@ -1001,7 +1049,7 @@ class ExecingProcess_ConnectionWrapper(object):
     self._check_closed()
     self._check_readable()
     buf = self.recv_bytes()
-    f = StringIO(buf)
+    f = BytesIO(buf)
     res = Unpickler(f).load()
     return res
 
@@ -1146,12 +1194,12 @@ class AsyncTask:
     try:
       self.func(self)
     except KeyboardInterrupt:
-      print "Exception in AsyncTask", self.name, ": KeyboardInterrupt"
+      print("Exception in AsyncTask %s: KeyboardInterrupt" % self.name)
       sys.exit(1)
     except SystemExit:
       raise
     except BaseException:
-      print "Exception in AsyncTask", self.name
+      print("Exception in AsyncTask %s" % self.name)
       sys.excepthook(*sys.exc_info())
       sys.exit(1)
     finally:
@@ -1212,7 +1260,7 @@ def WarnMustNotBeInForkDecorator(func):
     global isFork
     if isFork:
       if not Ctx.didWarn:
-        print "Must not be in fork!"
+        print("Must not be in fork!")
         Ctx.didWarn = True
       return None
     return func(*args, **kwargs)
@@ -1256,5 +1304,5 @@ if __name__ == "__main__":
     ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
   except KeyboardInterrupt:
     sys.exit(1)
-  print "You are not expected to call this. This is for ExecingProcess."
+  print("You are not expected to call this. This is for ExecingProcess.")
   sys.exit(1)

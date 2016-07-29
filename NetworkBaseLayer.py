@@ -5,6 +5,7 @@ from theano import tensor as T
 import theano
 from Log import log
 from TheanoUtil import time_batch_make_flat, tiled_eye
+from Util import as_str
 import json
 
 
@@ -32,8 +33,8 @@ class Container(object):
     self.attrs = {}; """ :type: dict[str,str|float|int|bool|dict] """
     self.device = None
     if layer_class:
-      self.layer_class = layer_class.encode("utf8")
-    self.name = name.encode("utf8")
+      self.layer_class = as_str(layer_class.encode("utf8"))
+    self.name = as_str(name.encode("utf8"))
     self.train_flag = train_flag
     self.eval_flag = eval_flag
     self.depth = depth

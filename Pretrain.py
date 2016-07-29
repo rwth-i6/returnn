@@ -167,4 +167,4 @@ def pretrainFromConfig(config):
   elif pretrainType == "":
     return None
   else:
-    raise Exception, "unknown pretrain type: %s" % pretrainType
+    raise Exception("unknown pretrain type: %s" % pretrainType)
