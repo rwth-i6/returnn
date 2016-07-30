@@ -26,13 +26,14 @@ class OutputLayer(Layer):
   layer_class = "softmax"
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
-               softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None,
+               softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                **kwargs):
     """
     :param theano.Variable index: index for batches
     :param str loss: e.g. 'ce'
     """
     super(OutputLayer, self).__init__(**kwargs)
+    self.set_attr("normalize_length", normalize_length)
     if dtype:
       self.set_attr('dtype', dtype)
     if copy_input:
@@ -119,7 +120,7 @@ class OutputLayer(Layer):
         #self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
         self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
                                           T.concatenate([padi,self.index],axis=0),self.index)
-      self.norm = num / T.cast(T.sum(self.index),'float32')
+      self.norm *= num / T.cast(T.sum(self.index),'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
       nom = T.cast(T.sum(self.index),'float32')
@@ -174,6 +175,8 @@ class OutputLayer(Layer):
       return None
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
+        if self.attrs['normalize_length']:
+          return self.norm * T.sum(T.max(T.neq(T.argmax(self.output[:self.index.shape[0]], axis=2), self.y) * T.cast(self.index,'float32'),axis=0))
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
       else:
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
