@@ -526,7 +526,15 @@ class AttentionList(AttentionBase):
         Q,K = self.align(w_i,self.item("Q", i))
         updates[self.state_vars['Q_%d' % i]] = Q
         updates[self.state_vars['K_%d' % i]] = K
-      inp += T.dot(T.sum(B * w_i.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0), W_att_in)
+      if self.attrs['accumulator'] == 'rnn':
+        def rnn(x_t, w_t, c_p):
+          return x_t * w_t + c_p * (numpy.float32(1.) - w_t)
+        zT, _ = theano.scan(rnn, sequences=[B,w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2)],
+                           outputs_info = [T.zeros_like(B[0])])
+        z = zT[-1]
+      else:
+        z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
+      inp += T.dot(z, W_att_in)
     return inp, updates
 
 

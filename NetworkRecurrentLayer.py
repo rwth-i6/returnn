@@ -258,7 +258,8 @@ class RecurrentUnitLayer(Layer):
                attention_smooth = False,
                attention_align = False,
                attention_glimpse = 1,
-               attention_filters=1,
+               attention_filters = 1,
+               attention_accumulator = 'sum',
                attention_bn = 0,
                attention_lm = 'none',
                base = None,
@@ -351,6 +352,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_filters', attention_filters)
     self.set_attr('attention_lm', attention_lm)
     self.set_attr('attention_bn', attention_bn)
+    self.set_attr('attention_accumulator', attention_accumulator)
     self.set_attr('n_dec', n_dec)
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
