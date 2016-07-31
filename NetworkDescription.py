@@ -69,13 +69,13 @@ class LayerNetworkDescription:
     assert len(hidden_name) <= len(hidden_size), "too many hidden layer names"
     if len(hidden_type) != len(hidden_size):
       n_hidden_type = len(hidden_type)
-      for i in xrange(len(hidden_size) - len(hidden_type)):
+      for i in range(len(hidden_size) - len(hidden_type)):
         if n_hidden_type == 1:
           hidden_type.append(hidden_type[0])
         else:
           hidden_type.append("forward")
     if len(hidden_name) != len(hidden_size):
-      for i in xrange(len(hidden_size) - len(hidden_name)):
+      for i in range(len(hidden_size) - len(hidden_name)):
         hidden_name.append("_")
     for i, name in enumerate(hidden_name):
       if name == "_": hidden_name[i] = "hidden_%d" % i
@@ -89,15 +89,15 @@ class LayerNetworkDescription:
     sharpgates = config.value('sharpgates', 'none')
     entropy = config.float('entropy', 0.0)
     if len(actfct) < len(hidden_size):
-      for i in xrange(len(hidden_size) - len(actfct)):
+      for i in range(len(hidden_size) - len(actfct)):
         actfct.append(actfct[-1])
     if len(dropout) < len(hidden_size) + 1:
       assert len(dropout) > 0
-      for i in xrange(len(hidden_size) + 1 - len(dropout)):
+      for i in range(len(hidden_size) + 1 - len(dropout)):
         dropout.append(dropout[-1])
     dropout = [float(d) for d in dropout]
     hidden_info = []; """ :type: list[dict[str]] """
-    for i in xrange(len(hidden_size)):
+    for i in range(len(hidden_size)):
       hidden_info.append({
         "layer_class": hidden_type[i],  # e.g. 'forward'
         "n_out": hidden_size[i],

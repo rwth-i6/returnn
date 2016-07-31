@@ -394,7 +394,7 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     all_vars = [lcl[var_name] for var_name in var_names] + [sizes]
 
     #results: outputs Y1, Y2, Y3, Y4, (gates and cell states) H1, H2, H3, H4
-    return theano.Apply(self, all_vars, [lcl["X"].type() for _ in xrange(8)])
+    return theano.Apply(self, all_vars, [lcl["X"].type() for _ in range(8)])
 
   def c_support_code(self):
     return get_c_support_code_common() + get_c_support_code_mdlstm()

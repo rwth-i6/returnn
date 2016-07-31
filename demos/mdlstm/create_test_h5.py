@@ -36,14 +36,14 @@ def write_to_hdf(img_list, transcription_list, charlist, out_file_name, dataset_
     sizes = numpy.concatenate(numpy.array(sizes, dtype="int32"), axis=0)
     seq_lengths = numpy.concatenate(numpy.array(seq_lengths, dtype="int32"), axis=0)
     targets = numpy.array(targets, dtype="int32")
-    
+
     f.attrs["numTimesteps"] = inputs.shape[0]
 
     f["inputs"] = inputs.astype("float32") / 255.0
-    
+
     hdf5_strings(f, "labels", classes)
     f["seqLengths"] = seq_lengths
-    seq_tags = [dataset_prefix + "/" + str(idx) for idx in xrange(len(img_list))]
+    seq_tags = [dataset_prefix + "/" + str(idx) for idx in range(len(img_list))]
     hdf5_strings(f, "seqTags", seq_tags)
 
     f["targets/data/classes"] = targets
@@ -56,7 +56,7 @@ def write_to_hdf(img_list, transcription_list, charlist, out_file_name, dataset_
 
 def main():
   #TODO: replace this by the list of your chars (do not include the blank from CTC here, but you can include whitespace)
-  # attention: at the moment, the number of chars needs to be hardcoded in the config: "classes": [4,1], there the 4 must be len(char_list) 
+  # attention: at the moment, the number of chars needs to be hardcoded in the config: "classes": [4,1], there the 4 must be len(char_list)
   char_list = ['a', 'b', 'c', 'd']
   #TODO: replace this by some read images to use your own data
   img_list = [numpy.zeros((14,14), dtype="float32"), numpy.zeros((12,12), dtype="float32")]

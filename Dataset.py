@@ -454,14 +454,14 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxsize):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
     """
-    if batch_size == 0: batch_size = sys.maxint
+    if batch_size == 0: batch_size = sys.maxsize
     assert batch_size > 0
     ms = max_seqs
     bs = batch_size
@@ -515,7 +515,7 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxint, shuffle_batches=False):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxsize, shuffle_batches=False):
     """
     :type recurrent_net: bool
     :type batch_size: int

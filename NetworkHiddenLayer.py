@@ -1092,7 +1092,7 @@ class DualStateLayer(ForwardLayer):
           self.act[i] += self.dot(s.act[i], self.W_in[-1])
         else:
           self.act[i] += self.dot(self.mass * m * s.act[i], self.W_in[-1])
-    for i in xrange(2):
+    for i in range(2):
       self.act[i] = self.activations[i](self.act[i])
     self.make_output(self.act[0])
 
@@ -1105,7 +1105,7 @@ class StateToAct(ForwardLayer):
     super(StateToAct, self).__init__(**kwargs)
     self.set_attr("dual", dual)
     self.params = {}
-    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=1).dimshuffle('x',0,1) for i in xrange(len(self.sources[0].act)) ] # 1BD
+    self.act = [ T.concatenate([s.act[i][-1] for s in self.sources], axis=1).dimshuffle('x',0,1) for i in range(len(self.sources[0].act)) ] # 1BD
     self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
     if dual and len(self.act) > 1:
       self.make_output(T.tanh(self.act[1]))
@@ -1888,7 +1888,7 @@ class RoutingLayer(HiddenLayer):
       self.xflag = T.constant(1., 'float32')
     import theano.ifelse
     self.output = z #theano.ifelse.ifelse(self.xflag, base[0].output, base[1].output)
-    self.act = [ theano.ifelse.ifelse(self.xflag, base[0].act[i][-1:], base[1].act[i][-1:]) for i in xrange(len(base[0].act))]
+    self.act = [ theano.ifelse.ifelse(self.xflag, base[0].act[i][-1:], base[1].act[i][-1:]) for i in range(len(base[0].act))]
     self.length = real
     #idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
     #                    sequences = [self.length], non_sequences=[T.max(self.length) + 1])
@@ -2583,7 +2583,7 @@ class NewConvLayer(_NoOpLayer):
 
 
 def my_print(op, x):
-  print 'masuk!!!!!!!'
+  print('masuk!!!!!!!')
   with open('/u/suryani/x.txt', 'a') as f:
     f.write('----->'+str(x.shape)+'\n')
 

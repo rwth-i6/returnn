@@ -1,3 +1,4 @@
+
 import subprocess
 from subprocess import CalledProcessError
 import h5py
@@ -9,6 +10,12 @@ import shlex
 import numpy as np
 import re
 import time
+
+PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  unicode = str
+  long = int
 
 
 def cmd(s):
@@ -882,3 +889,11 @@ def to_bool(v):
     if v in ["true", "yes", "on"]: return True
     if v in ["false", "no", "off"]: return False
   raise ValueError("to_bool cannot handle %r" % v)
+
+
+def as_str(s):
+  if isinstance(s, str):
+    return s
+  if isinstance(s, bytes):
+    return s.decode("utf8")
+  assert False, "unknown type %s" % type(s)

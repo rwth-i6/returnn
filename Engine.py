@@ -18,9 +18,14 @@ import EngineUtil
 from Util import hms, hdf5_dimension
 import errno
 import time
-import SimpleHTTPServer
-import SocketServer
-import BaseHTTPServer
+try:
+  import SimpleHTTPServer
+  import SocketServer
+  import BaseHTTPServer
+except ImportError:  # Python3
+  import http.server as SimpleHTTPServer
+  import socketserver as SocketServer
+  BaseHTTPServer = SimpleHTTPServer
 import json
 import cgi
 from GeneratingDataset import StaticDataset
@@ -199,7 +204,7 @@ class Engine:
     self.max_seq_length = config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if self.max_seq_length == 0:
-      self.max_seq_length = sys.maxint
+      self.max_seq_length = sys.maxsize
     if config.is_typed("seq_train_parallel"):
       self.seq_train_parallel = SeqTrainParallelControl(engine=self, config=config, **config.typed_value("seq_train_parallel"))
     else:
@@ -270,13 +275,13 @@ class Engine:
     fout = open(json_filename, 'w')
     try:
       json_content = self.network.to_json()
-      print json_content
-      print "---------------"
+      print(json_content)
+      print("---------------")
       json_data = json.loads(json_content)
-      print json_data
-      print "---------------"
-      print json.dumps(json_data, indent=2, sort_keys=True)
-      print "---------------"
+      print(json_data)
+      print("---------------")
+      print(json.dumps(json_data, indent=2, sort_keys=True))
+      print("---------------")
       print >> fout, json.dumps(json_data, indent=2, sort_keys=True)
     except ValueError as e:
       print >> log.v5, self.network.to_json()
@@ -315,7 +320,7 @@ class Engine:
     self.training_finished = False
 
     assert self.start_epoch >= 1, "Epochs start at 1."
-    final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxint
+    final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxsize
     if self.start_epoch > final_epoch:
       print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
                        (self.start_epoch, self.final_epoch)
@@ -326,7 +331,7 @@ class Engine:
     epoch = self.start_epoch # Epochs start at 1.
     rebatch = True
     while epoch <= final_epoch:
-      if self.max_seq_length != sys.maxint:
+      if self.max_seq_length != sys.maxsize:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
           print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
           rebatch = True
@@ -426,7 +431,7 @@ class Engine:
 
     if self.init_train_epoch_posthook:
       print >> log.v5, "execute init_train_epoch_posthook:", self.init_train_epoch_posthook
-      exec self.init_train_epoch_posthook
+      exec(self.init_train_epoch_posthook)
 
   def train_epoch(self):
     print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
@@ -492,7 +497,7 @@ class Engine:
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size,
                                                                       max_seqs=self.max_seqs,
-                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxint))
+                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize))
       else:
         self.dataset_batches[dataset_name].reset()
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
@@ -585,7 +590,7 @@ class Engine:
           ret['error'] = "invalid data: %s" % params
         else:
           batches = data.generate_batches(recurrent_net=network.recurrent,
-                                          batch_size=sys.maxint, max_seqs=1)
+                                          batch_size=sys.maxsize, max_seqs=1)
           if not hash in classifiers:
             classifiers[hash] = ClassificationTaskThread(network, devices, data, batches)
             classifiers[hash].json_params = params
@@ -705,7 +710,7 @@ class Engine:
           real_c = device.targets[:,device.batch_start[batch] : device.batch_start[batch + 1]].flatten()
         else:
           real_c = device.targets[device.batch_start[batch] : device.batch_start[batch + 1]].flatten()
-        for i in xrange(max_c.shape[0]):
+        for i in range(max_c.shape[0]):
           #print real_c[i], max_c[i], len(confusion_matrix[0])
           if "mle" in statistics:
             confusion_matrix[mle_map[int(real_c[i])], mle_map[int(max_c[i])]] += 1
@@ -714,26 +719,26 @@ class Engine:
       num_batches += len(alloc_devices)
     if "confusion_matrix" in statistics:
       print >> log.v1, "confusion matrix:"
-      for i in xrange(confusion_matrix.shape[0]):
-        for j in xrange(confusion_matrix.shape[1]):
+      for i in range(confusion_matrix.shape[0]):
+        for j in range(confusion_matrix.shape[1]):
           print >> log.v1, str(confusion_matrix[i,j]).rjust(3),
         print >> log.v1, ''
     if "confusion_list" in statistics:
       n = 30
       print >> log.v1, "confusion top" + str(n) + ":"
       top = []
-      for i in xrange(confusion_matrix.shape[0]):
-        for j in xrange(confusion_matrix.shape[1]):
+      for i in range(confusion_matrix.shape[0]):
+        for j in range(confusion_matrix.shape[1]):
           if i != j:
             if "mle" in statistics:
               top.append([mle_labels[i] + " -> " + mle_labels[j], confusion_matrix[i,j]])
             else:
               top.append([data.labels[i] + " -> " + data.labels[j], confusion_matrix[i,j]])
       top.sort(key = lambda x: x[1], reverse = True)
-      for i in xrange(n):
+      for i in range(n):
         print >> log.v1, top[i][0], top[i][1], str(100 * top[i][1] / float(data.num_timesteps)) + "%"
     if "error" in statistics:
-      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in xrange(confusion_matrix.shape[0])]) / float(data.num_timesteps)
+      print >> log.v1, "error:", 1.0 - sum([confusion_matrix[i,i] for i in range(confusion_matrix.shape[0])]) / float(data.num_timesteps)
 
   def compute_priors(self, dataset, config):
     from Dataset import Dataset
@@ -752,7 +757,7 @@ class Engine:
     epoch = config.int('epoch', 1)
     max_seq_length = config.float('max_seq_length', 0)
     if max_seq_length <= 0:
-      max_seq_length = sys.maxint
+      max_seq_length = sys.maxsize
 
     dataset.init_seq_order(epoch=epoch)
     batches = dataset.generate_batches(recurrent_net=self.network.recurrent,

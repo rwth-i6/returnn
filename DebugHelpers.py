@@ -9,6 +9,7 @@ import theano
 import theano.tensor as tt
 import theano.sandbox.cuda as cuda
 import numpy
+from Network import LayerNetwork
 
 
 def find_obj_in_stack(cls, stack=None, all_threads=True):
@@ -88,3 +89,11 @@ def compute(var, trainnet=True):
   if not isinstance(var, list):
     result = result[0]
   return result
+
+
+class DebugNn:
+  def __init__(self, filename):
+    self.network = LayerNetwork.from_hdf(filename)
+    pass
+  pass
+

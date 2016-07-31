@@ -69,7 +69,7 @@ class Updater:
                grad_noise_rel_grad_norm=0.0,
                reset_update_params=False
                ):
-    self.rng = numpy.random.RandomState(0101)
+    self.rng = numpy.random.RandomState(0o101)
     self.momentum = numpy.float32(momentum)
     self.nesterov_momentum = numpy.float32(nesterov_momentum)
     self.momentum2 = numpy.float32(momentum2)

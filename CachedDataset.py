@@ -83,7 +83,7 @@ class CachedDataset(Dataset):
 
   def _init_seq_starts(self):
     self._seq_start = [self._seq_start[0] * 0]  # idx like in seq_index, *not* real idx
-    for i in xrange(self.num_seqs):
+    for i in range(self.num_seqs):
       ids = self._seq_index[i]
       self._seq_start.append(self._seq_start[-1] + self._seq_lengths[ids])
 
@@ -95,7 +95,7 @@ class CachedDataset(Dataset):
 
     num_cached = 0
     cached_bytes = 0
-    for i in xrange(self.num_seqs):
+    for i in range(self.num_seqs):
       if i == num_cached:
         nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
         if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:

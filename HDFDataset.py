@@ -52,7 +52,7 @@ class HDFDataset(CachedDataset):
       self.target_keys = ['classes']
 
     if len(seq_lengths.shape) == 1:
-      seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in xrange(len(self.target_keys)+1)]))
+      seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys)+1)]))
 
     seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
     if not self._seq_start:
@@ -69,7 +69,7 @@ class HDFDataset(CachedDataset):
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
     self._num_timesteps = sum([s[0] for s in self._seq_lengths])
-    self._num_codesteps = [ sum([s[i] for s in self._seq_lengths]) for i in xrange(1,len(self._seq_lengths[0])) ]
+    self._num_codesteps = [ sum([s[i] for s in self._seq_lengths]) for i in range(1,len(self._seq_lengths[0])) ]
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if len(fin['inputs'].shape) == 1:  # sparse
@@ -131,12 +131,12 @@ class HDFDataset(CachedDataset):
     assert end <= self.num_seqs
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
-    file_info = [ [] for l in xrange(len(self.files)) ]; """ :type: list[list[int]] """
+    file_info = [ [] for l in range(len(self.files)) ]; """ :type: list[list[int]] """
     # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
       ids = self._seq_index[idc]
       file_info[self.file_index[ids]].append((idc,ids))
-    for i in xrange(len(self.files)):
+    for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue
       print >> log.v4, "loading file", self.files[i]

@@ -601,7 +601,7 @@ def demo():
   assert dataset.num_outputs["data"][1] == 2  # expect 1-hot
   assert dataset.num_outputs["classes"][1] == 1  # expect sparse
   for i in range(10):
-    print "Seq idx", i, ":"
+    print("Seq idx %i:" % i)
     s = dataset.generate_seq(i)
     assert isinstance(s, DatasetSeq)
     features = s.features
@@ -611,8 +611,8 @@ def demo():
     input_seq = numpy.argmax(features, axis=1)
     input_seq_str = "".join([dataset._input_classes[i] for i in input_seq])
     output_seq_str = "".join([dataset._output_classes[i] for i in output_seq])
-    print " ", repr(input_seq_str)
-    print " ", repr(output_seq_str)
+    print(" %r" % input_seq_str)
+    print(" %r" % output_seq_str)
     assert features.shape[1] == dataset.num_outputs["data"][0]
     assert features.shape[0] == output_seq.shape[0]
 

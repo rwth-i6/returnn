@@ -25,7 +25,7 @@ class TaskThread(threading.Thread):
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
       if eval_batch_size == 0:
-        eval_batch_size = sys.maxint
+        eval_batch_size = sys.maxsize
       self.share_batches = share_batches
       self.eval_batch_size = eval_batch_size
       self.eval_batch_idx = 0
@@ -234,7 +234,7 @@ class TaskThread(threading.Thread):
 
         if outputs_format and any([k.startswith("gparam:") for k in outputs_format]):
           # WARNING: this code is untested and likely broken!
-          for i in xrange(len(self.alloc_devices)):
+          for i in range(len(self.alloc_devices)):
             res = Device.make_result_dict(device_results[i], outputs_format)
             self.alloc_devices[i].sync_net_train_params()
             devnet = self.alloc_devices[i].get_net_train_params(self.parent.network)
@@ -378,7 +378,7 @@ class TaskThread(threading.Thread):
           print >> log.v1, "%s failed" % self.name
           if log.v[4]:
             sys.excepthook(*sys.exc_info())
-            print ""
+            print("")
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
@@ -400,7 +400,7 @@ class TaskThread(threading.Thread):
         device.tot = 0
 
       num_device_runs = 1 if self.share_batches else len(self.devices)
-      deviceRuns = [ self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices) for i in xrange(num_device_runs) ]
+      deviceRuns = [ self.DeviceBatchRun(self, [self.devices[i]] if not self.share_batches else self.devices) for i in range(num_device_runs) ]
 
       results = { 'batchess': [], 'results': [], 'num_frames' : NumbersDict(0) }
       run_frames = NumbersDict(0)
@@ -415,7 +415,7 @@ class TaskThread(threading.Thread):
           crashed = True
           break
 
-        for i in xrange(num_device_runs):
+        for i in range(num_device_runs):
           if deviceRuns[i].crashed:
             crashed = True
             break
@@ -452,7 +452,7 @@ class TaskThread(threading.Thread):
             self.batches.advance(1)
             break
           match = False
-          for i in xrange(num_device_runs):
+          for i in range(num_device_runs):
             if not deviceRuns[i].allocated:
               deviceRuns[i].allocate()
               run_frames += deviceRuns[i].run_frames
@@ -600,7 +600,7 @@ class TrainTaskThread(TaskThread):
         consnet = hypnets[0]
       else:
         # consensus via average
-        for i in xrange(nparams):
+        for i in range(nparams):
           num_updates = { dev.name : dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
           tot_updates = sum(num_updates.values())
           #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])

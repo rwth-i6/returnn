@@ -127,7 +127,7 @@ def getDevicesInitArgs(config):
     ngpux = 0
     ncpus, ngpus = get_num_devices()
     if "all" in device_info:
-      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in xrange(ncpus)] + [ "gpu" + str(i) for i in xrange(ngpus)] }
+      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in range(ncpus)] + [ "gpu" + str(i) for i in range(ngpus)] }
     else:
       for info in device_info:
         device_update = True
@@ -154,7 +154,7 @@ def getDevicesInitArgs(config):
           else:
             np = 0
           match = False
-          for p in xrange(np):
+          for p in range(np):
             if re.match(uid, str(p)):
               device_tags[utype + str(p)] = [num_batches, device_update]
               match = True

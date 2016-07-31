@@ -40,13 +40,13 @@ class Log:
             'raw''' : logging.Formatter('%(message)s'),
             'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS')
           }
-    self.v = [ logging.getLogger('v' + str(v)) for v in xrange(6) ]
+    self.v = [ logging.getLogger('v' + str(v)) for v in range(6) ]
     for l in self.v:
       # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
       l.handlers = []
     if not 'stdout' in logs:
       logs.append('stdout')
-    for i in xrange(len(logs)):
+    for i in range(len(logs)):
       t = logs[i]
       v = 3
       if i < len(verbosity):
@@ -70,12 +70,12 @@ class Log:
       else:
         assert False, "invalid log target %r" % t
       handler.setFormatter(f)
-      for j in xrange(v + 1):
+      for j in range(v + 1):
         if not handler in self.v[j].handlers:
           self.v[j].addHandler(handler)
     self.verbose = [ True ] * 6
     null = logging.FileHandler(os.devnull)
-    for i in xrange(len(self.v)):
+    for i in range(len(self.v)):
       self.v[i].setLevel(logging.DEBUG)
       if not self.v[i].handlers:
         self.verbose[i] = False
