@@ -163,7 +163,7 @@ class TaskThread(threading.Thread):
       # Check for key specific behavior
       if key.split(':')[-1] in self.network.output:
         attrs = self.network.output[key.split(':')[-1]].attrs
-        if 'normalize_length' in attrs and attrs['normalize_length']:
+        if attrs.get('normalize_length', False):
           return 1.0 / float(self.data.num_seqs)
       # Default: Normalize by number of frames.
       return 1.0 / float(self.num_frames[target])
