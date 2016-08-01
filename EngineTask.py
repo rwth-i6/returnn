@@ -43,7 +43,6 @@ class TaskThread(threading.Thread):
       self.error = {}
       self.results = {}
       self.num_frames = NumbersDict(0)
-      self.num_seqs = batches.dataset.num_seqs #sum([batch.get_num_seqs() for batch in batches.advance()])
       self.batch_idx = None; " :type: int | None "
       self.device_crash_batch = None; " :type: int | None "
       self.report_prefix = report_prefix or self.task
@@ -165,7 +164,7 @@ class TaskThread(threading.Thread):
       if key.split(':')[-1] in self.network.output:
         attrs = self.network.output[key.split(':')[-1]].attrs
         if 'normalize_length' in attrs and attrs['normalize_length']:
-          return 1.0 / float(self.num_seqs)
+          return 1.0 / float(self.data.num_seqs)
       # Default: Normalize by number of frames.
       return 1.0 / float(self.num_frames[target])
     def finalize(self):
