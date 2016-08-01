@@ -31,8 +31,11 @@ class HiddenLayer(Layer):
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
-  def get_linear_forward_output(self):
-    z = self.b
+  def get_linear_forward_output(self, with_bias=True):
+    if with_bias:
+      z = self.b
+    else:
+      z = 0
     assert len(self.sources) == len(self.masks) == len(self.W_in)
     for s, m, W_in in zip(self.sources, self.masks, self.W_in):
       if s.attrs['sparse']:
