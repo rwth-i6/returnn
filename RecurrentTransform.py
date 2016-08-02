@@ -419,6 +419,9 @@ class AttentionList(AttentionBase):
     elif self.attrs['momentum'] == "conv2d":
       self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
       self.__setattr__("U_%d" % i, self.custom_vars['U_%d' % i])
+    elif self.attrs['momentum'] == "mono":
+      self.__setattr__("D_in_%d" % i, self.custom_vars['D_in_%d' % i])
+      self.__setattr__("D_out_%d" % i, self.custom_vars['D_out_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -462,6 +465,15 @@ class AttentionList(AttentionBase):
         l = sqrt(6.) / sqrt(self.attrs['filters'] + 1)
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.attrs['filters'], 1)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_%d" % i))
+      elif self.attrs['momentum'] == "mono":
+        size = 200
+        l = 0.01
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(1, size)),
+                               dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="D_in_%d" % i))
+        values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(size, 1)),
+                               dtype=theano.config.floatX)
+        self.add_param(self.layer.shared(value=values, borrow=True, name="D_out_%d" % i))
       self.init(i)
 
   def item(self, name, i):
@@ -507,17 +519,20 @@ class AttentionList(AttentionBase):
         z_i = self.distance(C, H)
         w_i = self.softmax(z_i, I)
         if self.attrs['momentum'] == 'conv2d':
-          F = self.item('F',i) #* 0 + 1
+          F = self.item('F',i)
           context = F.shape[3]
           padding = T.zeros((2,context/2,C.shape[1]),'float32')
           att = T.concatenate([padding, T.stack([self.item('att',i), w_i]), padding],axis=1) # 2TB
           v_i = T.nnet.sigmoid(T.dot(T.nnet.conv2d(border_mode='valid',
                               input=att.dimshuffle(2,'x',0,1), # B12T
                               filters=F).dimshuffle(3,0,2,1),self.item('U',i)).reshape((C.shape[0],C.shape[1])))
-          #v_i = T.exp(T.nnet.conv2d(border_mode='valid',
-          #                          input=att.dimshuffle(2, 'x', 0, 1),  # B12T
-          #                          filters=F).dimshuffle(3, 0, 2, 1).reshape((C.shape[0], C.shape[1])))
           w_i *= v_i
+          w_i = w_i / w_i.sum(axis=0, keepdims=True)
+        elif self.attrs['momentum'] == 'mono': # gating function
+          idx = T.arange(z_i.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_i.shape[1],axis=1) # TB
+          d_i = idx - T.sum(self.item('att', i) * idx,axis=0,keepdims=True)
+          f_i = T.nnet.sigmoid(T.dot(T.tanh(T.dot(d_i.dimshuffle(0,1,'x'), self.item('D_in', i))), self.item("D_out", i)))[:,:,0]
+          w_i = T.exp(-z_i) * f_i
           w_i = w_i / w_i.sum(axis=0, keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
