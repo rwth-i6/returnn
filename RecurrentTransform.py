@@ -141,7 +141,7 @@ class RecurrentTransformBase(object):
   def get_state_vars_seq(self, state_var):
     assert state_var.name in self.state_vars
     idx = sorted(self.state_vars.keys()).index(state_var.name)
-    return self.layer.recurrent_transform_state_var_seqs[idx]
+    return self.layer.unit.recurrent_transform_state_var_seqs[idx]
 
   def step(self, y_p):
     """
@@ -422,6 +422,7 @@ class AttentionList(AttentionBase):
     elif self.attrs['momentum'] == "mono":
       self.__setattr__("D_in_%d" % i, self.custom_vars['D_in_%d' % i])
       self.__setattr__("D_out_%d" % i, self.custom_vars['D_out_%d' % i])
+      self.__setattr__("Db_out_%d" % i, self.custom_vars['Db_out_%d' % i])
 
   def create_vars(self):
     super(AttentionList, self).create_vars()
@@ -466,7 +467,7 @@ class AttentionList(AttentionBase):
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.attrs['filters'], 1)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_%d" % i))
       elif self.attrs['momentum'] == "mono":
-        size = 200
+        size = 500
         l = 0.01
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(1, size)),
                                dtype=theano.config.floatX)
@@ -474,6 +475,7 @@ class AttentionList(AttentionBase):
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(size, 1)),
                                dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="D_out_%d" % i))
+        self.add_param(self.layer.shared(value=numpy.zeros((1,),'float32'), borrow=True, name="Db_out_%d" % i))
       self.init(i)
 
   def item(self, name, i):
@@ -511,7 +513,6 @@ class AttentionList(AttentionBase):
     return B, C, I, h_p, self.item("W_att_in", i)
 
   def attend(self, y_p):
-    #inp, updates = T.dot(y_p,self.W_re), {}
     inp, updates = 0, {}
     for i in range(len(self.base)):
       for g in range(self.n_glm):
@@ -531,8 +532,8 @@ class AttentionList(AttentionBase):
         elif self.attrs['momentum'] == 'mono': # gating function
           idx = T.arange(z_i.shape[0],dtype='float32').dimshuffle(0,'x').repeat(w_i.shape[1],axis=1) # TB
           d_i = idx - T.sum(self.item('att', i) * idx,axis=0,keepdims=True)
-          f_i = T.nnet.sigmoid(T.dot(T.tanh(T.dot(d_i.dimshuffle(0,1,'x'), self.item('D_in', i))), self.item("D_out", i)))[:,:,0]
-          w_i = T.exp(-z_i) * f_i
+          f_i = T.nnet.sigmoid(T.dot(T.tanh(T.dot(d_i.dimshuffle(0,1,'x'), self.item('D_in', i))), self.item("D_out", i)) + self.item('Db_out',i))[:,:,0]
+          w_i = T.exp(-z_i) * f_i * I
           w_i = w_i / w_i.sum(axis=0, keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
       if self.attrs['store']:
@@ -553,6 +554,14 @@ class AttentionList(AttentionBase):
       inp += T.dot(z, W_att_in)
     return inp, updates
 
+  def cost(self):
+    if self.attrs['smooth']:
+      penalty = 0
+      for i in range(len(self.base)):
+        a = self.get_state_vars_seq(self.state_vars['att_%d' % i])
+        penalty += T.maximum(T.sum(a[1:] - a[:-1],axis=0),numpy.float32(0))
+      return T.sum(penalty)
+    return 0
 
 class AttentionTime(AttentionList):
   """
