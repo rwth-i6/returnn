@@ -620,9 +620,7 @@ class SprintErrorSigOp(theano.Op):
     self.target = target  # default is "classes"
     self.sprint_opts = make_hashable(sprint_opts)
     self.sprint_instance_pool = None
-    from Config import get_global_config
-    config = get_global_config()
-    self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
+    self.debug_perform_time = None
 
   def make_node(self, log_posteriors, seq_lengths):
     log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
@@ -652,6 +650,10 @@ class SprintErrorSigOp(theano.Op):
 
     print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
     end_time = time.time()
+    if self.debug_perform_time is None:
+      from Config import get_global_config
+      config = get_global_config()
+      self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
     if self.debug_perform_time:
       print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
 

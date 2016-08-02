@@ -651,3 +651,29 @@ def softmax(z):
   collapsed_dim = numpy.prod(dims[:-1])
   return T.nnet.softmax(z.reshape((collapsed_dim, dims[-1]))).reshape(dims)
 
+
+def layer_normalization(x, bias=None, scale=None, eps=1e-5):
+  """
+  Layer Normalization, https://arxiv.org/abs/1607.06450
+  x is mean and variance normalized along its feature dimension.
+  After that, we allow a bias and a rescale. This is supposed to be trainable.
+  :param x: 3d tensor (time,batch,dim) (or any ndim, last dim is expected to be dim)
+  :param bias: 1d tensor (dim) or None
+  :param scale: 1d tensor (dim) or None
+  """
+  mean = T.mean(x, axis=x.ndim - 1, keepdims=True)
+  std = T.sqrt(T.var(x, axis=x.ndim - 1, keepdims=True) + numpy.float32(eps))
+  assert mean.ndim == std.ndim == x.ndim
+  output = (x - mean) / std
+  assert output.ndim == x.ndim
+  if scale is not None:
+    assert scale.ndim == 1
+    scale = scale.dimshuffle(*(('x',) * (x.ndim - 1) + (0,)))
+    assert scale.ndim == x.ndim
+    output = output * scale
+  if bias is not None:
+    assert bias.ndim == 1
+    bias = bias.dimshuffle(*(('x',) * (x.ndim - 1) + (0,)))
+    assert bias.ndim == x.ndim
+    output = output + bias
+  return output

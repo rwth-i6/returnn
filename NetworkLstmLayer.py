@@ -587,6 +587,140 @@ class Lstm2Layer(HiddenLayer):
     self.make_output(h)
 
 
+class Lstm3Layer(HiddenLayer):
+  """
+  Like lstm2 but even simpler.
+  """
+  recurrent = True
+  layer_class = "lstm3"
+
+  def __init__(self, n_out, direction=1, grad_clip=None, **kwargs):
+    n_cells = n_out
+    n_re_in = n_out
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(Lstm3Layer, self).__init__(n_out=n_cells * 4, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_cells', n_cells)
+    self.set_attr('direction', direction)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    CI, CO, G = [T.tanh, T.tanh, T.nnet.sigmoid]
+
+    z = self.get_linear_forward_output()
+    self.W_re = self.add_param(self.create_recurrent_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_cells*4)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += T.dot(h_p, self.W_re)
+      z_t *= i_t_bc
+      input = CI(z_t[:, :n_cells])
+      gates = G(z_t[:, n_cells:])
+      ingate = gates[:, :n_cells]
+      forgetgate = gates[:, n_cells:2 * n_cells]
+      outgate = gates[:, 2 * n_cells:]
+      s_t = input * ingate + s_p * forgetgate
+      h_t = CO(s_t) * outgate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    assert z.ndim == 3  # (time,batch,dim)
+    n_batch = z.shape[1]
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1: False, -1: True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            outputs_info=[s_initial, h_initial])
+    h = h[::direction]
+    self.make_output(h)
+
+
+class LayerNormLstmLayer(HiddenLayer):
+  """
+  Layer Normalization, https://arxiv.org/abs/1607.06450
+  """
+  recurrent = True
+  layer_class = "ln_lstm"
+
+  def __init__(self, n_out, direction=1, grad_clip=None, **kwargs):
+    n_cells = n_out
+    n_re_in = n_out
+    # It's a hidden layer, thus this will create the feed forward layer for the LSTM for the input.
+    super(LayerNormLstmLayer, self).__init__(n_out=n_cells * 4, **kwargs)
+    self.set_attr('n_out', n_out)
+    self.set_attr('n_cells', n_cells)
+    self.set_attr('direction', direction)
+    if grad_clip:
+      self.set_attr('grad_clip', grad_clip)
+      grad_clip = numpy.float32(grad_clip)
+    C, G = [T.tanh, T.nnet.sigmoid]
+
+    from TheanoUtil import layer_normalization
+    def _sliced_layer_norm(z, scale, idx):
+      dimstart = n_cells * idx
+      dimend = dimstart + n_cells
+      zdims = (slice(None),) * (z.ndim - 1) + (slice(dimstart, dimend),)
+      return layer_normalization(z[zdims], bias=None, scale=scale[dimstart:dimend])
+    def sliced_layer_norm(z, scale):
+      slices = [_sliced_layer_norm(z, scale=scale, idx=i) for i in range(4)]
+      return T.concatenate(slices, axis=z.ndim - 1)
+
+    z = self.get_linear_forward_output(with_bias=False)
+    self.ln_zi_scale = self.add_param(self.create_bias(n=n_cells * 4, name="ln_zi_scale_%s" % self.name, init_eval_str="zeros() + 1"))
+    z = sliced_layer_norm(z, scale=self.ln_zi_scale)
+    z += self.b
+    self.W_re = self.add_param(self.create_recurrent_weights(n=n_re_in, m=n_cells * 4, name="W_re_%s" % self.name))
+    self.ln_zr_scale = self.add_param(self.create_bias(n=n_cells * 4, name="ln_zr_scale_%s" % self.name, init_eval_str="zeros() + 1"))
+    self.ln_s_bias = self.add_param(self.create_bias(n=n_cells, name="ln_s_bias_%s" % self.name, init_eval_str="zeros()"))
+    self.ln_s_scale = self.add_param(self.create_bias(n=n_cells, name="ln_s_scale_%s" % self.name, init_eval_str="zeros() + 1"))
+
+
+    def lstm_step(z_t, i_t, s_p, h_p):
+      # z_t: current input. (batch,n_cells*4)
+      # i_t: 0 or 1 (via index). (batch,)
+      # s_p: previous cell state. (batch,n_cells)
+      # h_p: previous hidden out. (batch,n_out)
+      i_t_bc = i_t.dimshuffle(0, 'x')
+      z_t += sliced_layer_norm(T.dot(h_p, self.W_re), scale=self.ln_zr_scale)
+      z_t *= i_t_bc
+      input = C(z_t[:, :n_cells])
+      gates = G(z_t[:, n_cells:])
+      igate = gates[:, :n_cells]
+      fgate = gates[:, n_cells:2 * n_cells]
+      ogate = gates[:, 2 * n_cells:]
+      s_t = input * igate + s_p * fgate
+      s_t_ = layer_normalization(s_t, bias=self.ln_s_bias, scale=self.ln_s_scale)
+      h_t = C(s_t_) * ogate
+      s_t *= i_t_bc
+      h_t *= i_t_bc
+      if grad_clip:
+        s_t = theano.gradient.grad_clip(s_t, -grad_clip, grad_clip)
+        h_t = theano.gradient.grad_clip(h_t, -grad_clip, grad_clip)
+      return s_t, h_t
+
+    i = T.cast(self.index, dtype="float32")  # so that it can run on gpu
+    assert z.ndim == 3  # (time,batch,dim)
+    n_batch = z.shape[1]
+    s_initial = T.zeros((n_batch, n_cells), dtype="float32")
+    h_initial = T.zeros((n_batch, n_out), dtype="float32")
+    go_backwards = {1: False, -1: True}[direction]
+    (s, h), _ = theano.scan(lstm_step,
+                            sequences=[z, i], go_backwards=go_backwards,
+                            outputs_info=[s_initial, h_initial])
+    h = h[::direction]
+    self.make_output(h)
+
+
 class NativeLstmLayer(HiddenLayer):
   recurrent = True
   layer_class = "native_lstm"
