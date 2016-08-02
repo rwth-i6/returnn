@@ -528,7 +528,8 @@ class AttentionList(AttentionBase):
         updates[self.state_vars['K_%d' % i]] = K
       if self.attrs['accumulator'] == 'rnn':
         def rnn(x_t, w_t, c_p):
-          return x_t * w_t + c_p * (numpy.float32(1.) - w_t)
+          c = x_t * w_t + c_p * (numpy.float32(1.) - w_t)
+          return T.switch(T.ge(c, 0), c, T.exp(c) - 1)
         zT, _ = theano.scan(rnn, sequences=[B,w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2)],
                            outputs_info = [T.zeros_like(B[0])])
         z = zT[-1]

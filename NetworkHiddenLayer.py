@@ -1186,8 +1186,7 @@ class HDF5DataLayer(Layer):
     import h5py
     h5 = h5py.File(filename, "r")
     data = h5[dset][...]
-    self.z = self.shared(value=data.astype('float32'), borrow=True, name=self.name)
-    self.make_output(self.z) # QD
+    self.output = self.shared(value=data.astype('float32'), borrow=True, name=self.name)
     self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
     h5.close()
 
