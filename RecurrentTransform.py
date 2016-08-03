@@ -410,6 +410,8 @@ class AttentionList(AttentionBase):
     shape = self.layer.base[i].index.shape
     if self.attrs['store']:
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
+    if self.attrs['smooth']:
+      self.__setattr__("datt_%d" % i, self.add_state_var(T.zeros(shape, 'float32'), "datt_%d" % i))
     if self.attrs['align']:
       self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32') + numpy.float32(1e10), "Q_%d" % i))
       self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
@@ -536,6 +538,8 @@ class AttentionList(AttentionBase):
           w_i = T.exp(-z_i) * f_i * I
           w_i = w_i / w_i.sum(axis=0, keepdims=True)
         self.glimpses[i].append(T.sum(C * w_i.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
+      if self.attrs['smooth']:
+        updates[self.state_vars['datt_%d' % i]] = w_i - self.state_vars['att_%d' % i]
       if self.attrs['store']:
         updates[self.state_vars['att_%d' % i]] = theano.gradient.disconnected_grad(w_i)
       if self.attrs['align']:
@@ -556,11 +560,10 @@ class AttentionList(AttentionBase):
 
   def cost(self):
     if self.attrs['smooth']:
-      penalty = 0
+      penalty = T.constant(0,'float32')
       for i in range(len(self.base)):
-        a = self.get_state_vars_seq(self.state_vars['att_%d' % i])
-        penalty += T.maximum(T.sum(a[1:] - a[:-1],axis=0),numpy.float32(0))
-      return T.sum(penalty)
+        penalty += theano.tensor.extra_ops.cumsum(self.get_state_vars_seq(self.state_vars['datt_%d' % i]),axis=0)
+      return T.sum(T.maximum(penalty,T.zeros_like(penalty)))
     return 0
 
 class AttentionTime(AttentionList):
