@@ -33,6 +33,14 @@ def _consider_check_for_gpu():
   Maybe it's also a Linux Kernel bug.
   Anyway, just avoid any such check if we don't asked for a GPU.
   """
+  theano_flags = {key: value for (key, value)
+                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+  if "device" in theano_flags:
+    dev = theano_flags["device"]
+    if dev.startswith("gpu") or dev.startswith("cuda"):
+      return True
+    # THEANO_FLAGS will overwrite this config option. See rnn.initDevices().
+    return False
   try:
     from Config import get_global_config
     config = get_global_config()
@@ -44,12 +52,6 @@ def _consider_check_for_gpu():
         return True
       if dev == "all":
         return True
-  theano_flags = {key: value for (key, value)
-                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-  if "device" in theano_flags:
-    dev = theano_flags["device"]
-    if dev.startswith("gpu") or dev.startswith("cuda"):
-      return True
   return False
 
 
