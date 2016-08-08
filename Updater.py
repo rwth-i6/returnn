@@ -66,6 +66,7 @@ class Updater:
                update_multiple_models_param_is_cur_model=False,
                enforce_triangular_matrix_zero=False,
                gradient_noise=0.0,
+               gradient_noise_decay=0.55,
                grad_noise_rel_grad_norm=0.0,
                reset_update_params=False
                ):
@@ -99,6 +100,7 @@ class Updater:
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.gradient_noise = gradient_noise
+    self.gradient_noise_decay = gradient_noise_decay
     self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
     self.reset_update_params = reset_update_params
     self.device = str(theano.config.device)
@@ -157,7 +159,7 @@ class Updater:
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
     " :type: theano.compile.sharedvalue.SharedVariable "
     self.i = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_i")
-    self.e = self.var(numpy.float32(0), name="updater_epoch")
+    self.e = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_epoch")
 
     if self.momentum > 0:
       self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
@@ -292,14 +294,14 @@ class Updater:
           grads[W_in] -= T.outer(avg, delta_b)
           grads[layer.b] -= T.dot(grads[W_in].T, avg)
 
-    eps = 1e-7
     self.counter = self.var(0, name="counter", dtype="int64")
     updates.append((self.counter, self.counter + 1))
     dt = T.cast(1.,'float32') #T.cast(T.max(T.sum(self.network.output.values()[0].index,axis=0)), 'float32')
     i_t = self.i + dt #1.
     prev_epoch = self.var(numpy.zeros((), dtype="int32"),'prev_epoch',dtype='int32')
     updates.append((prev_epoch, self.network.epoch))
-    e_t = T.switch(T.eq(self.network.epoch,prev_epoch), self.e + dt, numpy.float32(1))
+    e_t = T.switch(T.eq(self.network.epoch,prev_epoch), self.e + dt,
+                   T.switch(T.eq(i_t, self.e), numpy.float32(1), self.e/2 + dt))
     updates.append((self.e, e_t))
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
@@ -326,7 +328,7 @@ class Updater:
 
       if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
-        gamma = 0.55
+        gamma = self.gradient_noise_decay
         sigma = nu / (1 + i_t)**gamma
         deltas += srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
       if self.grad_noise_rel_grad_norm > 0.0:
@@ -361,11 +363,9 @@ class Updater:
         self.use_corrected_grad = True
         self.decay = 0.75
         self.delta_clip = 50.0
-        self.outlier_detection = False
         self.gamma_clip = 2.5 #1.8
+        eps = numpy.float32(1e-7)
         deltas = deltas / (deltas.norm(2) + eps)
-        mean_grad = self.var(param.get_value() * 0. + eps, name="mean_grad_%s" % param.name, broadcastable=param.broadcastable)
-        slow_constant = 2.1
         if self.use_adagrad:
           sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name, broadcastable=param.broadcastable)
         if self.use_adadelta:
@@ -427,7 +427,6 @@ class Updater:
         if self.gamma_clip:
           gamma = T.minimum(gamma, self.gamma_clip)
 
-
         momentum_step = gamma * new_mean_grad
         corrected_grad_cand = (deltas + momentum_step) / (1 + gamma)
 
@@ -468,13 +467,13 @@ class Updater:
         #Unbiased average squared curvature
         nc_sq_ave = new_curvature_sqr_ave
 
-        epsilon = self.learning_rate_var
-        rms_dx_tm1 = T.sqrt(msdx + epsilon)
-        rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
+        slope = self.learning_rate_var
+        rms_dx_tm1 = T.sqrt(msdx + slope)
+        rms_curve_t = T.sqrt(new_curvature_sqr_ave + slope)
 
         #This is where the update step is being defined
         #delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
-        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
+        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + self.decay))
         delta_x_t.name = "delta_x_t_" + param.name
 
         # This part seems to be necessary for only RNNs
@@ -491,6 +490,7 @@ class Updater:
         else:
           #logger.info("Clipped adagrad is disabled.")
           delta_x_t = delta_x_t * corrected_grad
+        delta_x_t *= self.learning_rate_var
 
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
         #To compute the E[\Delta^2]_t
@@ -570,124 +570,6 @@ class Updater:
         updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))
         updates.append((v_prev, v))
-
-      elif self.adamvr:
-        self.decay = 0.75
-        self.delta_clip = 1.0
-        self.gamma_clip = 1.8
-
-        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
-        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
-
-        deltas = deltas / (deltas.norm(2) + eps)
-        taus_x_t = self.var((numpy.ones_like(param.get_value()) + eps) * 2.1, name="taus_x_t_" + param.name)
-
-        #Variance reduction parameters
-        #Numerator of the gamma:
-        gamma_nume_sqr = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_nume_sqr_" + param.name)
-        #Denominator of the gamma:
-        gamma_deno_sqr = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_deno_sqr_" + param.name)
-        #For the covariance parameter := E[\gamma \alpha]_{t-1}
-        cov_num_t = self.var(numpy.zeros_like(param.get_value()) + eps, name="cov_num_t_" + param.name)
-        # mean_grad := E[g]_{t-1}
-        mean_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_grad_%s" % param.name)
-        # mean_squared_grad := E[g^2]_{t-1}
-        mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="msg_" + param.name)
-        # mean_square_dx := E[(\Delta x)^2]_{t-1}
-        mean_square_dx = self.var(value = numpy.zeros_like(param.get_value()), name="msd_" + param.name)
-        old_grad = self.var(value = numpy.zeros_like(param.get_value()) + eps, name="old_grad_" + param.name)
-
-        #The uncorrected gradient of previous of the previous update:
-        old_plain_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="old_plain_grad_" + param.name)
-        mean_curvature = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_curvature_" + param.name)
-        mean_curvature_sqr = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_curvature_sqr_" + param.name)
-
-        # Initialize the E[\Delta]_{t-1}
-        mean_dx = self.var(numpy.zeros_like(param.get_value()), name="mean_dx_" + param.name)
-
-        #For the first time-step, assume that delta_x_t := deltas
-        cond = T.eq(self.i, 0)
-        msdx = cond * deltas**2 + (1 - cond) * mean_square_dx
-        mdx = cond * deltas + (1 - cond) * mean_dx
-
-        # E[g_i^2]_t
-        new_mean_squared_grad = mean_square_grad * self.decay + T.sqr(deltas) * (1 - self.decay)
-        new_mean_squared_grad.name = "msg_" + param.name
-        # E[g_i]_t
-        new_mean_grad = mean_grad * self.decay + deltas * (1 - self.decay)
-        new_mean_grad.name = "nmg_" + param.name
-        # Keep the rms for numerator and denominator of gamma.
-        new_gamma_nume_sqr = gamma_nume_sqr * (1 - 1 / taus_x_t) + T.sqr((deltas - old_grad) * (old_grad - new_mean_grad)) / taus_x_t
-        new_gamma_nume_sqr.name = "ngammasqr_num_" + param.name
-        new_gamma_deno_sqr = gamma_deno_sqr * (1 - 1 / taus_x_t) + T.sqr((new_mean_grad - deltas) * (old_grad - new_mean_grad)) / taus_x_t
-        new_gamma_deno_sqr.name = "ngammasqr_den_" + param.name
-
-        gamma = T.sqrt(gamma_nume_sqr) / T.sqrt(gamma_deno_sqr + eps)
-        gamma.name = "gamma_" + param.name
-
-        if self.gamma_clip:
-          gamma = T.minimum(gamma, self.gamma_clip)
-
-        momentum_step = gamma * new_mean_grad
-        corrected_grad = (deltas + momentum_step) / (1 + gamma)
-
-        # Use the gradients from the previous update
-        # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
-        cur_curvature = deltas - old_plain_grad
-        new_curvature_ave = mean_curvature * (1 - 1 / taus_x_t) + cur_curvature / taus_x_t
-        new_curvature_ave.name = "ncurve_ave_" + param.name
-        #Average average curvature
-        new_curvature_sqr_ave = mean_curvature_sqr * (1 - 1 / taus_x_t) + T.sqr(cur_curvature) / taus_x_t
-        new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
-        #Unbiased average squared curvature
-        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * corrected_grad
-        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * corrected_grad ** 2
-        a_t = T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
-
-        epsilon = self.learning_rate_var
-        rms_dx_tm1 = T.sqrt(msdx + epsilon)
-        rms_curve_t = T.sqrt(new_curvature_sqr_ave + epsilon)
-
-        #This is where the update step is being defined
-        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
-        delta_x_t = delta_x_t * a_t * m_t / (T.sqrt(v_t) + epsilon)
-        delta_x_t.name = "delta_x_t_" + param.name
-
-        if self.delta_clip < 1.0 and self.delta_clip > 0.0:
-          delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
-
-        new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
-        #To compute the E[\Delta^2]_t
-        new_mean_square_dx = msdx * (1 - 1 / taus_x_t) + T.sqr(delta_x_t) / taus_x_t
-        #To compute the E[\Delta]_t
-        new_mean_dx = mean_dx * (1 - 1 / taus_x_t) + delta_x_t / taus_x_t
-
-        #Perform the outlier detection:
-        new_taus_t = T.switch(T.or_(abs(deltas - new_mean_grad) > (2 * T.sqrt(new_mean_squared_grad  - new_mean_grad**2)),
-                                    abs(cur_curvature - new_curvature_ave) > (2 * T.sqrt(new_curvature_sqr_ave - new_curvature_ave**2))),
-                                    self.var(2.2), new_taus_t)
-
-        #Apply the bound constraints on tau:
-        new_taus_t = T.maximum(1.5, new_taus_t)
-        new_taus_t = T.minimum(1e8, new_taus_t)
-        new_cov_num_t = cov_num_t * (1 - 1 / taus_x_t) + (delta_x_t * cur_curvature) * (1 / taus_x_t)
-
-        # Apply updates
-        updates.append((mean_square_grad, new_mean_squared_grad))
-        updates.append((mean_square_dx, new_mean_square_dx))
-        updates.append((mean_dx, new_mean_dx))
-        updates.append((gamma_nume_sqr, new_gamma_nume_sqr))
-        updates.append((gamma_deno_sqr, new_gamma_deno_sqr))
-        updates.append((taus_x_t, new_taus_t))
-        updates.append((cov_num_t, new_cov_num_t))
-        updates.append((mean_grad, new_mean_grad))
-        updates.append((old_plain_grad, deltas))
-        updates.append((mean_curvature, new_curvature_ave))
-        updates.append((mean_curvature_sqr, new_curvature_sqr_ave))
-        updates.append((m_prev, m_t))
-        updates.append((v_prev, v_t))
-        updates.append((old_grad, corrected_grad))
-        upd[param] = delta_x_t
 
       elif self.adam:
         #epsilon = numpy.float32(1e-8)
