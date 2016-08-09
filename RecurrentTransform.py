@@ -383,7 +383,7 @@ class AttentionBase(RecurrentTransformBase):
     else:
       raise NotImplementedError()
     E = E * I
-    if self.attrs['nbest'] > 0:
+    if self.attrs['nbest'] > 1:
       opt = T.minimum(self.attrs['nbest'], E.shape[0])
       score = (T.sort(E, axis=0)[-opt]).dimshuffle('x',0).repeat(E.shape[0],axis=0)
       E = T.switch(T.lt(E,score), T.zeros_like(E), E)
@@ -554,7 +554,10 @@ class AttentionList(AttentionBase):
                            outputs_info = [T.zeros_like(B[0])])
         z = zT[-1]
       else:
-        z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
+        if self.attrs['nbest'] == 1:
+          z = B[T.argmax(w_i,axis=0),T.arange(w_i.shape[1])]
+        else:
+          z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
       inp += T.dot(z, W_att_in)
     return inp, updates
 

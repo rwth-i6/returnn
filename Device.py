@@ -281,7 +281,10 @@ class Device(object):
       print >>log.v3, "Device proc %s (%s) died: %r" % (self.name, device_tag, e)
       print >>log.v5, "Theano flags:", env_update["THEANO_FLAGS"]
       interrupt_main()
-    self.attributes = get_device_attributes()[self.device_name]
+    if self.device_name in get_device_attributes().keys():
+      self.attributes = get_device_attributes()[self.device_name]
+    else:
+      self.attributes = get_device_attributes()['default']
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
 

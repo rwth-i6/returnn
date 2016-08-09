@@ -182,7 +182,7 @@ class OutputLayer(Layer):
       else:
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
     elif self.y_data_flat.dtype.startswith('float'):
-      return T.sum(T.sqr(T.nnet.sigmoid(self.y_m[self.i]) - T.nnet.sigmoid(self.y_data_flat.reshape(self.y_m.shape)[self.i])))
+      return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
       #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
@@ -267,7 +267,7 @@ class FramewiseOutputLayer(OutputLayer):
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
         #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
-        return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
+        return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
         #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
@@ -446,20 +446,20 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base=None, prior_scale=0.7, prior_momentum=0.0, permutation=False, **kwargs):
+  def __init__(self, base=None, prior_scale=0.0, confidence=0.0, prior_momentum=0.0, lm_scale=1.0, permutation=False, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
     self.set_attr('prior_scale', prior_scale)
+    self.set_attr('confidence', confidence)
     self.set_attr('prior_momentum', prior_momentum)
     self.set_attr('permutation', permutation)
-    if base is not None:
-      self.z = base[0].z
-      self.priors = theano.gradient.disconnected_grad(base[0].priors)
+    self.set_attr('lm_scale', lm_scale)
+    self.lm_score = T.constant(0.0,'float32')
     z_f = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     self.y_m = z_f
-    i_f = T.cast(self.index.flatten(), 'float32')
+    i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(z_f.shape[1], axis=1)
     self.p = T.nnet.softmax(z_f)
     self.N = T.maximum(T.sum(i_f), numpy.float32(1))
     if base is None:
@@ -487,7 +487,7 @@ class UnsupervisedOutputLayer(OutputLayer):
       sigma = T.stack(*sigma)
       self.W = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], nP, l=0.1, name="W_p_%s" % (self.name)))
       self.b = self.add_param(self.create_bias(nP, name="b_p_%s" % (self.name)))
-      zb = T.mean(T.dot(z_f, self.W) + self.b,axis=0) #+ alpha_init
+      zb = T.mean(T.dot(z_f, self.W) + self.b,axis=0)
       norm = T.sqrt(T.constant(2.*numpy.pi,'float32')*sigma**2)
       alpha = T.exp(-zb**2/(2*sigma**2)) / norm
       from TheanoUtil import print_to_file
@@ -499,19 +499,54 @@ class UnsupervisedOutputLayer(OutputLayer):
       P = print_to_file('P', P)
       self.p = T.nnet.softmax(T.dot(z_f, P))
 
+    #if base is not None:
+    #  p_lm = base[0].output.reshape(self.p.shape)[T.arange(self.p.shape[0]),T.argmax(self.p,axis=1)]
+    #  self.lm_score = -T.sum(T.log(p_lm))
+    if base is not None:
+      if self.attrs['confidence'] == 1.0:
+        self.lm_score = -T.sum(T.log(T.max(base[0].output, axis=2)))
+      elif self.attrs['confidence'] == 0.0:
+        self.lm_score = -T.sum(T.log(base[0].output)) / T.constant(self.attrs['n_out'],'float32')
+      else:
+        p = (self.p ** confidence)
+        p = p / p.sum(axis=1, keepdims=True)
+        self.lm_score = -T.sum(p * i_f * T.log(base[0].output.reshape(p.shape)))
+
   def cost(self):
     known_grads = None
-    if self.train_flag:
+    if self.train_flag or True:
       i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(self.p.shape[1], axis=1)
       prior_momentum = T.constant(self.attrs['prior_momentum'], 'float32')
       prior_scale = T.constant(self.attrs['prior_scale'],'float32')
+      lm_scale = T.constant(self.attrs['lm_scale'],'float32')
       entropy_scale = T.constant(1. - self.attrs['prior_scale'],'float32')
-      batch_prior = (numpy.float32(1) - prior_momentum) * T.mean(self.p[self.i],axis=0)
+      confidence = T.constant(1. - self.attrs['confidence'],'float32')
+      batch_prior = T.maximum((numpy.float32(1) - prior_momentum) * T.mean(self.p[self.i],axis=0), T.constant(1e-10,'float32'))
       batch_prior += prior_momentum * self.running_priors
-      H = -T.sum(self.p * i_f * T.log(self.p))
-      L = -T.sum(self.priors * T.log(batch_prior)) * self.N
+
+      decay = 0.1
+      energy = T.log(T.constant(self.attrs['n_out'], 'float32')) / (self.N*(1 + self.network.epoch) ** decay)
+      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+      srng = RandomStreams(self.rng.randint(1234) + 1)
+      nn = numpy.float32(1. / 0.05)
+      #noise = srng.normal(size=self.priors.shape, ndim=self.priors.ndim, avg=0.0, std=self.priors / nn, dtype="float32")
+
+      #H = -T.sum(T.sum(self.p * i_f * T.log(self.p),axis=0) - noise * self.N)
+      if self.attrs['confidence'] == 1.0:
+        H = -T.sum(T.cast(self.index.flatten(), 'float32') * T.log(T.max(self.p,axis=1)))
+      else:
+        p = (self.p**confidence)
+        p = p / p.sum(axis=1,keepdims=True)
+        H = -T.sum(T.sum(p * i_f * T.log(self.p)))
+      L = self.lm_score
+      #L = -T.sum(self.priors * T.log(batch_prior)) * self.N
+      #Q = -T.sum(self.priors.dimshuffle('x',0).repeat(self.p.shape[0],axis=0) * i_f * T.log(self.p))
       #H = theano.printing.Print("H")(H)
       #L = theano.printing.Print("L")(L)
+      #return entropy_scale * H + lm_scale * self.lm_score, known_grads
+      #return entropy_scale * H + prior_scale * Q + lm_scale * self.lm_score, known_grads
+      #return H, known_grads
+      #return H * L, known_grads
       return entropy_scale * H + prior_scale * L, known_grads
     else:
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])

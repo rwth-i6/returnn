@@ -1,4 +1,3 @@
-4
 from math import sqrt
 import numpy
 from theano import tensor as T

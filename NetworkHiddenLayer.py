@@ -1142,6 +1142,19 @@ class StateVector(ForwardLayer):
     self.index = T.ones((1, self.index.shape[1]), dtype='int8')
 
 
+class TimeShift(_NoOpLayer):
+  layer_class = "time_shift"
+
+  def __init__(self, base=None, n_shift=1, **kwargs):
+    super(TimeShift, self).__init__(**kwargs)
+    self.set_attr('n_shift', n_shift)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    if n_shift > 1:
+      self.output = T.concatenate([T.zeros_like(self.sources[0].output[:n_shift]),self.sources[0].output[:-n_shift]],axis=0)
+    else:
+      self.output = T.concatenate([T.zeros_like(self.sources[0].output[0]).dimshuffle('x',0,1), self.sources[0].output[:-1]], axis=0)
+
+
 class TimeConcatLayer(HiddenLayer):
   layer_class = "time_concat"
 

@@ -473,7 +473,7 @@ class Updater:
 
         #This is where the update step is being defined
         #delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
-        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + self.decay))
+        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + self.learning_rate_var))
         delta_x_t.name = "delta_x_t_" + param.name
 
         # This part seems to be necessary for only RNNs
@@ -490,7 +490,6 @@ class Updater:
         else:
           #logger.info("Clipped adagrad is disabled.")
           delta_x_t = delta_x_t * corrected_grad
-        delta_x_t *= self.learning_rate_var
 
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
         #To compute the E[\Delta^2]_t
