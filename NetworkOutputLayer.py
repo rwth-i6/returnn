@@ -541,4 +541,22 @@ class UnsupervisedOutputLayer(OutputLayer):
       L = self.lm_score
       #L = -T.sum(self.priors * T.log(batch_prior)) * self.N
       #Q = -T.sum(self.priors.dimshuffle('x',0).repeat(self.p.shape[0],axis=0) * i_f * T.log(self.p))
-      #H = theano.printing.Print("H
+      #H = theano.printing.Print("H")(H)
+      #L = theano.printing.Print("L")(L)
+      #return entropy_scale * H + lm_scale * self.lm_score, known_grads
+      #return entropy_scale * H + prior_scale * Q + lm_scale * self.lm_score, known_grads
+      #return H, known_grads
+      #return H * L, known_grads
+      return entropy_scale * H + prior_scale * L, known_grads
+    else:
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+      return T.sum(nll), known_grads
+
+  def errors(self):
+    """
+    :rtype: theano.Variable
+    """
+    if self.y_data_flat.type == T.ivector().type:
+      return self.norm * T.sum(T.neq(T.argmax(self.p[self.i], axis=-1), self.y_data_flat[self.i]))
+    else:
+      return self.norm * T.sum(T.neq(T.argmax(self.p[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis=-1)))
