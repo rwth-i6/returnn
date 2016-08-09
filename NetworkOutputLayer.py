@@ -446,16 +446,14 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base=None, prior_scale=0.0, confidence=0.0, prior_momentum=0.0, lm_scale=1.0, permutation=False, **kwargs):
+  def __init__(self, base, prior_scale=0.0, prior_confidence=0.0, posterior_confidence=0.0, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
     self.set_attr('prior_scale', prior_scale)
-    self.set_attr('confidence', confidence)
-    self.set_attr('prior_momentum', prior_momentum)
-    self.set_attr('permutation', permutation)
-    self.set_attr('lm_scale', lm_scale)
+    self.set_attr('prior_confidence', prior_confidence)
+    self.set_attr('posterior_confidence', posterior_confidence)
     self.lm_score = T.constant(0.0,'float32')
     z_f = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     self.y_m = z_f
@@ -473,66 +471,27 @@ class UnsupervisedOutputLayer(OutputLayer):
       custom_gradient=T.mean(self.p[self.i],axis=0),
       custom_gradient_normalized=True)
 
-    if permutation:
-      def conf(a, b):
-        return T.exp(-((a * T.log(b) - b * T.log(a))** 2))
-      Ps = []
-      sigma = []
-      I = T.eye(self.attrs['n_out'])
-      for n in xrange(self.attrs['n_out']):
-        for m in xrange(n+1,self.attrs['n_out']):
-          Ps.append(T.concatenate([I[:n], I[[m]], I[n+1:m], I[[n]], I[m+1:]]))
-          sigma.append(conf(self.priors[n],self.priors[m]))
-      nP = len(Ps)
-      sigma = T.stack(*sigma)
-      self.W = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], nP, l=0.1, name="W_p_%s" % (self.name)))
-      self.b = self.add_param(self.create_bias(nP, name="b_p_%s" % (self.name)))
-      zb = T.mean(T.dot(z_f, self.W) + self.b,axis=0)
-      norm = T.sqrt(T.constant(2.*numpy.pi,'float32')*sigma**2)
-      alpha = T.exp(-zb**2/(2*sigma**2)) / norm
-      from TheanoUtil import print_to_file
-      alpha = print_to_file('alpha',alpha)
-      P = T.eye(self.attrs['n_out'])
-      for n in xrange(nP):
-        Pi = alpha[n] * Ps[n] + (numpy.float32(1.) - alpha[n]) * T.eye(self.attrs['n_out'])
-        P = T.dot(P, Pi)
-      P = print_to_file('P', P)
-      self.p = T.nnet.softmax(T.dot(z_f, P))
-
-    #if base is not None:
-    #  p_lm = base[0].output.reshape(self.p.shape)[T.arange(self.p.shape[0]),T.argmax(self.p,axis=1)]
-    #  self.lm_score = -T.sum(T.log(p_lm))
     if base is not None:
-      if self.attrs['confidence'] == 1.0:
+      if self.attrs['prior_confidence'] == 1.0:
         self.lm_score = -T.sum(T.log(T.max(base[0].output, axis=2)))
-      elif self.attrs['confidence'] == 0.0:
+      elif self.attrs['prior_confidence'] == 0.0:
         self.lm_score = -T.sum(T.log(base[0].output)) / T.constant(self.attrs['n_out'],'float32')
       else:
-        p = (self.p ** confidence)
+        p = base[0].output.reshape(self.p.shape)**T.constant(1.-prior_confidence,'float32')
         p = p / p.sum(axis=1, keepdims=True)
         self.lm_score = -T.sum(p * i_f * T.log(base[0].output.reshape(p.shape)))
+    else:
+      self.lm_score = 0.0
+      assert prior_scale == 0.0
 
   def cost(self):
     known_grads = None
     if self.train_flag or True:
       i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(self.p.shape[1], axis=1)
-      prior_momentum = T.constant(self.attrs['prior_momentum'], 'float32')
       prior_scale = T.constant(self.attrs['prior_scale'],'float32')
-      lm_scale = T.constant(self.attrs['lm_scale'],'float32')
       entropy_scale = T.constant(1. - self.attrs['prior_scale'],'float32')
-      confidence = T.constant(1. - self.attrs['confidence'],'float32')
-      batch_prior = T.maximum((numpy.float32(1) - prior_momentum) * T.mean(self.p[self.i],axis=0), T.constant(1e-10,'float32'))
-      batch_prior += prior_momentum * self.running_priors
-
-      decay = 0.1
-      energy = T.log(T.constant(self.attrs['n_out'], 'float32')) / (self.N*(1 + self.network.epoch) ** decay)
-      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-      nn = numpy.float32(1. / 0.05)
-      #noise = srng.normal(size=self.priors.shape, ndim=self.priors.ndim, avg=0.0, std=self.priors / nn, dtype="float32")
-
-      #H = -T.sum(T.sum(self.p * i_f * T.log(self.p),axis=0) - noise * self.N)
-      if self.attrs['confidence'] == 1.0:
+      confidence = T.constant(1. - self.attrs['posterior_confidence'],'float32')
+      if self.attrs['posterior_confidence'] == 1.0:
         H = -T.sum(T.cast(self.index.flatten(), 'float32') * T.log(T.max(self.p,axis=1)))
       else:
         p = (self.p**confidence)
