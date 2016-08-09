@@ -182,7 +182,7 @@ class OutputLayer(Layer):
       else:
         return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
     elif self.y_data_flat.dtype.startswith('float'):
-      return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
+      return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.flatten()[self.i]))
       #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i])
       #return T.sum(T.sqr(self.y_m[self.i] - self.y.reshape(self.y_m.shape)[self.i]))
@@ -209,9 +209,10 @@ class FramewiseOutputLayer(OutputLayer):
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
+      custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_gradient=T.mean(self.p_y_given_x[self.i], axis=0),
-                                   custom_gradient_normalized=True)
+                                   custom_gradient=custom,
+                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
 
   def cost(self):
     """
@@ -266,7 +267,7 @@ class FramewiseOutputLayer(OutputLayer):
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
         #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
-        return T.sum(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
+        return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
         #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
@@ -438,7 +439,6 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
-      #self.y_m = y.flatten()
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
     else:
@@ -446,54 +446,99 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base=None, blur=0.0, e_t=1e-5, e_b=0.1, e_d=1.0, use_max=False, **kwargs):
+  def __init__(self, base=None, prior_scale=0.0, confidence=0.0, prior_momentum=0.0, lm_scale=1.0, permutation=False, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
-    self.set_attr('loss', 'unsupervised')
-    self.xflag = base[0].xflag if base else numpy.float32(1)
-    self.blur = blur
-    self.e_t = e_t
-    self.e_b = e_b
-    self.e_d = e_d
-    self.use_max = use_max
-    self.p = base[0].p if base else numpy.float32(0)
+    self.set_attr('prior_scale', prior_scale)
+    self.set_attr('confidence', confidence)
+    self.set_attr('prior_momentum', prior_momentum)
+    self.set_attr('permutation', permutation)
+    self.set_attr('lm_scale', lm_scale)
+    self.lm_score = T.constant(0.0,'float32')
+    z_f = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    self.y_m = z_f
+    i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(z_f.shape[1], axis=1)
+    self.p = T.nnet.softmax(z_f)
+    self.N = T.maximum(T.sum(i_f), numpy.float32(1))
+    if base is None:
+      custom = T.mean(self.p[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
+      self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
+                                   custom_gradient=custom,
+                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
+    self.running_priors = self.add_param(
+      theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out']),
+                    'running_priors'), 'running_priors',
+      custom_gradient=T.mean(self.p[self.i],axis=0),
+      custom_gradient_normalized=True)
+
+    if permutation:
+      def conf(a, b):
+        return T.exp(-((a * T.log(b) - b * T.log(a))** 2))
+      Ps = []
+      sigma = []
+      I = T.eye(self.attrs['n_out'])
+      for n in xrange(self.attrs['n_out']):
+        for m in xrange(n+1,self.attrs['n_out']):
+          Ps.append(T.concatenate([I[:n], I[[m]], I[n+1:m], I[[n]], I[m+1:]]))
+          sigma.append(conf(self.priors[n],self.priors[m]))
+      nP = len(Ps)
+      sigma = T.stack(*sigma)
+      self.W = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], nP, l=0.1, name="W_p_%s" % (self.name)))
+      self.b = self.add_param(self.create_bias(nP, name="b_p_%s" % (self.name)))
+      zb = T.mean(T.dot(z_f, self.W) + self.b,axis=0)
+      norm = T.sqrt(T.constant(2.*numpy.pi,'float32')*sigma**2)
+      alpha = T.exp(-zb**2/(2*sigma**2)) / norm
+      from TheanoUtil import print_to_file
+      alpha = print_to_file('alpha',alpha)
+      P = T.eye(self.attrs['n_out'])
+      for n in xrange(nP):
+        Pi = alpha[n] * Ps[n] + (numpy.float32(1.) - alpha[n]) * T.eye(self.attrs['n_out'])
+        P = T.dot(P, Pi)
+      P = print_to_file('P', P)
+      self.p = T.nnet.softmax(T.dot(z_f, P))
+
+    #if base is not None:
+    #  p_lm = base[0].output.reshape(self.p.shape)[T.arange(self.p.shape[0]),T.argmax(self.p,axis=1)]
+    #  self.lm_score = -T.sum(T.log(p_lm))
+    if base is not None:
+      if self.attrs['confidence'] == 1.0:
+        self.lm_score = -T.sum(T.log(T.max(base[0].output, axis=2)))
+      elif self.attrs['confidence'] == 0.0:
+        self.lm_score = -T.sum(T.log(base[0].output)) / T.constant(self.attrs['n_out'],'float32')
+      else:
+        p = (self.p ** confidence)
+        p = p / p.sum(axis=1, keepdims=True)
+        self.lm_score = -T.sum(p * i_f * T.log(base[0].output.reshape(p.shape)))
 
   def cost(self):
     known_grads = None
-    xd = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
-    epsilon = numpy.float32(1e-10)
-    # cross-entropy
-    nll, _ = T.nnet.crossentropy_softmax_1hot(x=xd[self.i], y_idx=self.y_data_flat[self.i])
-    ce = T.sum(nll)
-    # entropy
-    def entropy(p, axis=None):
-      if self.use_max and axis is not None:
-        q = p.dimshuffle(axis, *(range(axis) + range(axis+1,p.ndim)))
-        #return -T.mean(T.log(T.maximum(T.max(q,axis=0),epsilon)))
-        return -T.mean(T.max(q,axis=0)+epsilon) + T.log(T.cast(p.shape[axis],'float32'))
+    if self.train_flag or True:
+      i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(self.p.shape[1], axis=1)
+      prior_momentum = T.constant(self.attrs['prior_momentum'], 'float32')
+      prior_scale = T.constant(self.attrs['prior_scale'],'float32')
+      lm_scale = T.constant(self.attrs['lm_scale'],'float32')
+      entropy_scale = T.constant(1. - self.attrs['prior_scale'],'float32')
+      confidence = T.constant(1. - self.attrs['confidence'],'float32')
+      batch_prior = T.maximum((numpy.float32(1) - prior_momentum) * T.mean(self.p[self.i],axis=0), T.constant(1e-10,'float32'))
+      batch_prior += prior_momentum * self.running_priors
+
+      decay = 0.1
+      energy = T.log(T.constant(self.attrs['n_out'], 'float32')) / (self.N*(1 + self.network.epoch) ** decay)
+      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+      srng = RandomStreams(self.rng.randint(1234) + 1)
+      nn = numpy.float32(1. / 0.05)
+      #noise = srng.normal(size=self.priors.shape, ndim=self.priors.ndim, avg=0.0, std=self.priors / nn, dtype="float32")
+
+      #H = -T.sum(T.sum(self.p * i_f * T.log(self.p),axis=0) - noise * self.N)
+      if self.attrs['confidence'] == 1.0:
+        H = -T.sum(T.cast(self.index.flatten(), 'float32') * T.log(T.max(self.p,axis=1)))
       else:
-        return -T.mean(p*T.log(p+epsilon)) + T.log(T.cast(p.shape[axis],'float32'))
-    ez = T.exp(self.z) * T.cast(self.index.dimshuffle(0,1,'x').repeat(self.z.shape[2],axis=2), 'float32')
-    et = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=0,keepdims=True)),axis=0)
-    eb = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=1,keepdims=True)),axis=1)
-    ed = entropy(ez / T.maximum(epsilon,T.sum(ez,axis=2,keepdims=True)),axis=2)
-    # maximize entropy across T and B and minimize entropy across D
-    e = self.e_d * ed - (self.e_t * et + self.e_b * eb) / numpy.float32(self.e_t + self.e_b)
-
-    import theano.ifelse
-    if self.train_flag:
-      return theano.ifelse.ifelse(T.cast(self.xflag,'int8'),e,ce), known_grads
-    else:
-      return ce, known_grads
-
-  def errors(self):
-    """
-    :rtype: theano.Variable
-    """
-    self.y_m = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
-    if self.y_data_flat.type == T.ivector().type:
-      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
-    else:
-      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis = -1)))
+        p = (self.p**confidence)
+        p = p / p.sum(axis=1,keepdims=True)
+        H = -T.sum(T.sum(p * i_f * T.log(self.p)))
+      L = self.lm_score
+      #L = -T.sum(self.priors * T.log(batch_prior)) * self.N
+      #Q = -T.sum(self.priors.dimshuffle('x',0).repeat(self.p.shape[0],axis=0) * i_f * T.log(self.p))
+      #H = theano.printing.Print("H
