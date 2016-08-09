@@ -33,6 +33,14 @@ def _consider_check_for_gpu():
   Maybe it's also a Linux Kernel bug.
   Anyway, just avoid any such check if we don't asked for a GPU.
   """
+  theano_flags = {key: value for (key, value)
+                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+  if "device" in theano_flags:
+    dev = theano_flags["device"]
+    if dev.startswith("gpu") or dev.startswith("cuda"):
+      return True
+    # THEANO_FLAGS will overwrite this config option. See rnn.initDevices().
+    return False
   try:
     from Config import get_global_config
     config = get_global_config()
@@ -44,12 +52,6 @@ def _consider_check_for_gpu():
         return True
       if dev == "all":
         return True
-  theano_flags = {key: value for (key, value)
-                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-  if "device" in theano_flags:
-    dev = theano_flags["device"]
-    if dev.startswith("gpu") or dev.startswith("cuda"):
-      return True
   return False
 
 
@@ -279,7 +281,10 @@ class Device(object):
       print >>log.v3, "Device proc %s (%s) died: %r" % (self.name, device_tag, e)
       print >>log.v5, "Theano flags:", env_update["THEANO_FLAGS"]
       interrupt_main()
-    self.attributes = get_device_attributes()[self.device_name]
+    if self.device_name in get_device_attributes().keys():
+      self.attributes = get_device_attributes()[self.device_name]
+    else:
+      self.attributes = get_device_attributes()['default']
     self.name = device_tag[0:3] + str(self.id)
     self.initialized = True
 
