@@ -1150,3 +1150,327 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
   ce = -T.sum(y_target * T.log(y), axis=2)
   grad_z = y - y_target
   return ce, grad_z
+
+
+class FastBaumWelchOp(NativeOpGenBase):
+  """
+  inputs:
+    :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+    :param weights: weights of the edges
+  outputs:
+    :param output: output. 3d (time,batch,dim)
+  """
+  in_info = (
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contigous" : False, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": False, "gradient": "disconnected"},
+    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"}
+  )
+  out_info = (
+    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
+  )
+
+  c_extra_support_code = {
+    "01_set_start_states" : """
+      __global__
+      void set_start_states(float* states, unsigned* start_states) {
+        unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
+        states[state_idx] = 0.0;
+      }
+    """,
+    "02_init_bwd_state_buffer": """
+      __global__
+      void init_bwd_state_buffer(float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (index[t * index_stride + idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + idx] == 0.0)) {
+          unsigned state_idx = end_states[idx];
+          states[state_idx] = 0.0;
+        }
+      }
+    """,
+    "10_fill_array" : """
+      __global__
+      void fill_array(float* array, float value, unsigned size) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < size) {
+          array[idx] = value;
+        }
+      }
+    """,
+    "11_prob_add": """
+      __device__
+      float prob_add(float a, float b) {
+        float diff = a - b;
+        if (isnan(diff)) {
+          return CUDART_INF_F;
+        }
+        else {
+          return -log1p(exp(-abs(diff))) + min(a, b);
+        }
+      }
+    """,
+    "12_atomic_prob_add": """
+      __device__
+      void atomic_prob_add(float* a, float b) {
+        int* addr = (int*)a;
+        int old   = __float_as_int(*a);
+        int assumed;
+        do {
+          assumed = old;
+          old     = atomicCAS(addr, assumed, __float_as_int(prob_add(__int_as_float(old), b)));
+        } while (old != assumed);
+      }
+    """,
+    "20_next_frame": """
+      __global__
+      void next_frame(bool fwd, unsigned num_edges, unsigned  num_emissions,
+                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer, unsigned* emission_idxs,
+                      float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_edges) {
+          return;
+        }
+
+        unsigned from     = from_buffer  [idx];
+        float    prev_val = prev_frame[from];
+        if (isinf(prev_val)) {
+          edge_buffer[idx] = CUDART_INF_F;
+          return;
+        }
+
+        unsigned to           = to_buffer    [idx];
+        unsigned emission_idx = emission_idxs[idx];
+        float    edge_weight  = weight_buffer[idx];
+        unsigned sequence_idx = sequence_idxs[idx];
+
+        float val = prev_val + edge_weight + am_scores[sequence_idx * num_emissions + emission_idx];
+
+        if (fwd) {
+          edge_buffer[idx] += val;
+        }
+        else {
+          edge_buffer[idx] += prev_val;
+        }
+        atomic_prob_add(next_frame + to, val);
+      }
+    """,
+    "21_normalize": """
+      __global__
+      void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, float* debug_out) {
+        extern __shared__ float sum[];
+        buffer += blockIdx.x * num_edges;
+
+        sum[threadIdx.x] = CUDART_INF_F;
+        unsigned initial_summands = (num_edges + blockDim.x - 1u) / blockDim.x;
+        for (unsigned i = 0u; i < initial_summands; i++) {
+          unsigned idx = i * blockDim.x + threadIdx.x;
+          if (i >= num_edges) {
+            break;
+          }
+          if (sequence_idxs[idx] == blockIdx.y && !isinf(buffer[idx])) {
+            sum[threadIdx.x] = prob_add(sum[threadIdx.x], buffer[idx]);
+          }
+        }
+
+
+        // reduce
+        unsigned sum_size = blockDim.x;
+        while (sum_size > 1u) {
+          __syncthreads();
+          unsigned to_merge = sum_size / 2;
+          if (threadIdx.x >= to_merge) {
+            break;
+          }
+          sum[threadIdx.x] = prob_add(sum[threadIdx.x], sum[sum_size - to_merge + threadIdx.x]);
+          sum_size -= to_merge;
+        }
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+          debug_out[blockIdx.y * blockDim.x + blockIdx.x] = sum[0];
+        }
+
+        if (isinf(sum[0])) {
+          return;
+        }
+
+        for (unsigned i = 0u; i < initial_summands; i++) {
+          unsigned idx = i * blockDim.x + threadIdx.x;
+          if (i >= num_edges) {
+            break;
+          }
+          if (sequence_idxs[idx] == blockIdx.y) {
+            buffer[idx] -= sum[0];
+          }
+        }
+      }
+    """,
+    "21_normalize_2": """
+      __global__
+      void normalize_2(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs) {
+        extern __shared__ float sum[];
+
+        buffer += blockIdx.x * num_edges;
+
+        for (unsigned s = 0u; s < num_seqs; s++) {
+          sum[s] = CUDART_INF_F;
+        }
+
+        for (unsigned e = 0u; e < num_edges; e++) {
+          unsigned s = sequence_idxs[e];
+          sum[s] = prob_add(sum[s], buffer[e]);
+        }
+
+        for (unsigned e = 0u; e < num_edges; e++) {
+          unsigned s = sequence_idxs[e];
+          buffer[e] -= sum[s];
+        }
+      }
+    """,
+    "22_compute_result": """
+      __global__
+      void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
+                          unsigned frame_stride, unsigned seq_stride,
+                          unsigned num_frames, unsigned num_seqs, unsigned num_edges) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_frames * num_edges) {
+          return;
+        }
+
+        unsigned e_idx        = idx % num_edges;
+        unsigned frame        = idx / num_edges;
+        unsigned emission_idx = emission_idxs[e_idx];
+        unsigned seq_idx      = sequence_idxs[e_idx];
+        float    score        = edge_buffer[idx];
+
+        atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
+      }
+    """
+  }
+
+  c_fw_code = """
+    // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
+    // output = output_names
+    assert(n_inputs  == 6);
+    assert(n_outputs == 1);
+    Ndarray* am_scores        = inputs[0];
+    Ndarray* edges            = inputs[1];
+    Ndarray* weights          = inputs[2];
+    Ndarray* start_end_states = inputs[3];
+    Ndarray* index            = inputs[4];
+    Ndarray* state_buffer     = inputs[5];
+    Ndarray* out              = *outputs[0];
+
+    assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
+    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
+    assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
+    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+
+    unsigned* d_from              = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 0 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_to                = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 1 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 2 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 3 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    float*    d_weights           = CudaNdarray_DEV_DATA(weights);
+    float*    d_am_scores         = CudaNdarray_DEV_DATA(am_scores);
+    unsigned* d_start_states      = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 0 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
+    unsigned* d_end_states        = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 1 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
+    float*    d_index             = CudaNdarray_DEV_DATA(index);
+    float*    d_state_buffer_prev = CudaNdarray_DEV_DATA(state_buffer) + 0 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
+    float*    d_state_buffer_next = CudaNdarray_DEV_DATA(state_buffer) + 1 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
+    float*    d_out               = CudaNdarray_DEV_DATA(out);
+
+    unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
+    unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
+    unsigned n_emissions = Ndarray_DIMS(am_scores)[2];
+    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_edges     = Ndarray_DIMS(edges)[1];
+    unsigned n_threads   = 1024u;
+    unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
+
+    unsigned frame_stride    = CudaNdarray_HOST_STRIDES(am_scores)[0];
+    unsigned sequence_stride = CudaNdarray_HOST_STRIDES(am_scores)[1];
+    unsigned index_stride    = CudaNdarray_HOST_STRIDES(index)[0];
+
+    assert(n_frames > 0);
+
+    //std::cerr << "n_frames: "    << n_frames    << std::endl;
+    //std::cerr << "n_seqs: "      << n_seqs      << std::endl;
+    //std::cerr << "n_emissions: " << n_emissions << std::endl;
+    //std::cerr << "n_states: "    << n_states    << std::endl;
+    //std::cerr << "n_edges: "     << n_edges     << std::endl;
+    //std::cerr << "n_threads: "   << n_threads   << std::endl;
+    //std::cerr << "n_blocks: "    << n_blocks    << std::endl;
+
+    //std::cerr << "frame_stride: "     << frame_stride    << std::endl;
+    //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
+    //std::cerr << "index_stride: "     << index_stride    << std::endl;
+
+    // initialize edge buffer
+    float* d_edge_buffer;
+    HANDLE_ERROR(cudaMalloc(reinterpret_cast<void**>(&d_edge_buffer), n_edges * n_frames * sizeof(float)));
+    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
+    HANDLE_ERROR(cudaGetLastError());
+
+    // initialize the state buffer
+    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    HANDLE_ERROR(cudaGetLastError());
+    set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+
+    // fwd pass
+    for (unsigned t = 0u; t < n_frames; t++) {
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_ERROR(cudaGetLastError());
+      next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
+                                          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
+                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
+      HANDLE_ERROR(cudaGetLastError());
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    //std::cerr << "fwd finished" << std::endl;
+
+    // bwd pass
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    HANDLE_ERROR(cudaGetLastError());
+    for (unsigned t = n_frames; t > 0; t--) {
+      init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_ERROR(cudaGetLastError());
+      next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
+                                          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
+                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
+      HANDLE_ERROR(cudaGetLastError());
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    //std::cerr << "bwd finished" << std::endl;
+
+    dim3 blocks(n_frames, n_seqs);
+    //normalize<<<blocks, n_threads, n_threads * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, d_debug_sum);
+    normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs);
+    HANDLE_ERROR(cudaGetLastError());
+
+    //std::cerr << "normalize finished" << std::endl;
+
+    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
+    HANDLE_ERROR(cudaGetLastError());
+
+    frame_stride    = CudaNdarray_HOST_STRIDES(out)[0];
+    sequence_stride = CudaNdarray_HOST_STRIDES(out)[1];
+    n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
+                                            frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
+    HANDLE_ERROR(cudaGetLastError());
+
+    cudaFree(d_edge_buffer);
+    //std::cerr << "fast_bw finished" << std::endl;
+  """
+
+  c_bw_code = None
+
+  code_version = 52

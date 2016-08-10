@@ -689,7 +689,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'):
       layer_class = SequenceOutputLayer
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer

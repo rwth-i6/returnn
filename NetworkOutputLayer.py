@@ -5,8 +5,9 @@ import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from OpNumpyAlign import NumpyAlignOp
+from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
-from SprintErrorSignals import sprint_loss_and_error_signal
+from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 from Util import as_str
 from Log import log
@@ -329,7 +330,7 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(p_y_given_x, axis = -1)
@@ -401,6 +402,17 @@ class SequenceOutputLayer(OutputLayer):
         err += ce
         grad += T.grad(ce, self.z)
       known_grads = {self.z: grad}
+      return err, known_grads
+    elif self.loss == 'fast_bw':
+      if not isinstance(self.sprint_opts, dict):
+        import json
+        self.sprint_opts = json.loads(self.sprint_opts)
+      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+      scores = -T.log(self.p_y_given_x)
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      float_idx = T.cast(self.index, "float32")
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      err = (T.exp(-fwdbwd) * scores * float_idx.dimshuffle(0, 1, 'x')).sum()  # TODO: maybe this is wrong
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
