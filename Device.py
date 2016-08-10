@@ -402,6 +402,7 @@ class Device(object):
     self.block_start = T.lscalar()
     self.block_end = T.lscalar()
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
+    self.tags_var  = theano.shared(numpy.zeros((0, 0), dtype="int8"), name="tags_var")
 
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
@@ -878,6 +879,7 @@ class Device(object):
         #self.c.set_value(c.astype('int32'), borrow = True)
         for k in target_keys:
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
+        self.tags_var.set_value(numpy.array(self.tags).view(dtype='int8').reshape((len(self.tags), max(map(len, self.tags)))))
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
@@ -1332,12 +1334,14 @@ class Device(object):
     gs  = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
     gs += [(network.epoch, self.epoch_var)]
+    gs += [(network.tags,  self.tags_var)]
     return gs
 
   def make_input_givens(self, network):
     # self.i == self.j["data"]
     gs  = [(network.y[k], self.y[k]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
+    gs += [(network.tags, self.tags_var)]
     return gs
 
   def make_sprint_givens(self, network):
