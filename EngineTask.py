@@ -95,8 +95,10 @@ class TaskThread(threading.Thread):
     def prepare_device_for_batch(self, device):
       """ :type device: Device.Device """
       pass
+
     def get_device_prepare_args(self):
       return {"network": self.network, "updater": None}
+
     def evaluate(self, batchess, results, result_format, num_frames):
       """
       :param list[list[EngineBatch.Batch]] batchess: batches per device
@@ -142,13 +144,16 @@ class TaskThread(threading.Thread):
       #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
       #  assert False  # Should not get here.
       return eval_info
+
     def initialize(self):
       """
       Called at the beginning of an epoch.
       """
       pass
+
     def reduce(self, num_frames):
       pass
+
     def _get_target_for_key(self, key):
       try:
         target = self.network.output[key.split(':')[-1]].attrs['target']
@@ -158,6 +163,7 @@ class TaskThread(threading.Thread):
         except Exception:
           target = 'classes'
       return target
+
     def epoch_norm_factor_for_result(self, key):
       target = self._get_target_for_key(key)
       # Check for key specific behavior
@@ -167,6 +173,7 @@ class TaskThread(threading.Thread):
           return 1.0 / float(self.data.num_seqs)
       # Default: Normalize by number of frames.
       return 1.0 / float(self.num_frames[target])
+
     def finalize(self):
       """
       Called at the end of an epoch.

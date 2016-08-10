@@ -1100,13 +1100,6 @@ class Device(object):
       self.input_queue.send("get-num-updates")
       return int(self.output_queue.recv())
 
-  def maybe_update_network(self, network):
-    """
-    This is usually called before we start a new batch.
-    :type network: LayerNetwork
-    """
-    return
-
   def start_epoch_stats(self):
     if not self.is_device_proc():
       return self._generic_exec_on_dev("start_epoch_stats")
@@ -1304,9 +1297,15 @@ class Device(object):
     self.proc = None
 
   # device properties
-  def get_device_shaders(self): return self.attributes[0]
-  def get_device_clock(self): return self.attributes[1]
-  def get_device_memory(self): return self.attributes[2]
+  def get_device_shaders(self):
+    return self.attributes[0]
+
+  def get_device_clock(self):
+    return self.attributes[1]
+
+  def get_device_memory(self):
+    return self.attributes[2]
+
   def update_memory(self):
     self.memory = self.attributes[2] - 512 * 1024 * 1024
     if self.name[0:3] != 'cpu':
@@ -1328,25 +1327,25 @@ class Device(object):
     :type network: LayerNetwork
     """
     # self.i == self.j["data"], self.x == self.y["data"]
-    if True or self.block_size:
-      i = self.block_start
-      j = self.block_end
-      gs = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
-           [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
-    else:
-      gs = [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs + [(network.epoch, self.epoch_var)]
+    i = self.block_start
+    j = self.block_end
+    gs  = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys]
+    gs += [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
+    gs += [(network.epoch, self.epoch_var)]
+    return gs
 
   def make_input_givens(self, network):
     # self.i == self.j["data"]
-    gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
+    gs  = [(network.y[k], self.y[k]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs #+ [(network.epoch, self.epoch_var)]
+    return gs
+
   def make_sprint_givens(self, network):
     return self.make_input_givens(network)
+
   def make_ctc_givens(self, network):
     return self.make_input_givens(network) + [(network.c, self.c)]
+
   def make_ce_ctc_givens(self, network):
     return self.make_givens(network) + [(network.c, self.c)]
 
