@@ -38,7 +38,7 @@ class SprintSubprocessInstance:
 
   Version = 1  # increase when some protocol changes
 
-  def __init__(self, sprintExecPath, minPythonControlVersion=2, sprintConfigStr="", sprintControlConfig=None):
+  def __init__(self, sprintExecPath, minPythonControlVersion=2, sprintConfigStr="", sprintControlConfig=None, usePythonSegmentOrder=True):
     """
     :param str sprintExecPath: this executable will be called for the sub proc.
     :param int minPythonControlVersion: will be checked in the subprocess. via Sprint PythonControl
@@ -57,6 +57,7 @@ class SprintSubprocessInstance:
       sprintConfigStr = config.typed_dict[sprintConfigStr[len("config:"):]]
     self.sprintConfig = eval_shell_str(sprintConfigStr)
     self.sprintControlConfig = sprintControlConfig
+    self.usePythonSegmentOrder = usePythonSegmentOrder
     self.child_pid = None
     self.parent_pid = os.getpid()
     # There is no generic way to see whether Python is exiting.
@@ -169,14 +170,17 @@ class SprintSubprocessInstance:
       # Sprint PythonControl or PythonTrainer
       "--*.pymod-path=%s" % self._my_python_mod_path,
       "--*.pymod-name=%s" % my_mod_name,
-      "--*.pymod-config=%s" % config_str,
-      # Sprint PythonSegmentOrder
-      "--*.python-segment-order=true",
-      "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
-      "--*.python-segment-order-pymod-name=%s" % my_mod_name,
-      "--*.python-segment-order-config=%s" % config_str,
-      "--*.python-segment-order-allow-copy=false"
+      "--*.pymod-config=%s" % config_str
     ]
+    if self.usePythonSegmentOrder:
+      args += [
+        # Sprint PythonSegmentOrder
+        "--*.python-segment-order=true",
+        "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
+        "--*.python-segment-order-pymod-name=%s" % my_mod_name,
+        "--*.python-segment-order-config=%s" % config_str,
+        "--*.python-segment-order-allow-copy=false"
+      ]
     args += self.sprintConfig
     return args
 
@@ -351,6 +355,47 @@ class SprintInstancePool:
         batch_error_signal[:seq_lengths[b], b] = error_signal
         numpy_set_unused(error_signal)
     return batch_loss, batch_error_signal
+
+  def get_automata_for_batch(self, tags):
+    all_num_states = [None] * len(tags)
+    all_num_edges  = [None] * len(tags)
+    all_edges      = [None] * len(tags)
+    all_weights    = [None] * len(tags)
+    for bb in range(0, len(tags), self.max_num_instances):
+      for i in range(self.max_num_instances):
+        b = bb + i
+        if b >= len(tags): break
+        instance = self._get_instance(i)
+        segment_name = tags[b].view('S%d' % tags.shape[1])[0]
+        instance._send(("export_alignment_fsa_by_segment_name", segment_name))
+      for i in range(self.max_num_instances):
+        b = bb + i
+        if b >= len(tags): break
+        instance = self._get_instance(i)
+        r = instance._read()
+        if r[0] != 'ok':
+          raise RuntimeError(r[1])
+        num_states, num_edges, edges, weights = r[1:]
+        all_num_states[b] = num_states
+        all_num_edges [b] = num_edges
+        all_edges     [b] = edges.reshape((3, num_edges))
+        all_weights   [b] = weights
+    state_offset = 0
+    for idx in range(len(all_edges)):
+      num_edges = all_num_edges[idx]
+      all_edges[idx][0:2,:] += state_offset
+      state_offset += all_num_states[idx]
+      # add sequence_idx
+      all_edges[idx] = numpy.vstack((all_edges[idx], numpy.ones((1, num_edges), dtype='uint32') * idx))
+
+    start_end_states = numpy.empty((2, len(all_num_states)), dtype='uint32')
+    state_offset = 0
+    for idx, num_states in enumerate(all_num_states):
+      start_end_states[0,idx] = state_offset
+      start_end_states[1,idx] = state_offset + num_states - 1
+      state_offset += num_states
+
+    return numpy.hstack(all_edges), numpy.hstack(all_weights), start_end_states
 
   def get_free_instance(self):
     for inst in self.instances:
@@ -656,6 +701,38 @@ class SprintErrorSigOp(theano.Op):
       self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
     if self.debug_perform_time:
       print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
+
+
+class SprintAlignmentAutomataOp(theano.Op):
+  """
+  Op: maps segment names (tags) to fsa automata (using sprint) that can be used to compute a BW-alignment
+  """
+
+  __props__ = ("sprint_opts",)
+
+  def __init__(self, sprint_opts):
+    super(SprintAlignmentAutomataOp, self).__init__()
+    self.sprint_opts = make_hashable(sprint_opts)
+    self.sprint_instance_pool = None
+
+  def make_node(self, tags):
+    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
+    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
+    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fmatrix(), T.fmatrix()])
+
+  def perform(self, node, inputs, output_storage):
+    tags = inputs[0]
+
+    if self.sprint_instance_pool is None:
+      print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
+      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
+
+    edges, weights, start_end_states = self.sprint_instance_pool.get_automata_for_batch(tags)
+
+    output_storage[0][0] = edges.view(dtype='float32')
+    output_storage[1][0] = weights
+    output_storage[2][0] = start_end_states.view(dtype='float32')
+    output_storage[3][0] = numpy.empty((2, start_end_states[1,-1] + 1), dtype='float32')
 
 
 def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
