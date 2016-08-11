@@ -318,7 +318,7 @@ class Device(object):
     import theano.tensor as T
     import h5py
     self.T = T
-    self.seq_train_parallel_control = None  # SeqTrainParallelControlDevHost
+    self.seq_train_parallel_control = None  # type: SeqTrainParallelControlDevHost. will be set via SprintErrorSignals
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
