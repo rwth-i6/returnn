@@ -1162,11 +1162,11 @@ class FastBaumWelchOp(NativeOpGenBase):
     :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
   """
   in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": False, "gradient": "disconnected"},
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
     {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True,  "gradient": "disconnected"},
     {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True,  "gradient": "disconnected"},
     {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"},
-    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": False, "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
     {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"}
   )
   out_info = (
