@@ -1155,13 +1155,14 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
 class FastBaumWelchOp(NativeOpGenBase):
   """
   inputs:
+    :param am_scores: scores in -log space. 3d (time,batch,dim)
     :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
     :param weights: weights of the edges
   outputs:
-    :param output: output. 3d (time,batch,dim)
+    :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
   """
   in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contigous" : False, "gradient": "disconnected"},
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": False, "gradient": "disconnected"},
     {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True,  "gradient": "disconnected"},
     {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True,  "gradient": "disconnected"},
     {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"},
