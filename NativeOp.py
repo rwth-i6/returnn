@@ -747,6 +747,137 @@ class LstmGenericBase(NativeOpGenBase):
   code_version = ()
 
 
+class Chunking(NativeOpGenBase):
+  """
+  Given an input in 3d (n_time,n_batch,n_dim), we chunk up the time dimension
+  in chunks of size chunk_size, every chunk_step frames.
+  This results in an 3d output (chunk_size, n_batch * n_chunks, n_dim)
+  where n_chunks = floor( max(n_time - chunk_size + chunk_step - 1, 0) / chunk_step ) + 1.
+  Examples:
+    n_time=1,   chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=49,  chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=50,  chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=51,  chunk_size=50, chunk_step=10 -> n_chunks=2
+    n_time=60,  chunk_size=50, chunk_step=10 -> n_chunks=2
+    n_time=61,  chunk_size=50, chunk_step=10 -> n_chunks=3
+    n_time=99,  chunk_size=50, chunk_step=10 -> n_chunks=6
+    n_time=100, chunk_size=50, chunk_step=10 -> n_chunks=6
+    n_time=101, chunk_size=50, chunk_step=10 -> n_chunks=7
+  """
+  in_info = (
+    {"name": "input", "ndim": 3, "shape": (None, None, None)},
+    {"name": "index", "ndim": 2, "shape": (None, None)},
+    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0},
+    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1},
+    {"name": "chunk_params", "ndim": 1, "shape": (2,)},  # (chunk_size, chunk_step)
+  )
+  out_info = (
+    {"name": "output", "ndim": ((2, 0), (2, 1), (2, 2))},
+    {"name": "oindex", "ndim": ((3, 0), (3, 1))}
+  )
+
+  c_extra_support_code = {
+    "copy_kernel": """
+    DEF_KERNEL
+    void copy_kernel(
+      float* chunk_params,
+      float* input, long in_dim0, long in_dim1, long in_dim2, long in_stride0, long in_stride1, long in_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* output, long out_dim0, long out_dim1, long out_stride0, long out_stride1, long out_stride2,
+      float* oindex, long oidx_stride0, long oidx_stride1
+    ) {
+      assert(out_dim1 % in_dim1 == 0);
+      const long n_chunks = out_dim1 / in_dim1;
+      const long chunk_size = out_dim0;
+      // chunk_step * (n_chunks - 1) + chunk_size >= in_dim0
+      assert(n_chunks > 0);
+      assert(chunk_size <= in_dim0);
+      const long chunk_step = 0;
+      if(n_chunks > 1)
+        chunk_step = (in_dim0 - chunk_size) / (n_chunks - 1);
+      assert(chunk_step * (n_chunks - 1) + chunk_size >= in_dim0);
+      assert(chunk_step * (n_chunks - 1) < in_dim0)
+      assert(long(chunk_params[0]) == chunk_size);
+      assert(long(chunk_params[1]) == chunk_step);
+
+      // Iterate over output x/y coordinates.
+      // In an inner loop, we will loop over z.
+      const long max_idx = out_dim0 * out_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long out_x = idx % out_dim0;  // time
+        long out_y = idx / out_dim0;  // batch
+
+        long chunk_idx = out_y % n_chunks;
+        long in_y =      out_y / n_chunks;
+
+        long in_x = chunk_step * chunk_idx + out_x;
+
+        if(in_x < in_dim0 && index[in_x * in_stride0 + in_y * in_stride1] > 0.1) {
+          for(long z = 0; z < in_dim2; ++z)
+            output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] =
+              input[in_x * in_stride0 + in_y * in_stride1 + z * in_stride2];
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 1;
+        }
+        else {
+          for(long z = 0; z < in_dim2; ++z)
+            output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] = 0;
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 0;
+        }
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 5);
+    assert(n_outputs == 2);
+    Ndarray* input = inputs[0];
+    Ndarray* index = inputs[1];
+    Ndarray* chunk_params = inputs[5];
+    Ndarray* output = *outputs[0];
+    Ndarray* oindex = *outputs[1];
+
+    assert(Ndarray_NDIM(input) == 3);
+    assert(Ndarray_NDIM(index) == 2);
+    assert(Ndarray_DIMS(input)[0] == Ndarray_DIMS(index)[0]);
+    assert(Ndarray_DIMS(input)[1] == Ndarray_DIMS(index)[1]);
+    assert(Ndarray_NDIM(chunk_params) == 1);
+    assert(Ndarray_DIMS(chunk_params)[0] == 2);
+    assert(Ndarray_NDIM(output) == 3);
+    assert(Ndarray_NDIM(oindex) == 3);
+    assert(Ndarray_DIMS(output)[0] == Ndarray_DIMS(oindex)[0]);
+    assert(Ndarray_DIMS(output)[1] == Ndarray_DIMS(oindex)[1]);
+    assert(Ndarray_DIMS(output)[2] == Ndarray_DIMS(input)[2]);
+
+    start_dev_kernel(copy_kernel, (
+      Ndarray_DEV_DATA(chunk_params),
+      Ndarray_DEV_DATA(input),
+        Ndarray_DIMS(input)[0],
+        Ndarray_DIMS(input)[1],
+        Ndarray_DIMS(input)[2],
+        Ndarray_STRIDE(input, 0),
+        Ndarray_STRIDE(input, 1),
+        Ndarray_STRIDE(input, 2),
+      Ndarray_DEV_DATA(index),
+        Ndarray_STRIDE(index, 0),
+        Ndarray_STRIDE(index, 1),
+      Ndarray_DEV_DATA(output),
+        Ndarray_DIMS(output)[0],
+        Ndarray_DIMS(output)[1],
+        Ndarray_STRIDE(output, 0),
+        Ndarray_STRIDE(output, 1),
+        Ndarray_STRIDE(output, 2),
+      Ndarray_DEV_DATA(oindex),
+        Ndarray_STRIDE(oindex, 0),
+        Ndarray_STRIDE(oindex, 1)
+    ));
+  """
+
+
 class SparseToDense(NativeOpGenBase):
   """
   Expects a sparse matrix in COOrdinate format,
