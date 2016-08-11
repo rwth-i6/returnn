@@ -852,6 +852,7 @@ class SeqTrainParallelControl:
       assert success, "failed to allocate & assign data"
       self.train_device.update_data()
       self._device_exec("do_forward", batch=batch)
+      self._device_exec("train_check_calc_loss")
 
   def train_wait_for_seqs(self, device, batches):
     """
@@ -875,7 +876,6 @@ class SeqTrainParallelControl:
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
     self.forward_fill_queue()
-    self._device_exec("train_check_calc_loss")
     while not self._device_exec("train_have_loss_for_cur_batches"):
       if not self._device_exec("train_check_calc_loss"):
         time.sleep(0.1)  # wait until we have the data we need
