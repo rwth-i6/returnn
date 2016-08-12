@@ -35,11 +35,13 @@ class NativeOp(theano.Op):
 
   __props__ = ("in_info", "out_info",
                "c_fw_code", "c_bw_code", "c_extra_support_code", "code_version",
-               "grad_input_map", "name")
+               "grad_input_map", "name",
+               "custom_grad")
 
   def __init__(self, in_info, out_info,
                c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
-               grad_input_map=None, name=None):
+               grad_input_map=None, name=None,
+               custom_grad=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
       attribs in the dict:
@@ -65,6 +67,7 @@ class NativeOp(theano.Op):
     :param tuple|callable grad_input_map: selection of grad inputs.
       by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
+    :param function custom_grad: if given, will use this instead for self.grad
     """
     super(NativeOp, self).__init__()
     assert isinstance(in_info, (list, tuple))
@@ -80,6 +83,7 @@ class NativeOp(theano.Op):
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
     self.destroy_map = self._construct_destroy_map(in_info)
+    self.custom_grad = custom_grad
 
   @classmethod
   def _resolve_want_inplace_dummy(cls, in_info, out_info):
@@ -204,6 +208,9 @@ class NativeOp(theano.Op):
     return info
 
   def grad(self, inputs, output_grads):
+    if self.custom_grad:
+      return self.custom_grad(self, inputs, output_grads)
+
     if not self.c_bw_code:
       # Unknown how to calculate gradient.
       return [T.DisconnectedType()() for inp in inputs]
@@ -491,6 +498,7 @@ class NativeOpGenBase:
   c_extra_support_code = None
   code_version = None
   grad_input_map = None
+  custom_grad = None
 
   @classmethod
   def make_op(cls):
@@ -502,7 +510,8 @@ class NativeOpGenBase:
                     c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
                     c_extra_support_code=cls.c_extra_support_code,
                     grad_input_map=cls.grad_input_map,
-                    name=name)
+                    name=name,
+                    custom_grad=cls.custom_grad)
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
@@ -766,10 +775,10 @@ class Chunking(NativeOpGenBase):
   """
   in_info = (
     {"name": "input", "ndim": 3, "shape": (None, None, None)},
-    {"name": "index", "ndim": 2, "shape": (None, None)},
-    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0},
-    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,)},  # (chunk_size, chunk_step)
+    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -894,12 +903,38 @@ class Chunking(NativeOpGenBase):
       t += chunk_step
     return chunk_start_frames
 
+  @classmethod
+  def custom_grad(cls, op, inputs, output_grads):
+    assert len(op.in_info) == len(inputs)
+    assert len(op.out_info) == len(output_grads)
+
+    input, index, _, _, chunk_params = inputs
+    Dout, _ = output_grads
+
+    assert input.ndim == 3
+    n_time = input.shape[0]
+    n_batch = input.shape[1]
+    chunk_size = chunk_params[0]
+    chunk_step = chunk_params[1]
+    out, oindex = op(*inputs)
+    Dinput, _, factors = unchunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+    # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
+    Dinput /= factors.dimshuffle(0, 1, 'x')
+
+    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    assert len(grads) == len(inputs)
+    return grads
+
 
 def chunk(x, index, chunk_size, chunk_step):
   assert x.ndim == 3
   n_time = x.shape[0]
   n_batch = x.shape[1]
   n_dim = x.shape[2]
+  if isinstance(chunk_size, T.TensorVariable):
+    chunk_size = T.cast(chunk_size, "int64")
+  if isinstance(chunk_step, T.TensorVariable):
+    chunk_step = T.cast(chunk_step, "int64")
   n_chunks = T.maximum(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
   chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
   out_buffer = T.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
@@ -920,11 +955,11 @@ class UnChunking(NativeOpGenBase):
   """
   in_info = (
     {"name": "input", "ndim": 3, "shape": (None, None, None)},
-    {"name": "index", "ndim": 2, "shape": (None, None)},
-    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0},
-    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1},
-    {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,)},  # (chunk_size, chunk_step)
+    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+    {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -1072,6 +1107,24 @@ class UnChunking(NativeOpGenBase):
         Ndarray_STRIDE(ofactors, 1)
     ));
   """
+
+  @classmethod
+  def custom_grad(cls, op, inputs, output_grads):
+    assert len(op.in_info) == len(inputs)
+    assert len(op.out_info) == len(output_grads)
+
+    input, index, _, _, _, chunk_params = inputs
+    Dout, _, _ = output_grads
+
+    chunk_size = chunk_params[0]
+    chunk_step = chunk_params[1]
+    out, oindex, factors = op(*inputs)
+    Dout *= factors.dimshuffle(0, 1, 'x')
+    Dinput, _ = chunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
+
+    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    assert len(grads) == len(inputs)
+    return grads
 
 
 def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):

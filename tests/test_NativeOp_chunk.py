@@ -47,6 +47,7 @@ def test_chunk():
   n_dim = 5
   chunk_size = 11
   chunk_step = 7
+  numpy.random.seed(1234)
   _x = numpy.random.randn(n_time, n_batch, n_dim).astype(f32)
   _out, _oindex = naive_chunk(_x, chunk_size, chunk_step)
   _index = numpy.ones((n_time, n_batch), dtype="int8")
@@ -79,3 +80,49 @@ def test_chunk_unchunk():
   _index2 = index2.eval()
   assert_almost_equal(_x, _x2)
   assert numpy.all(_index2)
+
+
+def test_chunk_unchunk_grad():
+  n_time = 101
+  n_batch = 3
+  n_dim = 5
+  numpy.random.seed(1234)
+  _x = numpy.random.randn(n_time, n_batch, n_dim).astype(f32)
+  _index = numpy.ones((n_time, n_batch), dtype="int8")
+  x = T.as_tensor(_x)
+  index = T.as_tensor(_index)
+  chunk_size = 11
+  chunk_step = 7
+  out, oindex = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  x2, index2, factors = unchunk(out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=x.shape[0], n_batch=x.shape[1])
+  grad = T.grad(T.sum((x2 - x) ** 2), wrt=x)
+  _grad = grad.eval()
+  assert_almost_equal(_grad, 0)
+
+
+def test_chunk_unchunk_grad2():
+  n_time = 101
+  n_batch = 3
+  n_dim = 5
+  numpy.random.seed(1234)
+  _x = numpy.random.randn(n_time, n_batch, n_dim).astype(f32)
+  _Dx2 = numpy.random.randn(n_time, n_batch, n_dim).astype(f32)
+  _index = numpy.ones((n_time, n_batch), dtype="int8")
+  x = T.as_tensor(_x)
+  Dx2 = T.as_tensor(_Dx2)
+  index = T.as_tensor(_index)
+  chunk_size = 11
+  chunk_step = 7
+
+  out, oindex = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  chunk_op = NativeOp.Chunking.make_op()
+  assert type(out.owner.op) is type(chunk_op)
+
+  x2, index2, factors = unchunk(out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=x.shape[0], n_batch=x.shape[1])
+  unchunk_op = NativeOp.UnChunking.make_op()
+  assert type(x2.owner.op) is type(unchunk_op)
+
+  Dout, _, _, _, _, _ = unchunk_op.grad(x2.owner.inputs, (Dx2, None, None))
+  Dx, _, _, _, _ = chunk_op.grad(out.owner.inputs, (Dout, None))
+  _Dx = Dx.eval()
+  assert_almost_equal(_Dx, _Dx2)
