@@ -1,5 +1,6 @@
 
 #include <assert.h>
+#include <iostream>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -102,6 +103,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #define HANDLE_ERROR(err) (_cudaHandleError( err, __FILE__, __LINE__ ))
 
+#define assert_cmp(a, cmp, b) assert((a) cmp (b))
+
 #else   // not CUDA
 
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
@@ -169,6 +172,12 @@ struct _KernelLoop {
 		threadIdx.x++;
 	}
 };
+
+#define assert_cmp(a, cmp, b) \
+    if(!((a) cmp (b))) { \
+        std::cerr << "Assertion failed: " << a << " " << #cmp << " " << b << std::endl; \
+        assert((a) cmp (b)); \
+    }
 
 #endif
 

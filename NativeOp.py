@@ -772,8 +772,8 @@ class Chunking(NativeOpGenBase):
     {"name": "chunk_params", "ndim": 1, "shape": (2,)},  # (chunk_size, chunk_step)
   )
   out_info = (
-    {"name": "output", "ndim": ((2, 0), (2, 1), (2, 2))},
-    {"name": "oindex", "ndim": ((3, 0), (3, 1))}
+    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))}
   )
 
   c_extra_support_code = {
@@ -786,18 +786,23 @@ class Chunking(NativeOpGenBase):
       float* output, long out_dim0, long out_dim1, long out_stride0, long out_stride1, long out_stride2,
       float* oindex, long oidx_stride0, long oidx_stride1
     ) {
-      assert(out_dim1 % in_dim1 == 0);
+      assert_cmp(out_dim1 % in_dim1, ==, 0);
       const long n_chunks = out_dim1 / in_dim1;
+      assert_cmp(n_chunks, >, 0);
       const long chunk_size = out_dim0;
-      // chunk_step * (n_chunks - 1) + chunk_size >= in_dim0
-      assert(n_chunks > 0);
+      // We have chunk_step * (n_chunks - 1) + chunk_size >= in_dim0
+      // and     chunk_step * (n_chunks - 1)              <  in_dim0 .
+      // Examples:
+      //   in_dim0-chunk_size=90, n_chunks-1=10, in_dim0=85 -> chunk_step=9
+      //   in_dim0-chunk_size=91, n_chunks-1=10, in_dim0=85 -> chunk_step=10
       long chunk_step = 1;
       if(n_chunks > 1)
-        chunk_step = (in_dim0 - chunk_size) / (n_chunks - 1);
-      assert(chunk_step * (n_chunks - 1) + chunk_size >= in_dim0);
-      assert(chunk_step * (n_chunks - 1) < in_dim0)
-      assert(long(chunk_params[0]) == chunk_size);
-      assert(long(chunk_params[1]) == chunk_step);
+        chunk_step = (in_dim0 - chunk_size + n_chunks - 2) / (n_chunks - 1);
+      assert_cmp(chunk_step, >, 0);
+      assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, in_dim0);
+      assert_cmp(chunk_step * (n_chunks - 1), <, in_dim0);
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      assert_cmp(long(chunk_params[1]), ==, chunk_step);
 
       // Iterate over output (chunked) x/y coordinates.
       // In an inner loop, we will loop over z.
@@ -815,7 +820,7 @@ class Chunking(NativeOpGenBase):
 
         long in_x = chunk_step * chunk_idx + out_x;
 
-        if(in_x < in_dim0 && index[in_x * in_stride0 + in_y * in_stride1] > 0.1) {
+        if(in_x < in_dim0 && index[in_x * idx_stride0 + in_y * idx_stride1] > 0.1) {
           for(long z = 0; z < in_dim2; ++z)
             output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] =
               input[in_x * in_stride0 + in_y * in_stride1 + z * in_stride2];
@@ -832,25 +837,25 @@ class Chunking(NativeOpGenBase):
   }
 
   c_fw_code = """
-    assert(n_inputs == 5);
-    assert(n_outputs == 2);
+    assert_cmp(n_inputs, ==, 5);
+    assert_cmp(n_outputs, ==, 2);
     Ndarray* input = inputs[0];
     Ndarray* index = inputs[1];
-    Ndarray* chunk_params = inputs[5];
+    Ndarray* chunk_params = inputs[4];
     Ndarray* output = *outputs[0];
     Ndarray* oindex = *outputs[1];
 
-    assert(Ndarray_NDIM(input) == 3);
-    assert(Ndarray_NDIM(index) == 2);
-    assert(Ndarray_DIMS(input)[0] == Ndarray_DIMS(index)[0]);
-    assert(Ndarray_DIMS(input)[1] == Ndarray_DIMS(index)[1]);
-    assert(Ndarray_NDIM(chunk_params) == 1);
-    assert(Ndarray_DIMS(chunk_params)[0] == 2);
-    assert(Ndarray_NDIM(output) == 3);
-    assert(Ndarray_NDIM(oindex) == 2);
-    assert(Ndarray_DIMS(output)[0] == Ndarray_DIMS(oindex)[0]);
-    assert(Ndarray_DIMS(output)[1] == Ndarray_DIMS(oindex)[1]);
-    assert(Ndarray_DIMS(output)[2] == Ndarray_DIMS(input)[2]);
+    assert_cmp(Ndarray_NDIM(input), ==, 3);
+    assert_cmp(Ndarray_NDIM(index), ==, 2);
+    assert_cmp(Ndarray_DIMS(input)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(input)[1], ==, Ndarray_DIMS(index)[1]);
+    assert_cmp(Ndarray_NDIM(chunk_params), ==, 1);
+    assert_cmp(Ndarray_DIMS(chunk_params)[0], ==, 2);
+    assert_cmp(Ndarray_NDIM(output), ==, 3);
+    assert_cmp(Ndarray_NDIM(oindex), ==, 2);
+    assert_cmp(Ndarray_DIMS(output)[0], ==, Ndarray_DIMS(oindex)[0]);
+    assert_cmp(Ndarray_DIMS(output)[1], ==, Ndarray_DIMS(oindex)[1]);
+    assert_cmp(Ndarray_DIMS(output)[2], ==, Ndarray_DIMS(input)[2]);
 
     start_dev_kernel(copy_kernel, (
       Ndarray_DEV_DATA(chunk_params),
@@ -876,6 +881,33 @@ class Chunking(NativeOpGenBase):
     ));
   """
 
+  @staticmethod
+  def naive_chunk_start_frames(n_time, chunk_size, chunk_step):
+    """
+    This is just for documentation / demonstration. Also used by testing code.
+    """
+    t = 0
+    chunk_start_frames = []
+    while True:
+      chunk_start_frames.append(t)
+      if t + chunk_size >= n_time: break
+      t += chunk_step
+    return chunk_start_frames
+
+
+def chunk(x, index, chunk_size, chunk_step):
+  assert x.ndim == 3
+  n_time = x.shape[0]
+  n_batch = x.shape[1]
+  n_dim = x.shape[2]
+  n_chunks = T.maximum(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+  chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
+  out_buffer = T.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
+  oindex_buffer = T.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
+  chunk_op = Chunking.make_op()
+  out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
+  return out, oindex
+
 
 class UnChunking(NativeOpGenBase):
   """
@@ -891,11 +923,13 @@ class UnChunking(NativeOpGenBase):
     {"name": "index", "ndim": 2, "shape": (None, None)},
     {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0},
     {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1},
+    {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2},
     {"name": "chunk_params", "ndim": 1, "shape": (2,)},  # (chunk_size, chunk_step)
   )
   out_info = (
-    {"name": "output", "ndim": ((2, 0), (2, 1), (2, 2))},
-    {"name": "oindex", "ndim": ((3, 0), (3, 1))}
+    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))},
+    {"name": "ofactors", "ndim": 2, "shape": ((4, 0), (4, 1))}
   )
 
   c_extra_support_code = {
@@ -906,20 +940,22 @@ class UnChunking(NativeOpGenBase):
       float* input, long in_dim0, long in_dim1, long in_dim2, long in_stride0, long in_stride1, long in_stride2,
       float* index, long idx_stride0, long idx_stride1,
       float* output, long out_dim0, long out_dim1, long out_stride0, long out_stride1, long out_stride2,
-      float* oindex, long oidx_stride0, long oidx_stride1
+      float* oindex, long oidx_stride0, long oidx_stride1,
+      float* ofactors, long ofac_stride0, long ofac_stride1
     ) {
-      assert(in_dim1 % out_dim1 == 0);
+      assert_cmp(in_dim1 % out_dim1, ==, 0);
       const long n_chunks = in_dim1 / out_dim1;
       const long chunk_size = in_dim0;
       // chunk_step * (n_chunks - 1) + chunk_size >= out_dim0
-      assert(n_chunks > 0);
+      assert_cmp(n_chunks, >, 0);
       long chunk_step = 1;
       if(n_chunks > 1)
-        chunk_step = (out_dim0 - chunk_size) / (n_chunks - 1);
-      assert(chunk_step * (n_chunks - 1) + chunk_size >= out_dim0);
-      assert(chunk_step * (n_chunks - 1) < out_dim0)
-      assert(long(chunk_params[0]) == chunk_size);
-      assert(long(chunk_params[1]) == chunk_step);
+        chunk_step = (out_dim0 - chunk_size + n_chunks - 2) / (n_chunks - 1);
+      assert_cmp(chunk_step, >, 0);
+      assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, out_dim0);
+      assert_cmp(chunk_step * (n_chunks - 1), <, out_dim0);
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      assert_cmp(long(chunk_params[1]), ==, chunk_step);
 
       // Iterate over output (unchunked) x/y coordinates.
       // In an inner loop, we will loop over z.
@@ -942,21 +978,27 @@ class UnChunking(NativeOpGenBase):
         // thus we need chunk_idx <= out_x / chunk_step,
         // and          chunk_idx > (out_x - chunk_size) / chunk_step.
         // Examples:
-        //   out_x=7,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,1
-        //   out_x=8,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
-        //   out_x=9,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
-        //   out_x=10, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,2
-        //   out_x=11, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,2
-        //   out_x=12, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
-        //   out_x=13, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
-        //   out_x=14, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=2,3
-        const long chunk_idx_start = max(out_x - chunk_size + chunk_step, 0) / chunk_step;
-        const long chunk_idx_end = min(out_x / chunk_step, n_chunks);
+        //   out_x=0,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,1
+        //   out_x=3,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,1
+        //   out_x=4,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
+        //   out_x=7,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
+        //   out_x=8,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,3
+        //   out_x=9,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,3
+        //   out_x=10, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
+        //   out_x=11, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
+        //   out_x=12, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,4
+        //   out_x=13, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,4
+        //   out_x=14, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=2,4
+        long chunk_idx_start = (out_x - chunk_size + chunk_step) / chunk_step;
+        if(chunk_idx_start < 0) chunk_idx_start = 0;
+        long chunk_idx_end = out_x / chunk_step + 1;
+        if(chunk_idx_end > n_chunks) chunk_idx_end = n_chunks;
+        assert_cmp(chunk_idx_start, <, chunk_idx_end);
         for(long chunk_idx = chunk_idx_start; chunk_idx < chunk_idx_end; ++chunk_idx) {
           long in_y = out_y * n_chunks + chunk_idx;
           long in_x = out_x - chunk_step * chunk_idx;
-          assert(in_x >= 0);
-          assert(in_x < chunk_size);
+          assert_cmp(in_x, >=, 0);
+          assert_cmp(in_x, <, chunk_size);
           if(index[in_x * idx_stride0 + in_y * idx_stride1] > 0.1) {
             c += 1;
             for(long z = 0; z < in_dim2; ++z)
@@ -969,8 +1011,10 @@ class UnChunking(NativeOpGenBase):
           for(long z = 0; z < in_dim2; ++z)
             output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] /= c;
           oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 1;
+          ofactors[out_x * ofac_stride0 + out_y * ofac_stride1] = 1.0 / c;
         } else {
           oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 0;
+          ofactors[out_x * ofac_stride0 + out_y * ofac_stride1] = 1.0;
         }
       }
     }
@@ -978,25 +1022,29 @@ class UnChunking(NativeOpGenBase):
   }
 
   c_fw_code = """
-    assert(n_inputs == 5);
-    assert(n_outputs == 2);
+    assert_cmp(n_inputs, ==, 6);
+    assert_cmp(n_outputs, ==, 3);
     Ndarray* input = inputs[0];
     Ndarray* index = inputs[1];
     Ndarray* chunk_params = inputs[5];
     Ndarray* output = *outputs[0];
     Ndarray* oindex = *outputs[1];
+    Ndarray* ofactors = *outputs[2];
 
-    assert(Ndarray_NDIM(input) == 3);
-    assert(Ndarray_NDIM(index) == 2);
-    assert(Ndarray_DIMS(input)[0] == Ndarray_DIMS(index)[0]);
-    assert(Ndarray_DIMS(input)[1] == Ndarray_DIMS(index)[1]);
-    assert(Ndarray_NDIM(chunk_params) == 1);
-    assert(Ndarray_DIMS(chunk_params)[0] == 2);
-    assert(Ndarray_NDIM(output) == 3);
-    assert(Ndarray_NDIM(oindex) == 2);
-    assert(Ndarray_DIMS(output)[0] == Ndarray_DIMS(oindex)[0]);
-    assert(Ndarray_DIMS(output)[1] == Ndarray_DIMS(oindex)[1]);
-    assert(Ndarray_DIMS(output)[2] == Ndarray_DIMS(input)[2]);
+    assert_cmp(Ndarray_NDIM(input), ==, 3);
+    assert_cmp(Ndarray_NDIM(index), ==, 2);
+    assert_cmp(Ndarray_DIMS(input)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(input)[1], ==, Ndarray_DIMS(index)[1]);
+    assert_cmp(Ndarray_NDIM(chunk_params), ==, 1);
+    assert_cmp(Ndarray_DIMS(chunk_params)[0], ==, 2);
+    assert_cmp(Ndarray_NDIM(output), ==, 3);
+    assert_cmp(Ndarray_NDIM(oindex), ==, 2);
+    assert_cmp(Ndarray_NDIM(ofactors), ==, 2);
+    assert_cmp(Ndarray_DIMS(output)[0], ==, Ndarray_DIMS(oindex)[0]);
+    assert_cmp(Ndarray_DIMS(output)[1], ==, Ndarray_DIMS(oindex)[1]);
+    assert_cmp(Ndarray_DIMS(output)[2], ==, Ndarray_DIMS(input)[2]);
+    assert_cmp(Ndarray_DIMS(oindex)[0], ==, Ndarray_DIMS(ofactors)[0]);
+    assert_cmp(Ndarray_DIMS(oindex)[1], ==, Ndarray_DIMS(ofactors)[1]);
 
     start_dev_kernel(unchunk_kernel, (
       Ndarray_DEV_DATA(chunk_params),
@@ -1018,9 +1066,24 @@ class UnChunking(NativeOpGenBase):
         Ndarray_STRIDE(output, 2),
       Ndarray_DEV_DATA(oindex),
         Ndarray_STRIDE(oindex, 0),
-        Ndarray_STRIDE(oindex, 1)
+        Ndarray_STRIDE(oindex, 1),
+      Ndarray_DEV_DATA(ofactors),
+        Ndarray_STRIDE(ofactors, 0),
+        Ndarray_STRIDE(ofactors, 1)
     ));
   """
+
+
+def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
+  assert x.ndim == 3
+  n_dim = x.shape[2]
+  chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
+  out_buffer = T.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
+  oindex_buffer = T.zeros((n_time, n_batch), dtype=index.dtype)
+  ofactors_buffer = T.zeros((n_time, n_batch), dtype=x.dtype)
+  unchunk_op = UnChunking.make_op()
+  out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
+  return out, oindex, ofactors
 
 
 class SparseToDense(NativeOpGenBase):
