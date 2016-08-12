@@ -228,7 +228,17 @@ class FramewiseOutputLayer(OutputLayer):
     :returns: cost, known_grads
     """
     known_grads = None
-    if self.loss == 'ce' or self.loss == 'priori':
+    if not self.attrs.get("apply_softmax", True):
+      if self.loss != "ce": raise NotImplementedError
+      index = T.cast(self.index, "float32").flatten().dimshuffle(0, 'x')
+      y_idx = self.y_data_flat[self.i]
+      p = T.clip(self.p_y_given_x, numpy.float32(1.e-38), numpy.float32(1.e20))
+      logp = T.log(p)
+      nll = -T.sum(logp[self.i, y_idx])
+      # the grad for p is: -y_ref/p
+      known_grads = {self.p_y_given_x: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index}
+      return self.norm * nll, known_grads
+    elif self.loss == 'ce' or self.loss == 'priori':
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
         assert isinstance(self.y, tuple)
         assert len(self.y) == 3

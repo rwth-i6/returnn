@@ -677,7 +677,7 @@ class TimeUnChunkingLayer(_NoOpLayer):
     n_batch = chunking_layer_o.source_index.shape[1]
     from NativeOp import unchunk
     self.output, self.index, _ = unchunk(
-      x, index=self.source_index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+      x, index=chunking_layer_o.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
 
 
 class RBFLayer(_NoOpLayer):
