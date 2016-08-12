@@ -646,6 +646,40 @@ class ChunkingSublayer(_NoOpLayer):
     return self.sublayer.make_constraints()
 
 
+class TimeChunkingLayer(_NoOpLayer):
+  layer_class = "time_chunking"
+
+  def __init__(self, n_out, chunk_size, chunk_step, **kwargs):
+    super(TimeChunkingLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("chunk_size", chunk_size)
+    self.set_attr("chunk_step", chunk_step)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.source_index = self.index
+    from NativeOp import chunk
+    self.output, self.index = chunk(x, index=self.source_index, chunk_size=chunk_size, chunk_step=chunk_step)
+
+
+class TimeUnChunkingLayer(_NoOpLayer):
+  layer_class = "time_unchunking"
+
+  def __init__(self, n_out, chunking_layer, **kwargs):
+    super(TimeUnChunkingLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    self.set_attr("chunking_layer", chunking_layer)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.source_index = self.index
+    chunking_layer_o = self.network.get_layer(chunking_layer)
+    assert isinstance(chunking_layer_o, TimeChunkingLayer)
+    chunk_size = chunking_layer_o.attrs["chunk_size"]
+    chunk_step = chunking_layer_o.attrs["chunk_step"]
+    n_time = chunking_layer_o.source_index.shape[0]
+    n_batch = chunking_layer_o.source_index.shape[1]
+    from NativeOp import unchunk
+    self.output, self.index, _ = unchunk(
+      x, index=self.source_index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+
+
 class RBFLayer(_NoOpLayer):
   """
   Use radial basis function.
