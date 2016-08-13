@@ -168,8 +168,10 @@ class NativeOp(theano.Op):
     return Contiguous()(v)
 
   def _convert_input_var(self, v, info):
-    v = T.cast(v, info.get("dtype", "float32"))
     v = self.as_tensor_var(v)
+    dtype = info.get("dtype", "float32")
+    if v.dtype != dtype:
+      v = T.cast(v, dtype)
     if v.ndim != info["ndim"]:
       raise TypeError("input var ndim %i does not match with info %r" % (v.ndim, info))
     if info.get("need_contiguous", False):
@@ -428,7 +430,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
   @classmethod
   def contiguous(cls, v):
     from theano.sandbox.cuda.basic_ops import gpu_contiguous
-    assert isinstance(v, theano.sandbox.cuda.CudaNdarrayVariable)
+    assert isinstance(v, (theano.sandbox.cuda.CudaNdarrayVariable, theano.sandbox.cuda.CudaNdarrayConstant))
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
       if v.owner.op == gpu_contiguous:
@@ -778,7 +780,7 @@ class Chunking(NativeOpGenBase):
     {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
     {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
     {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,), "gradient": "disconnected"},  # (chunk_size, chunk_step)
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -799,19 +801,11 @@ class Chunking(NativeOpGenBase):
       const long n_chunks = out_dim1 / in_dim1;
       assert_cmp(n_chunks, >, 0);
       const long chunk_size = out_dim0;
-      // We have chunk_step * (n_chunks - 1) + chunk_size >= in_dim0
-      // and     chunk_step * (n_chunks - 1)              <  in_dim0 .
-      // Examples:
-      //   in_dim0-chunk_size=90, n_chunks-1=10, in_dim0=85 -> chunk_step=9
-      //   in_dim0-chunk_size=91, n_chunks-1=10, in_dim0=85 -> chunk_step=10
-      long chunk_step = 1;
-      if(n_chunks > 1)
-        chunk_step = (in_dim0 - chunk_size + n_chunks - 2) / (n_chunks - 1);
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      const long chunk_step = long(chunk_params[1]);
       assert_cmp(chunk_step, >, 0);
       assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, in_dim0);
       assert_cmp(chunk_step * (n_chunks - 1), <, in_dim0);
-      assert_cmp(long(chunk_params[0]), ==, chunk_size);
-      assert_cmp(long(chunk_params[1]), ==, chunk_step);
 
       // Iterate over output (chunked) x/y coordinates.
       // In an inner loop, we will loop over z.
@@ -890,6 +884,8 @@ class Chunking(NativeOpGenBase):
     ));
   """
 
+  code_version = ()
+
   @staticmethod
   def naive_chunk_start_frames(n_time, chunk_size, chunk_step):
     """
@@ -959,7 +955,7 @@ class UnChunking(NativeOpGenBase):
     {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
     {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
     {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,), "gradient": "disconnected"},  # (chunk_size, chunk_step)
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -980,17 +976,13 @@ class UnChunking(NativeOpGenBase):
     ) {
       assert_cmp(in_dim1 % out_dim1, ==, 0);
       const long n_chunks = in_dim1 / out_dim1;
-      const long chunk_size = in_dim0;
-      // chunk_step * (n_chunks - 1) + chunk_size >= out_dim0
       assert_cmp(n_chunks, >, 0);
-      long chunk_step = 1;
-      if(n_chunks > 1)
-        chunk_step = (out_dim0 - chunk_size + n_chunks - 2) / (n_chunks - 1);
+      const long chunk_size = in_dim0;
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      const long chunk_step = long(chunk_params[1]);
       assert_cmp(chunk_step, >, 0);
       assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, out_dim0);
       assert_cmp(chunk_step * (n_chunks - 1), <, out_dim0);
-      assert_cmp(long(chunk_params[0]), ==, chunk_size);
-      assert_cmp(long(chunk_params[1]), ==, chunk_step);
 
       // Iterate over output (unchunked) x/y coordinates.
       // In an inner loop, we will loop over z.
@@ -1107,6 +1099,8 @@ class UnChunking(NativeOpGenBase):
         Ndarray_STRIDE(ofactors, 1)
     ));
   """
+
+  code_version = ()
 
   @classmethod
   def custom_grad(cls, op, inputs, output_grads):
