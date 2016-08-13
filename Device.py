@@ -133,6 +133,12 @@ def get_device_attributes():
   return attributes
 
 
+def is_using_gpu():
+  import theano.sandbox.cuda as theano_cuda
+  if not theano_cuda.cuda_available: return False
+  return theano_cuda.cuda_enabled
+
+
 # When we are the child process, we have one single Device instance.
 asyncChildGlobalDevice = None
 

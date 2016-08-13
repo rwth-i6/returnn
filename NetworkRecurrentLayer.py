@@ -302,14 +302,15 @@ class RecurrentUnitLayer(Layer):
       kwargs['sources'] = []
       source_index = kwargs['index']
     unit_given = unit
+    from Device import is_using_gpu
     if unit == 'lstm':  # auto selection
-      if str(theano.config.device).startswith('cpu'):
+      if not is_using_gpu():
         unit = 'lstme'
       elif recurrent_transform == 'none' and (not lm or droplm == 0.0):
         unit = 'lstmp'
       else:
         unit = 'lstmc'
-    elif unit in ("lstmc", "lstmp") and str(theano.config.device).startswith('cpu'):
+    elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
