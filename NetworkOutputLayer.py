@@ -230,11 +230,16 @@ class FramewiseOutputLayer(OutputLayer):
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
       if self.loss != "ce": raise NotImplementedError
+      assert self.p_y_given_x.ndim == 2  # flattened
       index = T.cast(self.index, "float32").flatten()
       index_bc = index.dimshuffle(0, 'x')
       y_idx = self.y_data_flat
+      assert y_idx.ndim == 1
       p = T.clip(self.p_y_given_x, numpy.float32(1.e-38), numpy.float32(1.e20))
-      nll = -T.sum(T.log(p[:, y_idx]) * index)
+      i = T.arange(p.shape[0])
+      logp = T.log(p[i, y_idx[i]])  # TODO that will not run on GPU...
+      assert logp.ndim == 1
+      nll = -T.sum(logp * index)
       # the grad for p is: -y_ref/p
       known_grads = {self.p_y_given_x: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
       return self.norm * nll, known_grads
