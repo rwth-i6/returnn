@@ -418,3 +418,37 @@ def loadLearningRateControlFromConfig(config):
   cls = learningRateControlType(controlType)
   return cls.load_initial_from_config(config)
 
+
+def demo():
+  import better_exchook
+  better_exchook.install()
+  import rnn
+  import sys
+  if len(sys.argv) <= 1:
+    print("usage: python %s [config] [other options]" % __file__)
+    print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
+  rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.config._hack_value_reading_debug()
+  log.initialize(verbosity=[5])
+  control = loadLearningRateControlFromConfig(rnn.config)
+  print("LearningRateControl: %r" % control)
+  if not control.epochData:
+    print("No epoch data so far.")
+    return
+  maxEpoch = max(control.epochData.keys())
+  for epoch in range(1, maxEpoch + 2):  # all epochs [1..maxEpoch+1]
+    oldLearningRate = None
+    if epoch in control.epochData:
+      oldLearningRate = control.epochData[epoch].learningRate
+    learningRate = control.calcLearningRateForEpoch(epoch)
+    print("Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate))
+    # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
+    if epoch in control.epochData:
+      control.epochData[epoch].learningRate = learningRate
+    else:
+      control.epochData[epoch] = control.EpochData(learningRate=learningRate)
+  print("Finished, last stored epoch was %i." % maxEpoch)
+
+
+if __name__ == "__main__":
+  demo()
