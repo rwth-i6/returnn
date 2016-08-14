@@ -678,8 +678,10 @@ def layer_normalization(x, bias=None, scale=None, eps=1e-5):
     output = output + bias
   return output
 
+
 def print_to_file(filename, x):
   def theano_print_to_file(op,x):
     with open(filename, 'a') as f:
-      f.write(str(x) + '\n')
+      f.write(str(x.argmax(axis=-1)) + '\n')
+      #f.write(str(x) + '\n')
   return theano.printing.Print(global_fn=theano_print_to_file)(x)
