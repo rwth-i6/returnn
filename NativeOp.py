@@ -231,7 +231,7 @@ class NativeOp(theano.Op):
     # i.e. we might reuse some of the calculation.
     grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
-    in_info = list(self.in_info)
+    in_info = [self._bw_in_var_info(info) for info in self.in_info]
     in_info += [self._bw_in_var_info(info) for info in self.out_info]
     in_info += [self._bw_grad_var_info(info) for info in self.out_info]
     in_info = self._filter_grad_inputs(in_info)
@@ -339,7 +339,7 @@ class NativeOp(theano.Op):
       {
         int out_shape_idx = 0;
         for(int i = 0; i < n_outputs; ++i) {
-          assert(out_shape_idx + out_ndims[i] <= ARRAY_LEN(output_shapes_flat));
+          assert_cmp(out_shape_idx + out_ndims[i], <=, ARRAY_LEN(output_shapes_flat));
           if(*outputs[i]) {
             bool can_reuse = true;
             for(int j = 0; j < out_ndims[i]; ++j)
@@ -348,17 +348,17 @@ class NativeOp(theano.Op):
                 break;
               }
             if(!can_reuse)
-              Py_DECREF(*outputs[i]);
+              Py_CLEAR(*outputs[i]);
           }
           out_shape_idx += out_ndims[i];
         }
-        assert(out_shape_idx == ARRAY_LEN(output_shapes_flat));
+        assert_cmp(out_shape_idx, ==, ARRAY_LEN(output_shapes_flat));
       }
 
       // Maybe reuse or otherwise copy input into output vars.
       for(int i = 0; i < n_inputs; ++i)
         if(in_want_inplace[i] >= 0) {
-          assert(in_want_inplace[i] < n_outputs);
+          assert_cmp(in_want_inplace[i], <, n_outputs);
           Py_XDECREF(*outputs[in_want_inplace[i]]);
           if(in_is_inplace[i]) {
             *(outputs[in_want_inplace[i]]) = inputs[i];
@@ -377,7 +377,8 @@ class NativeOp(theano.Op):
           assert(out_shape_idx + out_ndims[i] <= ARRAY_LEN(output_shapes_flat));
           if(*(outputs[i])) {
             for(int j = 0; j < out_ndims[i]; ++j)
-              assert(output_shapes_flat[out_shape_idx + j] == Ndarray_DIMS(*outputs[i])[j]);
+              // If this fails, we maybe have reused an input which has an invalid shape.
+              assert_cmp(output_shapes_flat[out_shape_idx + j], ==, Ndarray_DIMS(*outputs[i])[j]);
           }
           else {
             *(outputs[i]) = (Ndarray*) Ndarray_NewDims(out_ndims[i], &output_shapes_flat[out_shape_idx]);
@@ -385,7 +386,7 @@ class NativeOp(theano.Op):
           }
           out_shape_idx += out_ndims[i];
         }
-        assert(out_shape_idx == ARRAY_LEN(output_shapes_flat));
+        assert_cmp(out_shape_idx, ==, ARRAY_LEN(output_shapes_flat));
       }
 
       // And the user C code starts here.
@@ -1131,6 +1132,156 @@ def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   unchunk_op = UnChunking.make_op()
   out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
   return out, oindex, ofactors
+
+
+class SubtensorBatchedIndex(NativeOpGenBase):
+  """
+  Consider you have:
+    idx: 2d (n_time, n_batch) -> idx (in [0..n_dim-1])
+    x: 3d (n_time, n_batch, n_dim)
+  Then, this op will calculate:
+    x[..., idx[...]]: 2d (n_time, n_batch)
+  """
+  in_info = (
+    {"name": "x", "ndim": 3, "shape": (None, None, None), "bw_in_var": {"want_inplace": 0}},
+    {"name": "idx", "ndim": 2, "shape": (None, None), "gradient": "disconnected"}
+  )
+  out_info = (
+    {"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},
+  )
+  @classmethod
+  def grad_input_map(cls, x, idx,  y,  DY):
+    return (x, idx, DY)
+
+  c_extra_support_code = {
+    "select_kernel": """
+    DEF_KERNEL
+    void select_kernel(
+      float* x, long x_dim0, long x_dim1, long x_dim2, long x_stride0, long x_stride1, long x_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* y, long y_stride0, long y_stride1
+    ) {
+      const long max_idx = x_dim0 * x_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long d0 = idx % x_dim0;
+        long d1 = idx / x_dim0;
+        long d2 = long(index[d0 * idx_stride0 + d1 * idx_stride1]);
+        if(d2 < 0) d2 = 0;
+        if(d2 >= x_dim2) d2 = x_dim2 - 1;
+        y[d0 * y_stride0 + d1 * y_stride1] = x[d0 * x_stride0 + d1 * x_stride1 + d2 * x_stride2];
+      }
+    }
+    """,
+    "select_bw_kernel": """
+    DEF_KERNEL
+    void select_bw_kernel(
+      float* Dx, long Dx_dim0, long Dx_dim1, long Dx_dim2, long Dx_stride0, long Dx_stride1, long Dx_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* Dy, long Dy_stride0, long Dy_stride1
+    ) {
+      const long max_idx = Dx_dim0 * Dx_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long d0 = idx % Dx_dim0;
+        long d1 = idx / Dx_dim0;
+        long d2 = long(index[d0 * idx_stride0 + d1 * idx_stride1]);
+        if(d2 < 0) d2 = 0;
+        if(d2 >= Dx_dim2) d2 = Dx_dim2 - 1;
+        Dx[d0 * Dx_stride0 + d1 * Dx_stride1 + d2 * Dx_stride2] = Dy[d0 * Dy_stride0 + d1 * Dy_stride1];
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert_cmp(n_inputs, ==, 2);
+    assert_cmp(n_outputs, ==, 1);
+    Ndarray* x = inputs[0];
+    Ndarray* idx = inputs[1];
+    Ndarray* y = *outputs[0];
+
+    assert_cmp(Ndarray_NDIM(x), ==, 3);
+    assert_cmp(Ndarray_NDIM(idx), ==, 2);
+    assert_cmp(Ndarray_DIMS(x)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(x)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(y), ==, 2);
+    assert_cmp(Ndarray_DIMS(y)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(y)[1], ==, Ndarray_DIMS(idx)[1]);
+
+    start_dev_kernel(select_kernel, (
+      Ndarray_DEV_DATA(x),
+        Ndarray_DIMS(x)[0],
+        Ndarray_DIMS(x)[1],
+        Ndarray_DIMS(x)[2],
+        Ndarray_STRIDE(x, 0),
+        Ndarray_STRIDE(x, 1),
+        Ndarray_STRIDE(x, 2),
+      Ndarray_DEV_DATA(idx),
+        Ndarray_STRIDE(idx, 0),
+        Ndarray_STRIDE(idx, 1),
+      Ndarray_DEV_DATA(y),
+        Ndarray_STRIDE(y, 0),
+        Ndarray_STRIDE(y, 1)
+    ));
+  """
+
+  c_bw_code = """
+    assert_cmp(n_inputs, ==, 3);
+    assert_cmp(n_outputs, ==, 1);
+    Ndarray* x = inputs[0];
+    Ndarray* idx = inputs[1];
+    Ndarray* Dy = inputs[2];
+    Ndarray* Dx = *outputs[0];  // inplace on x
+
+    assert_cmp(Ndarray_NDIM(x), ==, 3);
+    assert_cmp(Ndarray_NDIM(idx), ==, 2);
+    assert_cmp(Ndarray_DIMS(x)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(x)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(Dy), ==, 2);
+    assert_cmp(Ndarray_DIMS(Dy)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(Dy)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(Dx), ==, 3);
+    assert_cmp(Ndarray_DIMS(Dx)[0], ==, Ndarray_DIMS(x)[0]);
+    assert_cmp(Ndarray_DIMS(Dx)[1], ==, Ndarray_DIMS(x)[1]);
+    assert_cmp(Ndarray_DIMS(Dx)[2], ==, Ndarray_DIMS(x)[2]);
+
+    Ndarray_set_zero(Dx);
+    start_dev_kernel(select_bw_kernel, (
+      Ndarray_DEV_DATA(Dx),
+        Ndarray_DIMS(Dx)[0],
+        Ndarray_DIMS(Dx)[1],
+        Ndarray_DIMS(Dx)[2],
+        Ndarray_STRIDE(Dx, 0),
+        Ndarray_STRIDE(Dx, 1),
+        Ndarray_STRIDE(Dx, 2),
+      Ndarray_DEV_DATA(idx),
+        Ndarray_STRIDE(idx, 0),
+        Ndarray_STRIDE(idx, 1),
+      Ndarray_DEV_DATA(Dy),
+        Ndarray_STRIDE(Dy, 0),
+        Ndarray_STRIDE(Dy, 1)
+    ));
+  """
+
+
+def subtensor_batched_index(x, idx):
+  if x.ndim == 2:
+    assert idx.ndim == 1
+    x = x.reshape((x.shape[0], 1, x.shape[1]))
+    idx = idx.reshape((idx.shape[0], 1))
+    y = subtensor_batched_index(x, idx)
+    return y[:, 0]
+  assert x.ndim == 3
+  assert idx.ndim == 2
+  op = SubtensorBatchedIndex.make_op()
+  return op(x, idx)
 
 
 class SparseToDense(NativeOpGenBase):
