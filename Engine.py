@@ -773,7 +773,7 @@ class Engine:
 
 class SeqTrainParallelControl:
   """
-  Idea: Parallelize some stuff in seq training (e.g. sprint loss). Use chunked training.
+  Idea: Parallelize some stuff in seq training (e.g. sprint loss). Can use chunked training.
   We have these steps:
     (1) (forward:GPU) forward only, remember output
     (2) (calc_loss:CPU) calculate loss based on data from (1), error signal. store hat_y = y - grad_L (for stability).
@@ -782,6 +782,17 @@ class SeqTrainParallelControl:
   (2) is on CPU.
   (3) is done via the usual loop via EngineTask.TrainTaskThread.
     It calls self.train_wait_for_seqs().
+
+  This class `SeqTrainParallelControl` is instantiated by the Engine and it has the these callbacks which are called
+  by the engine (TrainTaskThread):
+    train_start_epoch()
+    train_finish_epoch()
+    train_wait_for_seqs()
+  Thus, this instance lives in the main proc and this code is executed in the main proc.
+
+  There is a counterpart of this code living in the device proc and we are calling it via
+  Device.seq_train_parallel_control which is an instance of `SeqTrainParallelControlDevHost`.
+  Most things are actually happening there.
   """
 
   def __init__(self, engine, config, **kwargs):
@@ -841,10 +852,12 @@ class SeqTrainParallelControl:
       assert success, "failed to allocate & assign data"
       self.train_device.update_data()
       self._device_exec("do_forward", batch=batch)
+      self._device_exec("train_check_calc_loss")
 
   def train_wait_for_seqs(self, device, batches):
     """
     Called from TrainTaskThread while doing training (forward + backprop).
+    This will tell the device what set of batches we want to train next.
     :type device: Device.Device
     :type batches: list[EngineBatch.Batch]
     """
@@ -863,7 +876,6 @@ class SeqTrainParallelControl:
     self._device_exec("train_set_cur_batches", batches=batches)
     self.train_start_seq = start_seq
     self.forward_fill_queue()
-    self._device_exec("train_check_calc_loss")
     while not self._device_exec("train_have_loss_for_cur_batches"):
       if not self._device_exec("train_check_calc_loss"):
         time.sleep(0.1)  # wait until we have the data we need

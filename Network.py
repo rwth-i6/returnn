@@ -67,8 +67,10 @@ class LayerNetwork(object):
       self.j = {"data": self.i}
     if base_network is not None:
       self.epoch = base_network.epoch
+      self.tags  = base_network.tags
     else:
       self.epoch = T.constant(0, name="epoch", dtype="int32")
+      self.tags  = T.bmatrix('tags')
     self.constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
@@ -687,7 +689,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'):
       layer_class = SequenceOutputLayer
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer

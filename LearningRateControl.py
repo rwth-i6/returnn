@@ -2,6 +2,7 @@
 import os
 from Util import betterRepr, simpleObjRepr, ObjAsDict
 from Log import log
+import numpy
 
 
 class LearningRateControl(object):
@@ -52,7 +53,7 @@ class LearningRateControl(object):
     :param str errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
     :param str filename: load from and save to file
     """
-    self.epochData = {}
+    self.epochData = {}  # type: dict[int,LearningRateControl.EpochData]
     self.defaultLearningRate = defaultLearningRate
     self.minLearningRate = minLearningRate
     if defaultLearningRates:
@@ -117,6 +118,14 @@ class LearningRateControl(object):
     if not epochs:
       return None
     return epochs[-1]
+
+  def getMostRecentLearningRate(self, epoch, excludeCurrent=True):
+    for e, data in reversed(sorted(self.epochData.items())):
+      if e > epoch: continue
+      if excludeCurrent and e == epoch: continue
+      if data.learningRate is None: continue
+      return data.learningRate
+    return self.defaultLearningRate
 
   def setEpochError(self, epoch, error):
     """
@@ -314,6 +323,79 @@ class NewbobAbs(LearningRateControl):
     return learningRate
 
 
+class NewbobMultiEpoch(LearningRateControl):
+
+  @classmethod
+  def load_initial_kwargs_from_config(cls, config):
+    """
+    :type config: Config.Config
+    :rtype: dict[str]
+    """
+    kwargs = super(NewbobMultiEpoch, cls).load_initial_kwargs_from_config(config)
+    kwargs.update({
+      "numEpochs": config.int("newbob_multi_num_epochs", 5),
+      "updateInterval": config.int("newbob_multi_update_interval", config.int("newbob_multi_num_epochs", 5)),
+      "relativeErrorThreshold": config.float('newbob_relative_error_threshold', -0.01),
+      "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
+    return kwargs
+
+  def __init__(self, numEpochs, updateInterval, relativeErrorThreshold, learningRateDecayFactor, **kwargs):
+    """
+    :param float defaultLearningRate: learning rate for epoch 1+2
+    :type numEpochs: int
+    :type updateInterval: int
+    :type relativeErrorThreshold: float
+    :type learningRateDecayFactor: float
+    :type filename: str
+    """
+    super(NewbobMultiEpoch, self).__init__(**kwargs)
+    self.numEpochs = numEpochs
+    assert self.numEpochs >= 1
+    self.updateInterval = updateInterval
+    assert self.updateInterval >= 1
+    self.relativeErrorThreshold = relativeErrorThreshold
+    self.learningRateDecayFactor = learningRateDecayFactor
+
+  def _calcRelativeError(self, oldEpoch, newEpoch):
+    oldError = self.getEpochErrorValue(oldEpoch)
+    newError = self.getEpochErrorValue(newEpoch)
+    if oldError is None or newError is None:
+      return None
+    relativeError = (newError - oldError) / abs(newError)
+    return relativeError
+
+  def _calcMeanRelativeError(self, epochs):
+    assert len(epochs) >= 2
+    errors = [self._calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
+    if any([e is None for e in errors]):
+      return None
+    return numpy.mean(errors)
+
+  def calcLearningRateForEpoch(self, epoch):
+    """
+    Newbob+ on train data.
+    :type epoch: int
+    :returns learning rate
+    :rtype: float
+    """
+    learningRate = self.getMostRecentLearningRate(epoch)
+    lastEpochs = sorted([e for e in self.epochData.keys() if e < epoch])
+    if not lastEpochs:
+      return learningRate
+    # We could also use the self.numEpochs limit here. But maybe this is better.
+    if len(lastEpochs) <= 1:
+      return learningRate
+    # We start counting epochs at 1.
+    if self.updateInterval > 1 and epoch % self.updateInterval != 1:
+      return learningRate
+    # Take one more than self.numEpochs because we are looking at the diffs.
+    lastEpochs = lastEpochs[-self.numEpochs - 1:]
+    meanRelativeError = self._calcMeanRelativeError(lastEpochs)
+    if meanRelativeError > self.relativeErrorThreshold:
+      learningRate *= self.learningRateDecayFactor
+    return learningRate
+
+
 def learningRateControlType(typeName):
   if typeName == "constant":
     return ConstantLearningRate
@@ -321,6 +403,8 @@ def learningRateControlType(typeName):
     return NewbobRelative
   elif typeName == "newbob_abs":
     return NewbobAbs
+  elif typeName == "newbob_multi_epoch":
+    return NewbobMultiEpoch
   else:
     assert False, "unknown learning-rate-control type %s" % typeName
 
@@ -334,3 +418,37 @@ def loadLearningRateControlFromConfig(config):
   cls = learningRateControlType(controlType)
   return cls.load_initial_from_config(config)
 
+
+def demo():
+  import better_exchook
+  better_exchook.install()
+  import rnn
+  import sys
+  if len(sys.argv) <= 1:
+    print("usage: python %s [config] [other options]" % __file__)
+    print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
+  rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.config._hack_value_reading_debug()
+  log.initialize(verbosity=[5])
+  control = loadLearningRateControlFromConfig(rnn.config)
+  print("LearningRateControl: %r" % control)
+  if not control.epochData:
+    print("No epoch data so far.")
+    return
+  maxEpoch = max(control.epochData.keys())
+  for epoch in range(1, maxEpoch + 2):  # all epochs [1..maxEpoch+1]
+    oldLearningRate = None
+    if epoch in control.epochData:
+      oldLearningRate = control.epochData[epoch].learningRate
+    learningRate = control.calcLearningRateForEpoch(epoch)
+    print("Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate))
+    # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
+    if epoch in control.epochData:
+      control.epochData[epoch].learningRate = learningRate
+    else:
+      control.epochData[epoch] = control.EpochData(learningRate=learningRate)
+  print("Finished, last stored epoch was %i." % maxEpoch)
+
+
+if __name__ == "__main__":
+  demo()

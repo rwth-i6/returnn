@@ -35,11 +35,13 @@ class NativeOp(theano.Op):
 
   __props__ = ("in_info", "out_info",
                "c_fw_code", "c_bw_code", "c_extra_support_code", "code_version",
-               "grad_input_map", "name")
+               "grad_input_map", "name",
+               "custom_grad")
 
   def __init__(self, in_info, out_info,
                c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
-               grad_input_map=None, name=None):
+               grad_input_map=None, name=None,
+               custom_grad=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
       attribs in the dict:
@@ -65,6 +67,7 @@ class NativeOp(theano.Op):
     :param tuple|callable grad_input_map: selection of grad inputs.
       by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
+    :param function custom_grad: if given, will use this instead for self.grad
     """
     super(NativeOp, self).__init__()
     assert isinstance(in_info, (list, tuple))
@@ -80,6 +83,7 @@ class NativeOp(theano.Op):
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
     self.destroy_map = self._construct_destroy_map(in_info)
+    self.custom_grad = custom_grad
 
   @classmethod
   def _resolve_want_inplace_dummy(cls, in_info, out_info):
@@ -164,8 +168,10 @@ class NativeOp(theano.Op):
     return Contiguous()(v)
 
   def _convert_input_var(self, v, info):
-    v = T.cast(v, info.get("dtype", "float32"))
     v = self.as_tensor_var(v)
+    dtype = info.get("dtype", "float32")
+    if v.dtype != dtype:
+      v = T.cast(v, dtype)
     if v.ndim != info["ndim"]:
       raise TypeError("input var ndim %i does not match with info %r" % (v.ndim, info))
     if info.get("need_contiguous", False):
@@ -204,6 +210,9 @@ class NativeOp(theano.Op):
     return info
 
   def grad(self, inputs, output_grads):
+    if self.custom_grad:
+      return self.custom_grad(self, inputs, output_grads)
+
     if not self.c_bw_code:
       # Unknown how to calculate gradient.
       return [T.DisconnectedType()() for inp in inputs]
@@ -222,7 +231,7 @@ class NativeOp(theano.Op):
     # i.e. we might reuse some of the calculation.
     grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
-    in_info = list(self.in_info)
+    in_info = [self._bw_in_var_info(info) for info in self.in_info]
     in_info += [self._bw_in_var_info(info) for info in self.out_info]
     in_info += [self._bw_grad_var_info(info) for info in self.out_info]
     in_info = self._filter_grad_inputs(in_info)
@@ -330,7 +339,7 @@ class NativeOp(theano.Op):
       {
         int out_shape_idx = 0;
         for(int i = 0; i < n_outputs; ++i) {
-          assert(out_shape_idx + out_ndims[i] <= ARRAY_LEN(output_shapes_flat));
+          assert_cmp(out_shape_idx + out_ndims[i], <=, ARRAY_LEN(output_shapes_flat));
           if(*outputs[i]) {
             bool can_reuse = true;
             for(int j = 0; j < out_ndims[i]; ++j)
@@ -339,17 +348,17 @@ class NativeOp(theano.Op):
                 break;
               }
             if(!can_reuse)
-              Py_DECREF(*outputs[i]);
+              Py_CLEAR(*outputs[i]);
           }
           out_shape_idx += out_ndims[i];
         }
-        assert(out_shape_idx == ARRAY_LEN(output_shapes_flat));
+        assert_cmp(out_shape_idx, ==, ARRAY_LEN(output_shapes_flat));
       }
 
       // Maybe reuse or otherwise copy input into output vars.
       for(int i = 0; i < n_inputs; ++i)
         if(in_want_inplace[i] >= 0) {
-          assert(in_want_inplace[i] < n_outputs);
+          assert_cmp(in_want_inplace[i], <, n_outputs);
           Py_XDECREF(*outputs[in_want_inplace[i]]);
           if(in_is_inplace[i]) {
             *(outputs[in_want_inplace[i]]) = inputs[i];
@@ -368,7 +377,8 @@ class NativeOp(theano.Op):
           assert(out_shape_idx + out_ndims[i] <= ARRAY_LEN(output_shapes_flat));
           if(*(outputs[i])) {
             for(int j = 0; j < out_ndims[i]; ++j)
-              assert(output_shapes_flat[out_shape_idx + j] == Ndarray_DIMS(*outputs[i])[j]);
+              // If this fails, we maybe have reused an input which has an invalid shape.
+              assert_cmp(output_shapes_flat[out_shape_idx + j], ==, Ndarray_DIMS(*outputs[i])[j]);
           }
           else {
             *(outputs[i]) = (Ndarray*) Ndarray_NewDims(out_ndims[i], &output_shapes_flat[out_shape_idx]);
@@ -376,7 +386,7 @@ class NativeOp(theano.Op):
           }
           out_shape_idx += out_ndims[i];
         }
-        assert(out_shape_idx == ARRAY_LEN(output_shapes_flat));
+        assert_cmp(out_shape_idx, ==, ARRAY_LEN(output_shapes_flat));
       }
 
       // And the user C code starts here.
@@ -421,7 +431,7 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
   @classmethod
   def contiguous(cls, v):
     from theano.sandbox.cuda.basic_ops import gpu_contiguous
-    assert isinstance(v, theano.sandbox.cuda.CudaNdarrayVariable)
+    assert isinstance(v, (theano.sandbox.cuda.CudaNdarrayVariable, theano.sandbox.cuda.CudaNdarrayConstant))
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
       if v.owner.op == gpu_contiguous:
@@ -491,6 +501,7 @@ class NativeOpGenBase:
   c_extra_support_code = None
   code_version = None
   grad_input_map = None
+  custom_grad = None
 
   @classmethod
   def make_op(cls):
@@ -502,7 +513,8 @@ class NativeOpGenBase:
                     c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
                     c_extra_support_code=cls.c_extra_support_code,
                     grad_input_map=cls.grad_input_map,
-                    name=name)
+                    name=name,
+                    custom_grad=cls.custom_grad)
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
@@ -745,6 +757,531 @@ class LstmGenericBase(NativeOpGenBase):
   """
 
   code_version = ()
+
+
+class Chunking(NativeOpGenBase):
+  """
+  Given an input in 3d (n_time,n_batch,n_dim), we chunk up the time dimension
+  in chunks of size chunk_size, every chunk_step frames.
+  This results in an 3d output (chunk_size, n_batch * n_chunks, n_dim)
+  where n_chunks = floor( max(n_time - chunk_size + chunk_step - 1, 0) / chunk_step ) + 1.
+  Examples:
+    n_time=1,   chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=49,  chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=50,  chunk_size=50, chunk_step=10 -> n_chunks=1
+    n_time=51,  chunk_size=50, chunk_step=10 -> n_chunks=2
+    n_time=60,  chunk_size=50, chunk_step=10 -> n_chunks=2
+    n_time=61,  chunk_size=50, chunk_step=10 -> n_chunks=3
+    n_time=99,  chunk_size=50, chunk_step=10 -> n_chunks=6
+    n_time=100, chunk_size=50, chunk_step=10 -> n_chunks=6
+    n_time=101, chunk_size=50, chunk_step=10 -> n_chunks=7
+  """
+  in_info = (
+    {"name": "input", "ndim": 3, "shape": (None, None, None)},
+    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
+  )
+  out_info = (
+    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))}
+  )
+
+  c_extra_support_code = {
+    "copy_kernel": """
+    DEF_KERNEL
+    void copy_kernel(
+      float* chunk_params,
+      float* input, long in_dim0, long in_dim1, long in_dim2, long in_stride0, long in_stride1, long in_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* output, long out_dim0, long out_dim1, long out_stride0, long out_stride1, long out_stride2,
+      float* oindex, long oidx_stride0, long oidx_stride1
+    ) {
+      assert_cmp(out_dim1 % in_dim1, ==, 0);
+      const long n_chunks = out_dim1 / in_dim1;
+      assert_cmp(n_chunks, >, 0);
+      const long chunk_size = out_dim0;
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      const long chunk_step = long(chunk_params[1]);
+      assert_cmp(chunk_step, >, 0);
+      assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, in_dim0);
+      assert_cmp(chunk_step * (n_chunks - 1), <, in_dim0);
+
+      // Iterate over output (chunked) x/y coordinates.
+      // In an inner loop, we will loop over z.
+      const long max_idx = out_dim0 * out_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long out_x = idx % out_dim0;  // time
+        long out_y = idx / out_dim0;  // batch
+
+        long chunk_idx = out_y % n_chunks;
+        long in_y =      out_y / n_chunks;
+
+        long in_x = chunk_step * chunk_idx + out_x;
+
+        if(in_x < in_dim0 && index[in_x * idx_stride0 + in_y * idx_stride1] > 0.1) {
+          for(long z = 0; z < in_dim2; ++z)
+            output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] =
+              input[in_x * in_stride0 + in_y * in_stride1 + z * in_stride2];
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 1;
+        }
+        else {
+          for(long z = 0; z < in_dim2; ++z)
+            output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] = 0;
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 0;
+        }
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert_cmp(n_inputs, ==, 5);
+    assert_cmp(n_outputs, ==, 2);
+    Ndarray* input = inputs[0];
+    Ndarray* index = inputs[1];
+    Ndarray* chunk_params = inputs[4];
+    Ndarray* output = *outputs[0];
+    Ndarray* oindex = *outputs[1];
+
+    assert_cmp(Ndarray_NDIM(input), ==, 3);
+    assert_cmp(Ndarray_NDIM(index), ==, 2);
+    assert_cmp(Ndarray_DIMS(input)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(input)[1], ==, Ndarray_DIMS(index)[1]);
+    assert_cmp(Ndarray_NDIM(chunk_params), ==, 1);
+    assert_cmp(Ndarray_DIMS(chunk_params)[0], ==, 2);
+    assert_cmp(Ndarray_NDIM(output), ==, 3);
+    assert_cmp(Ndarray_NDIM(oindex), ==, 2);
+    assert_cmp(Ndarray_DIMS(output)[0], ==, Ndarray_DIMS(oindex)[0]);
+    assert_cmp(Ndarray_DIMS(output)[1], ==, Ndarray_DIMS(oindex)[1]);
+    assert_cmp(Ndarray_DIMS(output)[2], ==, Ndarray_DIMS(input)[2]);
+
+    start_dev_kernel(copy_kernel, (
+      Ndarray_DEV_DATA(chunk_params),
+      Ndarray_DEV_DATA(input),
+        Ndarray_DIMS(input)[0],
+        Ndarray_DIMS(input)[1],
+        Ndarray_DIMS(input)[2],
+        Ndarray_STRIDE(input, 0),
+        Ndarray_STRIDE(input, 1),
+        Ndarray_STRIDE(input, 2),
+      Ndarray_DEV_DATA(index),
+        Ndarray_STRIDE(index, 0),
+        Ndarray_STRIDE(index, 1),
+      Ndarray_DEV_DATA(output),
+        Ndarray_DIMS(output)[0],
+        Ndarray_DIMS(output)[1],
+        Ndarray_STRIDE(output, 0),
+        Ndarray_STRIDE(output, 1),
+        Ndarray_STRIDE(output, 2),
+      Ndarray_DEV_DATA(oindex),
+        Ndarray_STRIDE(oindex, 0),
+        Ndarray_STRIDE(oindex, 1)
+    ));
+  """
+
+  code_version = ()
+
+  @staticmethod
+  def naive_chunk_start_frames(n_time, chunk_size, chunk_step):
+    """
+    This is just for documentation / demonstration. Also used by testing code.
+    """
+    t = 0
+    chunk_start_frames = []
+    while True:
+      chunk_start_frames.append(t)
+      if t + chunk_size >= n_time: break
+      t += chunk_step
+    return chunk_start_frames
+
+  @classmethod
+  def custom_grad(cls, op, inputs, output_grads):
+    assert len(op.in_info) == len(inputs)
+    assert len(op.out_info) == len(output_grads)
+
+    input, index, _, _, chunk_params = inputs
+    Dout, _ = output_grads
+
+    assert input.ndim == 3
+    n_time = input.shape[0]
+    n_batch = input.shape[1]
+    chunk_size = chunk_params[0]
+    chunk_step = chunk_params[1]
+    out, oindex = op(*inputs)
+    Dinput, _, factors = unchunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+    # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
+    Dinput /= factors.dimshuffle(0, 1, 'x')
+
+    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    assert len(grads) == len(inputs)
+    return grads
+
+
+def chunk(x, index, chunk_size, chunk_step):
+  assert x.ndim == 3
+  n_time = x.shape[0]
+  n_batch = x.shape[1]
+  n_dim = x.shape[2]
+  if isinstance(chunk_size, T.TensorVariable):
+    chunk_size = T.cast(chunk_size, "int64")
+  if isinstance(chunk_step, T.TensorVariable):
+    chunk_step = T.cast(chunk_step, "int64")
+  n_chunks = T.maximum(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+  chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
+  out_buffer = T.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
+  oindex_buffer = T.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
+  chunk_op = Chunking.make_op()
+  out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
+  return out, oindex
+
+
+class UnChunking(NativeOpGenBase):
+  """
+  This reverses the output from `Chunking`, i.e. chunking the time dimension.
+  We get a 3d input (chunk_size, n_batch * n_chunks, n_dim)
+  and return an 3d output (n_time, n_batch, n_dim)
+  where the chunks are of size chunk_size, every chunk_step frames.
+  Because of overlaps, we have to combine the overlapping chunks somehow.
+  We will do that with a uniform distribution, i.e. take the mean of all overlaps per frame.
+  """
+  in_info = (
+    {"name": "input", "ndim": 3, "shape": (None, None, None)},
+    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+    {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
+    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
+  )
+  out_info = (
+    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))},
+    {"name": "ofactors", "ndim": 2, "shape": ((4, 0), (4, 1))}
+  )
+
+  c_extra_support_code = {
+    "unchunk_kernel": """
+    DEF_KERNEL
+    void unchunk_kernel(
+      float* chunk_params,
+      float* input, long in_dim0, long in_dim1, long in_dim2, long in_stride0, long in_stride1, long in_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* output, long out_dim0, long out_dim1, long out_stride0, long out_stride1, long out_stride2,
+      float* oindex, long oidx_stride0, long oidx_stride1,
+      float* ofactors, long ofac_stride0, long ofac_stride1
+    ) {
+      assert_cmp(in_dim1 % out_dim1, ==, 0);
+      const long n_chunks = in_dim1 / out_dim1;
+      assert_cmp(n_chunks, >, 0);
+      const long chunk_size = in_dim0;
+      assert_cmp(long(chunk_params[0]), ==, chunk_size);
+      const long chunk_step = long(chunk_params[1]);
+      assert_cmp(chunk_step, >, 0);
+      assert_cmp(chunk_step * (n_chunks - 1) + chunk_size, >=, out_dim0);
+      assert_cmp(chunk_step * (n_chunks - 1), <, out_dim0);
+
+      // Iterate over output (unchunked) x/y coordinates.
+      // In an inner loop, we will loop over z.
+      const long max_idx = out_dim0 * out_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long out_x = idx % out_dim0;  // time
+        long out_y = idx / out_dim0;  // batch
+
+        float c = 0;
+        for(long z = 0; z < in_dim2; ++z)
+          output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] = 0;
+
+        // in_x = out_x - chunk_step * chunk_idx,
+        // thus in_x < 0           when chunk_idx * chunk_step >  out_x,
+        // and  in_x >= chunk_size when chunk_idx * chunk_step <= out_x - chunk_size,
+        // thus we need chunk_idx <= out_x / chunk_step,
+        // and          chunk_idx > (out_x - chunk_size) / chunk_step.
+        // Examples:
+        //   out_x=0,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,1
+        //   out_x=3,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,1
+        //   out_x=4,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
+        //   out_x=7,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,2
+        //   out_x=8,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,3
+        //   out_x=9,  chunk_size=10, chunk_step=4 -> chunk_idx_start,end=0,3
+        //   out_x=10, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
+        //   out_x=11, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,3
+        //   out_x=12, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,4
+        //   out_x=13, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=1,4
+        //   out_x=14, chunk_size=10, chunk_step=4 -> chunk_idx_start,end=2,4
+        long chunk_idx_start = (out_x - chunk_size + chunk_step) / chunk_step;
+        if(chunk_idx_start < 0) chunk_idx_start = 0;
+        long chunk_idx_end = out_x / chunk_step + 1;
+        if(chunk_idx_end > n_chunks) chunk_idx_end = n_chunks;
+        assert_cmp(chunk_idx_start, <, chunk_idx_end);
+        for(long chunk_idx = chunk_idx_start; chunk_idx < chunk_idx_end; ++chunk_idx) {
+          long in_y = out_y * n_chunks + chunk_idx;
+          long in_x = out_x - chunk_step * chunk_idx;
+          assert_cmp(in_x, >=, 0);
+          assert_cmp(in_x, <, chunk_size);
+          if(index[in_x * idx_stride0 + in_y * idx_stride1] > 0.1) {
+            c += 1;
+            for(long z = 0; z < in_dim2; ++z)
+              output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] +=
+                input[in_x * in_stride0 + in_y * in_stride1 + z * in_stride2];
+          }
+        }
+
+        if(c > 0.1) {
+          for(long z = 0; z < in_dim2; ++z)
+            output[out_x * out_stride0 + out_y * out_stride1 + z * out_stride2] /= c;
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 1;
+          ofactors[out_x * ofac_stride0 + out_y * ofac_stride1] = 1.0 / c;
+        } else {
+          oindex[out_x * oidx_stride0 + out_y * oidx_stride1] = 0;
+          ofactors[out_x * ofac_stride0 + out_y * ofac_stride1] = 1.0;
+        }
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert_cmp(n_inputs, ==, 6);
+    assert_cmp(n_outputs, ==, 3);
+    Ndarray* input = inputs[0];
+    Ndarray* index = inputs[1];
+    Ndarray* chunk_params = inputs[5];
+    Ndarray* output = *outputs[0];
+    Ndarray* oindex = *outputs[1];
+    Ndarray* ofactors = *outputs[2];
+
+    assert_cmp(Ndarray_NDIM(input), ==, 3);
+    assert_cmp(Ndarray_NDIM(index), ==, 2);
+    assert_cmp(Ndarray_DIMS(input)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(input)[1], ==, Ndarray_DIMS(index)[1]);
+    assert_cmp(Ndarray_NDIM(chunk_params), ==, 1);
+    assert_cmp(Ndarray_DIMS(chunk_params)[0], ==, 2);
+    assert_cmp(Ndarray_NDIM(output), ==, 3);
+    assert_cmp(Ndarray_NDIM(oindex), ==, 2);
+    assert_cmp(Ndarray_NDIM(ofactors), ==, 2);
+    assert_cmp(Ndarray_DIMS(output)[0], ==, Ndarray_DIMS(oindex)[0]);
+    assert_cmp(Ndarray_DIMS(output)[1], ==, Ndarray_DIMS(oindex)[1]);
+    assert_cmp(Ndarray_DIMS(output)[2], ==, Ndarray_DIMS(input)[2]);
+    assert_cmp(Ndarray_DIMS(oindex)[0], ==, Ndarray_DIMS(ofactors)[0]);
+    assert_cmp(Ndarray_DIMS(oindex)[1], ==, Ndarray_DIMS(ofactors)[1]);
+
+    start_dev_kernel(unchunk_kernel, (
+      Ndarray_DEV_DATA(chunk_params),
+      Ndarray_DEV_DATA(input),
+        Ndarray_DIMS(input)[0],
+        Ndarray_DIMS(input)[1],
+        Ndarray_DIMS(input)[2],
+        Ndarray_STRIDE(input, 0),
+        Ndarray_STRIDE(input, 1),
+        Ndarray_STRIDE(input, 2),
+      Ndarray_DEV_DATA(index),
+        Ndarray_STRIDE(index, 0),
+        Ndarray_STRIDE(index, 1),
+      Ndarray_DEV_DATA(output),
+        Ndarray_DIMS(output)[0],
+        Ndarray_DIMS(output)[1],
+        Ndarray_STRIDE(output, 0),
+        Ndarray_STRIDE(output, 1),
+        Ndarray_STRIDE(output, 2),
+      Ndarray_DEV_DATA(oindex),
+        Ndarray_STRIDE(oindex, 0),
+        Ndarray_STRIDE(oindex, 1),
+      Ndarray_DEV_DATA(ofactors),
+        Ndarray_STRIDE(ofactors, 0),
+        Ndarray_STRIDE(ofactors, 1)
+    ));
+  """
+
+  code_version = ()
+
+  @classmethod
+  def custom_grad(cls, op, inputs, output_grads):
+    assert len(op.in_info) == len(inputs)
+    assert len(op.out_info) == len(output_grads)
+
+    input, index, _, _, _, chunk_params = inputs
+    Dout, _, _ = output_grads
+
+    chunk_size = chunk_params[0]
+    chunk_step = chunk_params[1]
+    out, oindex, factors = op(*inputs)
+    Dout *= factors.dimshuffle(0, 1, 'x')
+    Dinput, _ = chunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
+
+    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    assert len(grads) == len(inputs)
+    return grads
+
+
+def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
+  assert x.ndim == 3
+  n_dim = x.shape[2]
+  chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
+  out_buffer = T.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
+  oindex_buffer = T.zeros((n_time, n_batch), dtype=index.dtype)
+  ofactors_buffer = T.zeros((n_time, n_batch), dtype=x.dtype)
+  unchunk_op = UnChunking.make_op()
+  out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
+  return out, oindex, ofactors
+
+
+class SubtensorBatchedIndex(NativeOpGenBase):
+  """
+  Consider you have:
+    idx: 2d (n_time, n_batch) -> idx (in [0..n_dim-1])
+    x: 3d (n_time, n_batch, n_dim)
+  Then, this op will calculate:
+    x[..., idx[...]]: 2d (n_time, n_batch)
+  """
+  in_info = (
+    {"name": "x", "ndim": 3, "shape": (None, None, None), "bw_in_var": {"want_inplace": 0}},
+    {"name": "idx", "ndim": 2, "shape": (None, None), "gradient": "disconnected"}
+  )
+  out_info = (
+    {"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},
+  )
+  @classmethod
+  def grad_input_map(cls, x, idx,  y,  DY):
+    return (x, idx, DY)
+
+  c_extra_support_code = {
+    "select_kernel": """
+    DEF_KERNEL
+    void select_kernel(
+      float* x, long x_dim0, long x_dim1, long x_dim2, long x_stride0, long x_stride1, long x_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* y, long y_stride0, long y_stride1
+    ) {
+      const long max_idx = x_dim0 * x_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long d0 = idx % x_dim0;
+        long d1 = idx / x_dim0;
+        long d2 = long(index[d0 * idx_stride0 + d1 * idx_stride1]);
+        if(d2 < 0) d2 = 0;
+        if(d2 >= x_dim2) d2 = x_dim2 - 1;
+        y[d0 * y_stride0 + d1 * y_stride1] = x[d0 * x_stride0 + d1 * x_stride1 + d2 * x_stride2];
+      }
+    }
+    """,
+    "select_bw_kernel": """
+    DEF_KERNEL
+    void select_bw_kernel(
+      float* Dx, long Dx_dim0, long Dx_dim1, long Dx_dim2, long Dx_stride0, long Dx_stride1, long Dx_stride2,
+      float* index, long idx_stride0, long idx_stride1,
+      float* Dy, long Dy_stride0, long Dy_stride1
+    ) {
+      const long max_idx = Dx_dim0 * Dx_dim1;
+      for(
+        long idx = threadIdx.x + blockDim.x * blockIdx.x;
+        idx < max_idx;
+        idx += gridDim.x * blockDim.x)
+      {
+        long d0 = idx % Dx_dim0;
+        long d1 = idx / Dx_dim0;
+        long d2 = long(index[d0 * idx_stride0 + d1 * idx_stride1]);
+        if(d2 < 0) d2 = 0;
+        if(d2 >= Dx_dim2) d2 = Dx_dim2 - 1;
+        Dx[d0 * Dx_stride0 + d1 * Dx_stride1 + d2 * Dx_stride2] = Dy[d0 * Dy_stride0 + d1 * Dy_stride1];
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    assert_cmp(n_inputs, ==, 2);
+    assert_cmp(n_outputs, ==, 1);
+    Ndarray* x = inputs[0];
+    Ndarray* idx = inputs[1];
+    Ndarray* y = *outputs[0];
+
+    assert_cmp(Ndarray_NDIM(x), ==, 3);
+    assert_cmp(Ndarray_NDIM(idx), ==, 2);
+    assert_cmp(Ndarray_DIMS(x)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(x)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(y), ==, 2);
+    assert_cmp(Ndarray_DIMS(y)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(y)[1], ==, Ndarray_DIMS(idx)[1]);
+
+    start_dev_kernel(select_kernel, (
+      Ndarray_DEV_DATA(x),
+        Ndarray_DIMS(x)[0],
+        Ndarray_DIMS(x)[1],
+        Ndarray_DIMS(x)[2],
+        Ndarray_STRIDE(x, 0),
+        Ndarray_STRIDE(x, 1),
+        Ndarray_STRIDE(x, 2),
+      Ndarray_DEV_DATA(idx),
+        Ndarray_STRIDE(idx, 0),
+        Ndarray_STRIDE(idx, 1),
+      Ndarray_DEV_DATA(y),
+        Ndarray_STRIDE(y, 0),
+        Ndarray_STRIDE(y, 1)
+    ));
+  """
+
+  c_bw_code = """
+    assert_cmp(n_inputs, ==, 3);
+    assert_cmp(n_outputs, ==, 1);
+    Ndarray* x = inputs[0];
+    Ndarray* idx = inputs[1];
+    Ndarray* Dy = inputs[2];
+    Ndarray* Dx = *outputs[0];  // inplace on x
+
+    assert_cmp(Ndarray_NDIM(x), ==, 3);
+    assert_cmp(Ndarray_NDIM(idx), ==, 2);
+    assert_cmp(Ndarray_DIMS(x)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(x)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(Dy), ==, 2);
+    assert_cmp(Ndarray_DIMS(Dy)[0], ==, Ndarray_DIMS(idx)[0]);
+    assert_cmp(Ndarray_DIMS(Dy)[1], ==, Ndarray_DIMS(idx)[1]);
+    assert_cmp(Ndarray_NDIM(Dx), ==, 3);
+    assert_cmp(Ndarray_DIMS(Dx)[0], ==, Ndarray_DIMS(x)[0]);
+    assert_cmp(Ndarray_DIMS(Dx)[1], ==, Ndarray_DIMS(x)[1]);
+    assert_cmp(Ndarray_DIMS(Dx)[2], ==, Ndarray_DIMS(x)[2]);
+
+    Ndarray_set_zero(Dx);
+    start_dev_kernel(select_bw_kernel, (
+      Ndarray_DEV_DATA(Dx),
+        Ndarray_DIMS(Dx)[0],
+        Ndarray_DIMS(Dx)[1],
+        Ndarray_DIMS(Dx)[2],
+        Ndarray_STRIDE(Dx, 0),
+        Ndarray_STRIDE(Dx, 1),
+        Ndarray_STRIDE(Dx, 2),
+      Ndarray_DEV_DATA(idx),
+        Ndarray_STRIDE(idx, 0),
+        Ndarray_STRIDE(idx, 1),
+      Ndarray_DEV_DATA(Dy),
+        Ndarray_STRIDE(Dy, 0),
+        Ndarray_STRIDE(Dy, 1)
+    ));
+  """
+
+
+def subtensor_batched_index(x, idx):
+  if x.ndim == 2:
+    assert idx.ndim == 1
+    x = x.reshape((x.shape[0], 1, x.shape[1]))
+    idx = idx.reshape((idx.shape[0], 1))
+    y = subtensor_batched_index(x, idx)
+    return y[:, 0]
+  assert x.ndim == 3
+  assert idx.ndim == 2
+  op = SubtensorBatchedIndex.make_op()
+  return op(x, idx)
 
 
 class SparseToDense(NativeOpGenBase):
@@ -1150,3 +1687,328 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
   ce = -T.sum(y_target * T.log(y), axis=2)
   grad_z = y - y_target
   return ce, grad_z
+
+
+class FastBaumWelchOp(NativeOpGenBase):
+  """
+  inputs:
+    :param am_scores: scores in -log space. 3d (time,batch,dim)
+    :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+    :param weights: weights of the edges
+  outputs:
+    :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
+  """
+  in_info = (
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"}
+  )
+  out_info = (
+    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
+  )
+
+  c_extra_support_code = {
+    "01_set_start_states" : """
+      __global__
+      void set_start_states(float* states, unsigned* start_states) {
+        unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
+        states[state_idx] = 0.0;
+      }
+    """,
+    "02_init_bwd_state_buffer": """
+      __global__
+      void init_bwd_state_buffer(float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (index[t * index_stride + idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + idx] == 0.0)) {
+          unsigned state_idx = end_states[idx];
+          states[state_idx] = 0.0;
+        }
+      }
+    """,
+    "10_fill_array" : """
+      __global__
+      void fill_array(float* array, float value, unsigned size) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < size) {
+          array[idx] = value;
+        }
+      }
+    """,
+    "11_prob_add": """
+      __device__
+      float prob_add(float a, float b) {
+        float diff = a - b;
+        if (isnan(diff)) {
+          return CUDART_INF_F;
+        }
+        else {
+          return -log1p(exp(-abs(diff))) + min(a, b);
+        }
+      }
+    """,
+    "12_atomic_prob_add": """
+      __device__
+      void atomic_prob_add(float* a, float b) {
+        int* addr = (int*)a;
+        int old   = __float_as_int(*a);
+        int assumed;
+        do {
+          assumed = old;
+          old     = atomicCAS(addr, assumed, __float_as_int(prob_add(__int_as_float(old), b)));
+        } while (old != assumed);
+      }
+    """,
+    "20_next_frame": """
+      __global__
+      void next_frame(bool fwd, unsigned num_edges, unsigned  num_emissions,
+                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer, unsigned* emission_idxs,
+                      float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_edges) {
+          return;
+        }
+
+        unsigned from     = from_buffer  [idx];
+        float    prev_val = prev_frame[from];
+        if (isinf(prev_val)) {
+          edge_buffer[idx] = CUDART_INF_F;
+          return;
+        }
+
+        unsigned to           = to_buffer    [idx];
+        unsigned emission_idx = emission_idxs[idx];
+        float    edge_weight  = weight_buffer[idx];
+        unsigned sequence_idx = sequence_idxs[idx];
+
+        float val = prev_val + edge_weight + am_scores[sequence_idx * num_emissions + emission_idx];
+
+        if (fwd) {
+          edge_buffer[idx] += val;
+        }
+        else {
+          edge_buffer[idx] += prev_val;
+        }
+        atomic_prob_add(next_frame + to, val);
+      }
+    """,
+    "21_normalize": """
+      __global__
+      void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, float* debug_out) {
+        extern __shared__ float sum[];
+        buffer += blockIdx.x * num_edges;
+
+        sum[threadIdx.x] = CUDART_INF_F;
+        unsigned initial_summands = (num_edges + blockDim.x - 1u) / blockDim.x;
+        for (unsigned i = 0u; i < initial_summands; i++) {
+          unsigned idx = i * blockDim.x + threadIdx.x;
+          if (i >= num_edges) {
+            break;
+          }
+          if (sequence_idxs[idx] == blockIdx.y && !isinf(buffer[idx])) {
+            sum[threadIdx.x] = prob_add(sum[threadIdx.x], buffer[idx]);
+          }
+        }
+
+
+        // reduce
+        unsigned sum_size = blockDim.x;
+        while (sum_size > 1u) {
+          __syncthreads();
+          unsigned to_merge = sum_size / 2;
+          if (threadIdx.x >= to_merge) {
+            break;
+          }
+          sum[threadIdx.x] = prob_add(sum[threadIdx.x], sum[sum_size - to_merge + threadIdx.x]);
+          sum_size -= to_merge;
+        }
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+          debug_out[blockIdx.y * blockDim.x + blockIdx.x] = sum[0];
+        }
+
+        if (isinf(sum[0])) {
+          return;
+        }
+
+        for (unsigned i = 0u; i < initial_summands; i++) {
+          unsigned idx = i * blockDim.x + threadIdx.x;
+          if (i >= num_edges) {
+            break;
+          }
+          if (sequence_idxs[idx] == blockIdx.y) {
+            buffer[idx] -= sum[0];
+          }
+        }
+      }
+    """,
+    "21_normalize_2": """
+      __global__
+      void normalize_2(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs) {
+        extern __shared__ float sum[];
+
+        buffer += blockIdx.x * num_edges;
+
+        for (unsigned s = 0u; s < num_seqs; s++) {
+          sum[s] = CUDART_INF_F;
+        }
+
+        for (unsigned e = 0u; e < num_edges; e++) {
+          unsigned s = sequence_idxs[e];
+          sum[s] = prob_add(sum[s], buffer[e]);
+        }
+
+        for (unsigned e = 0u; e < num_edges; e++) {
+          unsigned s = sequence_idxs[e];
+          buffer[e] -= sum[s];
+        }
+      }
+    """,
+    "22_compute_result": """
+      __global__
+      void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
+                          unsigned frame_stride, unsigned seq_stride,
+                          unsigned num_frames, unsigned num_seqs, unsigned num_edges) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_frames * num_edges) {
+          return;
+        }
+
+        unsigned e_idx        = idx % num_edges;
+        unsigned frame        = idx / num_edges;
+        unsigned emission_idx = emission_idxs[e_idx];
+        unsigned seq_idx      = sequence_idxs[e_idx];
+        float    score        = edge_buffer[idx];
+
+        atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
+      }
+    """
+  }
+
+  c_fw_code = """
+    // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
+    // output = output_names
+    assert(n_inputs  == 6);
+    assert(n_outputs == 1);
+    Ndarray* am_scores        = inputs[0];
+    Ndarray* edges            = inputs[1];
+    Ndarray* weights          = inputs[2];
+    Ndarray* start_end_states = inputs[3];
+    Ndarray* index            = inputs[4];
+    Ndarray* state_buffer     = inputs[5];
+    Ndarray* out              = *outputs[0];
+
+    assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
+    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
+    assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
+    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+
+    unsigned* d_from              = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 0 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_to                = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 1 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 2 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 3 * CudaNdarray_HOST_STRIDES(edges)[0]);
+    float*    d_weights           = CudaNdarray_DEV_DATA(weights);
+    float*    d_am_scores         = CudaNdarray_DEV_DATA(am_scores);
+    unsigned* d_start_states      = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 0 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
+    unsigned* d_end_states        = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 1 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
+    float*    d_index             = CudaNdarray_DEV_DATA(index);
+    float*    d_state_buffer_prev = CudaNdarray_DEV_DATA(state_buffer) + 0 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
+    float*    d_state_buffer_next = CudaNdarray_DEV_DATA(state_buffer) + 1 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
+    float*    d_out               = CudaNdarray_DEV_DATA(out);
+
+    unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
+    unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
+    unsigned n_emissions = Ndarray_DIMS(am_scores)[2];
+    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_edges     = Ndarray_DIMS(edges)[1];
+    unsigned n_threads   = 1024u;
+    unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
+
+    unsigned frame_stride    = CudaNdarray_HOST_STRIDES(am_scores)[0];
+    unsigned sequence_stride = CudaNdarray_HOST_STRIDES(am_scores)[1];
+    unsigned index_stride    = CudaNdarray_HOST_STRIDES(index)[0];
+
+    assert(n_frames > 0);
+
+    //std::cerr << "n_frames: "    << n_frames    << std::endl;
+    //std::cerr << "n_seqs: "      << n_seqs      << std::endl;
+    //std::cerr << "n_emissions: " << n_emissions << std::endl;
+    //std::cerr << "n_states: "    << n_states    << std::endl;
+    //std::cerr << "n_edges: "     << n_edges     << std::endl;
+    //std::cerr << "n_threads: "   << n_threads   << std::endl;
+    //std::cerr << "n_blocks: "    << n_blocks    << std::endl;
+
+    //std::cerr << "frame_stride: "     << frame_stride    << std::endl;
+    //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
+    //std::cerr << "index_stride: "     << index_stride    << std::endl;
+
+    // initialize edge buffer
+    float* d_edge_buffer;
+    HANDLE_ERROR(cudaMalloc(reinterpret_cast<void**>(&d_edge_buffer), n_edges * n_frames * sizeof(float)));
+    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
+    HANDLE_ERROR(cudaGetLastError());
+
+    // initialize the state buffer
+    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    HANDLE_ERROR(cudaGetLastError());
+    set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+
+    // fwd pass
+    for (unsigned t = 0u; t < n_frames; t++) {
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_ERROR(cudaGetLastError());
+      next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
+                                          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
+                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
+      HANDLE_ERROR(cudaGetLastError());
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    //std::cerr << "fwd finished" << std::endl;
+
+    // bwd pass
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    HANDLE_ERROR(cudaGetLastError());
+    for (unsigned t = n_frames; t > 0; t--) {
+      init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_ERROR(cudaGetLastError());
+      next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
+                                          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
+                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
+      HANDLE_ERROR(cudaGetLastError());
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    //std::cerr << "bwd finished" << std::endl;
+
+    dim3 blocks(n_frames, n_seqs);
+    //normalize<<<blocks, n_threads, n_threads * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, d_debug_sum);
+    normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs);
+    HANDLE_ERROR(cudaGetLastError());
+
+    //std::cerr << "normalize finished" << std::endl;
+
+    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
+    HANDLE_ERROR(cudaGetLastError());
+
+    frame_stride    = CudaNdarray_HOST_STRIDES(out)[0];
+    sequence_stride = CudaNdarray_HOST_STRIDES(out)[1];
+    n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
+                                            frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
+    HANDLE_ERROR(cudaGetLastError());
+
+    cudaFree(d_edge_buffer);
+    //std::cerr << "fast_bw finished" << std::endl;
+  """
+
+  c_bw_code = None
+
+  code_version = 52

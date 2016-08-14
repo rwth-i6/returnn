@@ -5,8 +5,9 @@ import theano
 from BestPathDecoder import BestPathDecodeOp
 from CTC import CTCOp
 from OpNumpyAlign import NumpyAlignOp
+from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
-from SprintErrorSignals import sprint_loss_and_error_signal
+from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 from Util import as_str
 from Log import log
@@ -28,6 +29,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
+               apply_softmax=True,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -43,6 +45,8 @@ class OutputLayer(Layer):
       self.set_attr("grad_clip_z", grad_clip_z)
     if grad_discard_out_of_bound_z is not None:
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
+    if not apply_softmax:
+      self.set_attr("apply_softmax", apply_softmax)
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -202,11 +206,15 @@ class FramewiseOutputLayer(OutputLayer):
     #self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     output = self.output
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
-    if self.loss == 'ce' or self.loss == 'entropy': self.p_y_given_x = T.nnet.softmax(self.y_m)
+    self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
+    if not self.attrs.get("apply_softmax", True):
+      self.p_y_given_x = self.y_m
+      self.z = T.log(self.z)
+      self.y_m = T.log(self.y_m)
+    elif self.loss in ['ce', 'entropy', 'none']: self.p_y_given_x = T.nnet.softmax(self.y_m)
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
-    self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
@@ -220,7 +228,22 @@ class FramewiseOutputLayer(OutputLayer):
     :returns: cost, known_grads
     """
     known_grads = None
-    if self.loss == 'ce' or self.loss == 'priori':
+    if not self.attrs.get("apply_softmax", True):
+      if self.loss != "ce": raise NotImplementedError
+      assert self.p_y_given_x.ndim == 2  # flattened
+      index = T.cast(self.index, "float32").flatten()
+      index_bc = index.dimshuffle(0, 'x')
+      y_idx = self.y_data_flat
+      assert y_idx.ndim == 1
+      p = T.clip(self.p_y_given_x, numpy.float32(1.e-38), numpy.float32(1.e20))
+      from NativeOp import subtensor_batched_index
+      logp = T.log(subtensor_batched_index(p, y_idx))
+      assert logp.ndim == 1
+      nll = -T.sum(logp * index)
+      # the grad for p is: -y_ref/p
+      known_grads = {self.p_y_given_x: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
+      return self.norm * nll, known_grads
+    elif self.loss == 'ce' or self.loss == 'priori':
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
         assert isinstance(self.y, tuple)
         assert len(self.y) == 3
@@ -272,8 +295,10 @@ class FramewiseOutputLayer(OutputLayer):
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
         #return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
+    elif self.loss == "none":
+      return None, None
     else:
-      assert False, "unknown loss: %s" % self.loss
+      assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
 
 
 class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer with self.W_lm_in
@@ -329,11 +354,17 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
-    p_y_given_x = T.nnet.softmax(self.y_m)
-    self.y_pred = T.argmax(p_y_given_x, axis = -1)
-    self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    if not self.attrs.get("apply_softmax", True):
+      p_y_given_x = self.y_m
+      self.p_y_given_x = self.z
+      self.z = T.log(self.z)
+      self.y_m = T.log(self.y_m)
+    else:
+      p_y_given_x = T.nnet.softmax(self.y_m)
+      self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    self.y_pred = T.argmax(p_y_given_x, axis=-1)
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
@@ -401,6 +432,17 @@ class SequenceOutputLayer(OutputLayer):
         err += ce
         grad += T.grad(ce, self.z)
       known_grads = {self.z: grad}
+      return err, known_grads
+    elif self.loss == 'fast_bw':
+      if not isinstance(self.sprint_opts, dict):
+        import json
+        self.sprint_opts = json.loads(self.sprint_opts)
+      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+      scores = -T.log(self.p_y_given_x)
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      float_idx = T.cast(self.index, "float32")
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      err = (T.exp(-fwdbwd) * scores * float_idx.dimshuffle(0, 1, 'x')).sum()
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous

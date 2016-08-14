@@ -106,6 +106,14 @@ class Config:
     for key, value in dikt.items():
       self.set(key, value)
 
+  def _hack_value_reading_debug(self):
+    orig_value_func = self.value
+    def wrapped_value_func(*args, **kwargs):
+      res = orig_value_func(*args, **kwargs)
+      print("Config.value(%s) -> %r" % (", ".join(list(map(repr, args)) + ["%s=%r" for (k, v) in kwargs.items()]), res))
+      return res
+    self.value = wrapped_value_func
+
   def value(self, key, default, index=None, list_join_str=","):
     """
     :type key: str

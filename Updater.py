@@ -54,9 +54,9 @@ class Updater:
                adamdelta=False,
                adam_fit_learning_rate=True,
                adamax=False,
-               adamvr=False, # adam with adasecant variance reduction
-               nadam=False, # Adam with nag part momentum
-               nadam_decay=0.004, # Magical 250.0 denominator in nesterov scaling of i_t
+               adamvr=False,  # adam with adasecant variance reduction
+               nadam=False,  # Adam with nag part momentum
+               nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -64,6 +64,7 @@ class Updater:
                update_multiple_models=0, update_multiple_models_average_step=0,
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
+               multi_batch_update=0,
                enforce_triangular_matrix_zero=False,
                gradient_noise=0.0,
                gradient_noise_decay=0.55,
@@ -98,6 +99,7 @@ class Updater:
     self.update_multiple_models_average_step = update_multiple_models_average_step
     self.update_multiple_models_average_step_i = update_multiple_models_average_step_i
     self.update_multiple_models_param_is_cur_model = update_multiple_models_param_is_cur_model
+    self.multi_batch_update = multi_batch_update
     self.enforce_triangular_matrix_zero = enforce_triangular_matrix_zero
     self.gradient_noise = gradient_noise
     self.gradient_noise_decay = gradient_noise_decay
@@ -305,6 +307,16 @@ class Updater:
     updates.append((self.e, e_t))
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
+
+    default_output_layer = None
+    batch_num_output_frames = None
+    if self.network.output:
+      if "output" in self.network.output:
+        default_output_layer = self.network.output["output"]
+      else:
+        default_output_layer = sorted(self.network.output.items())[1]
+      batch_num_output_frames = T.sum(default_output_layer.index)
+
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(self.rng.randint(1234) + 1)
     total_grad_norm = numpy.float32(0)
@@ -312,6 +324,7 @@ class Updater:
     n_total_params = 0
     for grad in grads.values(): n_total_params += T.prod(grad.shape)
     avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
+
     for param in grads.keys():
       if hasattr(param,'custom_gradient'):
         if param.custom_gradient_normalized:
@@ -690,6 +703,29 @@ class Updater:
       for p, u in list(upd.items()):
         if not u: continue
         upd[p] = T.clip(u, -self.update_clip, self.update_clip)
+
+    if self.multi_batch_update > 1:
+      do_update_now = T.eq(self.counter % self.multi_batch_update, self.multi_batch_update - 1)
+      self.multi_batch_num_output_frames = self.var(0, name="multi_batch_num_output_frames", dtype="int64")
+      multi_batch_num_output_frames = self.multi_batch_num_output_frames + batch_num_output_frames
+      updates.append((self.multi_batch_num_output_frames, T.switch(do_update_now, 0, multi_batch_num_output_frames)))
+
+      for param in grads.keys():
+        multi_batch_update_param = self.var(param, name="%s_multi_batch_update" % param.name, zero=True)
+        new_multi_batch_update_param = multi_batch_update_param + upd[param]
+        updates.append((
+          multi_batch_update_param,
+          theano.ifelse.ifelse(
+            do_update_now,
+            T.zeros_like(param),
+            new_multi_batch_update_param
+          )
+        ))
+        upd[param] = theano.ifelse.ifelse(
+          do_update_now,
+          new_multi_batch_update_param / numpy.float32(self.multi_batch_update),
+          T.zeros_like(param)
+        )
 
     # Simulate multi GPU training. This might help for regularization.
     if self.update_multiple_models:

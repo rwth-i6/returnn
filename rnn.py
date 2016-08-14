@@ -35,16 +35,21 @@ eval_data = None; """ :type: Dataset """
 quit = False
 
 
-def initConfig(configFilename, commandLineOptions):
+def initConfig(configFilename=None, commandLineOptions=()):
   """
   :type configFilename: str
   :type commandLineOptions: list[str]
-  Inits the global config.
+  Initializes the global config.
   """
-  assert os.path.isfile(configFilename), "config file not found"
   global config
   config = Config()
-  config.load_file(configFilename)
+  if configFilename:
+    assert os.path.isfile(configFilename), "config file not found"
+    config.load_file(configFilename)
+  if commandLineOptions and commandLineOptions[0][:1] not in ["-", "+"]:
+    # Assume that this is a config filename.
+    config.load_file(commandLineOptions[0])
+    commandLineOptions = commandLineOptions[1:]
   parser = OptionParser()
   parser.add_option("-a", "--activation", dest = "activation", help = "[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
   parser.add_option("-b", "--batch_size", dest = "batch_size", help = "[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
@@ -59,7 +64,7 @@ def initConfig(configFilename, commandLineOptions):
   #parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
   parser.add_option("-k", "--output_file", dest = "output_file", help = "[STRING] Path to target file for network output.")
   parser.add_option("-l", "--log", dest = "log", help = "[STRING] Log file path.")
-  parser.add_option("-L", "--load", dest = "load", help = "[STRING] lad model file path.")
+  parser.add_option("-L", "--load", dest = "load", help = "[STRING] load model file path.")
   parser.add_option("-m", "--momentum", dest = "momentum", help = "[FLOAT] Momentum term in gradient descent optimization.")
   parser.add_option("-n", "--num_epochs", dest = "num_epochs", help = "[INTEGER] Number of epochs that should be trained.")
   parser.add_option("-o", "--order", dest = "order", help = "[default/sorted/random] Ordering of sequences.")
@@ -74,11 +79,15 @@ def initConfig(configFilename, commandLineOptions):
   parser.add_option("-x", "--task", dest = "task", help = "[train/forward/analyze] Task of the current program call.")
   parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
   parser.add_option("-z", "--max_sequences", dest = "max_seqs", help = "[INTEGER] Maximal number of sequences per batch.")
+  parser.add_option("--config", dest="load_config", help="[STRING] load config")
   (options, args) = parser.parse_args(commandLineOptions)
   options = vars(options)
   for opt in options.keys():
-    if options[opt] != None:
-      config.add_line(opt, options[opt])
+    if options[opt] is not None:
+      if opt == "load_config":
+        config.load_file(options[opt])
+      else:
+        config.add_line(opt, options[opt])
   assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
   for i in range(0, len(args), 2):
     key, value = args[i:i+2]
@@ -320,10 +329,10 @@ def initEngine(devices):
   engine = Engine(devices)
 
 
-def init(configFilename, commandLineOptions):
+def init(configFilename=None, commandLineOptions=()):
   initBetterExchook()
   initThreadJoinHack()
-  initConfig(configFilename, commandLineOptions)
+  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initLog()
   print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
   print >> log.v3, "Theano:", describe_theano_version()
@@ -475,7 +484,7 @@ def main(argv):
   return_code = 0
   try:
     assert len(argv) >= 2, "usage: %s <config>" % argv[0]
-    init(configFilename=argv[1], commandLineOptions=argv[2:])
+    init(commandLineOptions=argv[1:])
     executeMainTask()
   except KeyboardInterrupt:
     return_code = 1

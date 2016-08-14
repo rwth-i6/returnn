@@ -1,6 +1,11 @@
 
-#include <string.h>
 #include <assert.h>
+#include <iostream>
+#include <fstream>
+#include <limits>
+#include <sstream>
+#include <string.h>
+#include <vector>
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
@@ -12,6 +17,7 @@
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
+#define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
 #define Ndarray_NDIM(x) (x->nd)
 #define Ndarray_DIM_Type int
 #define Ndarray_SIZE CudaNdarray_SIZE
@@ -97,6 +103,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #define HANDLE_ERROR(err) (_cudaHandleError( err, __FILE__, __LINE__ ))
 
+#define assert_cmp(a, cmp, b) assert((a) cmp (b))
+
 #else   // not CUDA
 
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
@@ -104,6 +112,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
 #define Ndarray_HOST_DIMS PyArray_DIMS
+#define Ndarray_STRIDE(x, i) (PyArray_STRIDE(x, i) / sizeof(float))  // return in elements. Numpy stores in bytes
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM PyArray_NDIM
 #define Ndarray_DIM_Type npy_intp
@@ -163,6 +172,12 @@ struct _KernelLoop {
 		threadIdx.x++;
 	}
 };
+
+#define assert_cmp(a, cmp, b) \
+    if(!((a) cmp (b))) { \
+        std::cerr << "Assertion failed: " << a << " " << #cmp << " " << b << std::endl; \
+        assert((a) cmp (b)); \
+    }
 
 #endif
 

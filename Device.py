@@ -133,6 +133,12 @@ def get_device_attributes():
   return attributes
 
 
+def is_using_gpu():
+  import theano.sandbox.cuda as theano_cuda
+  if not theano_cuda.cuda_available: return False
+  return theano_cuda.cuda_enabled
+
+
 # When we are the child process, we have one single Device instance.
 asyncChildGlobalDevice = None
 
@@ -318,7 +324,7 @@ class Device(object):
     import theano.tensor as T
     import h5py
     self.T = T
-    self.seq_train_parallel_control = None  # SeqTrainParallelControlDevHost
+    self.seq_train_parallel_control = None  # type: SeqTrainParallelControlDevHost. will be set via SprintErrorSignals
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
@@ -402,6 +408,7 @@ class Device(object):
     self.block_start = T.lscalar()
     self.block_end = T.lscalar()
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
+    self.tags_var  = theano.shared(numpy.zeros((0, 0), dtype="int8"), name="tags_var")
 
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
@@ -878,6 +885,7 @@ class Device(object):
         #self.c.set_value(c.astype('int32'), borrow = True)
         for k in target_keys:
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
+        self.tags_var.set_value(numpy.array(self.tags).view(dtype='int8').reshape((len(self.tags), max(map(len, self.tags)))))
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
@@ -1100,13 +1108,6 @@ class Device(object):
       self.input_queue.send("get-num-updates")
       return int(self.output_queue.recv())
 
-  def maybe_update_network(self, network):
-    """
-    This is usually called before we start a new batch.
-    :type network: LayerNetwork
-    """
-    return
-
   def start_epoch_stats(self):
     if not self.is_device_proc():
       return self._generic_exec_on_dev("start_epoch_stats")
@@ -1304,9 +1305,15 @@ class Device(object):
     self.proc = None
 
   # device properties
-  def get_device_shaders(self): return self.attributes[0]
-  def get_device_clock(self): return self.attributes[1]
-  def get_device_memory(self): return self.attributes[2]
+  def get_device_shaders(self):
+    return self.attributes[0]
+
+  def get_device_clock(self):
+    return self.attributes[1]
+
+  def get_device_memory(self):
+    return self.attributes[2]
+
   def update_memory(self):
     self.memory = self.attributes[2] - 512 * 1024 * 1024
     if self.name[0:3] != 'cpu':
@@ -1328,25 +1335,27 @@ class Device(object):
     :type network: LayerNetwork
     """
     # self.i == self.j["data"], self.x == self.y["data"]
-    if True or self.block_size:
-      i = self.block_start
-      j = self.block_end
-      gs = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys] + \
-           [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
-    else:
-      gs = [(network.y[k], self.y[k]) for k in self.used_data_keys] + \
-           [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs + [(network.epoch, self.epoch_var)]
+    i = self.block_start
+    j = self.block_end
+    gs  = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys]
+    gs += [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
+    gs += [(network.epoch, self.epoch_var)]
+    gs += [(network.tags,  self.tags_var)]
+    return gs
 
   def make_input_givens(self, network):
     # self.i == self.j["data"]
-    gs = [(network.y[k], self.y[k]) for k in self.used_data_keys]
+    gs  = [(network.y[k], self.y[k]) for k in self.used_data_keys]
     gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    return gs #+ [(network.epoch, self.epoch_var)]
+    gs += [(network.tags, self.tags_var)]
+    return gs
+
   def make_sprint_givens(self, network):
     return self.make_input_givens(network)
+
   def make_ctc_givens(self, network):
     return self.make_input_givens(network) + [(network.c, self.c)]
+
   def make_ce_ctc_givens(self, network):
     return self.make_givens(network) + [(network.c, self.c)]
 
