@@ -236,8 +236,8 @@ class FramewiseOutputLayer(OutputLayer):
       y_idx = self.y_data_flat
       assert y_idx.ndim == 1
       p = T.clip(self.p_y_given_x, numpy.float32(1.e-38), numpy.float32(1.e20))
-      i = T.arange(p.shape[0])
-      logp = T.log(p[i, y_idx[i]])  # TODO that will not run on GPU...
+      from NativeOp import subtensor_batched_index
+      logp = T.log(subtensor_batched_index(p, y_idx))
       assert logp.ndim == 1
       nll = -T.sum(logp * index)
       # the grad for p is: -y_ref/p
