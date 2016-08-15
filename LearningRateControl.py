@@ -127,6 +127,14 @@ class LearningRateControl(object):
       return data.learningRate
     return self.defaultLearningRate
 
+  def calcRelativeError(self, oldEpoch, newEpoch):
+    oldError = self.getEpochErrorValue(oldEpoch)
+    newError = self.getEpochErrorValue(newEpoch)
+    if oldError is None or newError is None:
+      return None
+    relativeError = (newError - oldError) / abs(newError)
+    return relativeError
+
   def setEpochError(self, epoch, error):
     """
     :type epoch: int
@@ -356,17 +364,9 @@ class NewbobMultiEpoch(LearningRateControl):
     self.relativeErrorThreshold = relativeErrorThreshold
     self.learningRateDecayFactor = learningRateDecayFactor
 
-  def _calcRelativeError(self, oldEpoch, newEpoch):
-    oldError = self.getEpochErrorValue(oldEpoch)
-    newError = self.getEpochErrorValue(newEpoch)
-    if oldError is None or newError is None:
-      return None
-    relativeError = (newError - oldError) / abs(newError)
-    return relativeError
-
   def _calcMeanRelativeError(self, epochs):
     assert len(epochs) >= 2
-    errors = [self._calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
+    errors = [self.calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
     if any([e is None for e in errors]):
       return None
     return numpy.mean(errors)
@@ -441,7 +441,8 @@ def demo():
     if epoch in control.epochData:
       oldLearningRate = control.epochData[epoch].learningRate
     learningRate = control.calcLearningRateForEpoch(epoch)
-    print("Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate))
+    print("Calculated learning rate for epoch %i: %s (was: %s), " % (epoch, learningRate, oldLearningRate) +
+          "previous relative error: %s" % control.calcRelativeError(epoch - 2, epoch - 1))
     # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
     if epoch in control.epochData:
       control.epochData[epoch].learningRate = learningRate
