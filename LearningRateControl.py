@@ -441,8 +441,12 @@ def demo():
     if epoch in control.epochData:
       oldLearningRate = control.epochData[epoch].learningRate
     learningRate = control.calcLearningRateForEpoch(epoch)
-    print("Calculated learning rate for epoch %i: %s (was: %s), " % (epoch, learningRate, oldLearningRate) +
-          "previous relative error: %s" % control.calcRelativeError(epoch - 2, epoch - 1))
+    s = "Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
+    if learningRate < control.minLearningRate:
+      learningRate = control.minLearningRate
+      s += ", clipped to %s" % learningRate
+    s += ", previous relative error: %s" % control.calcRelativeError(epoch - 2, epoch - 1)
+    print(s)
     # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
     if epoch in control.epochData:
       control.epochData[epoch].learningRate = learningRate
