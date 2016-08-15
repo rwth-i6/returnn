@@ -35,7 +35,9 @@ class LearningRateControl(object):
       "minLearningRate": config.float('min_learning_rate', 0.0),
       "defaultLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
       "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
-      "filename": config.value('learning_rate_file', None)}
+      "relativeErrorAlsoRelativeToLearningRate": config.bool('learning_rate_control_relative_error_relative_lr', False),
+      "filename": config.value('learning_rate_file', None),
+    }
 
   @classmethod
   def load_initial_from_config(cls, config):
@@ -46,7 +48,10 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, defaultLearningRate, minLearningRate=0.0, defaultLearningRates=None, errorMeasureKey=None, filename=None):
+  def __init__(self, defaultLearningRate, minLearningRate=0.0, defaultLearningRates=None,
+               errorMeasureKey=None,
+               relativeErrorAlsoRelativeToLearningRate=False,
+               filename=None):
     """
     :param float defaultLearningRate: default learning rate. usually for epoch 1
     :param list[float] | dict[int,float] defaultLearningRates: learning rates
@@ -66,6 +71,7 @@ class LearningRateControl(object):
         self.setDefaultLearningRateForEpoch(epoch, v)
     self.defaultLearningRates = defaultLearningRates
     self.errorMeasureKey = errorMeasureKey
+    self.relativeErrorAlsoRelativeToLearningRate = relativeErrorAlsoRelativeToLearningRate
     self.filename = filename
     if filename:
       if os.path.exists(filename):
@@ -133,6 +139,11 @@ class LearningRateControl(object):
     if oldError is None or newError is None:
       return None
     relativeError = (newError - oldError) / abs(newError)
+    if self.relativeErrorAlsoRelativeToLearningRate:
+      learningRate = self.getMostRecentLearningRate(newEpoch, excludeCurrent=False)
+      # If the learning rate is lower than the initial learning rate,
+      # the relative error is also expected to be lower, so correct for that here.
+      relativeError /= learningRate / self.defaultLearningRate
     return relativeError
 
   def setEpochError(self, epoch, error):
@@ -272,11 +283,9 @@ class NewbobRelative(LearningRateControl):
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
-    oldError = self.getEpochErrorValue(last2Epoch)
-    newError = self.getEpochErrorValue(lastEpoch)
-    if oldError is None or newError is None:
+    relativeError = self.calcRelativeError(last2Epoch, lastEpoch)
+    if relativeError is None:
       return learningRate
-    relativeError = (newError - oldError) / abs(newError)
     if relativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor
     return learningRate
