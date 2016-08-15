@@ -448,12 +448,15 @@ def demo():
     oldLearningRate = None
     if epoch in control.epochData:
       oldLearningRate = control.epochData[epoch].learningRate
-    if epoch >= first_non_pretrain_epoch:
-      learningRate = control.calcLearningRateForEpoch(epoch)
-      s = "Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
-    else:
+    if epoch < first_non_pretrain_epoch:
       learningRate = pretrain_learning_rate
       s = "Pretrain epoch %i, fixed learning rate: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
+    elif first_non_pretrain_epoch > 1 and epoch == first_non_pretrain_epoch:
+      learningRate = control.defaultLearningRate
+      s = "First epoch after pretrain, epoch %i, fixed learning rate: %s (was %s)" % (epoch, learningRate, oldLearningRate)
+    else:
+      learningRate = control.calcLearningRateForEpoch(epoch)
+      s = "Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
     if learningRate < control.minLearningRate:
       learningRate = control.minLearningRate
       s += ", clipped to %s" % learningRate
