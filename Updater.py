@@ -314,7 +314,7 @@ class Updater:
       if "output" in self.network.output:
         default_output_layer = self.network.output["output"]
       else:
-        default_output_layer = sorted(self.network.output.items())[1]
+        default_output_layer = sorted(self.network.output.items())[0][1]
       batch_num_output_frames = T.sum(default_output_layer.index)
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams

@@ -529,7 +529,7 @@ class UnsupervisedOutputLayer(OutputLayer):
       self.p *= srng.binomial(self.p.shape,p=(1. - decay * self.train_flag)) + eps
       self.p = self.p / self.p.sum(axis=1, keepdims=True)
 
-    self.p = print_to_file('probs', self.p)
+    self.p = print_to_file('probs', self.p, True)
 
     if base is not None:
       if self.attrs['prior_confidence'] == 'inf':
@@ -544,6 +544,8 @@ class UnsupervisedOutputLayer(OutputLayer):
         #self.lm_score += -T.sum(p * i_f * T.log(base[0].output.reshape(p.shape) + eps))
         #self.lm_score = T.sum(p * i_f * T.log(p/base[0].output.reshape(p.shape) + eps))
         #self.lm_score = T.sum(base[0].output.reshape(p.shape) * i_f * (T.log(base[0].output.reshape(p.shape) + eps) - T.log(p + eps)))
+        self.clm = base[0].output
+        self.plm = base[1].output
         self.lmp = base[0].output
         self.lm_score = T.sum(
           p * i_f * (T.log(p + eps) - T.log(base[0].output.reshape(p.shape) + eps)))
@@ -551,7 +553,6 @@ class UnsupervisedOutputLayer(OutputLayer):
     else:
       self.lm_score = 0.0
       assert prior_scale == 0.0
-
 
   def cost(self):
     known_grads = None
@@ -574,17 +575,19 @@ class UnsupervisedOutputLayer(OutputLayer):
       from TheanoUtil import print_to_file
       #H = print_to_file('H', H)
       #entropy_target = print_to_file('entropy_target', entropy_target)
-      batch_p = T.mean(self.p, axis=0, keepdims=True)
+      #batch_p = T.mean(self.p, axis=0, keepdims=True)
       #U = T.sum(numpy.float32(1) - (self.p - batch_p)**2)
       #U = -T.sum(T.log(self.p * batch_p + eps))
       #U = T.sum(batch_p * i_f * (T.log(batch_p + eps) - T.log(self.lmp + eps)))
       q = self.p.reshape(self.z.shape) + eps
       q = q / q.sum(axis=1,keepdims=True)
+      #q = print_to_file('q', q)
       r = (q / q.sum(axis=2, keepdims=True)).reshape(self.p.shape)
       #U = T.log(T.constant(self.attrs['n_out'])) -T.sum(q * T.log(q+eps)) * T.log(T.constant(self.attrs['n_out'])) / T.log(T.cast(q.shape[1], 'float32'))
       #U = -T.sum(q * T.log(q)) #/ T.log(T.cast(q.shape[1], 'float32') + 1) #* T.log(T.constant(self.attrs['n_out'])) / T.log(T.cast(q.shape[1], 'float32') + eps)
-      U = -T.sum(T.log(T.max(q,axis=1,keepdims=True)))
-      U += T.sum(r * i_f * (T.log(r) - T.log(self.lmp.reshape(p.shape) + eps)))
+      U = -T.sum(T.log(T.max(q,axis=2,keepdims=True)))
+      #U = T.sum(T.var(self.p.reshape(self.z.shape),axis=1))
+      #U += T.sum(r * i_f * (T.log(r) - T.log(self.lmp.reshape(p.shape) + eps)))
       #batch_entropy = -T.sum(batch_p * i_f * T.log(batch_p + T.constant(1e-30, 'float32')))
       #U = T.sum(batch_p * i_f * T.log(self.p + T.constant(1e-30, 'float32'))) + batch_entropy
       #L = -T.sum(self.priors * T.log(batch_prior)) * self.N
@@ -597,6 +600,17 @@ class UnsupervisedOutputLayer(OutputLayer):
       #return H * L, known_grads
       #U = T.sum(T.constant(1.,'float32') - T.var(self.p,axis=0,keepdims=True))
       U = print_to_file('U', U)
+      #L = -T.sum(T.log(T.sum(self.lmp * self.output,axis=2)))
+      hyp = self.y_in['zpi'].flatten()
+      #plm = self.plm.reshape(self.p.shape)[hyp].dimshuffle(0,'x').repeat(p.shape[1],axis=1)
+      #clm = self.clm.reshape(self.p.shape)[hyp].dimshuffle(0,'x').repeat(p.shape[1],axis=1)
+
+      clm = self.clm.reshape(p.shape)[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)
+      plm = self.plm.reshape(p.shape)[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)
+      pcx = p[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)
+      #return -T.sum(T.log(clm)) - T.sum(T.log((self.p[T.arange(self.p.shape[0],dtype='int32'),hyp] - T.log(plm)))), known_grads
+      #return -T.sum(T.prod(clm,axis=0) * T.prod(pcx / plm,axis=0)), known_grads
+      return -T.sum(T.sum(T.log(clm), axis=0) + T.sum(T.log(pcx / plm), axis=0)), known_grads
       return entropy_scale * T.maximum(H - entropy_target,numpy.float32(0)) + prior_scale * L + variance_scale * U, known_grads
     else:
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
