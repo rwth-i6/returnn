@@ -885,7 +885,11 @@ class Device(object):
         #self.c.set_value(c.astype('int32'), borrow = True)
         for k in target_keys:
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
-        self.tags_var.set_value(numpy.array(self.tags).view(dtype='int8').reshape((len(self.tags), max(map(len, self.tags)))))
+        try:
+          utf8_tags = map(lambda s: s.encode('utf-8'), self.tags)
+        except:
+          utf8_tags = self.tags
+        self.tags_var.set_value(numpy.array(utf8_tags).view(dtype='int8').reshape((len(utf8_tags), max(map(len, utf8_tags)))))
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
