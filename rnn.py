@@ -92,6 +92,7 @@ def initConfig(configFilename=None, commandLineOptions=()):
   for i in range(0, len(args), 2):
     key, value = args[i:i+2]
     assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
+    if value[:2] == "+-": value = value[1:]  # otherwise we never could specify things like "++threshold -0.1"
     config.add_line(key=key[2:], value=value)
   # I really don't know where to put this otherwise:
   if config.bool("EnableAutoNumpySharedMemPickling", False):

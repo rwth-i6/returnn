@@ -35,7 +35,9 @@ class LearningRateControl(object):
       "minLearningRate": config.float('min_learning_rate', 0.0),
       "defaultLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
       "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
-      "filename": config.value('learning_rate_file', None)}
+      "relativeErrorAlsoRelativeToLearningRate": config.bool('learning_rate_control_relative_error_relative_lr', False),
+      "filename": config.value('learning_rate_file', None),
+    }
 
   @classmethod
   def load_initial_from_config(cls, config):
@@ -46,7 +48,10 @@ class LearningRateControl(object):
     kwargs = cls.load_initial_kwargs_from_config(config)
     return cls(**kwargs)
 
-  def __init__(self, defaultLearningRate, minLearningRate=0.0, defaultLearningRates=None, errorMeasureKey=None, filename=None):
+  def __init__(self, defaultLearningRate, minLearningRate=0.0, defaultLearningRates=None,
+               errorMeasureKey=None,
+               relativeErrorAlsoRelativeToLearningRate=False,
+               filename=None):
     """
     :param float defaultLearningRate: default learning rate. usually for epoch 1
     :param list[float] | dict[int,float] defaultLearningRates: learning rates
@@ -66,6 +71,7 @@ class LearningRateControl(object):
         self.setDefaultLearningRateForEpoch(epoch, v)
     self.defaultLearningRates = defaultLearningRates
     self.errorMeasureKey = errorMeasureKey
+    self.relativeErrorAlsoRelativeToLearningRate = relativeErrorAlsoRelativeToLearningRate
     self.filename = filename
     if filename:
       if os.path.exists(filename):
@@ -126,6 +132,19 @@ class LearningRateControl(object):
       if data.learningRate is None: continue
       return data.learningRate
     return self.defaultLearningRate
+
+  def calcRelativeError(self, oldEpoch, newEpoch):
+    oldError = self.getEpochErrorValue(oldEpoch)
+    newError = self.getEpochErrorValue(newEpoch)
+    if oldError is None or newError is None:
+      return None
+    relativeError = (newError - oldError) / abs(newError)
+    if self.relativeErrorAlsoRelativeToLearningRate:
+      learningRate = self.getMostRecentLearningRate(newEpoch, excludeCurrent=False)
+      # If the learning rate is lower than the initial learning rate,
+      # the relative error is also expected to be lower, so correct for that here.
+      relativeError /= learningRate / self.defaultLearningRate
+    return relativeError
 
   def setEpochError(self, epoch, error):
     """
@@ -264,11 +283,9 @@ class NewbobRelative(LearningRateControl):
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
-    oldError = self.getEpochErrorValue(last2Epoch)
-    newError = self.getEpochErrorValue(lastEpoch)
-    if oldError is None or newError is None:
+    relativeError = self.calcRelativeError(last2Epoch, lastEpoch)
+    if relativeError is None:
       return learningRate
-    relativeError = (newError - oldError) / abs(newError)
     if relativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor
     return learningRate
@@ -356,17 +373,9 @@ class NewbobMultiEpoch(LearningRateControl):
     self.relativeErrorThreshold = relativeErrorThreshold
     self.learningRateDecayFactor = learningRateDecayFactor
 
-  def _calcRelativeError(self, oldEpoch, newEpoch):
-    oldError = self.getEpochErrorValue(oldEpoch)
-    newError = self.getEpochErrorValue(newEpoch)
-    if oldError is None or newError is None:
-      return None
-    relativeError = (newError - oldError) / abs(newError)
-    return relativeError
-
   def _calcMeanRelativeError(self, epochs):
     assert len(epochs) >= 2
-    errors = [self._calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
+    errors = [self.calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
     if any([e is None for e in errors]):
       return None
     return numpy.mean(errors)
@@ -428,6 +437,12 @@ def demo():
     print("usage: python %s [config] [other options]" % __file__)
     print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
   rnn.initConfig(commandLineOptions=sys.argv[1:])
+  from Pretrain import pretrainFromConfig
+  pretrain = pretrainFromConfig(rnn.config)
+  first_non_pretrain_epoch = 1
+  pretrain_learning_rate = None
+  if pretrain:
+    first_non_pretrain_epoch = pretrain.get_train_num_epochs() + 1
   rnn.config._hack_value_reading_debug()
   log.initialize(verbosity=[5])
   control = loadLearningRateControlFromConfig(rnn.config)
@@ -435,13 +450,27 @@ def demo():
   if not control.epochData:
     print("No epoch data so far.")
     return
+  if pretrain:
+    pretrain_learning_rate = rnn.config.float('pretrain_learning_rate', control.defaultLearningRate)
   maxEpoch = max(control.epochData.keys())
   for epoch in range(1, maxEpoch + 2):  # all epochs [1..maxEpoch+1]
     oldLearningRate = None
     if epoch in control.epochData:
       oldLearningRate = control.epochData[epoch].learningRate
-    learningRate = control.calcLearningRateForEpoch(epoch)
-    print("Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate))
+    if epoch < first_non_pretrain_epoch:
+      learningRate = pretrain_learning_rate
+      s = "Pretrain epoch %i, fixed learning rate: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
+    elif first_non_pretrain_epoch > 1 and epoch == first_non_pretrain_epoch:
+      learningRate = control.defaultLearningRate
+      s = "First epoch after pretrain, epoch %i, fixed learning rate: %s (was %s)" % (epoch, learningRate, oldLearningRate)
+    else:
+      learningRate = control.calcLearningRateForEpoch(epoch)
+      s = "Calculated learning rate for epoch %i: %s (was: %s)" % (epoch, learningRate, oldLearningRate)
+    if learningRate < control.minLearningRate:
+      learningRate = control.minLearningRate
+      s += ", clipped to %s" % learningRate
+    s += ", previous relative error: %s" % control.calcRelativeError(epoch - 2, epoch - 1)
+    print(s)
     # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
     if epoch in control.epochData:
       control.epochData[epoch].learningRate = learningRate
