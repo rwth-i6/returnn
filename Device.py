@@ -887,7 +887,7 @@ class Device(object):
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
         try:
           utf8_tags = map(lambda s: s.encode('utf-8'), self.tags)
-        except:
+        except Exception:
           utf8_tags = self.tags
         self.tags_var.set_value(numpy.array(utf8_tags).view(dtype='int8').reshape((len(utf8_tags), max(map(len, utf8_tags)))))
         self.update_total_time += time.time() - update_start_time
