@@ -367,7 +367,7 @@ class SprintInstancePool:
         if b >= len(tags): break
         instance = self._get_instance(i)
         segment_name = tags[b].view('S%d' % tags.shape[1])[0]
-        instance._send(("export_alignment_fsa_by_segment_name", segment_name))
+        instance._send(("export_allophone_state_fsa_by_segment_name", segment_name))
       for i in range(self.max_num_instances):
         b = bb + i
         if b >= len(tags): break

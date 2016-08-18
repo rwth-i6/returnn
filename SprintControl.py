@@ -367,8 +367,8 @@ class PythonControl:
     error_signal = error_signal.astype('float32', copy=False)
     return loss, error_signal
 
-  def handle_cmd_export_alignment_fsa_by_segment_name(self, segment_name):
-    return self.callback("export_alignment_fsa_by_segment_name", segment_name)
+  def handle_cmd_export_allophone_state_fsa_by_segment_name(self, segment_name):
+    return self.callback("export_allophone_state_fsa_by_segment_name", segment_name)
 
   def handle_cmd(self, cmd, *args):
     func = getattr(self, "handle_cmd_%s" % cmd)
