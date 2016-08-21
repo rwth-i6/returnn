@@ -1199,6 +1199,52 @@ class TimeConcatLayer(HiddenLayer):
     self.index = T.concatenate([x.index for x in self.sources],axis=0)
 
 
+class KernelLayer(ForwardLayer):
+  layer_class = "kernel"
+
+  def __init__(self, kernel='gauss', encoder=None, base=None, train_model=False, **kwargs):
+    assert encoder is not None
+    super(KernelLayer, self).__init__(**kwargs)
+    xin = self.sources[0]
+    self.params = {}
+    sigma = T.constant(1.0,'float32')
+    #W_x = base[0].params['W_att_re_0_attention_list']
+    W_x = self.add_param(self.create_forward_weights(encoder[0].attrs['n_out'], xin.attrs['n_out']))
+    #b_x = base[0].params['b_att_re_0_attention_list']
+    b_x = self.add_param(self.create_bias(xin.attrs['n_out']))
+    from TheanoUtil import print_to_file
+    base[0].output = print_to_file('x', base[0].output)
+    xin.output = print_to_file('m', xin.output)
+
+    m = xin.output.dimshuffle('x',0,1,2).repeat(base[0].output.shape[0],axis=0) # TVBD
+    munk = m.mean(axis=1,keepdims=False)
+    munk = print_to_file('munk', munk)
+    x = base[0].output.dimshuffle(0, 'x',1, 2).repeat(m.shape[1], axis=1) # TVBD
+
+    VAR = self.add_param(
+      theano.shared(numpy.ones((self.attrs['n_out'], xin.attrs['n_out']), 'float32'), 'VAR_%s' % self.name),
+      custom_gradient=T.mean((x-m)**2,axis=(0,2)), custom_gradient_normalized=True)
+
+    var = T.maximum(VAR.dimshuffle('x', 0, 'x', 1).repeat(base[0].output.shape[0], axis=0).repeat(base[0].output.shape[1], axis=2),1.0)
+    var = print_to_file('var',var)
+    self.output = T.exp(-T.sum((x - m)**2/var,axis=3)) / T.sqrt(2*T.constant(numpy.pi,'float32')/T.prod(var,axis=3))
+    q = self.output.dimshuffle(0,1,2,'x').repeat(xin.attrs['n_out'],axis=3)
+    q = q / q.sum(axis=1,keepdims=True)
+    VAR.custom_gradient=T.sum(q * (x-m)**2,axis=(0,2)) / q.sum(axis=(0,2))
+    self.punk = T.exp(-T.sum((base[0].output - munk)**2/sigma,axis=2)) / T.sqrt(2*T.constant(numpy.pi,'float32')*sigma)
+    self.output = self.output.dimshuffle(0,2,1) # TBV
+    self.punk = self.punk.dimshuffle(0,1,'x')
+    self.punk = print_to_file('punk', self.punk)
+    #cov = T.outer(x-m,x-m) / T.cast(m.shape[0],'float32')
+    #trace = theano.tensor.nlinalg.trace(cov)
+    #q = self.output / self.output.sum(axis=2,keepdims=True) #trace**2 - cov.sum()
+    self.cost_val = 0 #-T.sum(T.log(T.min(self.output/self.output.sum(axis=2,keepdims=True),axis=2))) #-T.sum(q*T.log(q+T.constant(1e-30,'float32')))
+
+
+  def cost(self):
+    return self.cost_val, None
+
+
 class CollapseLayer(HiddenLayer):
   layer_class = "collapse"
 
