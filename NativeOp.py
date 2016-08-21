@@ -1946,8 +1946,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     //std::cerr << "index_stride: "     << index_stride    << std::endl;
 
     // initialize edge buffer
-    float* d_edge_buffer;
-    HANDLE_ERROR(cudaMalloc(reinterpret_cast<void**>(&d_edge_buffer), n_edges * n_frames * sizeof(float)));
+    float* d_edge_buffer = (float*) device_malloc(n_edges * n_frames * sizeof(float));
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
     HANDLE_ERROR(cudaGetLastError());
@@ -2005,7 +2004,7 @@ class FastBaumWelchOp(NativeOpGenBase):
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
     HANDLE_ERROR(cudaGetLastError());
 
-    cudaFree(d_edge_buffer);
+    device_free(d_edge_buffer);
     //std::cerr << "fast_bw finished" << std::endl;
   """
 
