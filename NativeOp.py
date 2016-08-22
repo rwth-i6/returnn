@@ -2010,4 +2010,4 @@ class FastBaumWelchOp(NativeOpGenBase):
 
   c_bw_code = None
 
-  code_version = 52
+  code_version = 53
