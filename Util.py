@@ -897,3 +897,12 @@ def as_str(s):
   if isinstance(s, bytes):
     return s.decode("utf8")
   assert False, "unknown type %s" % type(s)
+
+
+def load_txt_vector(filename):
+  """
+  Expect line-based text encoding in file.
+  We also support Sprint XML format, which has some additional xml header and footer,
+  which we will just strip away.
+  """
+  return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]

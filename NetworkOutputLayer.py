@@ -1,5 +1,6 @@
 
 import numpy
+import os
 from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
@@ -338,6 +339,15 @@ class SequenceOutputLayer(OutputLayer):
     self.prior_scale = prior_scale
     if prior_scale:
       self.set_attr("prior_scale", prior_scale)
+    if log_prior is not None:
+      # We expect a filename to the priors, stored as txt, in +log space.
+      assert isinstance(log_prior, str)
+      self.set_attr("log_prior", log_prior)
+      from Util import load_txt_vector
+      assert os.path.exists(log_prior)
+      log_prior = load_txt_vector(log_prior)
+      assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
+      log_prior = numpy.array(log_prior, dtype="float32")
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
@@ -438,10 +448,16 @@ class SequenceOutputLayer(OutputLayer):
         import json
         self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      scores = -T.log(self.p_y_given_x)
+      scores = -T.log(self.p_y_given_x)  # in -log space
+      am_scores = scores
+      if self.prior_scale:
+        assert self.log_prior is not None
+        # Scores are in -log space, self.log_prior is in +log space.
+        # We want to subtract the prior, thus `-=`.
+        am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
       float_idx = T.cast(self.index, "float32")
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = (T.exp(-fwdbwd) * scores * float_idx.dimshuffle(0, 1, 'x')).sum()
       return err, known_grads
     elif self.loss == 'ctc':
