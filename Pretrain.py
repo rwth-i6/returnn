@@ -1,8 +1,8 @@
 
 from Network import LayerNetwork
 from NetworkBaseLayer import Layer
-from NetworkDescription import LayerNetworkDescription
-from NetworkCopyUtils import intelli_copy_layer
+from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
+from Log import log
 
 
 class Pretrain:
@@ -18,12 +18,14 @@ class Pretrain:
     :type original_network_json: dict[str]
     :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
       must have n_in, n_out.
-    :param bool copy_output_layer: whether to copy the output layer params from last epoch or reinit
+    :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
     :param None | int | list[int] repetitions: how often to repeat certain pretrain steps. default is one epoch
     """
     if copy_output_layer is None:
-      copy_output_layer = True
+      copy_output_layer = "ifpossible"
+    if copy_output_layer:
+      assert copy_output_layer is True or copy_output_layer == "ifpossible"
     self.copy_output_layer = copy_output_layer
     if greedy is None:
       greedy = False
@@ -127,7 +129,15 @@ class Pretrain:
     if self.copy_output_layer:
       for layer_name in new_network.output.keys():
         assert layer_name in old_network.output
-        intelli_copy_layer(old_network.output[layer_name], new_network.output[layer_name])
+        try:
+          intelli_copy_layer(old_network.output[layer_name], new_network.output[layer_name])
+        except LayerDoNotMatchForCopy:
+          if self.copy_output_layer == "ifpossible":
+            print >>log.v4, "Pretrain: Can not copy output layer %s, will leave it randomly initialized" % layer_name
+          else:
+            raise
+    else:
+      print >>log.v4, "Pretrain: Will not copy output layer"
 
   def get_train_param_args_for_epoch(self, epoch):
     """
@@ -157,7 +167,7 @@ def pretrainFromConfig(config):
   if pretrainType == "default":
     network_init_args = LayerNetwork.init_args_from_config(config)
     original_network_json = LayerNetwork.json_from_config(config)
-    copy_output_layer = config.bool("pretrain_copy_output_layer", None)
+    copy_output_layer = config.bool_or_other("pretrain_copy_output_layer", "ifpossible")
     greedy = config.bool("pretrain_greedy", None)
     repetitions = config.int_list("pretrain_repetitions", None)
     return Pretrain(original_network_json=original_network_json,
