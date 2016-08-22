@@ -6,6 +6,7 @@ Generic interface which automatically creates:
 * grad variants
 """
 
+import sys
 import os
 import numpy
 import theano
@@ -16,6 +17,13 @@ from theano.compile import optdb
 from theano import gof
 from Util import make_hashable, make_dll_name, escape_c_str
 from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
+
+
+PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  unicode = str
+  long = int
 
 
 class NativeOp(theano.Op):
@@ -467,11 +475,14 @@ def inplace_NativeOp(node):
     return new_v
   return False
 
-optdb.register('inplace_NativeOp',
-               gof.TopoOptimizer(inplace_NativeOp
-                                 , failure_callback=gof.TopoOptimizer.warn_inplace
-                                 ),
-               60, 'fast_run', 'inplace')
+try:
+  optdb.register('inplace_NativeOp',
+                 gof.TopoOptimizer(inplace_NativeOp
+                                   , failure_callback=gof.TopoOptimizer.warn_inplace
+                                   ),
+                 60, 'fast_run', 'inplace')
+except ValueError:  # can happen if it was already registered before, e.g. when we reload the module
+  pass
 
 
 @try_register_gpu_opt(NativeOp)
