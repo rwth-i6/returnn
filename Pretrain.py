@@ -178,3 +178,31 @@ def pretrainFromConfig(config):
     return None
   else:
     raise Exception("unknown pretrain type: %s" % pretrainType)
+
+
+def demo():
+  import better_exchook
+  better_exchook.install()
+  import rnn
+  import sys
+  if len(sys.argv) <= 1:
+    print("usage: python %s [config] [other options]" % __file__)
+    print("example usage: python %s ++pretrain default" % __file__)
+  rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.config._hack_value_reading_debug()
+  if not rnn.config.value("pretrain", ""):
+    print("config option 'pretrain' not set, will set it for this demo to 'default'")
+    rnn.config.set("pretrain", "default")
+  pretrain = pretrainFromConfig(rnn.config)
+  print("pretrain: %s" % pretrain)
+  num_pretrain_epochs = pretrain.get_train_num_epochs()
+  from pprint import pprint
+  for epoch in range(1, 1 + num_pretrain_epochs):
+    print("epoch %i (of %i) network json:" % (epoch, num_pretrain_epochs))
+    net_json = pretrain._get_network_json_for_epoch(epoch)
+    pprint(net_json)
+  print("done.")
+
+
+if __name__ == "__main__":
+  demo()
