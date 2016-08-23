@@ -100,6 +100,18 @@ class Pretrain:
           sources.remove(v)
     return outs
 
+  def _find_existing_inputs(self, json, layer_name):
+    l = []
+    sources = self._original_network_json[layer_name].get("from", ["data"])
+    for src in sources:
+      if src in json or src == "data":
+        l.append(src)
+      else:
+        for csrc in self._find_existing_inputs(json, src):
+          if csrc not in l:
+            l.append(csrc)
+    return l
+
   def _construct_next_epoch_from_input(self, num_steps):
     """
     First find all layers which have data as input.
@@ -138,15 +150,13 @@ class Pretrain:
     if not needed:  # Nothing needed anymore, i.e. no missing layers.
       return False
     # Now fill in all missing ones.
-    while needed:
-      old_needed = sorted(needed)
-      needed.clear()
-      for l in old_needed:
-        if l in new_net:
-          continue
-        new_layer = {"class": "copy", "from": self._original_network_json[l].get("from", ["data"])}
-        new_net[l] = new_layer
-        update_needed(l)
+    for l in sorted(new_net.keys()):
+      sources = new_net[l].get("from", ["data"])
+      sources2 = self._find_existing_inputs(new_net, l)
+      if sources != sources2:
+        if "data" in sources2:
+          sources2.remove("data")
+        new_net[l]["from"] = sources2
     self._step_net_jsons.append(new_net)
     return True
 
