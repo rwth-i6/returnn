@@ -13,7 +13,7 @@ class Pretrain:
   """
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_json, network_init_args, copy_output_layer=None, greedy=None, repetitions=None):
+  def __init__(self, original_network_json, network_init_args, copy_output_layer=None, greedy=None, repetitions=None, construction_algo=None):
     """
     :type original_network_json: dict[str]
     :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
@@ -21,6 +21,7 @@ class Pretrain:
     :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
     :param None | int | list[int] repetitions: how often to repeat certain pretrain steps. default is one epoch
+    :param str construction_algo: e.g. "from_output"
     """
     if copy_output_layer is None:
       copy_output_layer = "ifpossible"
@@ -33,8 +34,11 @@ class Pretrain:
     self.network_init_args = network_init_args
     assert "n_in" in network_init_args
     assert "n_out" in network_init_args
-    self._step_net_jsons = [original_network_json]
-    self._construct_epochs()
+    self._original_network_json = original_network_json
+    if not construction_algo:
+      construction_algo = "from_output"
+    self._construction_algo = construction_algo
+    getattr(self, "_construct_epochs_%s" % construction_algo)()
     if not repetitions:
       repetitions = 1
     if not isinstance(repetitions, list):
@@ -59,7 +63,102 @@ class Pretrain:
     step = self._epoch_to_step_idx[epoch - 1]
     return self._step_net_jsons[step]
 
-  def _construct_epoch(self):
+  def _find_layer_descendants(self, json, sources):
+    l = []
+    for other_layer_name, other_layer in sorted(json.items()):
+      if other_layer_name in l:
+        continue
+      other_sources = other_layer.get("from", ["data"])
+      for src in sources:
+        if src in other_sources:
+          l.append(other_layer_name)
+          break
+    return l
+
+  def _is_layer_output(self, json, layer_name):
+    if layer_name == "output":
+      return True
+    if json[layer_name]["class"] == "softmax":
+      return True
+    if "target" in json[layer_name]:
+      return True
+    return False
+
+  def _find_layer_outputs(self, json, sources):
+    outs = []
+    visited = set()
+    while sources:
+      visited.update(sources)
+      for src in sources:
+        if src in outs:
+          continue
+        if self._is_layer_output(json, src):
+          outs.append(src)
+      sources = self._find_layer_descendants(self._original_network_json, sources)
+      for v in visited:
+        if v in sources:
+          sources.remove(v)
+    return outs
+
+  def _construct_next_epoch_from_input(self, num_steps):
+    """
+    First find all layers which have data as input.
+    Then expand from those layers.
+    """
+    from copy import deepcopy
+    new_net = {}
+    sources = ["data"]
+    needed = set()
+    def update_needed(l):
+      needed.update(set(new_net[l].get("from", ["data"])).difference(list(new_net.keys()) + ["data"]))
+    # First do a search of depth `num_steps` through the net.
+    for i in range(num_steps):
+      descendants = self._find_layer_descendants(self._original_network_json, sources)
+      sources = []
+      for l in descendants:
+        if l in new_net:
+          continue
+        else:
+          if l in needed:
+            needed.remove(l)
+          sources.append(l)
+          new_net[l] = deepcopy(self._original_network_json[l])
+          update_needed(l)
+      if not sources:  # This means we reached the end.
+        return False
+    # Add all output layers.
+    for l in sorted(self._original_network_json.keys()):
+      if l in new_net:
+        continue
+      if self._is_layer_output(self._original_network_json, l):
+        if l in needed:
+          needed.remove(l)
+        new_net[l] = deepcopy(self._original_network_json[l])
+        update_needed(l)
+    if not needed:  # Nothing needed anymore, i.e. no missing layers.
+      return False
+    # Now fill in all missing ones.
+    while needed:
+      old_needed = sorted(needed)
+      needed.clear()
+      for l in old_needed:
+        if l in new_net:
+          continue
+        new_layer = {"class": "copy", "from": self._original_network_json[l].get("from", ["data"])}
+        new_net[l] = new_layer
+        update_needed(l)
+    self._step_net_jsons.append(new_net)
+    return True
+
+  def _construct_epochs_from_input(self):
+    self._step_net_jsons = []
+    num_steps = 1
+    while self._construct_next_epoch_from_input(num_steps):
+      num_steps += 1
+    # Just add the original net at the end.
+    self._step_net_jsons.append(self._original_network_json)
+
+  def _construct_new_epoch_from_output(self):
     """
     We start from the most simple network which we have constructed so far,
     and try to construct an even simpler network.
@@ -90,8 +189,9 @@ class Pretrain:
     self._step_net_jsons = [new_json] + self._step_net_jsons
     return True
 
-  def _construct_epochs(self):
-    while self._construct_epoch():
+  def _construct_epochs_from_output(self):
+    self._step_net_jsons = [self._original_network_json]
+    while self._construct_new_epoch_from_output():
       pass
 
   # -------------- Public interface
@@ -170,10 +270,12 @@ def pretrainFromConfig(config):
     copy_output_layer = config.bool_or_other("pretrain_copy_output_layer", "ifpossible")
     greedy = config.bool("pretrain_greedy", None)
     repetitions = config.int_list("pretrain_repetitions", None)
+    construction_algo = config.value("pretrain_construction_algo", None)
     return Pretrain(original_network_json=original_network_json,
                     network_init_args=network_init_args,
                     copy_output_layer=copy_output_layer,
-                    greedy=greedy, repetitions=repetitions)
+                    greedy=greedy, repetitions=repetitions,
+                    construction_algo=construction_algo)
   elif pretrainType == "":
     return None
   else:
@@ -187,7 +289,7 @@ def demo():
   import sys
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options]" % __file__)
-    print("example usage: python %s ++pretrain default" % __file__)
+    print("example usage: python %s ++pretrain default ++pretrain_construction_algo from_input" % __file__)
   rnn.initConfig(commandLineOptions=sys.argv[1:])
   rnn.config._hack_value_reading_debug()
   if not rnn.config.value("pretrain", ""):
