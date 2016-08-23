@@ -488,244 +488,42 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, prior_scale=0.0, prior_confidence=0.0, posterior_confidence=0.0, entropy_target=0.0, variance_scale=0.0, decay=0.55, oracle=False, esteps=10, msteps=10, **kwargs):
+  def __init__(self, base, confidence=15.0, oracle=False, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
-    self.set_attr('prior_scale', prior_scale)
-    self.set_attr('variance_scale', variance_scale)
-    self.set_attr('prior_confidence', prior_confidence)
-    self.set_attr('posterior_confidence', posterior_confidence)
-    self.set_attr('entropy_target', entropy_target)
+    self.set_attr('confidence', confidence)
     self.set_attr('oracle', oracle)
-    self.set_attr('esteps', esteps)
-    self.set_attr('msteps', msteps)
-    self.lm_score = T.constant(0.0,'float32')
-    z_f = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
-    self.y_m = z_f
-    i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(z_f.shape[1], axis=1)
-    self.p = self.output.reshape(z_f.shape) #T.nnet.softmax(z_f)
-    self.N = T.maximum(T.sum(i_f), numpy.float32(1))
-    if base is None:
-      custom = T.mean(self.p[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
-      self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_gradient=custom,
-                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
-    self.running_priors = self.add_param(
-      theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out']),
-                    'running_priors'), 'running_priors',
-      custom_gradient=T.mean(self.p[self.i],axis=0),
-      custom_gradient_normalized=True)
 
-    from TheanoUtil import print_to_file
-    eps = T.constant(1e-30, 'float32')
-    if decay > 0:
-      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-      std = decay #numpy.float32(1) / (T.cast(self.network.epoch,'float32') ** decay)
-      #noise = srng.normal(size=self.p.shape, avg=0, std=std, dtype='float32')**2
-      ##noise = print_to_file('noise', noise)
-      #self.p += noise
-      #self.p = self.p / self.p.sum(axis=1, keepdims=True)
-      #std = print_to_file('noise', std)
-      self.p *= srng.binomial(self.p.shape,p=(1. - decay * self.train_flag)) + eps
-      self.p = self.p / self.p.sum(axis=1, keepdims=True)
-
-    if base is not None:
-      if self.attrs['prior_confidence'] == 'inf':
-        self.lm_score = -T.sum(T.log(T.max(base[0].output, axis=2, keepdims=True)))
-      else:
-        p = self.p
-        #p = base[0].output.reshape(self.p.shape)
-        if self.attrs['prior_confidence'] != 1:
-          p = p ** T.constant(prior_confidence, 'float32')
-          p = p / p.sum(axis=1, keepdims=True)
-        #self.lm_score = -T.sum(base[0].output.reshape(p.shape) * i_f * T.log(p + eps))
-        #self.lm_score += -T.sum(p * i_f * T.log(base[0].output.reshape(p.shape) + eps))
-        #self.lm_score = T.sum(p * i_f * T.log(p/base[0].output.reshape(p.shape) + eps))
-        #self.lm_score = T.sum(base[0].output.reshape(p.shape) * i_f * (T.log(base[0].output.reshape(p.shape) + eps) - T.log(p + eps)))
-        self.clm = base[0].output
-        self.plm = base[1].output
-        self.lmp = base[0].output
-        self.lm_score = T.sum(
-          p * i_f * (T.log(p + eps) - T.log(base[0].output.reshape(p.shape) + eps)))
-        self.ppl = -T.sum(base[0].output.reshape(p.shape) * i_f * T.log(base[0].output.reshape(p.shape) + eps))
-    else:
-      self.lm_score = 0.0
-      assert prior_scale == 0.0
-
-    self.pc = theano.gradient.disconnected_grad(base[1].output) # TBV
-    self.pxc = base[0].output  # TBV
-    self.punk = base[0].punk
-    self.pmc = base[0].pmc
-    #self.pxc = self.pxc.dimshuffle('x',1,0) # TBV
-    self.pc = print_to_file('pc', self.pc)
-    self.pxc = print_to_file('pxc', self.pxc)
-    self.y_m = self.pxc * self.pc + eps
-    self.p_cx = self.y_m
-    self.y_m = self.y_m / self.y_m.sum(axis=2,keepdims=True)
-    self.pcx = self.y_m
-    self.y_m = print_to_file('pcx', self.y_m)
-    self.y_m = self.y_m.reshape(z_f.shape)
-    self.p = self.y_m
-    self.lm_score = T.sum(
-      self.p * i_f * (T.log(self.p + eps) - T.log(self.pc.reshape(self.p.shape) + eps)))
+    pc = theano.gradient.disconnected_grad(base[1].output)  # TBV
+    pxc = base[0].output  # TBV
+    hyp = T.mean((pxc / pxc.sum(axis=2,keepdims=True))**T.constant(confidence,'float32'), axis=1, keepdims=True)
+    pcb = hyp / (hyp.sum(axis=2, keepdims=True) + T.constant(1e-30, 'float32')) + T.constant(1e-30, 'float32')
+    pcx = pc * pxc
+    pcx = pcx / pcx.sum(axis=2, keepdims=True)
+    p = pc * base[0].pmc
+    q = pxc * pcb
+    self.L = T.sum(p * T.log(T.maximum(p / q, T.constant(1e-30, 'float32'))))
+    self.y_m = pcx.reshape((p.shape[0] * p.shape[1], p.shape[2]))
+    self.x_m = pxc.reshape((p.shape[0] * p.shape[1], p.shape[2]))
 
   def cost(self):
-    from TheanoUtil import print_to_file
     known_grads = None
-    eps = T.constant(1e-30, 'float32')
     if self.train_flag and not self.attrs['oracle']:
-      p = self.pc * self.pmc # / self.punk  # * 0.5 * (self.punk + (self.pmc ** self.attrs['prior_scale']))
-      pcb = self.pxc #/ self.punk
-      pcb = pcb / pcb.sum(axis=2,keepdims=True) # + self.punk)
-      ps = T.constant(self.attrs['prior_scale'], 'float32')
-      pcb = T.mean(pcb**ps, axis=1, keepdims=True)
-      #pcb = T.mean(self.pcx, axis=1, keepdims=True)
-      pcb = pcb / pcb.sum(axis=2,keepdims=True)
-      q = self.pxc * pcb #self.pc #pcb #self.p_cx #pcb #self.pxc
-
-      p = p / (p.sum(axis=2, keepdims=True) + eps)
-      q = q / (q.sum(axis=2, keepdims=True) + eps) + eps
-
-      #return T.sum(self.pmc * T.log(self.pmc / q + eps) * self.pc * T.log(self.pc/p + eps)), known_grads
-
-      #q = q / q.sum(axis=1,keepdims=True)
-      #r = r / r.sum(axis=2,keepdims=True)
-      #return -T.sum(T.log(self.p_cx)), known_grads
-      #return -T.sum(T.log(T.sum(self.p_cx,axis=2))), known_grads
-
-      L = T.sum(p *  T.log(p / q + eps)) #- T.sum(self.pmc * T.log(T.max(self.pxc,axis=2))) #* T.sum(self.pmc * T.log(self.pmc/T.max(self.pxc,axis=2,keepdims=True)+eps))
-      #return L - T.sum(T.log(T.sum(self.p_cx,axis=2))), known_grads
-      return L, known_grads
-
-      i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(self.p.shape[1], axis=1)
-      q = self.pxc / self.pxc.sum(axis=1,keepdims=True)
-      p = self.pxc * self.pc
-      pcb = p.sum(axis=1,keepdims=True) + eps
-      pcb = print_to_file('pcb', pcb)
-      L = 0.1 * T.sum(pcb * (T.log(pcb) - T.log(self.pc + eps)))
-      #q = q / q.sum(axis=2,keepdims=True)
-      #Q = -T.sum(q*T.log(q+eps))
-      #Q = -T.mean(T.sum(q*(T.log(q+eps) - T.log(self.pc + eps)),axis=2)) / T.log(T.cast(q.shape[1],'float32'))
-      prior_scale = T.constant(self.attrs['prior_scale'], 'float32')
-      variance_scale = T.constant(self.attrs['variance_scale'], 'float32')
-
-      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-      #self.pxc += srng.normal(size=self.pxc.shape, avg=0, std=Q, dtype='float32')**2
-
-      #return -T.sum(T.sum(T.log(eps + self.pxc * self.pc))), known_grads
-      #pxcf = self.pxc.reshape(self.pxc.shape[0]*self.pxc.shape[1],self.pxc.axis[2])
-      #pcf = self.pc.reshape(self.pxc.shape[0]*self.pxc.shape[1],self.pxc.axis[2])
-      pcunk = T.constant(0.1, 'float32')
-      pcs = self.pc #* (T.constant(1., 'float32') - pcunk)
-      H = -T.sum(T.log(eps+T.sum((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
-      H = -T.sum(T.log(T.max(self.pcx,axis=2))) #self.lm_score #-T.sum(T.log(eps+T.max((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
-      H = -T.sum(T.sum(T.log(self.pcx), axis=2))
-      #q = T.mean(self.pcx,axis=(0,1),keepdims=True)
-      q = T.mean(self.pxc, axis=1, keepdims=True)
-      q = q / q.sum(axis=2,keepdims=True)
-      Q = -T.sum(self.pc * T.log(q + eps))
-      R = -T.sum(self.pmc * T.log(self.pxc + eps))
-      u = q * self.pxc #+ eps
-      v = self.pc * self.pmc # + eps
-      H = -T.sum(v * T.log(u + eps))
-      H = T.sum(v * T.log(v / u + eps))
-      #H = T.sum(u * T.log(u / v + eps))
-      H = print_to_file('H', H)
-      Q = print_to_file('Q', Q)
-      U = 0 #-T.sum(T.log(eps+(self.punk**variance_scale) * (pcunk**prior_scale)))
-      #U = print_to_file('U', U)
-      #H = -T.sum(T.log(eps + self.pxc * self.pc))
-      #return self.lm_score, known_grads
-      return H, known_grads
-      cond = T.le(T.mod(self.network.epoch,self.attrs['msteps']+self.attrs['esteps']),self.attrs['esteps'])
-      #cond = srng.binomial((1,), p=0.5)[0]i
-      #return H + Q, known_grads
-      return T.switch(cond,Q,R), known_grads
-      #return -T.sum(T.sum(self.pxc * self.pc, axis=2)), known_grads
-
-      prior_scale = T.constant(self.attrs['prior_scale'],'float32')
-      entropy_scale = T.constant(1. - self.attrs['prior_scale'],'float32')
-      variance_scale = T.constant(self.attrs['variance_scale'], 'float32')
-      entropy_target = T.constant( self.attrs['entropy_target'],'float32') * self.ppl
-      p = self.p
-      if self.attrs['posterior_confidence'] == 'inf':
-        H = -T.sum(T.cast(self.index.flatten(), 'float32') * T.log(T.max(self.p,axis=1)))
-      else:
-        if self.attrs['posterior_confidence'] != 1:
-          p = self.p**T.constant(self.attrs['posterior_confidence'],'float32')
-          p = p / p.sum(axis=1,keepdims=True)
-        H = -T.sum(p * i_f * T.log(self.p + T.constant(1e-30,'float32')))
-      L = self.lm_score
-      #H = print_to_file('H', H)
-      #entropy_target = print_to_file('entropy_target', entropy_target)
-      #batch_p = T.mean(self.p, axis=0, keepdims=True)
-      #U = T.sum(numpy.float32(1) - (self.p - batch_p)**2)
-      #U = -T.sum(T.log(self.p * batch_p + eps))
-      #U = T.sum(batch_p * i_f * (T.log(batch_p + eps) - T.log(self.lmp + eps)))
-      q = self.p.reshape(self.z.shape) + eps
-      q = q / q.sum(axis=1,keepdims=True)
-      #q = print_to_file('q', q)
-      r = (q / q.sum(axis=2, keepdims=True)).reshape(self.p.shape)
-      #U = T.log(T.constant(self.attrs['n_out'])) -T.sum(q * T.log(q+eps)) * T.log(T.constant(self.attrs['n_out'])) / T.log(T.cast(q.shape[1], 'float32'))
-      #U = -T.sum(q * T.log(q)) #/ T.log(T.cast(q.shape[1], 'float32') + 1) #* T.log(T.constant(self.attrs['n_out'])) / T.log(T.cast(q.shape[1], 'float32') + eps)
-      U = -T.sum(T.log(T.max(q,axis=2,keepdims=True)))
-      #U = T.sum(T.var(self.p.reshape(self.z.shape),axis=1))
-      #U += T.sum(r * i_f * (T.log(r) - T.log(self.lmp.reshape(p.shape) + eps)))
-      #batch_entropy = -T.sum(batch_p * i_f * T.log(batch_p + T.constant(1e-30, 'float32')))
-      #U = T.sum(batch_p * i_f * T.log(self.p + T.constant(1e-30, 'float32'))) + batch_entropy
-      #L = -T.sum(self.priors * T.log(batch_prior)) * self.N
-      #Q = -T.sum(self.priors.dimshuffle('x',0).repeat(self.p.shape[0],axis=0) * i_f * T.log(self.p))
-      #H = theano.printing.Print("H")(H)
-      #L = theano.printing.Print("L")(L)
-      #return entropy_scale * H + lm_scale * self.lm_score, known_grads
-      #return entropy_scale * H + prior_scale * Q + lm_scale * self.lm_score, known_grads
-      #return H, known_grads
-      #return H * L, known_grads
-      #U = T.sum(T.constant(1.,'float32') - T.var(self.p,axis=0,keepdims=True))
-      U = print_to_file('U', U)
-      #L = -T.sum(T.log(T.sum(self.lmp * self.output,axis=2)))
-      hyp = self.y_in['zpi'].flatten()
-      #plm = self.plm.reshape(self.p.shape)[hyp].dimshuffle(0,'x').repeat(p.shape[1],axis=1)
-      #clm = self.clm.reshape(self.p.shape)[hyp].dimshuffle(0,'x').repeat(p.shape[1],axis=1)
-
-      clm = self.clm.reshape(p.shape)[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)
-      plm = self.plm.reshape(p.shape)[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)**variance_scale
-      pcx = p[T.arange(p.shape[0],dtype='int32'),hyp].reshape(self.index.shape)
-      #pcx = print_to_file('pcx', pcx)
-      #H = -T.sum(pcx * T.cast(self.index,'float32') * T.log(pcx))
-      #H = -T.sum(T.cast(self.index, 'float32') * (pcx/plm) * (T.log(pcx + eps)))
-      H = -T.sum(T.cast(self.index, 'float32') * (pcx / plm) * (T.log(pcx + eps)))
-      L = -T.sum(T.cast(self.index,'float32') * clm * T.log(pcx + eps))
-      U = 0
-      #U = -T.sum(T.cast(self.index, 'float32') * T.log(pcx / pcx.sum(axis=1,keepdims=True)))
-
-      #return T.sum(T.cast(self.index,'float32') * pcx * T.log(clm)), known_grads
-
-      #return -T.sum(T.log(clm)) - T.sum(T.log((self.p[T.arange(self.p.shape[0],dtype='int32'),hyp] - T.log(plm)))), known_grads
-      #return -T.log(T.sum(T.prod(clm,axis=0) * T.prod(pcx / plm,axis=0))), known_grads
-      #return -T.sum(T.sum(T.log(clm), axis=0) + T.sum(T.log(pcx) - prior_scale * T.log(plm), axis=0)), known_grads
-      return entropy_scale * T.maximum(H - entropy_target,numpy.float32(0)) + prior_scale * L + variance_scale * U, known_grads
+      return self.L, known_grads
     else:
       p = self.y_m
-      Q = 0
       if self.attrs['oracle'] and self.train_flag:
-        p = self.pxc
-        z = p.sum(axis=2,keepdims=True) #+ self.punk
-        p = p / z #p.sum(axis=2,keepdims=True)
-        p = p.reshape(self.y_m.shape)
-        #Q = T.sum(T.log(self.punk/z+T.constant(1e-30,'float32')))
+        p = self.x_m / p.sum(axis=1,keepdims=True)
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
-      return T.sum(nll) + Q, known_grads
+      return T.sum(nll), known_grads
 
   def errors(self):
     """
     :rtype: theano.Variable
     """
     if self.y_data_flat.type == T.ivector().type:
-      return self.norm * T.sum(T.neq(T.argmax(self.p.reshape(self.p.shape)[self.i], axis=-1), self.y_data_flat[self.i]))
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
     else:
-      return self.norm * T.sum(T.neq(T.argmax(self.p[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis=-1)))
+      return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis=-1)))
