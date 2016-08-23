@@ -334,7 +334,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, loss_like_ce=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, gamma=1, loss_like_ce=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -355,6 +355,8 @@ class SequenceOutputLayer(OutputLayer):
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
+    if gamma != 1:
+      self.set_attr("gamma", gamma)
     self.loss_like_ce = loss_like_ce
     if loss_like_ce:
       self.set_attr("loss_like_ce", loss_like_ce)
@@ -449,6 +451,7 @@ class SequenceOutputLayer(OutputLayer):
         self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
+      assert y.ndim == 3
       nlog_scores = -T.log(y)  # in -log space
       am_scores = nlog_scores
       if self.prior_scale:
@@ -460,7 +463,12 @@ class SequenceOutputLayer(OutputLayer):
       float_idx = T.cast(self.index, "float32")
       float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
       fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+      gamma = self.attrs.get("gamma", 1)
+      if gamma != 1:
+        fwdbwd *= numpy.float32(gamma)
       bw = T.exp(-fwdbwd)
+      if gamma != 1:
+        bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-38), numpy.float32(1.e20))
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       return err, known_grads
