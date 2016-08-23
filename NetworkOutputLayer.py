@@ -488,7 +488,7 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, prior_scale=0.0, prior_confidence=0.0, posterior_confidence=0.0, entropy_target=0.0, variance_scale=0.0, decay=0.55, oracle=False, **kwargs):
+  def __init__(self, base, prior_scale=0.0, prior_confidence=0.0, posterior_confidence=0.0, entropy_target=0.0, variance_scale=0.0, decay=0.55, oracle=False, esteps=10, msteps=10, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
@@ -499,6 +499,8 @@ class UnsupervisedOutputLayer(OutputLayer):
     self.set_attr('posterior_confidence', posterior_confidence)
     self.set_attr('entropy_target', entropy_target)
     self.set_attr('oracle', oracle)
+    self.set_attr('esteps', esteps)
+    self.set_attr('msteps', msteps)
     self.lm_score = T.constant(0.0,'float32')
     z_f = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     self.y_m = z_f
@@ -556,11 +558,14 @@ class UnsupervisedOutputLayer(OutputLayer):
     self.pc = theano.gradient.disconnected_grad(base[1].output) # TBV
     self.pxc = base[0].output  # TBV
     self.punk = base[0].punk
+    self.pmc = base[0].pmc
     #self.pxc = self.pxc.dimshuffle('x',1,0) # TBV
     self.pc = print_to_file('pc', self.pc)
     self.pxc = print_to_file('pxc', self.pxc)
     self.y_m = self.pxc * self.pc + eps
+    self.p_cx = self.y_m
     self.y_m = self.y_m / self.y_m.sum(axis=2,keepdims=True)
+    self.pcx = self.y_m
     self.y_m = print_to_file('pcx', self.y_m)
     self.y_m = self.y_m.reshape(z_f.shape)
     self.p = self.y_m
@@ -572,6 +577,29 @@ class UnsupervisedOutputLayer(OutputLayer):
     known_grads = None
     eps = T.constant(1e-30, 'float32')
     if self.train_flag and not self.attrs['oracle']:
+      p = self.pc * self.pmc # / self.punk  # * 0.5 * (self.punk + (self.pmc ** self.attrs['prior_scale']))
+      pcb = self.pxc #/ self.punk
+      pcb = pcb / pcb.sum(axis=2,keepdims=True) # + self.punk)
+      ps = T.constant(self.attrs['prior_scale'], 'float32')
+      pcb = T.mean(pcb**ps, axis=1, keepdims=True)
+      #pcb = T.mean(self.pcx, axis=1, keepdims=True)
+      pcb = pcb / pcb.sum(axis=2,keepdims=True)
+      q = self.pxc * pcb #self.pc #pcb #self.p_cx #pcb #self.pxc
+
+      p = p / (p.sum(axis=2, keepdims=True) + eps)
+      q = q / (q.sum(axis=2, keepdims=True) + eps) + eps
+
+      #return T.sum(self.pmc * T.log(self.pmc / q + eps) * self.pc * T.log(self.pc/p + eps)), known_grads
+
+      #q = q / q.sum(axis=1,keepdims=True)
+      #r = r / r.sum(axis=2,keepdims=True)
+      #return -T.sum(T.log(self.p_cx)), known_grads
+      #return -T.sum(T.log(T.sum(self.p_cx,axis=2))), known_grads
+
+      L = T.sum(p *  T.log(p / q + eps)) #- T.sum(self.pmc * T.log(T.max(self.pxc,axis=2))) #* T.sum(self.pmc * T.log(self.pmc/T.max(self.pxc,axis=2,keepdims=True)+eps))
+      #return L - T.sum(T.log(T.sum(self.p_cx,axis=2))), known_grads
+      return L, known_grads
+
       i_f = T.cast(self.index.flatten(), 'float32').dimshuffle(0, 'x').repeat(self.p.shape[1], axis=1)
       q = self.pxc / self.pxc.sum(axis=1,keepdims=True)
       p = self.pxc * self.pc
@@ -593,14 +621,30 @@ class UnsupervisedOutputLayer(OutputLayer):
       #pcf = self.pc.reshape(self.pxc.shape[0]*self.pxc.shape[1],self.pxc.axis[2])
       pcunk = T.constant(0.1, 'float32')
       pcs = self.pc #* (T.constant(1., 'float32') - pcunk)
-      #H = -T.sum(T.log(eps+T.sum((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
-      H = -T.sum(T.log(eps+T.max((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
+      H = -T.sum(T.log(eps+T.sum((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
+      H = -T.sum(T.log(T.max(self.pcx,axis=2))) #self.lm_score #-T.sum(T.log(eps+T.max((self.pxc**variance_scale) * (pcs**prior_scale),axis=2)))
+      H = -T.sum(T.sum(T.log(self.pcx), axis=2))
+      #q = T.mean(self.pcx,axis=(0,1),keepdims=True)
+      q = T.mean(self.pxc, axis=1, keepdims=True)
+      q = q / q.sum(axis=2,keepdims=True)
+      Q = -T.sum(self.pc * T.log(q + eps))
+      R = -T.sum(self.pmc * T.log(self.pxc + eps))
+      u = q * self.pxc #+ eps
+      v = self.pc * self.pmc # + eps
+      H = -T.sum(v * T.log(u + eps))
+      H = T.sum(v * T.log(v / u + eps))
+      #H = T.sum(u * T.log(u / v + eps))
       H = print_to_file('H', H)
+      Q = print_to_file('Q', Q)
       U = 0 #-T.sum(T.log(eps+(self.punk**variance_scale) * (pcunk**prior_scale)))
       #U = print_to_file('U', U)
       #H = -T.sum(T.log(eps + self.pxc * self.pc))
       #return self.lm_score, known_grads
-      return H + U, known_grads
+      return H, known_grads
+      cond = T.le(T.mod(self.network.epoch,self.attrs['msteps']+self.attrs['esteps']),self.attrs['esteps'])
+      #cond = srng.binomial((1,), p=0.5)[0]i
+      #return H + Q, known_grads
+      return T.switch(cond,Q,R), known_grads
       #return -T.sum(T.sum(self.pxc * self.pc, axis=2)), known_grads
 
       prior_scale = T.constant(self.attrs['prior_scale'],'float32')
@@ -667,12 +711,15 @@ class UnsupervisedOutputLayer(OutputLayer):
       return entropy_scale * T.maximum(H - entropy_target,numpy.float32(0)) + prior_scale * L + variance_scale * U, known_grads
     else:
       p = self.y_m
+      Q = 0
       if self.attrs['oracle'] and self.train_flag:
         p = self.pxc
-        p = p/p.sum(axis=2,keepdims=True)
+        z = p.sum(axis=2,keepdims=True) #+ self.punk
+        p = p / z #p.sum(axis=2,keepdims=True)
         p = p.reshape(self.y_m.shape)
+        #Q = T.sum(T.log(self.punk/z+T.constant(1e-30,'float32')))
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
-      return T.sum(nll), known_grads
+      return T.sum(nll) + Q, known_grads
 
   def errors(self):
     """
