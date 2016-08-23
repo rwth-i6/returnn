@@ -1202,30 +1202,18 @@ class TimeConcatLayer(HiddenLayer):
 class KernelLayer(ForwardLayer):
   layer_class = "kernel"
 
-  def __init__(self, kernel='gauss', encoder=None, base=None, sigma=2.0, **kwargs):
+  def __init__(self, kernel='gauss', base=None, sigma=4.0, **kwargs):
     super(KernelLayer, self).__init__(**kwargs)
-    xin = self.sources[0]
     self.params = {}
-    sigma = T.constant(sigma,'float32') * T.constant(float(base[0].attrs['n_out'])/xin.attrs['n_out'],'float32')
-    #print sigma
-    #W_x = base[0].params['W_att_re_0_attention_list']
-    #W_x = self.add_param(self.create_forward_weights(encoder[0].attrs['n_out'], xin.attrs['n_out']))
-    #b_x = base[0].params['b_att_re_0_attention_list']
-    #b_x = self.add_param(self.create_bias(xin.attrs['n_out']))
-    from TheanoUtil import print_to_file
-    base[0].output = print_to_file('x', base[0].output)
-    xin.output = print_to_file('m', xin.output)
+    xin = self.sources[0]
+    sigma = T.constant(sigma,'float32')
+    m = xin.output.dimshuffle('x', 1, 0, 2).repeat(base[0].output.shape[0],axis=0)  # TBVD
+    x = base[0].output.dimshuffle(0, 1, 'x', 2).repeat(m.shape[2], axis=2)  # TBVD
 
-    m = xin.output.dimshuffle('x',0,1,2).repeat(base[0].output.shape[0],axis=0) # TVBD
-    x = base[0].output.dimshuffle(0, 'x',1, 2).repeat(m.shape[1], axis=1)
-
-    self.output = T.exp(-T.sum((x - m)**2/sigma,axis=3)) / T.sqrt(2*T.constant(numpy.pi,'float32')*sigma)
-    self.output = self.output.dimshuffle(0,2,1) # TBV
-    self.cost_val = 0 #-T.sum(T.log(T.min(self.output/self.output.sum(axis=2,keepdims=True),axis=2))) #-T.sum(q*T.log(q+T.constant(1e-30,'float32')))
-    self.pmc = 1.0 #numpy.float32(1) / T.sqrt(2*T.constant(numpy.pi,'float32')*sigma)
-
-  def cost(self):
-    return self.cost_val, None
+    if kernel == 'gauss':
+      self.output = T.exp(-T.sum((x - m)**2/sigma,axis=3)) / T.sqrt(T.constant(numpy.float32(2)*numpy.pi,'float32')*sigma)
+    else:
+      raise NotImplementedError()
 
 
 class CollapseLayer(HiddenLayer):

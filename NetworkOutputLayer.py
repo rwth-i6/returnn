@@ -488,7 +488,7 @@ class SequenceOutputLayer(OutputLayer):
 
 
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, confidence=15.0, oracle=False, **kwargs):
+  def __init__(self, base, confidence=5.0, oracle=False, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
@@ -499,14 +499,12 @@ class UnsupervisedOutputLayer(OutputLayer):
     pc = theano.gradient.disconnected_grad(base[1].output)  # TBV
     pxc = base[0].output  # TBV
     hyp = T.mean((pxc / pxc.sum(axis=2,keepdims=True))**T.constant(confidence,'float32'), axis=1, keepdims=True)
-    pcb = hyp / (hyp.sum(axis=2, keepdims=True) + T.constant(1e-30, 'float32')) + T.constant(1e-30, 'float32')
+    hyp = hyp / (hyp.sum(axis=2, keepdims=True) + T.constant(1e-30, 'float32')) + T.constant(1e-30, 'float32')
     pcx = pc * pxc
     pcx = pcx / pcx.sum(axis=2, keepdims=True)
-    p = pc * base[0].pmc
-    q = pxc * pcb
-    self.L = T.sum(p * T.log(T.maximum(p / q, T.constant(1e-30, 'float32'))))
-    self.y_m = pcx.reshape((p.shape[0] * p.shape[1], p.shape[2]))
-    self.x_m = pxc.reshape((p.shape[0] * p.shape[1], p.shape[2]))
+    self.L = T.sum(pc * T.log(T.maximum(pc / hyp, T.constant(1e-30, 'float32'))))
+    self.y_m = pcx.reshape((pc.shape[0] * pc.shape[1], pc.shape[2]))
+    self.x_m = pxc.reshape((pc.shape[0] * pc.shape[1], pc.shape[2]))
 
   def cost(self):
     known_grads = None
