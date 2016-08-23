@@ -448,8 +448,9 @@ class SequenceOutputLayer(OutputLayer):
         import json
         self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      scores = -T.log(self.p_y_given_x)  # in -log space
-      am_scores = scores
+      y = self.p_y_given_x
+      nlog_scores = -T.log(y)  # in -log space
+      am_scores = nlog_scores
       if self.prior_scale:
         assert self.log_prior is not None
         # Scores are in -log space, self.log_prior is in +log space.
@@ -457,8 +458,11 @@ class SequenceOutputLayer(OutputLayer):
         am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
       float_idx = T.cast(self.index, "float32")
+      float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
       fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
-      err = (T.exp(-fwdbwd) * scores * float_idx.dimshuffle(0, 1, 'x')).sum()
+      bw = T.exp(-fwdbwd)
+      err = (bw * nlog_scores * float_idx_bc).sum()
+      known_grads = {self.z: (y - bw) * float_idx_bc}
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
@@ -484,8 +488,8 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'viterbi':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-      scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
-      y = NumpyAlignOp(False)(self.sources[0].index,self.index,-scores,self.y)
+      nlog_scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = NumpyAlignOp(False)(self.sources[0].index,self.index,-nlog_scores,self.y)
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
