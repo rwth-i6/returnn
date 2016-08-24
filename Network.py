@@ -691,6 +691,9 @@ class LayerNetwork(object):
     self.loss = kwargs["loss"]
     if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'):
       layer_class = SequenceOutputLayer
+      # We must keep sequences as they are. Setting us as recurrent
+      # will tell other code to leave seqs as they are (e.g. the dataset batch building).
+      self.recurrent = True
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer
     elif self.loss == 'unsupervised':
