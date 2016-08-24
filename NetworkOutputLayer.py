@@ -28,7 +28,8 @@ from Log import log
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
+  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+               compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
                **kwargs):
@@ -149,6 +150,8 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if compute_priors:
       self.set_attr('compute_priors', compute_priors)
+      if compute_priors_exp_average:
+        self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
     if softmax_smoothing != 1.0:
       self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v4, "Logits before the softmax scaled with factor ", softmax_smoothing
@@ -221,9 +224,11 @@ class FramewiseOutputLayer(OutputLayer):
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs.get('compute_priors', False):
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
+      exp_average = self.attrs.get("compute_priors_exp_average", 0)
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
                                    custom_update=custom,
-                                   custom_update_normalized=True and self.attrs.get('trainable',True))
+                                   custom_update_normalized=(not exp_average) and self.attrs.get('trainable',True),
+                                   custom_update_exp_average=exp_average)
 
   def cost(self):
     """
@@ -392,9 +397,11 @@ class SequenceOutputLayer(OutputLayer):
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs.get('compute_priors', False):
+      exp_average = self.attrs.get("compute_priors_exp_average", 0)
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
                                    custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
-                                   custom_update_normalized=True)
+                                   custom_update_normalized=not exp_average,
+                                   custom_update_exp_average=exp_average)
       self.log_prior = T.log(self.priors)
 
   def index_for_ctc(self):
