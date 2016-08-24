@@ -105,7 +105,8 @@ class Pretrain:
     sources = self._original_network_json[layer_name].get("from", ["data"])
     for src in sources:
       if src in json or src == "data":
-        l.append(src)
+        if src not in l:
+          l.append(src)
       else:
         for csrc in self._find_existing_inputs(json, src):
           if csrc not in l:
