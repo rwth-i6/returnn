@@ -216,6 +216,7 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
+    self.p_y_given_x_flat = self.p_y_given_x  # a bit inconsistent here... it's always flat at the moment
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
@@ -334,7 +335,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, gamma=1, loss_like_ce=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, gamma=1, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -360,6 +361,17 @@ class SequenceOutputLayer(OutputLayer):
     self.loss_like_ce = loss_like_ce
     if loss_like_ce:
       self.set_attr("loss_like_ce", loss_like_ce)
+    if trained_softmax_prior:
+      self.set_attr('trained_softmax_prior', trained_softmax_prior)
+      assert not self.attrs.get('compute_priors', False)
+      initialization = numpy.zeros((self.attrs['n_out'],), 'float32')
+      if self.log_prior is not None:
+        # Will use that as initialization.
+        assert self.log_prior.shape == initialization.shape
+        initialization = self.log_prior
+      self.trained_softmax_prior_p = self.add_param(theano.shared(initialization, 'trained_softmax_prior_p'))
+      self.priors = T.nnet.softmax(self.trained_softmax_prior_p).reshape((self.attrs['n_out'],))
+      self.log_prior = T.log(self.priors)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -369,18 +381,18 @@ class SequenceOutputLayer(OutputLayer):
     assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if not self.attrs.get("apply_softmax", True):
-      p_y_given_x = self.y_m
+      self.p_y_given_x_flat = self.y_m
       self.p_y_given_x = self.z
       self.z = T.log(self.z)
       self.y_m = T.log(self.y_m)
     else:
-      p_y_given_x = T.nnet.softmax(self.y_m)
+      self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-    self.y_pred = T.argmax(p_y_given_x, axis=-1)
+    self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
-                                   custom_update=T.mean(p_y_given_x[self.i], axis=0),
+                                   custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
                                    custom_update_normalized=True)
       self.log_prior = T.log(self.priors)
 
@@ -472,6 +484,13 @@ class SequenceOutputLayer(OutputLayer):
         bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-38), numpy.float32(1.e20))
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
+      if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
+        bw_sum0 = T.sum(bw * float_idx_bc, axis=(0, 1))
+        idx_sum = T.sum(float_idx)
+        assert bw_sum0.ndim == self.priors.ndim == 1
+        # Note that this is the other way around as usually (`bw - y` instead of `y - bw`).
+        # That is because the prior is in the denominator.
+        known_grads[self.trained_softmax_prior_p] = numpy.float32(self.prior_scale) * (bw_sum0 - self.priors * idx_sum)
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
