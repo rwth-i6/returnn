@@ -80,7 +80,7 @@ def strtoact(act):
     return [strtoact(a) for a in act]
   if ":" in act:
     return [strtoact(a) for a in act.split(":")]
-  assert ActivationFunctions.has_key(act), "invalid activation function: %s" % act
+  assert act in ActivationFunctions, "invalid activation function: %s" % act
   return ActivationFunctions[act]
 
 def strtoact_single_joined(act):
@@ -96,5 +96,5 @@ def strtoact_single_joined(act):
     for f in [strtoact_single_joined(a) for a in act.split(":")]:
       joined = lambda x: f(joined(x))
     return joined
-  assert ActivationFunctions.has_key(act), "invalid activation function: %s" % act
+  assert act in ActivationFunctions, "invalid activation function: %s" % act
   return ActivationFunctions[act]
