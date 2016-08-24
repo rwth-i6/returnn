@@ -569,7 +569,7 @@ class Layer(Container):
       index = ifelse(T.gt(index.shape[0], 0), index, self.network.j["data"])
     return index
 
-  def add_param(self, param, name="", constraints=True, custom_update=None, custom_update_normalized=False):
+  def add_param(self, param, name="", constraints=True, custom_update=None, custom_update_normalized=False, custom_update_exp_average=0):
     """
     :type param: theano.SharedVariable
     :type name: str
@@ -579,6 +579,7 @@ class Layer(Container):
     if custom_update:
       param.custom_update = custom_update
       param.custom_update_normalized = custom_update_normalized
+      param.custom_update_exp_average = custom_update_exp_average
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
         self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()

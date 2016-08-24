@@ -326,9 +326,16 @@ class Updater:
     avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
 
     for param in grads.keys():
-      if hasattr(param,'custom_update'):
-        if param.custom_update_normalized:
+      # This loops sets upd[param], where param_new = param + upd[param].
+
+      if hasattr(param, 'custom_update'):
+        # grads[param] is not a gradient but actually the update (thus like negative gradient)
+        # We also don't apply the learning rate here.
+        if param.custom_update_normalized:  # cumulative moving average
           upd[param] = (grads[param] - param) / e_t
+        elif param.custom_update_exp_average:  # exponential moving average
+          alpha = numpy.float32(param.custom_update_exp_average)
+          upd[param] = alpha * (grads[param] - param)  # ((alpha - 1) * old + alpha * new)
         else:
           upd[param] = grads[param]
         continue
