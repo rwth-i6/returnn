@@ -5,6 +5,18 @@ from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
 from Log import log
 
 
+class WrapEpochValue:
+  """
+  Use this wrapper if you want to define some value in your network
+  which depends on the pretrain epoch.
+  """
+  def __init__(self, func):
+    self.func = func
+
+  def get_value(self, epoch):
+    return self.func(epoch=epoch)
+
+
 class Pretrain:
   """
   Start with 1 hidden layers up to N hidden layers -> N pretrain steps -> N epochs (with repetitions == 1).
@@ -47,21 +59,39 @@ class Pretrain:
     assert 0 < len(repetitions) <= len(self._step_net_jsons)
     if len(repetitions) < len(self._step_net_jsons):
       repetitions = repetitions + [repetitions[-1]] * (len(self._step_net_jsons) - len(repetitions))
-    assert len(repetitions) == len(self._step_net_jsons)
     self.repetitions = repetitions
-    self._epoch_to_step_idx = []
-    for i, n in enumerate(repetitions):
-      self._epoch_to_step_idx += [i] * n
+    self._make_repetitions()
+    self._resolve_wrapped_values()
 
   def _get_network_json_for_epoch(self, epoch):
     """
     :param int epoch: starting at 1
     :rtype: dict[str]
     """
-    if epoch > len(self._epoch_to_step_idx):
-      epoch = len(self._epoch_to_step_idx)  # take the last, which is the original
-    step = self._epoch_to_step_idx[epoch - 1]
-    return self._step_net_jsons[step]
+    assert epoch >= 1
+    if epoch > len(self._step_net_jsons):
+      epoch = len(self._step_net_jsons)  # take the last, which is the original
+    return self._step_net_jsons[epoch - 1]
+
+  def _make_repetitions(self):
+    assert len(self.repetitions) == len(self._step_net_jsons)
+    from copy import deepcopy
+    old_net_jsons = self._step_net_jsons
+    self._step_net_jsons = []
+    for n_rep, net_json in zip(self.repetitions, old_net_jsons):
+      for i in range(n_rep):
+        self._step_net_jsons.append(deepcopy(net_json))
+
+  def _resolve_wrapped_values(self):
+    for i, net_json in enumerate(self._step_net_jsons):
+      epoch = i + 1
+      for ln, l in sorted(net_json.items()):  # layers
+        assert isinstance(ln, str)
+        assert isinstance(l, dict)
+        for k, v in sorted(l.items()):  # layer attribs
+          assert isinstance(k, str)
+          if isinstance(v, WrapEpochValue):
+            l[k] = v.get_value(epoch=epoch)
 
   def _find_layer_descendants(self, json, sources):
     l = []
@@ -209,12 +239,11 @@ class Pretrain:
 
   def __str__(self):
     return ("Default layerwise construction+pretraining, starting with input+hidden+output. " +
-            "Number of models topologies (including final): %i, " +
-            "Number of train epochs: %i, Repetitions: %r") % (
-            len(self._step_net_jsons), self.get_train_num_epochs(), self.repetitions)
+            "Number of pretrain epochs: %i (repetitions: %r)") % (
+            self.get_train_num_epochs(), self.repetitions)
 
   def get_train_num_epochs(self):
-    return len(self._epoch_to_step_idx)
+    return len(self._step_net_jsons)
 
   def get_network_for_epoch(self, epoch, mask=None):
     """
@@ -318,4 +347,6 @@ def demo():
 
 
 if __name__ == "__main__":
+  import sys
+  sys.modules["Pretrain"] = sys.modules["__main__"]
   demo()
