@@ -341,7 +341,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, gamma=1, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, am_scale=1, gamma=1, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -362,6 +362,8 @@ class SequenceOutputLayer(OutputLayer):
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
+    if am_scale != 1:
+      self.set_attr("am_scale", am_scale)
     if gamma != 1:
       self.set_attr("gamma", gamma)
     self.loss_like_ce = loss_like_ce
@@ -475,6 +477,10 @@ class SequenceOutputLayer(OutputLayer):
       assert y.ndim == 3
       nlog_scores = -T.log(y)  # in -log space
       am_scores = nlog_scores
+      am_scale = self.attrs.get("am_scale", 1)
+      if am_scale != 1:
+        am_scale = numpy.float32(am_scale)
+        am_scores *= am_scale
       if self.prior_scale:
         assert self.log_prior is not None
         # Scores are in -log space, self.log_prior is in +log space.
