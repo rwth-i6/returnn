@@ -17,6 +17,18 @@ class WrapEpochValue:
     return self.func(epoch=epoch)
 
 
+def find_pretrain_wrap_values(net_json):
+  assert isinstance(net_json, dict)
+  for ln, l in sorted(net_json.items()):  # layers
+    assert isinstance(ln, str)
+    assert isinstance(l, dict)
+    for k, v in sorted(l.items()):  # layer attribs
+      assert isinstance(k, str)
+      if isinstance(v, WrapEpochValue):
+        return True
+  return False
+
+
 class Pretrain:
   """
   Start with 1 hidden layers up to N hidden layers -> N pretrain steps -> N epochs (with repetitions == 1).
@@ -62,16 +74,6 @@ class Pretrain:
     self.repetitions = repetitions
     self._make_repetitions()
     self._resolve_wrapped_values()
-
-  def _get_network_json_for_epoch(self, epoch):
-    """
-    :param int epoch: starting at 1
-    :rtype: dict[str]
-    """
-    assert epoch >= 1
-    if epoch > len(self._step_net_jsons):
-      epoch = len(self._step_net_jsons)  # take the last, which is the original
-    return self._step_net_jsons[epoch - 1]
 
   def _make_repetitions(self):
     assert len(self.repetitions) == len(self._step_net_jsons)
@@ -245,12 +247,25 @@ class Pretrain:
   def get_train_num_epochs(self):
     return len(self._step_net_jsons)
 
+  def get_final_network_json(self):
+    return self._step_net_jsons[-1]
+
+  def get_network_json_for_epoch(self, epoch):
+    """
+    :param int epoch: starting at 1
+    :rtype: dict[str]
+    """
+    assert epoch >= 1
+    if epoch > len(self._step_net_jsons):
+      epoch = len(self._step_net_jsons)  # take the last, which is the original
+    return self._step_net_jsons[epoch - 1]
+
   def get_network_for_epoch(self, epoch, mask=None):
     """
     :type epoch: int
     :rtype: Network.LayerNetwork
     """
-    json_content = self._get_network_json_for_epoch(epoch)
+    json_content = self.get_network_json_for_epoch(epoch)
     Layer.rng_seed = epoch
     return LayerNetwork.from_json(json_content, mask=mask, **self.network_init_args)
 
@@ -341,7 +356,7 @@ def demo():
   from pprint import pprint
   for epoch in range(1, 1 + num_pretrain_epochs):
     print("epoch %i (of %i) network json:" % (epoch, num_pretrain_epochs))
-    net_json = pretrain._get_network_json_for_epoch(epoch)
+    net_json = pretrain.get_network_json_for_epoch(epoch)
     pprint(net_json)
   print("done.")
 
