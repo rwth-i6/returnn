@@ -414,8 +414,9 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
-      if self.attrs['compute_priors']: # use own priors, assume prior scale in sprint config to be 0.0
-        log_probs -= T.constant(self.prior_scale, 'float32') * self.log_prior
+      if self.prior_scale: # use own priors, assume prior scale in sprint config to be 0.0
+        assert self.log_prior is not None
+        log_probs -= numpy.float32(self.prior_scale) * self.log_prior
       err, grad = sprint_loss_and_error_signal(
         output_layer=self,
         target=self.attrs.get("target", "classes"),
