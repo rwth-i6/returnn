@@ -220,8 +220,8 @@ class FramewiseOutputLayer(OutputLayer):
     if self.attrs['compute_priors']:
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_gradient=custom,
-                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
+                                   custom_update=custom,
+                                   custom_update_normalized=True and self.attrs.get('trainable',True))
 
   def cost(self):
     """
@@ -380,8 +380,8 @@ class SequenceOutputLayer(OutputLayer):
     self.output = self.p_y_given_x.reshape(self.output.shape)
     if self.attrs['compute_priors']:
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
-                                   custom_gradient=T.mean(p_y_given_x[self.i], axis=0),
-                                   custom_gradient_normalized=True)
+                                   custom_update=T.mean(p_y_given_x[self.i], axis=0),
+                                   custom_update_normalized=True)
       self.log_prior = T.log(self.priors)
 
   def index_for_ctc(self):
@@ -536,13 +536,13 @@ class UnsupervisedOutputLayer(OutputLayer):
     if base is None:
       custom = T.mean(self.p[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_gradient=custom,
-                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
+                                   custom_update=custom,
+                                   custom_update_normalized=True and self.attrs.get('trainable',True))
     self.running_priors = self.add_param(
       theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out']),
                     'running_priors'), 'running_priors',
-      custom_gradient=T.mean(self.p[self.i],axis=0),
-      custom_gradient_normalized=True)
+      custom_update=T.mean(self.p[self.i],axis=0),
+      custom_update_normalized=True)
 
     from TheanoUtil import print_to_file
     eps = T.constant(1e-30, 'float32')

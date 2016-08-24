@@ -326,8 +326,8 @@ class Updater:
     avg_grad_norm = total_grad_norm / T.cast(n_total_params, dtype="float32")
 
     for param in grads.keys():
-      if hasattr(param,'custom_gradient'):
-        if param.custom_gradient_normalized:
+      if hasattr(param,'custom_update'):
+        if param.custom_update_normalized:
           upd[param] = (grads[param] - param) / e_t
         else:
           upd[param] = grads[param]

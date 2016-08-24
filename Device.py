@@ -378,8 +378,8 @@ class Device(object):
         self.gradient_norm = None
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if hasattr(param,'custom_gradient'):
-          gparam = param.custom_gradient
+        if hasattr(param,'custom_update'):
+          gparam = param.custom_update
         elif update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
           gparam = 0
         else:

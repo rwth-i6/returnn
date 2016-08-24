@@ -541,8 +541,8 @@ class RecurrentUnitLayer(Layer):
         self.alignment.append(aln) # TB
 
     if recurrent_transform == 'batch_norm':
-      self.params['sample_mean_batch_norm'].custom_gradient = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
-      self.params['sample_mean_batch_norm'].custom_gradient_normalized = True
+      self.params['sample_mean_batch_norm'].custom_update = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
+      self.params['sample_mean_batch_norm'].custom_update_normalized = True
 
     self.make_output(self.act[0][::direction or 1])
     self.params.update(unit.params)

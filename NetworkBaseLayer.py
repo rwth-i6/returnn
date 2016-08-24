@@ -569,16 +569,16 @@ class Layer(Container):
       index = ifelse(T.gt(index.shape[0], 0), index, self.network.j["data"])
     return index
 
-  def add_param(self, param, name="", constraints=True, custom_gradient=None, custom_gradient_normalized=False):
+  def add_param(self, param, name="", constraints=True, custom_update=None, custom_update_normalized=False):
     """
     :type param: theano.SharedVariable
     :type name: str
     :rtype: theano.SharedVariable
     """
     param = super(Layer, self).add_param(param, name)
-    if custom_gradient:
-      param.custom_gradient = custom_gradient
-      param.custom_gradient_normalized = custom_gradient_normalized
+    if custom_update:
+      param.custom_update = custom_update
+      param.custom_update_normalized = custom_update_normalized
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
         self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
@@ -665,8 +665,8 @@ class Layer(Container):
     mean = T.mean(x,axis=0)
     std = T.std(x,axis=0)
     sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
-                                 custom_gradient=mean,
-                                 custom_gradient_normalized=True)
+                                 custom_update=mean,
+                                 custom_update_normalized=True)
     sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
     if not self.train_flag and not force_sample:
       use_sample=1.0
