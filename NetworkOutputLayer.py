@@ -147,7 +147,8 @@ class OutputLayer(Layer):
     self.j = ((1 - self.index.flatten()) > 0).nonzero()
     self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
-    self.attrs['compute_priors'] = compute_priors
+    if compute_priors:
+      self.set_attr('compute_priors', compute_priors)
     if softmax_smoothing != 1.0:
       self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v4, "Logits before the softmax scaled with factor ", softmax_smoothing
@@ -218,7 +219,7 @@ class FramewiseOutputLayer(OutputLayer):
     else: assert False, "invalid loss: " + self.loss
     self.p_y_given_x_flat = self.p_y_given_x  # a bit inconsistent here... it's always flat at the moment
     self.output = self.p_y_given_x.reshape(self.output.shape)
-    if self.attrs['compute_priors']:
+    if self.attrs.get('compute_priors', False):
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
                                    custom_update=custom,
@@ -390,7 +391,7 @@ class SequenceOutputLayer(OutputLayer):
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x.reshape(self.output.shape)
-    if self.attrs['compute_priors']:
+    if self.attrs.get('compute_priors', False):
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
                                    custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
                                    custom_update_normalized=True)
