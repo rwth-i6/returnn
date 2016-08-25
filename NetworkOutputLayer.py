@@ -427,6 +427,9 @@ class SequenceOutputLayer(OutputLayer):
     """
     y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
+    # In case that our target has another index, self.index will be that index.
+    # However, the right index for self.p_y_given_x and many others is the index from the source layers.
+    src_index = self.sources[0].index
     if self.loss == 'sprint':
       if not isinstance(self.sprint_opts, dict):
         import json
@@ -444,12 +447,12 @@ class SequenceOutputLayer(OutputLayer):
         target=self.attrs.get("target", "classes"),
         sprint_opts=self.sprint_opts,
         log_posteriors=log_probs,
-        seq_lengths=T.sum(self.index, axis=0)
+        seq_lengths=T.sum(src_index, axis=0)
       )
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
-        err = -T.sum(T.switch(T.cast(self.index, "float32").dimshuffle(0, 1, 'x'),
+        err = -T.sum(T.switch(T.cast(src_index, "float32").dimshuffle(0, 1, 'x'),
                               y_ref * T.log(self.p_y_given_x),
                               numpy.float32(0)))
       if self.ce_smoothing:
@@ -487,7 +490,7 @@ class SequenceOutputLayer(OutputLayer):
         # We want to subtract the prior, thus `-=`.
         am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      float_idx = T.cast(self.index, "float32")
+      float_idx = T.cast(src_index, "float32")
       float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
       fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
       gamma = self.attrs.get("gamma", 1)
@@ -531,7 +534,7 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'viterbi':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       nlog_scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
-      y = NumpyAlignOp(False)(self.sources[0].index,self.index,-nlog_scores,self.y)
+      y = NumpyAlignOp(False)(src_index, self.index, -nlog_scores, self.y)
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
