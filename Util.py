@@ -10,12 +10,16 @@ import shlex
 import numpy as np
 import re
 import time
+import __builtin__
 
 PY3 = sys.version_info[0] >= 3
 
 if PY3:
   unicode = str
   long = int
+else:
+  unicode = __builtin__.unicode
+  long = __builtin__.long
 
 
 def cmd(s):
