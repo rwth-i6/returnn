@@ -20,10 +20,10 @@ class WrapEpochValue:
 def find_pretrain_wrap_values(net_json):
   assert isinstance(net_json, dict)
   for ln, l in sorted(net_json.items()):  # layers
-    assert isinstance(ln, str)
+    # assert isinstance(ln, str)
     assert isinstance(l, dict)
     for k, v in sorted(l.items()):  # layer attribs
-      assert isinstance(k, str)
+      # assert isinstance(k, str)
       if isinstance(v, WrapEpochValue):
         return True
   return False

@@ -504,6 +504,8 @@ class Device(object):
             param = 'output'
           p_y_given_x = self.testnet.get_layer(param).p_y_given_x
           index = self.testnet.get_layer(param).output_index()
+          if "conv_1d" in [self.testnet.hidden[s].layer_class for s in self.testnet.hidden.keys()]:
+            index = self.testnet.get_layer(param).sources[0].index
           if p_y_given_x.ndim == 2:
             p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
           assert p_y_given_x.ndim == 3
