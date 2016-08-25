@@ -325,10 +325,12 @@ class SprintInstancePool:
     n_batch = seq_lengths.shape[0]
     assert n_batch == log_posteriors.shape[1]
 
-    index_mask = Device.get_current_seq_index_mask(target)  # (time,batch)
-    assert index_mask.ndim == 2
-    assert index_mask.shape[1] == n_batch
-    assert (numpy.sum(index_mask, axis=0) == seq_lengths).all()
+    # We cannot dynamically check the seq length this way because
+    # the relevant index of our posteriors might be dynamically calculated.
+    #index_mask = Device.get_current_seq_index_mask(target)  # (time,batch)
+    #assert index_mask.ndim == 2
+    #assert index_mask.shape[1] == n_batch
+    #assert (numpy.sum(index_mask, axis=0) == seq_lengths).all()
     tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
 
