@@ -341,7 +341,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, am_scale=1, gamma=1, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -366,6 +366,8 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
       self.set_attr("gamma", gamma)
+    if bw_norm_class_avg:
+      self.set_attr("bw_norm_class_avg", bw_norm_class_avg)
     self.loss_like_ce = loss_like_ce
     if loss_like_ce:
       self.set_attr("loss_like_ce", loss_like_ce)
@@ -492,18 +494,24 @@ class SequenceOutputLayer(OutputLayer):
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
       float_idx = T.cast(src_index, "float32")
       float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+      idx_sum = T.sum(float_idx)
       fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
       gamma = self.attrs.get("gamma", 1)
+      need_renorm = False
       if gamma != 1:
         fwdbwd *= numpy.float32(gamma)
+        need_renorm = True
       bw = T.exp(-fwdbwd)
-      if gamma != 1:
-        bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-38), numpy.float32(1.e20))
+      if self.attrs.get("bw_norm_class_avg", False):
+        cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
+        bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
+        need_renorm = True
+      if need_renorm:
+        bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
         bw_sum0 = T.sum(bw * float_idx_bc, axis=(0, 1))
-        idx_sum = T.sum(float_idx)
         assert bw_sum0.ndim == self.priors.ndim == 1
         # Note that this is the other way around as usually (`bw - y` instead of `y - bw`).
         # That is because the prior is in the denominator.
