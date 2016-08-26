@@ -400,7 +400,7 @@ class LayerNetwork(object):
         if layer_class.recurrent:
           network.recurrent = True
         return network.add_layer(layer_class(**params)).index
-    for layer_name in json_content:
+    for layer_name in sorted(json_content):
       if layer_name in network.hidden or layer_name in network.output:
         continue
       if layer_name == "data":
@@ -409,7 +409,7 @@ class LayerNetwork(object):
       trg = target
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
-      if layer_name == 'output' or 'target' in json_content[layer_name]:
+      if layer_name == 'output' or 'target' in json_content[layer_name] or json_content[layer_name].get("class", None) == "softmax":
         network.use_target(trg, dtype=json_content.get("dtype", json_content[layer_name].get('dtype',"int32")))
         traverse(json_content, layer_name, trg, network.j[trg])
     return network
