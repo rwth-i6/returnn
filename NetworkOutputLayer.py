@@ -341,7 +341,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, ce_target_layer_align=None, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -359,6 +359,8 @@ class SequenceOutputLayer(OutputLayer):
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
+    if ce_target_layer_align:
+      self.set_attr("ce_target_layer_align", ce_target_layer_align)
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
@@ -508,6 +510,12 @@ class SequenceOutputLayer(OutputLayer):
         need_renorm = True
       if need_renorm:
         bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
+      self.baumwelch_alignment = bw
+      if self.ce_smoothing > 0:
+        target_layer = self.attrs.get("ce_target_layer_align", None)
+        assert target_layer  # we could also use self.y but so far we only want this
+        bw2 = self.network.output[target_layer].baumwelch_alignment
+        bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
