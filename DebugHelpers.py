@@ -95,7 +95,7 @@ def compute(var, trainnet=True):
 
 class DebugNn:
   def __init__(self, filename):
-    self.network = LayerNetwork.from_hdf(filename)
+    self.network = LayerNetwork.from_hdf(filename, mask="unity", train_flag=False, eval_flag=True)
     self.f_forwarder = None
 
   def compile_forwarder(self):
