@@ -105,7 +105,7 @@ class DebugNn:
     givens = [(network.j[k], tt.ones(network.y["data"].shape[:2], dtype="int8")) for k in data_keys]
     self.f_forwarder = theano.function(
       inputs=[network.y["data"]],
-      outputs=[layer.output for name, layer in sorted(network.output.items())],
+      outputs=[network.output["output"].output],
       givens=givens,
       on_unused_input='warn',
       name="forwarder")
