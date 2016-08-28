@@ -64,6 +64,7 @@ class Pretrain:
       construction_algo = "from_output"
     self._construction_algo = construction_algo
     getattr(self, "_construct_epochs_%s" % construction_algo)()
+    self._remove_non_trainable_added_only()
     if not repetitions:
       repetitions = 1
     if not isinstance(repetitions, list):
@@ -75,6 +76,41 @@ class Pretrain:
     self.repetitions = repetitions
     self._make_repetitions()
     self._resolve_wrapped_values()
+
+  def _remove_non_trainable_added_only(self):
+    """
+    If from one epoch to the next, only non-trainable layers were added, remove this pretrain epoch.
+    Output layers are ignored.
+    Also handles first epoch.
+    """
+    assert self._step_net_jsons
+    old_net_jsons = self._step_net_jsons
+    self._step_net_jsons = []
+    # -1 will be the empty net. Until one before final, which we will always add.
+    for i in range(-1, len(old_net_jsons) - 2):
+      if i == -1:
+        net1, net2 = {}, old_net_jsons[0]
+      else:
+        net1, net2 = old_net_jsons[i:i+2]
+      assert isinstance(net1, dict)
+      assert isinstance(net2, dict)
+      for l in sorted(net1.keys()):
+        assert l in net2
+      have_new = False
+      have_new_trainable = False
+      for l in sorted(net2.keys()):
+        if self._is_layer_output(net2, l): continue  # ignore output layers
+        if l in net1: continue  # already had before
+        have_new = True
+        if net2[l].get("trainable", True):
+          print("new trainable: %s" % l)
+          have_new_trainable = True
+          break
+      assert have_new
+      if have_new_trainable:
+        self._step_net_jsons.append(net2)
+    # Always add final net.
+    self._step_net_jsons.append(old_net_jsons[-1])
 
   def _make_repetitions(self):
     assert len(self.repetitions) == len(self._step_net_jsons)
