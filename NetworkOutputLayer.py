@@ -482,6 +482,7 @@ class SequenceOutputLayer(OutputLayer):
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
       assert y.ndim == 3
+      y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
       nlog_scores = -T.log(y)  # in -log space
       am_scores = nlog_scores
       am_scale = self.attrs.get("am_scale", 1)
