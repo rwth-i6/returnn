@@ -371,7 +371,7 @@ class LayerNetwork(object):
           obj[key] = network.get_layer(obj[key])
       if 'encoder' in obj and not source:
         index = output_index
-      if 'target' in obj:
+      if 'target' in obj and obj['target'] != "null":
         index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
@@ -391,7 +391,7 @@ class LayerNetwork(object):
           params['target'] = target
         if 'loss' in obj and obj['loss'] == 'ctc':
           params['index'] = network.i
-        else:
+        elif target != "null":
           params['index'] = network.j[target] #output_index
         return network.make_classifier(**params)
       elif cl is not None:
@@ -411,7 +411,9 @@ class LayerNetwork(object):
         trg = json_content[layer_name]['target']
       if layer_name == 'output' or 'target' in json_content[layer_name] or json_content[layer_name].get("class", None) == "softmax":
         network.use_target(trg, dtype=json_content.get("dtype", json_content[layer_name].get('dtype',"int32")))
-        traverse(json_content, layer_name, trg, network.j[trg])
+        if trg != "null": index = network.j[trg]
+        else: index = network.i
+        traverse(json_content, layer_name, trg, index)
     return network
 
   @classmethod

@@ -92,7 +92,9 @@ class OutputLayer(Layer):
     else:
       self.index = copy_output.index
       self.y = copy_output.y_out
-    if isinstance(y, T.Variable):
+    if y is None:
+      self.y_data_flat = None
+    elif isinstance(y, T.Variable):
       self.y_data_flat = time_batch_make_flat(y)
     else:
       assert self.attrs.get("target", "").endswith("[sparse:coo]")
@@ -434,7 +436,6 @@ class SequenceOutputLayer(OutputLayer):
     :param y: shape (time*batch,) -> label
     :return: error scalar, known_grads dict
     """
-    y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
     # In case that our target has another index, self.index will be that index.
     # However, the right index for self.p_y_given_x and many others is the index from the source layers.
