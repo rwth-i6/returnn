@@ -658,7 +658,7 @@ class LayerNetwork(object):
     """
     assert layer.name
     layer_errors = layer.errors()
-    if layer.name == "output" or layer_errors is not None:
+    if isinstance(layer, OutputLayer) or layer.name == "output" or layer_errors is not None:
       is_output_layer = True
       self.output[layer.name] = layer
     else:
