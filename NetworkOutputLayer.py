@@ -29,6 +29,7 @@ class OutputLayer(Layer):
   layer_class = "softmax"
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+               use_source_index=False,
                compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
@@ -49,6 +50,10 @@ class OutputLayer(Layer):
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not apply_softmax:
       self.set_attr("apply_softmax", apply_softmax)
+    if use_source_index:
+      self.set_attr("use_source_index", use_source_index)
+      src_index = self.sources[0].index
+      self.index = src_index
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
