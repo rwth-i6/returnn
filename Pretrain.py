@@ -103,7 +103,6 @@ class Pretrain:
         if l in net1: continue  # already had before
         have_new = True
         if net2[l].get("trainable", True):
-          print("new trainable: %s" % l)
           have_new_trainable = True
           break
       assert have_new
@@ -190,9 +189,28 @@ class Pretrain:
     from copy import deepcopy
     new_net = {}
     sources = ["data"]
+    # Keep track of other layers which need to be added to make it complete.
     needed = set()
     def update_needed(l):
       needed.update(set(new_net[l].get("from", ["data"])).difference(list(new_net.keys()) + ["data"]))
+    # First search for non-trainable layers (like input windows or so).
+    # You must specify "trainable": False in the layer at the moment.
+    while True:
+      descendants = self._find_layer_descendants(self._original_network_json, sources)
+      added_something = False
+      for l in descendants:
+        if l in new_net:
+          continue
+        if self._original_network_json[l].get("trainable", True):
+          continue
+        if l in needed:
+          needed.remove(l)
+        added_something = True
+        sources.append(l)
+        new_net[l] = deepcopy(self._original_network_json[l])
+        update_needed(l)
+      if not added_something:
+        break
     # First do a search of depth `num_steps` through the net.
     for i in range(num_steps):
       descendants = self._find_layer_descendants(self._original_network_json, sources)
@@ -200,23 +218,23 @@ class Pretrain:
       for l in descendants:
         if l in new_net:
           continue
-        else:
-          if l in needed:
-            needed.remove(l)
-          sources.append(l)
-          new_net[l] = deepcopy(self._original_network_json[l])
-          update_needed(l)
+        if l in needed:
+          needed.remove(l)
+        sources.append(l)
+        new_net[l] = deepcopy(self._original_network_json[l])
+        update_needed(l)
       if not sources:  # This means we reached the end.
         return False
     # Add all output layers.
     for l in sorted(self._original_network_json.keys()):
       if l in new_net:
         continue
-      if self._is_layer_output(self._original_network_json, l):
-        if l in needed:
-          needed.remove(l)
-        new_net[l] = deepcopy(self._original_network_json[l])
-        update_needed(l)
+      if not self._is_layer_output(self._original_network_json, l):
+        continue
+      if l in needed:
+        needed.remove(l)
+      new_net[l] = deepcopy(self._original_network_json[l])
+      update_needed(l)
     if not needed:  # Nothing needed anymore, i.e. no missing layers.
       return False
     # Now fill in all missing ones.
