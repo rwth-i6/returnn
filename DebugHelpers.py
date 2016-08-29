@@ -100,7 +100,7 @@ class DebugNn:
 
   def compile_forwarder(self):
     network = self.network
-    data_keys = ["data", "classes"]
+    data_keys = list(sorted(network.j.keys()))
     # All input seqs expected to have same length.
     givens = [(network.j[k], tt.ones(network.y["data"].shape[:2], dtype="int8")) for k in data_keys]
     self.f_forwarder = theano.function(
