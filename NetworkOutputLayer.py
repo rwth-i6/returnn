@@ -290,7 +290,7 @@ class FramewiseOutputLayer(OutputLayer):
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
         #return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
-        return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i])), known_grads
+        return T.sum(T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]),axis=1)), known_grads
         #return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
@@ -486,25 +486,70 @@ class SequenceOutputLayer(OutputLayer):
     else:
       return super(SequenceOutputLayer, self).errors()
 
-
+from TheanoUtil import print_to_file
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, confidence=5.0, oracle=False, **kwargs):
+  def __init__(self, base, confidence=1.0, oracle=False, msteps=1, esteps=1, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
     self.set_attr('confidence', confidence)
     self.set_attr('oracle', oracle)
-
+    eps = T.constant(1e-30,'float32')
     pc = theano.gradient.disconnected_grad(base[1].output)  # TBV
+    pc = print_to_file('pc', pc)
     pxc = base[0].output  # TBV
-    hyp = T.mean((pxc / pxc.sum(axis=2,keepdims=True))**T.constant(confidence,'float32'), axis=1, keepdims=True)
-    hyp = hyp / (hyp.sum(axis=2, keepdims=True) + T.constant(1e-30, 'float32')) + T.constant(1e-30, 'float32')
-    pcx = pc * pxc
-    pcx = pcx / pcx.sum(axis=2, keepdims=True)
-    self.L = T.sum(pc * T.log(T.maximum(pc / hyp, T.constant(1e-30, 'float32'))))
-    self.y_m = pcx.reshape((pc.shape[0] * pc.shape[1], pc.shape[2]))
-    self.x_m = pxc.reshape((pc.shape[0] * pc.shape[1], pc.shape[2]))
+    npc = numpy.float32(1) - pc
+    nxc = base[0].negative
+
+    domax = T.ge(T.mod(self.network.epoch,msteps+esteps),esteps)
+    confidence = T.constant(confidence,'float32')
+    #confidence = print_to_file('conf',confidence)
+    hcx = (pxc)**confidence
+    #pcx = (hcx) / (hcx.sum(axis=2, keepdims=True))
+    hyp = T.mean(pxc, axis=1, keepdims=True)
+    hyp = hyp/hyp.sum(axis=2,keepdims=True)
+    pcx = pxc #pc * pxc #/base[0].pm
+    pcx = pcx / (pcx.sum(axis=2, keepdims=True) + eps)
+    pcx = print_to_file('pcx', pcx)
+    pxc = print_to_file('pxc', pxc)
+    hyp = print_to_file('hyp',hyp)
+    pc_x = T.sum(pxc * pc, axis=2)
+    #pc_x = T.max(pxc * pc, axis=2)
+    L = -T.sum(T.sum(pc * T.log(hyp),axis=2),axis=0) - T.sum(T.log(pc_x),axis=0) #/ T.cast(pc.shape[2],'float32')
+    nyp = T.mean(nxc, axis=1, keepdims=True)
+    nyp = nyp / nyp.sum(axis=2, keepdims=True)
+    nc_x = T.sum(nxc * npc, axis=2)
+    #nc_x = T.max(nxc * npc, axis=2)
+    L += -T.sum(T.sum(npc * T.log(nyp),axis=2),axis=0) - T.sum(T.log(nc_x),axis=0)
+    Q = -T.sum(T.log(T.max(pxc,axis=2)/base[0].pm),axis=0)
+    #ent = T.mean(pcx, axis=1, keepdims=True)
+    #ent = ent / (ent.sum(axis=2, keepdims=True) + eps) + eps
+    #Q = -T.sum(T.log(T.max(ent,axis=2),axis=0))
+    #Q = T.sum(base[0].punk * T.log(base[0].punk/T.max(pcx,axis=2,keepdims=True)))
+    #Q = T.log(T.max(base[0].punk,axis=2))
+    #Q = T.sum(T.log(base[0].pm * T.log(T.max(hcx, axis=2) / base[0].pm)))
+    #Q = -T.sum(T.log(T.max(hcx/base[0].pm, axis=2,keepdims=True)),axis=0) #+ T.sum(T.log(T.max(base[0].punk,axis=2)),axis=0)
+    #L += T.sum(T.mean(hyp * T.log(T.maximum(hyp / ent, eps)),axis=1)) / (confidence+1) # (self.L - T.sum(pc * T.log(T.maximum(pc / hyp, eps))))**2 + self.L #/ self.L
+
+    #Q = T.sum(pc * T.log(T.max(pc / ent, eps)))
+
+    L = print_to_file('L', L)
+    Q = print_to_file('Q', Q)
+
+    #self.L = T.sum(T.minimum(L,Q))
+    #self.L = T.sum((L+1) * (Q+1))
+    #self.L = T.sum(T.switch(T.ge(L,Q), L, L+Q))
+    #self.L = T.sum(L+Q) #T.sum(L + Q) #T.maximum(L, Q)
+    #self.L = T.sum(T.switch(domax,L,Q))
+    #self.L = T.sum(T.maximum(L, Q))
+    self.L = T.sum(L)
+    #self.L = T.sum(T.switch(T.ge(L, Q), L, Q))
+    #self.L = T.sum(L) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
+    self.y_m = pcx.reshape((pcx.shape[0] * pcx.shape[1], pcx.shape[2]))
+    self.x_m = pxc.reshape((pxc.shape[0] * pxc.shape[1], pxc.shape[2]))
+    self.punk = base[0].punk.reshape(self.x_m.shape)
+
 
   def cost(self):
     known_grads = None
@@ -512,8 +557,9 @@ class UnsupervisedOutputLayer(OutputLayer):
       return self.L, known_grads
     else:
       p = self.y_m
-      if self.attrs['oracle'] and self.train_flag:
-        p = self.x_m / p.sum(axis=1,keepdims=True)
+      #p = self.x_m / (self.x_m.sum(axis=1, keepdims=True) + self.punk)
+      #if self.attrs['oracle'] and self.train_flag:
+      #  p = self.x_m / (self.x_m.sum(axis=1,keepdims=True) + self.punk)
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
 
