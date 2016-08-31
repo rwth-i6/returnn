@@ -303,9 +303,8 @@ class SprintInstancePool:
       self._maybe_create_new_instance()
     return self.instances[i]
 
-  def get_batch_loss_and_error_signal(self, target, log_posteriors, seq_lengths):
+  def get_batch_loss_and_error_signal(self, log_posteriors, seq_lengths):
     """
-    :param str target: e.g. "classes". not yet passed over to Sprint.
     :param numpy.ndarray log_posteriors: 3d (time,batch,label)
     :param numpy.ndarray seq_lengths: 1d (batch)
     :rtype (numpy.ndarray, numpy.ndarray)
@@ -325,10 +324,6 @@ class SprintInstancePool:
     n_batch = seq_lengths.shape[0]
     assert n_batch == log_posteriors.shape[1]
 
-    index_mask = Device.get_current_seq_index_mask(target)  # (time,batch)
-    assert index_mask.ndim == 2
-    assert index_mask.shape[1] == n_batch
-    assert (numpy.sum(index_mask, axis=0) == seq_lengths).all()
     tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
 
@@ -367,7 +362,7 @@ class SprintInstancePool:
         if b >= len(tags): break
         instance = self._get_instance(i)
         segment_name = tags[b].view('S%d' % tags.shape[1])[0]
-        instance._send(("export_alignment_fsa_by_segment_name", segment_name))
+        instance._send(("export_allophone_state_fsa_by_segment_name", segment_name))
       for i in range(self.max_num_instances):
         b = bb + i
         if b >= len(tags): break
@@ -658,11 +653,10 @@ class SprintErrorSigOp(theano.Op):
   Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
   """
 
-  __props__ = ("target", "sprint_opts")
+  __props__ = ("sprint_opts",)
 
-  def __init__(self, target, sprint_opts):
+  def __init__(self, sprint_opts):
     super(SprintErrorSigOp, self).__init__()
-    self.target = target  # default is "classes"
     self.sprint_opts = make_hashable(sprint_opts)
     self.sprint_instance_pool = None
     self.debug_perform_time = None
@@ -688,7 +682,7 @@ class SprintErrorSigOp(theano.Op):
       print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
       self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
-    loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(self.target, log_posteriors, seq_lengths)
+    loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
     output_storage[0][0] = loss
     output_storage[1][0] = errsig
@@ -764,5 +758,5 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
         index_mask = T.cast(output_layer.network.j["data"], "float32").dimshuffle(0, 1, 'x')
         error_signal *= index_mask
         return loss, error_signal
-  op = SprintErrorSigOp(target, sprint_opts)
+  op = SprintErrorSigOp(sprint_opts)
   return op(log_posteriors, seq_lengths)

@@ -14,8 +14,13 @@ import time
 PY3 = sys.version_info[0] >= 3
 
 if PY3:
+  import builtins
   unicode = str
   long = int
+else:
+  import __builtin__ as builtins
+  unicode = builtins.unicode
+  long = builtins.long
 
 
 def cmd(s):
@@ -886,8 +891,8 @@ def to_bool(v):
     pass
   if isinstance(v, (str, unicode)):
     v = v.lower()
-    if v in ["true", "yes", "on"]: return True
-    if v in ["false", "no", "off"]: return False
+    if v in ["true", "yes", "on", "1"]: return True
+    if v in ["false", "no", "off", "0"]: return False
   raise ValueError("to_bool cannot handle %r" % v)
 
 
@@ -897,3 +902,12 @@ def as_str(s):
   if isinstance(s, bytes):
     return s.decode("utf8")
   assert False, "unknown type %s" % type(s)
+
+
+def load_txt_vector(filename):
+  """
+  Expect line-based text encoding in file.
+  We also support Sprint XML format, which has some additional xml header and footer,
+  which we will just strip away.
+  """
+  return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]

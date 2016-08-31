@@ -186,13 +186,25 @@ class Config:
       return value
     if key not in self.dict:
       return default
-    v = str(self.value(key, None, index)).lower()
-    if v == "true" or v == 'True' or v == "1":
-      return True
-    if v == "false" or v == 'False' or v == "0":
-      return False
-    assert v == "", "invalid bool value for %s: %s" % (key, v)
-    return default
+    v = str(self.value(key, None, index))
+    if not v:
+      return default
+    from Util import to_bool
+    return to_bool(v)
+
+  def bool_or_other(self, key, default, index=0):
+    if key in self.typed_dict:
+      return self.typed_value(key, default=default, index=index)
+    if key not in self.dict:
+      return default
+    v = str(self.value(key, None, index))
+    if not v:
+      return default
+    from Util import to_bool
+    try:
+      return to_bool(v)
+    except ValueError:
+      return v
 
   def float(self, key, default, index=0):
     """

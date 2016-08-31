@@ -162,6 +162,9 @@ class TaskThread(threading.Thread):
           target = self.network.hidden[key.split(':')[-1]].attrs['target']
         except Exception:
           target = 'classes'
+      available_data_keys = self.data.get_data_keys()
+      if target not in available_data_keys:
+        target = available_data_keys[0]
       return target
 
     def epoch_norm_factor_for_result(self, key):

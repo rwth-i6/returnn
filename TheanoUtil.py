@@ -61,7 +61,7 @@ def windowed_batch(source, window):
   n_time = source.shape[0]
   n_batch = source.shape[1]
   n_dim = source.shape[2]
-  w_right = window / 2
+  w_right = window // 2
   w_left = window - w_right - 1
   pad_left = T.zeros((w_left, n_batch, n_dim), dtype=source.dtype)
   pad_right = T.zeros((w_right, n_batch, n_dim), dtype=source.dtype)

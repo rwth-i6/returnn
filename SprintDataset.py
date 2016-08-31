@@ -75,9 +75,11 @@ class SprintDataset(Dataset):
     :type outputDim: int
     Called via python_train.
     """
-    assert inputDim > 0 and outputDim > 0
+    assert inputDim > 0
     self.num_inputs = inputDim
-    self.num_outputs = {"classes": [outputDim, 1]}
+    self.num_outputs = {"data": [inputDim, 2]}
+    if outputDim > 0:
+      self.num_outputs["classes"] = [outputDim, 1]
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
     if not self.multiple_epochs:

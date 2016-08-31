@@ -1,5 +1,6 @@
 
 import numpy
+import os
 from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
@@ -27,7 +28,9 @@ from Log import log
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0, compute_priors=False,
+  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+               use_source_index=False,
+               compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
                **kwargs):
@@ -47,6 +50,10 @@ class OutputLayer(Layer):
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not apply_softmax:
       self.set_attr("apply_softmax", apply_softmax)
+    if use_source_index:
+      self.set_attr("use_source_index", use_source_index)
+      src_index = self.sources[0].index
+      self.index = src_index
     if not copy_input:
       self.z = self.b
       self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
@@ -85,7 +92,9 @@ class OutputLayer(Layer):
     else:
       self.index = copy_output.index
       self.y = copy_output.y_out
-    if isinstance(y, T.Variable):
+    if y is None:
+      self.y_data_flat = None
+    elif isinstance(y, T.Variable):
       self.y_data_flat = time_batch_make_flat(y)
     else:
       assert self.attrs.get("target", "").endswith("[sparse:coo]")
@@ -146,7 +155,10 @@ class OutputLayer(Layer):
     self.j = ((1 - self.index.flatten()) > 0).nonzero()
     self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
-    self.attrs['compute_priors'] = compute_priors
+    if compute_priors:
+      self.set_attr('compute_priors', compute_priors)
+      if compute_priors_exp_average:
+        self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
     if softmax_smoothing != 1.0:
       self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v4, "Logits before the softmax scaled with factor ", softmax_smoothing
@@ -215,12 +227,15 @@ class FramewiseOutputLayer(OutputLayer):
     elif self.loss == 'sse': self.p_y_given_x = self.y_m
     elif self.loss == 'priori': self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
     else: assert False, "invalid loss: " + self.loss
+    self.p_y_given_x_flat = self.p_y_given_x  # a bit inconsistent here... it's always flat at the moment
     self.output = self.p_y_given_x.reshape(self.output.shape)
-    if self.attrs['compute_priors']:
+    if self.attrs.get('compute_priors', False):
       custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable',True) else T.constant(0,'float32')
+      exp_average = self.attrs.get("compute_priors_exp_average", 0)
       self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_gradient=custom,
-                                   custom_gradient_normalized=True and self.attrs.get('trainable',True))
+                                   custom_update=custom,
+                                   custom_update_normalized=(not exp_average) and self.attrs.get('trainable',True),
+                                   custom_update_exp_average=exp_average)
 
   def cost(self):
     """
@@ -333,21 +348,49 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, exp_normalize=True, loss_like_ce=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, ce_target_layer_align=None, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
       self.set_attr("prior_scale", prior_scale)
+    if log_prior is not None:
+      # We expect a filename to the priors, stored as txt, in +log space.
+      assert isinstance(log_prior, str)
+      self.set_attr("log_prior", log_prior)
+      from Util import load_txt_vector
+      assert os.path.exists(log_prior)
+      log_prior = load_txt_vector(log_prior)
+      assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
+      log_prior = numpy.array(log_prior, dtype="float32")
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
+    if ce_target_layer_align:
+      self.set_attr("ce_target_layer_align", ce_target_layer_align)
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
+    if am_scale != 1:
+      self.set_attr("am_scale", am_scale)
+    if gamma != 1:
+      self.set_attr("gamma", gamma)
+    if bw_norm_class_avg:
+      self.set_attr("bw_norm_class_avg", bw_norm_class_avg)
     self.loss_like_ce = loss_like_ce
     if loss_like_ce:
       self.set_attr("loss_like_ce", loss_like_ce)
+    if trained_softmax_prior:
+      self.set_attr('trained_softmax_prior', trained_softmax_prior)
+      assert not self.attrs.get('compute_priors', False)
+      initialization = numpy.zeros((self.attrs['n_out'],), 'float32')
+      if self.log_prior is not None:
+        # Will use that as initialization.
+        assert self.log_prior.shape == initialization.shape
+        initialization = self.log_prior
+      self.trained_softmax_prior_p = self.add_param(theano.shared(initialization, 'trained_softmax_prior_p'))
+      self.priors = T.nnet.softmax(self.trained_softmax_prior_p).reshape((self.attrs['n_out'],))
+      self.log_prior = T.log(self.priors)
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
@@ -357,19 +400,21 @@ class SequenceOutputLayer(OutputLayer):
     assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if not self.attrs.get("apply_softmax", True):
-      p_y_given_x = self.y_m
+      self.p_y_given_x_flat = self.y_m
       self.p_y_given_x = self.z
       self.z = T.log(self.z)
       self.y_m = T.log(self.y_m)
     else:
-      p_y_given_x = T.nnet.softmax(self.y_m)
+      self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-    self.y_pred = T.argmax(p_y_given_x, axis=-1)
+    self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x.reshape(self.output.shape)
-    if self.attrs['compute_priors']:
+    if self.attrs.get('compute_priors', False):
+      exp_average = self.attrs.get("compute_priors_exp_average", 0)
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
-                                   custom_gradient=T.mean(p_y_given_x[self.i], axis=0),
-                                   custom_gradient_normalized=True)
+                                   custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
+                                   custom_update_normalized=not exp_average,
+                                   custom_update_exp_average=exp_average)
       self.log_prior = T.log(self.priors)
 
   def index_for_ctc(self):
@@ -391,8 +436,10 @@ class SequenceOutputLayer(OutputLayer):
     :param y: shape (time*batch,) -> label
     :return: error scalar, known_grads dict
     """
-    y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim = 1), 'int32')
     known_grads = None
+    # In case that our target has another index, self.index will be that index.
+    # However, the right index for self.p_y_given_x and many others is the index from the source layers.
+    src_index = self.sources[0].index
     if self.loss == 'sprint':
       if not isinstance(self.sprint_opts, dict):
         import json
@@ -402,19 +449,20 @@ class SequenceOutputLayer(OutputLayer):
         log_probs = T.log(self.p_y_given_x)
       else:
         log_probs = self.z
-      if self.attrs['compute_priors']: # use own priors, assume prior scale in sprint config to be 0.0
-        log_probs -= T.constant(self.prior_scale, 'float32') * self.log_prior
+      if self.prior_scale: # use own priors, assume prior scale in sprint config to be 0.0
+        assert self.log_prior is not None
+        log_probs -= numpy.float32(self.prior_scale) * self.log_prior
       err, grad = sprint_loss_and_error_signal(
         output_layer=self,
         target=self.attrs.get("target", "classes"),
         sprint_opts=self.sprint_opts,
         log_posteriors=log_probs,
-        seq_lengths=T.sum(self.index, axis=0)
+        seq_lengths=T.sum(src_index, axis=0)
       )
       err = err.sum()
       if self.loss_like_ce:
         y_ref = T.clip(self.p_y_given_x - grad, numpy.float32(0), numpy.float32(1))
-        err = -T.sum(T.switch(T.cast(self.index, "float32").dimshuffle(0, 1, 'x'),
+        err = -T.sum(T.switch(T.cast(src_index, "float32").dimshuffle(0, 1, 'x'),
                               y_ref * T.log(self.p_y_given_x),
                               numpy.float32(0)))
       if self.ce_smoothing:
@@ -438,11 +486,51 @@ class SequenceOutputLayer(OutputLayer):
         import json
         self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      scores = -T.log(self.p_y_given_x)
+      y = self.p_y_given_x
+      assert y.ndim == 3
+      y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
+      nlog_scores = -T.log(y)  # in -log space
+      am_scores = nlog_scores
+      am_scale = self.attrs.get("am_scale", 1)
+      if am_scale != 1:
+        am_scale = numpy.float32(am_scale)
+        am_scores *= am_scale
+      if self.prior_scale:
+        assert self.log_prior is not None
+        # Scores are in -log space, self.log_prior is in +log space.
+        # We want to subtract the prior, thus `-=`.
+        am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      float_idx = T.cast(self.index, "float32")
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
-      err = (T.exp(-fwdbwd) * scores * float_idx.dimshuffle(0, 1, 'x')).sum()
+      float_idx = T.cast(src_index, "float32")
+      float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+      idx_sum = T.sum(float_idx)
+      fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+      gamma = self.attrs.get("gamma", 1)
+      need_renorm = False
+      if gamma != 1:
+        fwdbwd *= numpy.float32(gamma)
+        need_renorm = True
+      bw = T.exp(-fwdbwd)
+      if self.attrs.get("bw_norm_class_avg", False):
+        cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
+        bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
+        need_renorm = True
+      if need_renorm:
+        bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
+      self.baumwelch_alignment = bw
+      if self.ce_smoothing > 0:
+        target_layer = self.attrs.get("ce_target_layer_align", None)
+        assert target_layer  # we could also use self.y but so far we only want this
+        bw2 = self.network.output[target_layer].baumwelch_alignment
+        bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
+      err = (bw * nlog_scores * float_idx_bc).sum()
+      known_grads = {self.z: (y - bw) * float_idx_bc}
+      if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
+        bw_sum0 = T.sum(bw * float_idx_bc, axis=(0, 1))
+        assert bw_sum0.ndim == self.priors.ndim == 1
+        # Note that this is the other way around as usually (`bw - y` instead of `y - bw`).
+        # That is because the prior is in the denominator.
+        known_grads[self.trained_softmax_prior_p] = numpy.float32(self.prior_scale) * (bw_sum0 - self.priors * idx_sum)
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
@@ -468,8 +556,8 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'viterbi':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-      scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
-      y = NumpyAlignOp(False)(self.sources[0].index,self.index,-scores,self.y)
+      nlog_scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = NumpyAlignOp(False)(src_index, self.index, -nlog_scores, self.y)
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
@@ -549,7 +637,6 @@ class UnsupervisedOutputLayer(OutputLayer):
     self.y_m = pcx.reshape((pcx.shape[0] * pcx.shape[1], pcx.shape[2]))
     self.x_m = pxc.reshape((pxc.shape[0] * pxc.shape[1], pxc.shape[2]))
     self.punk = base[0].punk.reshape(self.x_m.shape)
-
 
   def cost(self):
     known_grads = None

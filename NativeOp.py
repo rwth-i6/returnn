@@ -6,6 +6,7 @@ Generic interface which automatically creates:
 * grad variants
 """
 
+import sys
 import os
 import numpy
 import theano
@@ -16,6 +17,13 @@ from theano.compile import optdb
 from theano import gof
 from Util import make_hashable, make_dll_name, escape_c_str
 from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
+
+
+PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  unicode = str
+  long = int
 
 
 class NativeOp(theano.Op):
@@ -467,11 +475,14 @@ def inplace_NativeOp(node):
     return new_v
   return False
 
-optdb.register('inplace_NativeOp',
-               gof.TopoOptimizer(inplace_NativeOp
-                                 , failure_callback=gof.TopoOptimizer.warn_inplace
-                                 ),
-               60, 'fast_run', 'inplace')
+try:
+  optdb.register('inplace_NativeOp',
+                 gof.TopoOptimizer(inplace_NativeOp
+                                   , failure_callback=gof.TopoOptimizer.warn_inplace
+                                   ),
+                 60, 'fast_run', 'inplace')
+except ValueError:  # can happen if it was already registered before, e.g. when we reload the module
+  pass
 
 
 @try_register_gpu_opt(NativeOp)
@@ -1946,8 +1957,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     //std::cerr << "index_stride: "     << index_stride    << std::endl;
 
     // initialize edge buffer
-    float* d_edge_buffer;
-    HANDLE_ERROR(cudaMalloc(reinterpret_cast<void**>(&d_edge_buffer), n_edges * n_frames * sizeof(float)));
+    float* d_edge_buffer = (float*) device_malloc(n_edges * n_frames * sizeof(float));
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
     HANDLE_ERROR(cudaGetLastError());
@@ -2005,10 +2015,10 @@ class FastBaumWelchOp(NativeOpGenBase):
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
     HANDLE_ERROR(cudaGetLastError());
 
-    cudaFree(d_edge_buffer);
+    device_free(d_edge_buffer);
     //std::cerr << "fast_bw finished" << std::endl;
   """
 
   c_bw_code = None
 
-  code_version = 52
+  code_version = 53

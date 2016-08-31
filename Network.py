@@ -107,6 +107,11 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     json_content = cls.json_from_config(config, mask=mask)
+    from Pretrain import find_pretrain_wrap_values, pretrainFromConfig
+    if find_pretrain_wrap_values(json_content):
+      pretrain = pretrainFromConfig(config=config)
+      assert pretrain, "found Pretrain WrapEpochValue but no pretrain configured"
+      json_content = pretrain.get_final_network_json()
     return cls.from_json_and_config(json_content, config, mask=mask, **kwargs)
 
   @classmethod
@@ -366,7 +371,7 @@ class LayerNetwork(object):
           obj[key] = network.get_layer(obj[key])
       if 'encoder' in obj and not source:
         index = output_index
-      if 'target' in obj:
+      if 'target' in obj and obj['target'] != "null":
         index = network.j[obj['target']]
       obj.pop('from', None)
       params = { 'sources': source,
@@ -386,7 +391,7 @@ class LayerNetwork(object):
           params['target'] = target
         if 'loss' in obj and obj['loss'] == 'ctc':
           params['index'] = network.i
-        else:
+        elif target != "null":
           params['index'] = network.j[target] #output_index
         return network.make_classifier(**params)
       elif cl is not None:
@@ -395,7 +400,7 @@ class LayerNetwork(object):
         if layer_class.recurrent:
           network.recurrent = True
         return network.add_layer(layer_class(**params)).index
-    for layer_name in json_content:
+    for layer_name in sorted(json_content):
       if layer_name in network.hidden or layer_name in network.output:
         continue
       if layer_name == "data":
@@ -404,9 +409,11 @@ class LayerNetwork(object):
       trg = target
       if 'target' in json_content[layer_name]:
         trg = json_content[layer_name]['target']
-      if layer_name == 'output' or 'target' in json_content[layer_name]:
+      if layer_name == 'output' or 'target' in json_content[layer_name] or json_content[layer_name].get("class", None) == "softmax":
         network.use_target(trg, dtype=json_content.get("dtype", json_content[layer_name].get('dtype',"int32")))
-        traverse(json_content, layer_name, trg, network.j[trg])
+        if trg != "null": index = network.j[trg]
+        else: index = network.i
+        traverse(json_content, layer_name, trg, index)
     return network
 
   @classmethod
@@ -651,7 +658,7 @@ class LayerNetwork(object):
     """
     assert layer.name
     layer_errors = layer.errors()
-    if layer.name == "output" or layer_errors is not None:
+    if isinstance(layer, OutputLayer) or layer.name == "output" or layer_errors is not None:
       is_output_layer = True
       self.output[layer.name] = layer
     else:
@@ -691,6 +698,9 @@ class LayerNetwork(object):
     self.loss = kwargs["loss"]
     if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'):
       layer_class = SequenceOutputLayer
+      # We must keep sequences as they are. Setting us as recurrent
+      # will tell other code to leave seqs as they are (e.g. the dataset batch building).
+      self.recurrent = True
     elif self.loss == 'decode':
       layer_class = DecoderOutputLayer
     elif self.loss == 'unsupervised':

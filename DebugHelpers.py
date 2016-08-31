@@ -95,27 +95,27 @@ def compute(var, trainnet=True):
 
 class DebugNn:
   def __init__(self, filename):
-    self.network = LayerNetwork.from_hdf(filename)
+    self.network = LayerNetwork.from_hdf(filename, mask="unity", train_flag=False, eval_flag=True)
     self.f_forwarder = None
 
   def compile_forwarder(self):
     network = self.network
-    data_keys = ["data", "classes"]
+    data_keys = list(sorted(network.j.keys()))
     # All input seqs expected to have same length.
     givens = [(network.j[k], tt.ones(network.y["data"].shape[:2], dtype="int8")) for k in data_keys]
     self.f_forwarder = theano.function(
       inputs=[network.y["data"]],
-      outputs=[layer.output for name, layer in sorted(network.output.items())],
+      outputs=[network.output["output"].output] + [layer.output for name, layer in sorted(network.output.items()) if name != "output"],
       givens=givens,
       on_unused_input='warn',
       name="forwarder")
 
-  def forward(self, data):
+  def forward(self, data, output_index=0):
     assert data.ndim == 2
     data = data[:, None, :]  # add batch-dim
     assert self.f_forwarder
     res = self.f_forwarder(data)
-    res, = make_var_tuple(res)
+    res = make_var_tuple(res)[output_index]
     assert res.ndim == 3
     assert res.shape[1] == 1
     res = res[:, 0]

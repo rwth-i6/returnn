@@ -378,8 +378,8 @@ class Device(object):
         self.gradient_norm = None
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if hasattr(param,'custom_gradient'):
-          gparam = param.custom_gradient
+        if hasattr(param,'custom_update'):
+          gparam = param.custom_update
         elif update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
           gparam = 0
         else:
@@ -504,6 +504,8 @@ class Device(object):
             param = 'output'
           p_y_given_x = self.testnet.get_layer(param).p_y_given_x
           index = self.testnet.get_layer(param).output_index()
+          if "conv_1d" in [self.testnet.hidden[s].layer_class for s in self.testnet.hidden.keys()]:
+            index = self.testnet.get_layer(param).sources[0].index
           if p_y_given_x.ndim == 2:
             p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
           assert p_y_given_x.ndim == 3
@@ -887,7 +889,7 @@ class Device(object):
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
         try:
           utf8_tags = map(lambda s: s.encode('utf-8'), self.tags)
-        except:
+        except Exception:
           utf8_tags = self.tags
         self.tags_var.set_value(numpy.array(utf8_tags).view(dtype='int8').reshape((len(utf8_tags), max(map(len, utf8_tags)))))
         self.update_total_time += time.time() - update_start_time
