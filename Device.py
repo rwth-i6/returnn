@@ -644,6 +644,7 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
+    self.compute_start_time = compute_start_time
     batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if self.config.bool("debug_shell_first_compute", False):
