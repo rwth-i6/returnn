@@ -242,6 +242,8 @@ class FramewiseOutputLayer(OutputLayer):
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
     """
+    if self.loss == "none":
+      return None, None
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
       if self.loss != "ce": raise NotImplementedError
@@ -310,8 +312,6 @@ class FramewiseOutputLayer(OutputLayer):
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
         #return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
-    elif self.loss == "none":
-      return None, None
     else:
       assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
 
