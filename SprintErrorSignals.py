@@ -697,7 +697,7 @@ class SprintErrorSigOp(theano.Op):
       print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
       from Device import deviceInstance
       assert deviceInstance.is_device_proc()
-      forward_time = deviceInstance.compute_start_time - start_time
+      forward_time = start_time - deviceInstance.compute_start_time
       print >> log.v1, "SprintErrorSigOp forward time:", forward_time
 
 
