@@ -569,12 +569,12 @@ class Layer(Container):
       index = ifelse(T.gt(index.shape[0], 0), index, self.network.j["data"])
     return index
 
-  def find_source_layer(self):
+  def find_data_layer(self):
     for l in self.sources:
       if isinstance(l, SourceLayer):
         return l
       if isinstance(l, Layer):
-        s = l.find_source_layer()
+        s = l.find_data_layer()
         if s is not None:
           return s
     return None
