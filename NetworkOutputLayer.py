@@ -360,7 +360,13 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, ce_target_layer_align=None, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None,
+               ce_smoothing=0.0, ce_target_layer_align=None,
+               exp_normalize=True,
+               am_scale=1, gamma=1, bw_norm_class_avg=False,
+               loss_like_ce=False, trained_softmax_prior=False,
+               sprint_opts=None,
+               **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
