@@ -34,6 +34,8 @@ class OutputLayer(Layer):
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
                substract_prior_from_output=False,
+               input_output_similarity=None,
+               input_output_similarity_scale=1,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -53,6 +55,9 @@ class OutputLayer(Layer):
       self.set_attr("apply_softmax", apply_softmax)
     if substract_prior_from_output:
       self.set_attr("substract_prior_from_output", substract_prior_from_output)
+    if input_output_similarity:
+      self.set_attr("input_output_similarity", input_output_similarity)
+      self.set_attr("input_output_similarity_scale", input_output_similarity_scale)
     if use_source_index:
       self.set_attr("use_source_index", use_source_index)
       src_index = self.sources[0].index
@@ -168,6 +173,27 @@ class OutputLayer(Layer):
       self.z *= numpy.float32(softmax_smoothing)
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
+
+    if input_output_similarity:
+      from TheanoUtil import self_similarity_cosine
+      self_similarity = self_similarity_cosine
+      data_layer = self.find_data_layer()
+      assert data_layer
+      assert data_layer.output.ndim == 3
+      n_time = data_layer.output.shape[0]
+      n_batch = data_layer.output.shape[1]
+      findex = T.cast(self.output_index(), "float32")
+      findex_bc = findex.reshape((n_time * n_batch,)).dimshuffle(0, 'x')
+      findex_sum = T.sum(findex)
+      data = data_layer.output.reshape((n_time * n_batch, data_layer.output.shape[2])) * findex_bc
+      assert self.z.ndim == 3
+      z = self.z.reshape((n_time * n_batch, self.z.shape[2])) * findex_bc
+      data_self_sim = T.flatten(self_similarity(data))
+      z_self_sim = T.flatten(self_similarity(z))
+      assert data_self_sim.ndim == z_self_sim.ndim == 1
+      sim = T.dot(data_self_sim, z_self_sim)
+      assert sim.ndim == 0
+      self.constraints -= sim * numpy.float32(input_output_similarity_scale) / findex_sum
 
     #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
