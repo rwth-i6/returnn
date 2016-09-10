@@ -33,6 +33,7 @@ class OutputLayer(Layer):
                compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
+               substract_prior_from_output=False,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -50,6 +51,8 @@ class OutputLayer(Layer):
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not apply_softmax:
       self.set_attr("apply_softmax", apply_softmax)
+    if substract_prior_from_output:
+      self.set_attr("substract_prior_from_output", substract_prior_from_output)
     if use_source_index:
       self.set_attr("use_source_index", use_source_index)
       src_index = self.sources[0].index
@@ -208,6 +211,13 @@ class OutputLayer(Layer):
     else:
       raise NotImplementedError()
 
+  def _maybe_substract_prior_from_output(self):
+    if not self.attrs.get("substract_prior_from_output", False): return
+    log_out = T.log(T.clip(self.output, numpy.float32(1.e-20), numpy.float(1.e20)))
+    prior_scale = numpy.float32(self.attrs.get("prior_scale", 1))
+    self.output = T.exp(log_out - self.log_prior * prior_scale)
+    self.p_y_given_x = self.output
+
 
 class FramewiseOutputLayer(OutputLayer):
   def __init__(self, **kwargs):
@@ -236,6 +246,8 @@ class FramewiseOutputLayer(OutputLayer):
                                    custom_update=custom,
                                    custom_update_normalized=(not exp_average) and self.attrs.get('trainable',True),
                                    custom_update_exp_average=exp_average)
+      self.log_prior = T.log(self.priors)
+    self._maybe_substract_prior_from_output()
 
   def cost(self):
     """
@@ -416,6 +428,7 @@ class SequenceOutputLayer(OutputLayer):
                                    custom_update_normalized=not exp_average,
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(self.priors)
+    self._maybe_substract_prior_from_output()
 
   def index_for_ctc(self):
     for source in self.sources:
