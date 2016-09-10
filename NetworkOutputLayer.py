@@ -175,8 +175,14 @@ class OutputLayer(Layer):
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
     if input_output_similarity:
+      # First a self-similarity of input and output,
+      # and then add -similarity or distance between those to the constraints,
+      # so that the input and output correlate on a frame-by-frame basis.
+      # Here some other similarities/distances we could try:
+      # http://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
+      # https://brenocon.com/blog/2012/03/cosine-similarity-pearson-correlation-and-ols-coefficients/
       from TheanoUtil import self_similarity_cosine
-      self_similarity = self_similarity_cosine
+      self_similarity = self_similarity_cosine  # maybe other
       data_layer = self.find_data_layer()
       assert data_layer
       assert data_layer.output.ndim == 3
@@ -191,8 +197,9 @@ class OutputLayer(Layer):
       data_self_sim = T.flatten(self_similarity(data))
       z_self_sim = T.flatten(self_similarity(z))
       assert data_self_sim.ndim == z_self_sim.ndim == 1
-      sim = T.dot(data_self_sim, z_self_sim)
+      sim = T.dot(data_self_sim, z_self_sim)  # maybe others make sense
       assert sim.ndim == 0
+      # sim is ~ proportional to T * T, so divide by T.
       self.constraints -= sim * numpy.float32(input_output_similarity_scale) / findex_sum
 
     #self.make_output(self.z, collapse = False)
