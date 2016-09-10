@@ -200,7 +200,8 @@ class OutputLayer(Layer):
       sim = T.dot(data_self_sim, z_self_sim)  # maybe others make sense
       assert sim.ndim == 0
       # sim is ~ proportional to T * T, so divide by T.
-      self.constraints -= sim * numpy.float32(input_output_similarity_scale) / findex_sum
+      sim *= numpy.float32(input_output_similarity_scale) / findex_sum
+      self.constraints -= sim
 
     #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
