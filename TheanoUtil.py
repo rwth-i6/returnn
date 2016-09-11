@@ -697,7 +697,7 @@ def self_similarity_cosine(x):
   assert x.ndim == 2
   x2 = T.sqrt(T.clip(T.sum(T.sqr(x), axis=1), numpy.float32(1.e-20), numpy.float32(1.e20)))
   assert x2.ndim == 1
-  x_ = x / x2
+  x_ = x / x2.dimshuffle(0, 'x')
   xx = T.dot(x_, x_.T)
   assert xx.ndim == 2
   from theano.tensor.basic import tril
