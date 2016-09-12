@@ -130,7 +130,7 @@ class LSTME(Unit):
     # return: next outputs (# unit.n_act, y_t, c_t, ...)
     return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
 
-class Leaky(Unit):
+class LEAKYLSTM(Unit):
   """
   A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
@@ -138,7 +138,7 @@ class Leaky(Unit):
   This cell has 3 units instead of 4 like LSTM
   """
   def __init__(self, n_units, **kwargs):
-    super(LSTME, self).__init__(
+    super(LEAKYLSTM, self).__init__(
       n_units=n_units,
       n_in=n_units * 3,  # forget gate (FG), output gate (OG), net input (IN)
       n_out=n_units,
@@ -174,7 +174,7 @@ class Leaky(Unit):
     return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
 
 
-class LeakyLP(Unit):
+class LEAKYLPLSTM(Unit):
   """
   A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
@@ -182,7 +182,7 @@ class LeakyLP(Unit):
   This cell has 4 units like the LSTM
   """
   def __init__(self, n_units, **kwargs):
-    super(LSTME, self).__init__(
+    super(LEAKYLPLSTM, self).__init__(
       n_units=n_units,
       n_in=n_units * 4,  # forget gate (FG), output gate 1 (OG1), output gate 2 (OG2), net input (IN)
       n_out=n_units,
@@ -219,7 +219,7 @@ class LeakyLP(Unit):
     return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
 
 
-class PID(Unit):
+class PIDLSTM(Unit):
   """
   A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
@@ -230,7 +230,7 @@ class PID(Unit):
   This cell has 4 units like the LSTM
   """
   def __init__(self, n_units, **kwargs):
-    super(LSTME, self).__init__(
+    super(PIDLSTM, self).__init__(
       n_units=n_units,
       n_in=n_units * 4,  # forget gate (FG), Proportinal gate (PG), Difference gate (DG), net input (IN)
       n_out=n_units,
