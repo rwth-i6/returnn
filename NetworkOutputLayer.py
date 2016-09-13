@@ -586,31 +586,39 @@ class UnsupervisedOutputLayer(OutputLayer):
     eps = T.constant(1e-30,'float32')
     pc = theano.gradient.disconnected_grad(base[1].output)  # TBV
     pc = print_to_file('pc', pc)
-    pxc = base[0].output  # TBV
-    npc = numpy.float32(1) - pc
-    nxc = base[0].negative
+    pcx = base[0].output  # TBV
+    spcx = T.sort(pcx,2)[:,:,::-1]
 
     domax = T.ge(T.mod(self.network.epoch,msteps+esteps),esteps)
-    confidence = T.constant(confidence,'float32')
-    #confidence = print_to_file('conf',confidence)
-    hcx = (pxc)**confidence
-    #pcx = (hcx) / (hcx.sum(axis=2, keepdims=True))
-    hyp = T.mean(pxc, axis=1, keepdims=True)
+    #confidence = T.constant(confidence,'float32')
+    hyp = T.mean(pcx, axis=1, keepdims=True)
     hyp = hyp/hyp.sum(axis=2,keepdims=True)
-    pcx = pxc #pc * pxc #/base[0].pm
-    pcx = pcx / (pcx.sum(axis=2, keepdims=True) + eps)
+
+    self.hyp = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'hyp'), 'hyp',
+                              custom_update=T.mean(hyp[:,0,:],axis=0),
+                              custom_update_normalized=True)
+
+    order = T.argsort(self.hyp)[::-1]
+    order = print_to_file('order', order)
+    #shyp = hyp[T.arange(hyp.shape[0]),T.arange(hyp.shape[1]),order]
+    #spcx = pcx[T.arange(pcx.shape[0]),T.arange(pcx.shape[1]),order]
+
+    shyp = hyp[:, :, order]
+    spcx = pcx[:, :, order]
+
     pcx = print_to_file('pcx', pcx)
-    pxc = print_to_file('pxc', pxc)
     hyp = print_to_file('hyp',hyp)
-    pc_x = T.sum(pxc * pc, axis=2)
-    #pc_x = T.max(pxc * pc, axis=2)
-    L = -T.sum(T.sum(pc * T.log(hyp),axis=2),axis=0) - T.sum(T.log(pc_x),axis=0) #/ T.cast(pc.shape[2],'float32')
-    nyp = T.mean(nxc, axis=1, keepdims=True)
-    nyp = nyp / nyp.sum(axis=2, keepdims=True)
-    nc_x = T.sum(nxc * npc, axis=2)
+    shyp = print_to_file('shyp', shyp)
+    L = -T.sum(T.sum(pc * T.log(hyp),axis=2),axis=0)
+    K = -T.sum(T.sum(pc * T.log(shyp),axis=2),axis=0)
+    Q = -T.sum(T.sum(pcx * T.log(pcx),axis=2),axis=0)
+    #L = -T.sum(T.sum(pc * T.log(hyp), axis=2), axis=0) - T.sum(T.log(T.max(pcx,axis=2)), axis=0)
+    #nyp = T.mean(nxc, axis=1, keepdims=True)
+    #nyp = nyp / nyp.sum(axis=2, keepdims=True)
+    #nc_x = T.sum(nxc * npc, axis=2)
     #nc_x = T.max(nxc * npc, axis=2)
-    L += -T.sum(T.sum(npc * T.log(nyp),axis=2),axis=0) - T.sum(T.log(nc_x),axis=0)
-    Q = -T.sum(T.log(T.max(pxc,axis=2)/base[0].pm),axis=0)
+    #L += -T.sum(T.sum(npc * T.log(nyp),axis=2),axis=0) - T.sum(T.log(nc_x),axis=0)
+    #Q = -T.sum(T.log(T.max(pxc,axis=2)/base[0].pm),axis=0)
     #ent = T.mean(pcx, axis=1, keepdims=True)
     #ent = ent / (ent.sum(axis=2, keepdims=True) + eps) + eps
     #Q = -T.sum(T.log(T.max(ent,axis=2),axis=0))
@@ -621,22 +629,21 @@ class UnsupervisedOutputLayer(OutputLayer):
     #L += T.sum(T.mean(hyp * T.log(T.maximum(hyp / ent, eps)),axis=1)) / (confidence+1) # (self.L - T.sum(pc * T.log(T.maximum(pc / hyp, eps))))**2 + self.L #/ self.L
 
     #Q = T.sum(pc * T.log(T.max(pc / ent, eps)))
-
     L = print_to_file('L', L)
+    K = print_to_file('K', K)
     Q = print_to_file('Q', Q)
 
-    #self.L = T.sum(T.minimum(L,Q))
-    #self.L = T.sum((L+1) * (Q+1))
-    #self.L = T.sum(T.switch(T.ge(L,Q), L, L+Q))
-    #self.L = T.sum(L+Q) #T.sum(L + Q) #T.maximum(L, Q)
     #self.L = T.sum(T.switch(domax,L,Q))
     #self.L = T.sum(T.maximum(L, Q))
-    self.L = T.sum(L)
     #self.L = T.sum(T.switch(T.ge(L, Q), L, Q))
-    #self.L = T.sum(L) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
+    #self.L = T.sum(T.minimum(L,K)) + T.sum(Q)# + T.sum(R)
+    self.L = T.sum(L + L/K) + T.sum(Q)  # + T.sum(R)
+    #pcx = T.switch(T.le(T.sum(L),T.sum(K)),pcx,spcx)
+    pcx = spcx
+    #self.L = T.sum(L+Q) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
     self.y_m = pcx.reshape((pcx.shape[0] * pcx.shape[1], pcx.shape[2]))
-    self.x_m = pxc.reshape((pxc.shape[0] * pxc.shape[1], pxc.shape[2]))
-    self.punk = base[0].punk.reshape(self.x_m.shape)
+    #self.x_m = pxc.reshape((pxc.shape[0] * pxc.shape[1], pxc.shape[2]))
+    #self.punk = base[0].punk.reshape(self.x_m.shape)
 
   def cost(self):
     known_grads = None
