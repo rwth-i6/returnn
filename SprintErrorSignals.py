@@ -695,6 +695,10 @@ class SprintErrorSigOp(theano.Op):
       self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
     if self.debug_perform_time:
       print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
+      from Device import deviceInstance
+      assert deviceInstance.is_device_proc()
+      forward_time = start_time - deviceInstance.compute_start_time
+      print >> log.v1, "SprintErrorSigOp forward time:", forward_time
 
 
 class SprintAlignmentAutomataOp(theano.Op):

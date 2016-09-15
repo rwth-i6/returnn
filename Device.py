@@ -439,6 +439,9 @@ class Device(object):
       if self.gradient_norm is not None:
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
+      if config.bool("debug_output_constraints", False):
+        self.train_outputs_format += ["constraints:" + out for out in sorted(self.trainnet.constraints.keys())]
+        outputs += [self.trainnet.constraints[out] for out in sorted(self.trainnet.constraints.keys())]
 
       if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
@@ -644,6 +647,7 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
+    self.compute_start_time = compute_start_time
     batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if self.config.bool("debug_shell_first_compute", False):

@@ -267,6 +267,13 @@ class AttentionBase(RecurrentTransformBase):
       self.base = self.layer.base
     self.n = self.add_state_var(T.zeros((self.layer.index.shape[1],), 'float32'), 'n')
     self.bound = self.add_input(T.cast(T.sum(self.layer.index,axis=0), 'float32'), 'bound')
+    if self.attrs['norm'] == 'RNN':
+      n_tmp = self.attrs['template']
+      l = sqrt(6.) / sqrt(2 * n_tmp)
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, n_tmp*4)), dtype=theano.config.floatX)
+      self.N_re = self.add_param(self.layer.shared(value=values, borrow=True, name = "N_re"))
+      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n_tmp, 1)), dtype=theano.config.floatX)
+      self.N_out = self.add_param(self.layer.shared(value=values, borrow=True, name = "N_out"))
     if self.attrs['distance'] == 'rnn':
       n_tmp = self.attrs['template']
       l = sqrt(6.) / sqrt(2 * n_tmp)
@@ -380,6 +387,20 @@ class AttentionBase(RecurrentTransformBase):
       E = T.exp(-D)
     elif self.attrs['norm'] == 'sigmoid':
       E = T.nnet.sigmoid(D)
+    elif self.attrs['norm'] == 'lstm':
+      n_out = self.attrs['template']
+      def lstm(z, i_t, s_p, h_p):
+        z += T.dot(h_p, self.N_re)
+        i = T.outer(i_t, T.alloc(numpy.cast['int8'](1), n_out))
+        ingate = T.nnet.sigmoid(z[:,n_out: 2 * n_out])
+        forgetgate = T.nnet.sigmoid(z[:,2 * n_out:3 * n_out])
+        outgate = T.nnet.sigmoid(z[:,3 * n_out:])
+        input = T.tanh(z[:,:n_out])
+        s_t = input * ingate + s_p * forgetgate
+        h_t = T.tanh(s_t) * outgate
+        return theano.gradient.grad_clip(s_t * i, -50, 50), h_t * i
+      E, _ = theano.scan(lstm, sequences=[D,I], outputs_info=[T.zeros((n_out,), 'float32'), T.zeros((n_out,), 'int32')])
+      E = T.nnet.sigmoid(T.dot(E,self.N_out))
     else:
       raise NotImplementedError()
     E = E * I

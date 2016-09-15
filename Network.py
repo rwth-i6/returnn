@@ -71,7 +71,8 @@ class LayerNetwork(object):
     else:
       self.epoch = T.constant(0, name="epoch", dtype="int32")
       self.tags  = T.bmatrix('tags')
-    self.constraints = T.constant(0)
+    self.constraints = {}
+    self.total_constraints = T.constant(0)
     Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
@@ -651,6 +652,9 @@ class LayerNetwork(object):
       return self.output[layer_name]
     return None
 
+  def get_all_layers(self):
+    return sorted(self.hidden) + sorted(self.output)
+
   def add_layer(self, layer):
     """
     :type layer: NetworkHiddenLayer.Layer
@@ -676,7 +680,8 @@ class LayerNetwork(object):
     return layer
 
   def add_cost_and_constraints(self, layer):
-    self.constraints += layer.make_constraints()
+    self.constraints[layer.name] = layer.make_constraints()
+    self.total_constraints += self.constraints[layer.name]
     cost = layer.cost()
     if cost[0]:
       self.costs[layer.name] = cost[0]
@@ -726,7 +731,7 @@ class LayerNetwork(object):
     return layer.index
 
   def get_objective(self):
-    return self.total_cost + self.constraints
+    return self.total_cost + self.total_constraints
 
   def get_params_vars(self, hidden_layer_selection, with_output):
     """

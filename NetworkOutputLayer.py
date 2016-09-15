@@ -33,6 +33,9 @@ class OutputLayer(Layer):
                compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                apply_softmax=True,
+               substract_prior_from_output=False,
+               input_output_similarity=None,
+               input_output_similarity_scale=1,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -50,6 +53,11 @@ class OutputLayer(Layer):
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not apply_softmax:
       self.set_attr("apply_softmax", apply_softmax)
+    if substract_prior_from_output:
+      self.set_attr("substract_prior_from_output", substract_prior_from_output)
+    if input_output_similarity:
+      self.set_attr("input_output_similarity", input_output_similarity)
+      self.set_attr("input_output_similarity_scale", input_output_similarity_scale)
     if use_source_index:
       self.set_attr("use_source_index", use_source_index)
       src_index = self.sources[0].index
@@ -166,6 +174,35 @@ class OutputLayer(Layer):
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
 
+    if input_output_similarity:
+      # First a self-similarity of input and output,
+      # and then add -similarity or distance between those to the constraints,
+      # so that the input and output correlate on a frame-by-frame basis.
+      # Here some other similarities/distances we could try:
+      # http://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
+      # https://brenocon.com/blog/2012/03/cosine-similarity-pearson-correlation-and-ols-coefficients/
+      from TheanoUtil import self_similarity_cosine
+      self_similarity = self_similarity_cosine  # maybe other
+      data_layer = self.find_data_layer()
+      assert data_layer
+      assert data_layer.output.ndim == 3
+      n_time = data_layer.output.shape[0]
+      n_batch = data_layer.output.shape[1]
+      findex = T.cast(self.output_index(), "float32")
+      findex_bc = findex.reshape((n_time * n_batch,)).dimshuffle(0, 'x')
+      findex_sum = T.sum(findex)
+      data = data_layer.output.reshape((n_time * n_batch, data_layer.output.shape[2])) * findex_bc
+      assert self.z.ndim == 3
+      z = self.z.reshape((n_time * n_batch, self.z.shape[2])) * findex_bc
+      data_self_sim = T.flatten(self_similarity(data))
+      z_self_sim = T.flatten(self_similarity(z))
+      assert data_self_sim.ndim == z_self_sim.ndim == 1
+      sim = T.dot(data_self_sim, z_self_sim)  # maybe others make sense
+      assert sim.ndim == 0
+      # sim is ~ proportional to T * T, so divide by T.
+      sim *= numpy.float32(input_output_similarity_scale) / findex_sum
+      self.constraints -= sim
+
     #self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
@@ -208,6 +245,13 @@ class OutputLayer(Layer):
     else:
       raise NotImplementedError()
 
+  def _maybe_substract_prior_from_output(self):
+    if not self.attrs.get("substract_prior_from_output", False): return
+    log_out = T.log(T.clip(self.output, numpy.float32(1.e-20), numpy.float(1.e20)))
+    prior_scale = numpy.float32(self.attrs.get("prior_scale", 1))
+    self.output = T.exp(log_out - self.log_prior * prior_scale)
+    self.p_y_given_x = self.output
+
 
 class FramewiseOutputLayer(OutputLayer):
   def __init__(self, **kwargs):
@@ -236,12 +280,16 @@ class FramewiseOutputLayer(OutputLayer):
                                    custom_update=custom,
                                    custom_update_normalized=(not exp_average) and self.attrs.get('trainable',True),
                                    custom_update_exp_average=exp_average)
+      self.log_prior = T.log(self.priors)
+    self._maybe_substract_prior_from_output()
 
   def cost(self):
     """
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
     """
+    if self.loss == "none":
+      return None, None
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
       if self.loss != "ce": raise NotImplementedError
@@ -310,8 +358,6 @@ class FramewiseOutputLayer(OutputLayer):
         #y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
         #return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
         #return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
-    elif self.loss == "none":
-      return None, None
     else:
       assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
 
@@ -348,7 +394,13 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, ce_smoothing=0.0, ce_target_layer_align=None, exp_normalize=True, am_scale=1, gamma=1, bw_norm_class_avg=False, loss_like_ce=False, trained_softmax_prior=False, sprint_opts=None, **kwargs):
+  def __init__(self, prior_scale=0.0, log_prior=None,
+               ce_smoothing=0.0, ce_target_layer_align=None,
+               exp_normalize=True,
+               am_scale=1, gamma=1, bw_norm_class_avg=False,
+               loss_like_ce=False, trained_softmax_prior=False,
+               sprint_opts=None,
+               **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
     if prior_scale:
@@ -416,6 +468,7 @@ class SequenceOutputLayer(OutputLayer):
                                    custom_update_normalized=not exp_average,
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(self.priors)
+    self._maybe_substract_prior_from_output()
 
   def index_for_ctc(self):
     for source in self.sources:
