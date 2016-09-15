@@ -130,6 +130,142 @@ class LSTME(Unit):
     # return: next outputs (# unit.n_act, y_t, c_t, ...)
     return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
 
+class LEAKYLSTM(Unit):
+  """
+  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  The simplified equations can be seen in Table 7, page 36.
+  Type A with gamma_3==0.
+  This cell has 3 units instead of 4 like LSTM
+  """
+  def __init__(self, n_units, **kwargs):
+    super(LEAKYLSTM, self).__init__(
+      n_units=n_units,
+      n_in=n_units * 3,  # forget gate (FG), output gate (OG), net input (IN)
+      n_out=n_units,
+      n_re=n_units * 3,
+      n_act=2  # output, cell state
+    )
+    self.o_output = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+    self.o_h = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+
+  def step(self, i_t, x_t, z_t, y_p, c_p, *other_args):
+    # See Unit.scan() for seqs.
+    # args: seqs (x_t = unit.xc, z_t, i_t), outputs (# unit.n_act, y_p, c_p, ...), non_seqs (none)
+    other_outputs = []
+    if self.recurrent_transform:
+      state_vars = other_args[:len(self.recurrent_transform.state_vars)]
+      self.recurrent_transform.set_sorted_state_vars(state_vars)
+      z_r, r_updates = self.recurrent_transform.step(y_p)
+      z_t += z_r
+      for v in self.recurrent_transform.get_sorted_state_vars():
+        other_outputs += [r_updates[v]]
+    z_t += T.dot(y_p, self.W_re)
+    partition = z_t.shape[1] // 3 #number of units
+    forgetgate = T.nnet.sigmoid(z_t[:,:partition])
+    outgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+    input = T.tanh(z_t[:,2*partition:3*partition])
+    # c(t) = (1 - FG(t)) * IN(t) + FG(t) * c(t-1)
+    c_t = (1-forgetgate) * input + forgetgate * c_p
+    # y(t) = OG(t) * c(t) HINT: There can be added an additional nonlinearity (substitute c_t:=T.tanh(x_t))
+    y_t = outgate * c_t
+    i_output = T.outer(i_t, self.o_output)
+    i_h = T.outer(i_t, self.o_h)
+    # return: next outputs (# unit.n_act, y_t, c_t, ...)
+    return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
+
+
+class LEAKYLPLSTM(Unit):
+  """
+  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  The simplified equations can be seen in Table 7, page 36.
+  Type A.
+  This cell has 4 units like the LSTM
+  """
+  def __init__(self, n_units, **kwargs):
+    super(LEAKYLPLSTM, self).__init__(
+      n_units=n_units,
+      n_in=n_units * 4,  # forget gate (FG), output gate 1 (OG1), output gate 2 (OG2), net input (IN)
+      n_out=n_units,
+      n_re=n_units * 4,
+      n_act=2  # output, cell state
+    )
+    self.o_output = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+    self.o_h = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+
+  def step(self, i_t, x_t, z_t, y_p, c_p, *other_args):
+    # See Unit.scan() for seqs.
+    # args: seqs (x_t = unit.xc, z_t, i_t), outputs (# unit.n_act, y_p, c_p, ...), non_seqs (none)
+    other_outputs = []
+    if self.recurrent_transform:
+      state_vars = other_args[:len(self.recurrent_transform.state_vars)]
+      self.recurrent_transform.set_sorted_state_vars(state_vars)
+      z_r, r_updates = self.recurrent_transform.step(y_p)
+      z_t += z_r
+      for v in self.recurrent_transform.get_sorted_state_vars():
+        other_outputs += [r_updates[v]]
+    z_t += T.dot(y_p, self.W_re)
+    partition = z_t.shape[1] // 4 #number of units
+    forgetgate = T.nnet.sigmoid(z_t[:,:partition])
+    outgate1 = T.nnet.sigmoid(z_t[:,partition:2*partition])
+    outgate2 = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+    input = T.tanh(z_t[:,3*partition:4*partition])
+    # c(t) = (1 - FG(t)) * IN(t) + FG(t) * c(t-1)
+    c_t = (1-forgetgate) * input + forgetgate * c_p
+    # y(t) = tanh( OG1(t) * c(t) + OG2(t) * c(t-1) ) HINT: The additional nonlinearity maybe has not a significant effect
+    y_t = T.tanh(outgate1 * c_t + outgate2 * c_p)
+    i_output = T.outer(i_t, self.o_output)
+    i_h = T.outer(i_t, self.o_h)
+    # return: next outputs (# unit.n_act, y_t, c_t, ...)
+    return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
+
+
+class PIDLSTM(Unit):
+  """
+  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  The simplified equations can be seen in Table 7, page 36.
+  Type E. This cell works as a dynamic PID filter of the input. The forget gate
+  determines if it has PD od PI characteristic, the Proportional gate gates the P/I part,
+  the Difference gate the D/P part. It can have advantages if there is no subsampling in
+  the layer.
+  This cell has 4 units like the LSTM
+  """
+  def __init__(self, n_units, **kwargs):
+    super(PIDLSTM, self).__init__(
+      n_units=n_units,
+      n_in=n_units * 4,  # forget gate (FG), Proportinal gate (PG), Difference gate (DG), net input (IN)
+      n_out=n_units,
+      n_re=n_units * 4,
+      n_act=2  # output, cell state
+    )
+    self.o_output = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+    self.o_h = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+
+  def step(self, i_t, x_t, z_t, y_p, c_p, *other_args):
+    # See Unit.scan() for seqs.
+    # args: seqs (x_t = unit.xc, z_t, i_t), outputs (# unit.n_act, y_p, c_p, ...), non_seqs (none)
+    other_outputs = []
+    if self.recurrent_transform:
+      state_vars = other_args[:len(self.recurrent_transform.state_vars)]
+      self.recurrent_transform.set_sorted_state_vars(state_vars)
+      z_r, r_updates = self.recurrent_transform.step(y_p)
+      z_t += z_r
+      for v in self.recurrent_transform.get_sorted_state_vars():
+        other_outputs += [r_updates[v]]
+    z_t += T.dot(y_p, self.W_re)
+    partition = z_t.shape[1] // 4 #number of units
+    forgetgate = T.nnet.sigmoid(z_t[:,:partition])
+    propgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
+    diffgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+    input = T.tanh(z_t[:,3*partition:4*partition])
+    # c(t) = (1 - FG(t)) * IN(t) + FG(t) * c(t-1)
+    c_t = (1-forgetgate) * input + forgetgate * c_p
+    # y(t) = tanh( PG(t) * c(t) + DG(t) * ( c(t) - c(t-1)) ) HINT: The additional nonlinearity maybe has not a significant effect
+    y_t = T.tanh(propgate * c_t + diffgate * ( c_t - c_p))
+    i_output = T.outer(i_t, self.o_output)
+    i_h = T.outer(i_t, self.o_h)
+    # return: next outputs (# unit.n_act, y_t, c_t, ...)
+    return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
+
 
 class LSTMP(Unit):
   """

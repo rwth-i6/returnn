@@ -439,6 +439,9 @@ class Device(object):
       if self.gradient_norm is not None:
         self.train_outputs_format += ["gradient_norm"]
         outputs += [self.gradient_norm]
+      if config.bool("debug_output_constraints", False):
+        self.train_outputs_format += ["constraints:" + out for out in sorted(self.trainnet.constraints.keys())]
+        outputs += [self.trainnet.constraints[out] for out in sorted(self.trainnet.constraints.keys())]
 
       if self.updater:
         self.updater.initVars(self.trainnet, self.gradients)
