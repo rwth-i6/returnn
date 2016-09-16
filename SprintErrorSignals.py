@@ -701,7 +701,7 @@ class SprintErrorSigOp(theano.Op):
       print >> log.v1, "SprintErrorSigOp forward time:", forward_time
 
 
-  class SprintAlignmentAutomataOp(theano.Op):
+class SprintAlignmentAutomataOp(theano.Op):
   """
   Op: maps segment names (tags) to fsa automata (using sprint) that can be used to compute a BW-alignment
   """
