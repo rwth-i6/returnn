@@ -667,8 +667,8 @@ class UnsupervisedOutputLayer(OutputLayer):
     K = -T.sum(T.sum(pc * T.log(shyp),axis=2),axis=0)
     K = T.sum(T.sum(pc * T.log(pc/shyp), axis=2), axis=0)
     #K = T.sum(T.sum(hyp * T.log(hyp/shyp), axis=2), axis=0)
-    #Q = -T.sum(T.sum(pcx * T.log(pcx),axis=2),axis=0)
-    Q = -T.sum(T.log(T.max(pcx, axis=2)), axis=0)
+    Q = -T.sum(T.sum(pcx * T.log(pcx),axis=2),axis=0)
+    #Q = -T.sum(T.log(T.max(pcx, axis=2)), axis=0)
     #Q = -T.sum(T.sum(spcx * T.log(spcx), axis=2), axis=0)
     #L = -T.sum(T.sum(pc * T.log(hyp), axis=2), axis=0) - T.sum(T.log(T.max(pcx,axis=2)), axis=0)
     #nyp = T.mean(nxc, axis=1, keepdims=True)
@@ -697,6 +697,7 @@ class UnsupervisedOutputLayer(OutputLayer):
     #self.L = T.sum(T.minimum(L,K)) + T.sum(Q)# + T.sum(R)
     self.L = T.sum(K)*T.sum(L) + T.sum(Q)  # + T.sum(R)
     self.L = T.sum(K) * T.sum(L) + T.sum(Q)  # + T.sum(R)
+    self.L = T.sum(K) + T.sum(Q)  # + T.sum(R)
     #pcx = T.switch(T.le(T.sum(L),T.sum(K)),pcx,spcx)
     pcx = spcx
     #self.L = T.sum(L+Q) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
