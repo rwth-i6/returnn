@@ -467,7 +467,7 @@ class SequenceOutputLayer(OutputLayer):
                                    custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
                                    custom_update_normalized=not exp_average,
                                    custom_update_exp_average=exp_average)
-      self.log_prior = T.log(self.priors)
+      self.log_prior = T.log(T.maximum(self.priors,numpy.float32(1e-20)))
     self._maybe_substract_prior_from_output()
 
   def index_for_ctc(self):
