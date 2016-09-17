@@ -170,7 +170,7 @@ class CNN(_NoOpLayer):
   # function for calculating the weight parameter of convolution layer
   def create_weights(self, filter_shape, pool_size, factor):
     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
-    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:])) # / numpy.prod(pool_size))
     #         (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor

@@ -284,7 +284,7 @@ class ConvPoolLayer2(ConvBaseLayer):
       return x
     fixed_X, _ = theano.scan(pad_fn, [self.X.dimshuffle(2,0,1,3), T.cast(sizes_raw, "int32")])
     fixed_X = fixed_X.dimshuffle(1,2,0,3)
-    self.X = ifelse(size_problem, fixed_X, self.X)
+    self.X = ifelse(size_problem, T.unbroadcast(fixed_X,3), self.X)
     #end handle size problems
 
     self.output_sizes = self.output_size_from_input_size(sizes)
