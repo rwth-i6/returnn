@@ -633,85 +633,50 @@ class SequenceOutputLayer(OutputLayer):
 
 from TheanoUtil import print_to_file
 class UnsupervisedOutputLayer(OutputLayer):
-  def __init__(self, base, confidence=1.0, oracle=False, msteps=1, esteps=1, **kwargs):
+  def __init__(self, base, momentum=0.1, oracle=False, msteps=100, esteps=200, **kwargs):
     kwargs['loss'] = 'ce'
     super(UnsupervisedOutputLayer, self).__init__(**kwargs)
     if base:
       self.set_attr('base', base[0].name)
-    self.set_attr('confidence', confidence)
+    self.set_attr('momentum', momentum)
     self.set_attr('oracle', oracle)
+    self.set_attr('msteps', msteps)
+    self.set_attr('esteps', esteps)
     eps = T.constant(1e-30,'float32')
     pc = theano.gradient.disconnected_grad(base[1].output)  # TBV
     pc = print_to_file('pc', pc)
     pcx = base[0].output  # TBV
-    spcx = T.sort(pcx,2)[:,:,::-1]
 
-    domax = T.ge(T.mod(self.network.epoch,msteps+esteps),esteps)
-    #confidence = T.constant(confidence,'float32')
+    self.cnt = self.add_param(theano.shared(numpy.zeros((1,), 'float32'), 'cnt'), custom_update=T.constant(1, 'float32'))
+    domax = T.ge(T.mod(T.cast(self.cnt[0],'int32'), numpy.int32(msteps + esteps)), esteps)
+
     hyp = T.mean(pcx, axis=1, keepdims=True)
-    hyp = hyp/hyp.sum(axis=2,keepdims=True)
+    hyp = hyp / hyp.sum(axis=2,keepdims=True)
 
-    self.hyp = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'hyp'), 'hyp',
+    self.hyp = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out']), 'hyp'), 'hyp',
                               custom_update=T.mean(hyp[:,0,:],axis=0),
                               custom_update_condition=domax,
-                              custom_update_normalized=True)
-
-    ntr = 0.5
-    hyp = numpy.float32(ntr) * hyp + numpy.float32(1. - ntr) * self.hyp.dimshuffle('x','x',0).repeat(hyp.shape[1],axis=1).repeat(hyp.shape[0],axis=0)
+                              custom_update_normalized=True,
+                              custom_update_exp_average=1./(1.-momentum))
+    hyp = numpy.float32(1. - momentum) * hyp + numpy.float32(momentum) * self.hyp.dimshuffle('x','x',0).repeat(hyp.shape[1],axis=1).repeat(hyp.shape[0],axis=0)
 
     order = T.argsort(self.hyp)[::-1]
-    order = print_to_file('order', order)
-    #shyp = hyp[T.arange(hyp.shape[0]),T.arange(hyp.shape[1]),order]
-    #spcx = pcx[T.arange(pcx.shape[0]),T.arange(pcx.shape[1]),order]
+    #order = print_to_file('order', order)
 
     shyp = hyp[:, :, order]
     spcx = pcx[:, :, order]
 
-    pcx = print_to_file('pcx', pcx)
-    hyp = print_to_file('hyp',hyp)
-    shyp = print_to_file('shyp', shyp)
-    L = -T.sum(T.sum(pc * T.log(hyp),axis=2),axis=0)
-    L = T.sum(T.sum(pc * T.log(pc/hyp), axis=2), axis=0)
-    K = -T.sum(T.sum(pc * T.log(shyp),axis=2),axis=0)
-    K = T.sum(T.sum(pc * T.log(pc/shyp), axis=2), axis=0)
-    #K = T.sum(T.sum(hyp * T.log(hyp/shyp), axis=2), axis=0)
-    Q = -T.sum(T.sum(pcx * T.log(pcx),axis=2),axis=0)
-    #Q = -T.sum(T.log(T.max(pcx, axis=2)), axis=0)
-    #Q = -T.sum(T.sum(spcx * T.log(spcx), axis=2), axis=0)
-    #L = -T.sum(T.sum(pc * T.log(hyp), axis=2), axis=0) - T.sum(T.log(T.max(pcx,axis=2)), axis=0)
-    #nyp = T.mean(nxc, axis=1, keepdims=True)
-    #nyp = nyp / nyp.sum(axis=2, keepdims=True)
-    #nc_x = T.sum(nxc * npc, axis=2)
-    #nc_x = T.max(nxc * npc, axis=2)
-    #L += -T.sum(T.sum(npc * T.log(nyp),axis=2),axis=0) - T.sum(T.log(nc_x),axis=0)
-    #Q = -T.sum(T.log(T.max(pxc,axis=2)/base[0].pm),axis=0)
-    #ent = T.mean(pcx, axis=1, keepdims=True)
-    #ent = ent / (ent.sum(axis=2, keepdims=True) + eps) + eps
-    #Q = -T.sum(T.log(T.max(ent,axis=2),axis=0))
-    #Q = T.sum(base[0].punk * T.log(base[0].punk/T.max(pcx,axis=2,keepdims=True)))
-    #Q = T.log(T.max(base[0].punk,axis=2))
-    #Q = T.sum(T.log(base[0].pm * T.log(T.max(hcx, axis=2) / base[0].pm)))
-    #Q = -T.sum(T.log(T.max(hcx/base[0].pm, axis=2,keepdims=True)),axis=0) #+ T.sum(T.log(T.max(base[0].punk,axis=2)),axis=0)
-    #L += T.sum(T.mean(hyp * T.log(T.maximum(hyp / ent, eps)),axis=1)) / (confidence+1) # (self.L - T.sum(pc * T.log(T.maximum(pc / hyp, eps))))**2 + self.L #/ self.L
+    #spcx = print_to_file('pcx', spcx)
+    #shyp = print_to_file('shyp', shyp)
 
-    #Q = T.sum(pc * T.log(T.max(pc / ent, eps)))
-    L = print_to_file('L', L)
-    K = print_to_file('K', K)
-    Q = print_to_file('Q', Q)
+    K = numpy.float32(1./(1.-momentum)) * T.sum(T.sum(pc * T.log(pc/shyp), axis=2), axis=0)
+    Q = -T.sum(T.sum(pcx * T.log(pcx),axis=2),axis=0)
+
+    #K = print_to_file('K', K)
+    #Q = print_to_file('Q', Q)
 
     self.L = T.sum(T.switch(domax,Q,K))
-    #self.L = T.sum(T.maximum(L, Q))
-    #self.L = T.sum(T.switch(T.ge(L, Q), L, Q))
-    #self.L = T.sum(T.minimum(L,K)) + T.sum(Q)# + T.sum(R)
-    #self.L = T.sum(K)*T.sum(L) + T.sum(Q)  # + T.sum(R)
-    #self.L = T.sum(K) * T.sum(L) + T.sum(Q)  # + T.sum(R)
-    #self.L = T.sum(K) + T.sum(Q)  # + T.sum(R)
-    #pcx = T.switch(T.le(T.sum(L),T.sum(K)),pcx,spcx)
-    pcx = spcx
-    #self.L = T.sum(L+Q) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
-    self.y_m = pcx.reshape((pcx.shape[0] * pcx.shape[1], pcx.shape[2]))
-    #self.x_m = pxc.reshape((pxc.shape[0] * pxc.shape[1], pxc.shape[2]))
-    #self.punk = base[0].punk.reshape(self.x_m.shape)
+    self.y_m = spcx.reshape((spcx.shape[0] * spcx.shape[1], spcx.shape[2]))
 
   def cost(self):
     known_grads = None
