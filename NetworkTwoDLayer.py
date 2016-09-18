@@ -134,7 +134,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     self.index, _ = theano.scan(index_fn, [index_init, T.cast(sizes[:,1],"int32")])
     self.index = self.index.dimshuffle(1, 0)
 
-    if collapse_output == 'sum':
+    if collapse_output == 'sum' or collapse_output == True:
       Y = Y.sum(axis=0)
       #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':

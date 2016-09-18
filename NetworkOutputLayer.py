@@ -32,6 +32,7 @@ class OutputLayer(Layer):
                use_source_index=False,
                compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
+               exclude_labels=[],
                apply_softmax=True,
                substract_prior_from_output=False,
                input_output_similarity=None,
@@ -159,8 +160,11 @@ class OutputLayer(Layer):
     #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
-    self.i = (self.index.flatten() > 0).nonzero()
-    self.j = ((1 - self.index.flatten()) > 0).nonzero()
+    index_flat = self.index.flatten()
+    for label in exclude_labels:
+      index_flat = T.set_subtensor(index_flat[(T.eq(self.y_data_flat, label) > 0).nonzero()], numpy.int8(0))
+    self.i = (index_flat > 0).nonzero()
+    self.j = ((1 - index_flat) > 0).nonzero()
     self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
     if compute_priors:
@@ -649,7 +653,11 @@ class UnsupervisedOutputLayer(OutputLayer):
 
     self.hyp = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'hyp'), 'hyp',
                               custom_update=T.mean(hyp[:,0,:],axis=0),
+                              custom_update_condition=domax,
                               custom_update_normalized=True)
+
+    ntr = 0.5
+    hyp = numpy.float32(ntr) * hyp + numpy.float32(1. - ntr) * self.hyp.dimshuffle('x','x',0).repeat(hyp.shape[1],axis=1).repeat(hyp.shape[0],axis=0)
 
     order = T.argsort(self.hyp)[::-1]
     order = print_to_file('order', order)
@@ -691,13 +699,13 @@ class UnsupervisedOutputLayer(OutputLayer):
     K = print_to_file('K', K)
     Q = print_to_file('Q', Q)
 
-    #self.L = T.sum(T.switch(domax,L,Q))
+    self.L = T.sum(T.switch(domax,Q,K))
     #self.L = T.sum(T.maximum(L, Q))
     #self.L = T.sum(T.switch(T.ge(L, Q), L, Q))
     #self.L = T.sum(T.minimum(L,K)) + T.sum(Q)# + T.sum(R)
-    self.L = T.sum(K)*T.sum(L) + T.sum(Q)  # + T.sum(R)
-    self.L = T.sum(K) * T.sum(L) + T.sum(Q)  # + T.sum(R)
-    self.L = T.sum(K) + T.sum(Q)  # + T.sum(R)
+    #self.L = T.sum(K)*T.sum(L) + T.sum(Q)  # + T.sum(R)
+    #self.L = T.sum(K) * T.sum(L) + T.sum(Q)  # + T.sum(R)
+    #self.L = T.sum(K) + T.sum(Q)  # + T.sum(R)
     #pcx = T.switch(T.le(T.sum(L),T.sum(K)),pcx,spcx)
     pcx = spcx
     #self.L = T.sum(L+Q) #*T.max(base[0].punk / ((hcx).sum(axis=2, keepdims=True)),axis=2))
