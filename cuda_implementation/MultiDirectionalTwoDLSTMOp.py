@@ -77,7 +77,7 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     if(%(DX)s || %(DW1)s || %(DW2)s || %(DW3)s || %(DW4)s ||
        %(DV_h1)s || %(DV_h2)s || %(DV_h3)s || %(DV_h4)s ||
        %(DV_v1)s || %(DV_v2)s || %(DV_v3)s || %(DV_v4)s ||
-       %(Db1)s || %(Db1)s || %(Db1)s || %(Db1)s)
+       %(Db1)s || %(Db2)s || %(Db3)s || %(Db4)s)
     {
       cout << "output storage already exists" << endl;
       //TODO check if we can reuse it
