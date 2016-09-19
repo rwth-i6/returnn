@@ -403,7 +403,7 @@ class SequenceOutputLayer(OutputLayer):
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                loss_like_ce=False, trained_softmax_prior=False,
-               sprint_opts=None,
+               sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
@@ -450,6 +450,8 @@ class SequenceOutputLayer(OutputLayer):
     self.sprint_opts = sprint_opts
     if sprint_opts:
       self.set_attr("sprint_opts", sprint_opts)
+    if warp_ctc_lib:
+      self.set_attr("warp_ctc_lib", warp_ctc_lib)
     self.initialize()
 
   def initialize(self):
@@ -595,17 +597,16 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'warp_ctc':
+      import os
+      os.environ['CTC_LIB'] = self.attrs.get('warp_ctc_lib',os.getcwd())
       try:
-        import ctc
+        from theano_ctc import ctc_cost
       except Exception:
-        assert False, "install this: https://github.com/sherjilozair/ctc"
-      from theano.tensor.extra_ops import cpu_contiguous
-      cost = ctc.cpu_ctc_th(self.z, self.index_for_ctc(),
-                            cpu_contiguous(self.y_data_flat), T.cast(T.sum(T.cast(self.index,'int32'), axis=0),'int32'))
-      cost = T.mean(T.switch(T.or_(T.isnan(cost), T.isinf(cost)),
-                            numpy.float32(-numpy.log(1. / self.attrs['n_out'])),
-                            cost))
+        assert False, "install this: https://github.com/mcf06/theano_ctc"
       from TheanoUtil import print_to_file
+      yr = T.set_subtensor(self.y_data_flat[self.j],numpy.int32(-1)).reshape(self.y.shape)
+      yr = print_to_file('yr', yr)
+      cost = T.mean(ctc_cost(self.output, yr, self.index_for_ctc()))
       cost = print_to_file('cost',cost)
       return cost, known_grads
     elif self.loss == 'ce_ctc':
