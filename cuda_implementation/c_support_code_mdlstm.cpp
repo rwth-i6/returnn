@@ -664,6 +664,200 @@ void do_lstm_bwd_batched_multidir(CudaNdarray * delta1, CudaNdarray * delta2, Cu
   CHECK_KERNEL_ERROR();
 }
 
+void do_lstm_batched_bidir(CudaNdarray * H1, CudaNdarray * H2, CudaNdarray * out1, CudaNdarray * out2,
+ const vector<int>& ys, const vector<int>& xs,
+ CudaNdarray * ptr_storage, CudaNdarray * valid_storage, PyArrayObject * sizes, cudaStream_t stream=0)
+{
+  //CudaNdarray_print_part(H1);
+
+  int n_outer_batch = ys.size();
+  const int * H1_dims = CudaNdarray_HOST_DIMS(H1);
+  int height = H1_dims[0];
+  int width = H1_dims[1];
+  int n_minibatch = H1_dims[2];
+  int n_cells = H1_dims[3] / 5;
+  assert(H1_dims[3] % 5 == 0); //4 gates + cell
+
+  vector<float*> ptrs(2 * 5 * n_outer_batch); //4 dirs * 5 arrays
+  vector<float> valid(2 * n_minibatch * n_outer_batch, 1.0f);
+  for(int i = 0; i < n_outer_batch; ++i)
+  {
+    int y = ys[i];
+    int x = xs[i];
+
+    //fill valid
+    for(int n = 0; n < n_minibatch; ++n)
+    {
+      //these are the sizes of a single image in the batch, while height/width are the maximum sizes in the batch
+      int img_height = int(*(reinterpret_cast<const float*>(PyArray_DATA(sizes)) + 2 * n));
+      int img_width = int(*(reinterpret_cast<const float*>(PyArray_DATA(sizes)) + 2 * n + 1));
+      valid[i * 2 * n_minibatch + 0 * n_minibatch + n] = float(y < img_height && x < img_width);
+      valid[i * 2 * n_minibatch + 1 * n_minibatch + n] = float(y < img_height && (width - x) <= img_width);
+    }
+
+    //y not flipped, x not flipped
+    float * data_H1 = data_ptr(H1, y, x);
+    //y not flipped, x flipped
+    float * data_H2 = data_ptr(H2, y, (width - 1) - x);
+
+    //y not flipped, x not flipped
+    float * data_old_state_y1 = y > 0 ? data_ptr(H1, y - 1, x) + 2 * n_cells : 0;
+    //y flipped, x not flipped
+    float * data_old_state_y2 = y > 0 ? data_ptr(H2, y - 1, (width - 1) - x) + 2 * n_cells : 0;
+
+    //y not flipped, x not flipped
+    float * data_old_state_x1 = x > 0 ? data_ptr(H1, y, x - 1) + 2 * n_cells : 0;
+    //y not flipped, x flipped
+    float * data_old_state_x2 = x > 0 ? data_ptr(H2, y, (width - 1) - (x - 1)) + 2 * n_cells : 0;
+
+    //y not flipped, x not flipped
+    float * data_out1 = data_ptr(out1, y, x);
+    //y not flipped, x flipped
+    float * data_out2 = data_ptr(out2, y, (width - 1) - x);
+
+    float * valid1 = CudaNdarray_DEV_DATA(valid_storage) + i * 2 * n_minibatch + 0 * n_minibatch;
+    float * valid2 = CudaNdarray_DEV_DATA(valid_storage) + i * 2 * n_minibatch + 1 * n_minibatch;
+
+    ptrs[0 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_H1;
+    ptrs[0 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_H2;
+
+    ptrs[1 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_old_state_y1;
+    ptrs[1 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_old_state_y2;
+
+    ptrs[2 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_old_state_x1;
+    ptrs[2 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_old_state_x2;
+
+    ptrs[3 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_out1;
+    ptrs[3 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_out2;
+
+    ptrs[4 * 2 * n_outer_batch + 0 * n_outer_batch + i] = valid1;
+    ptrs[4 * 2 * n_outer_batch + 1 * n_outer_batch + i] = valid2;
+  }
+
+  HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(valid_storage), valid.data(),
+    valid.size() * sizeof(float), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(ptr_storage), ptrs.data(),
+    ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice));
+  float ** ptr_storage_data = reinterpret_cast<float**>(CudaNdarray_DEV_DATA(ptr_storage));
+  float ** data_Hs = ptr_storage_data + 0 * 2 * n_outer_batch;
+  const float ** data_old_state_ys = (const float**) ptr_storage_data + 1 * 2 * n_outer_batch;
+  const float ** data_old_state_xs = (const float**) ptr_storage_data + 2 * 2 * n_outer_batch;
+  float ** data_outs = ptr_storage_data + 3 * 2 * n_outer_batch;
+  const float ** data_valids = (const float**) (ptr_storage_data + 4 * 2 * n_outer_batch);
+
+  lstm_stable_cell_kernel_batched<<<DIM_GRID, DIM_BLOCK, 0, stream>>>(data_Hs, data_old_state_ys, data_old_state_xs,
+    data_outs, data_valids, 2 * n_outer_batch, n_cells, n_minibatch);
+  CHECK_KERNEL_ERROR();
+}
+
+//epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
+void do_lstm_bwd_batched_bidir(CudaNdarray * delta1, CudaNdarray * delta2, CudaNdarray * epsilon1, CudaNdarray * epsilon2,
+ const CudaNdarray * Y1, const CudaNdarray * Y2, CudaNdarray * workmem1, CudaNdarray * workmem2,
+ int height, int width, const vector<int>& ys, const vector<int>& xs,
+ CudaNdarray * ptr_storage, CudaNdarray * valid_storage, PyArrayObject * sizes, cudaStream_t stream=0)
+{
+  int n_outer_batch = ys.size();
+  int dims[2];
+  lastTwoDims(delta1, dims);
+  assert(dims[1] % 5 == 0); //4 gates + cell
+  int n_cells = dims[1] / 5;
+  int n_minibatch = dims[0];
+
+  vector<const float*> ptrs(2 * 10 * n_outer_batch); //2 dirs * 10 arrays
+  vector<float> valid(2 * n_minibatch * n_outer_batch, 1.0f);
+  for(int i = 0; i < n_outer_batch; ++i)
+  {
+    int y = ys[i];
+    int x = xs[i];
+
+    //fill valid
+    for(int n = 0; n < n_minibatch; ++n)
+    {
+      //these are the sizes of a single image in the batch, while height/width are the maximum sizes in the batch
+      int img_height = int(*(reinterpret_cast<const float*>(PyArray_DATA(sizes)) + 2 * n));
+      int img_width = int(*(reinterpret_cast<const float*>(PyArray_DATA(sizes)) + 2 * n + 1));
+      valid[i * 2 * n_minibatch + 0 * n_minibatch + n] = float(y < img_height && x < img_width);
+      valid[i * 2 * n_minibatch + 1 * n_minibatch + n] = float(y < img_height && (width - x) <= img_width);
+    }
+
+    bool botBorder = (y == height-1);
+    bool rightBorder = (x == width-1);
+    int y_flipped = (height - 1) - y;
+    int x_flipped = (width - 1) - x;
+    int yp1 = y + 1;
+    int yp1_flipped = (height - 1) - (y + 1);
+    int xp1 = x + 1;
+    int xp1_flipped = (width - 1) - (x + 1);
+    int ym1 = y - 1;
+    int ym1_flipped = (height - 1) - (y - 1);
+    int xm1 = x - 1;
+    int xm1_flipped = (width - 1) - (x - 1);
+
+    float * data_delta1 = data_ptr(delta1, y, x);
+    float * data_delta2 = data_ptr(delta2, y, x_flipped);
+    const float * data_epsilon1 = data_ptr(epsilon1, y, x);
+    const float * data_epsilon2 = data_ptr(epsilon2, y, x_flipped);
+    const float * data_next_epsilon_y1 = botBorder ? 0 : data_ptr(workmem1, yp1, x, 0);
+    const float * data_next_epsilon_y2 = botBorder ? 0 : data_ptr(workmem2, yp1, x_flipped, 0);
+    const float * data_next_epsilon_x1 = rightBorder ? 0 : data_ptr(workmem1, y, xp1, 1);
+    const float * data_next_epsilon_x2 = rightBorder ? 0 : data_ptr(workmem2, y, xp1_flipped, 1);
+    float * data_epsilon_y1 = data_ptr(workmem1, y, x, 0);
+    float * data_epsilon_y2 = data_ptr(workmem2, y, x_flipped, 0);
+    float * data_epsilon_x1 = data_ptr(workmem1, y, x, 1);
+    float * data_epsilon_x2 = data_ptr(workmem2, y, x_flipped, 1);
+    const float * data_last_state_y1 = y > 0 ? data_ptr(delta1, ym1, x) + 2 * n_cells : 0;
+    const float * data_last_state_y2 = y > 0 ? data_ptr(delta2, ym1, x_flipped) + 2 * n_cells : 0;
+    const float * data_last_state_x1 = x > 0 ? data_ptr(delta1, y, xm1) + 2 * n_cells : 0;
+    const float * data_last_state_x2 = x > 0 ? data_ptr(delta2, y, xm1_flipped) + 2 * n_cells : 0;
+    const float * data_Y1 = data_ptr(Y1, y, x);
+    const float * data_Y2 = data_ptr(Y2, y, x_flipped);
+    float * valid1 = CudaNdarray_DEV_DATA(valid_storage) + i * 2 * n_minibatch + 0 * n_minibatch;
+    float * valid2 = CudaNdarray_DEV_DATA(valid_storage) + i * 2 * n_minibatch + 1 * n_minibatch;
+
+    ptrs[0 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_delta1;
+    ptrs[0 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_delta2;
+    ptrs[1 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_epsilon1;
+    ptrs[1 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_epsilon2;
+    ptrs[2 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_next_epsilon_y1;
+    ptrs[2 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_next_epsilon_y2;
+    ptrs[3 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_next_epsilon_x1;
+    ptrs[3 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_next_epsilon_x2;
+    ptrs[4 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_epsilon_y1;
+    ptrs[4 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_epsilon_y2;
+    ptrs[5 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_epsilon_x1;
+    ptrs[5 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_epsilon_x2;
+    ptrs[6 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_last_state_y1;
+    ptrs[6 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_last_state_y2;
+    ptrs[7 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_last_state_x1;
+    ptrs[7 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_last_state_x2;
+    ptrs[8 * 2 * n_outer_batch + 0 * n_outer_batch + i] = data_Y1;
+    ptrs[8 * 2 * n_outer_batch + 1 * n_outer_batch + i] = data_Y2;
+    ptrs[9 * 2 * n_outer_batch + 0 * n_outer_batch + i] = valid1;
+    ptrs[9 * 2 * n_outer_batch + 1 * n_outer_batch + i] = valid2;
+  }
+  HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(valid_storage), valid.data(),
+    valid.size() * sizeof(float), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(ptr_storage), ptrs.data(),
+    ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice));
+  float ** ptr_storage_data = reinterpret_cast<float**>(CudaNdarray_DEV_DATA(ptr_storage));
+  float ** data_deltas = ptr_storage_data + 0 * 2 * n_outer_batch;
+  const float ** data_epsilons = (const float**) ptr_storage_data + 1 * 2 * n_outer_batch;
+  const float ** data_next_epsilon_ys = (const float**) ptr_storage_data + 2 * 2 * n_outer_batch;
+  const float ** data_next_epsilon_xs = (const float**) ptr_storage_data + 3 * 2 * n_outer_batch;
+  float ** data_epsilon_ys = ptr_storage_data + 4 * 2 * n_outer_batch;
+  float ** data_epsilon_xs = ptr_storage_data + 5 * 2 * n_outer_batch;
+  const float ** data_last_state_ys = (const float**) ptr_storage_data + 6 * 2 * n_outer_batch;
+  const float ** data_last_state_xs = (const float**) ptr_storage_data + 7 * 2 * n_outer_batch;
+  const float ** data_Ys = (const float**) ptr_storage_data + 8 * 2 * n_outer_batch;
+  const float ** data_valids = (const float**) (ptr_storage_data + 9 * 2 * n_outer_batch);
+
+  lstm_bwd_stable_cell_kernel_batched<<<DIM_GRID, DIM_BLOCK, 0, stream>>>(data_deltas, data_epsilons, data_next_epsilon_ys,
+    data_next_epsilon_xs, data_epsilon_ys, data_epsilon_xs, data_last_state_ys, data_last_state_xs,
+    data_Ys, data_valids, 2 * n_outer_batch, n_cells, n_minibatch);
+  CHECK_KERNEL_ERROR();
+}
+
+
 __global__ void repvec(const float * v, int vlen, int nCopies, float * dest)
 {
   int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -764,6 +958,74 @@ void affine_y_x_batched_multidir(int y_A, int x_A,
   }
   HANDLE_ERROR(cublasSgemmBatched(handle, transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, B_ptrs_data, ldB,
     A_ptrs_data, ldA, &beta, C_ptrs_data, B_dim[1], 4 * batch_size));
+}
+
+//ys and xs: base indices, offset by y_A, x_A (-1,0,1)
+void affine_y_x_batched_bidir(int y_A, int x_A,
+  const CudaNdarray * A1, const CudaNdarray * A2,
+  const CudaNdarray * B1, const CudaNdarray * B2,
+  CudaNdarray * C1, CudaNdarray * C2,
+  const vector<int>& ys, const vector<int>& xs, CudaNdarray * ptr_storage, int height, int width,
+  cudaStream_t stream = 0, bool transpose_A=false, bool transpose_B=false)
+{
+  const int batch_size = ys.size();
+  if(batch_size == 0)
+  {
+    return;
+  }
+  vector<const float*> ABC_ptrs(3 * 2 * batch_size); //content layout: 3x2xbatch_size (3: A,B,C, 2: dirs)
+
+  for(int i = 0; i < batch_size; ++i)
+  {
+    //A
+    //y not flipped, x not flipped
+    ABC_ptrs[0 * 2 * batch_size + 0 * batch_size + i] = data_ptr(A1, y_A + ys[i], x_A + xs[i]);
+    //y not flipped, x flipped
+    ABC_ptrs[0 * 2 * batch_size + 1 * batch_size + i] = data_ptr(A2, y_A + ys[i], (width - 1) - (x_A + xs[i]));
+
+    //B
+    //index doesent matter here, as B is only 2dimensional
+    ABC_ptrs[1 * 2 * batch_size + 0 * batch_size + i] = data_ptr(B1, 0, 0);
+    ABC_ptrs[1 * 2 * batch_size + 1 * batch_size + i] = data_ptr(B2, 0, 0);
+
+    //we write the result (C) in the same destination (y,x) as the source (A), so we don't need to flip later
+    //C
+    //y not flipped, x not flipped
+    ABC_ptrs[2 * 2 * batch_size + 0 * batch_size + i] = data_ptr(C1, ys[i], xs[i]);
+    //y not flipped, x flipped
+    ABC_ptrs[2 * 2 * batch_size + 1 * batch_size + i] = data_ptr(C2, ys[i], (width - 1) - xs[i]);
+  }
+  HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(ptr_storage), ABC_ptrs.data(),
+    ABC_ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice));
+  float ** ptr_storage_data = reinterpret_cast<float**>(CudaNdarray_DEV_DATA(ptr_storage));
+  const float ** A_ptrs_data = (const float**) ptr_storage_data + 0 * 2 * batch_size;
+  const float ** B_ptrs_data = (const float**) ptr_storage_data + 1 * 2 * batch_size;
+  float ** C_ptrs_data = ptr_storage_data + 2 * 2 * batch_size;
+
+  int A_dim[2], B_dim[2];
+  lastTwoDims(A1, A_dim);
+  lastTwoDims(B1, B_dim);
+  int ldB = B_dim[1];
+  int ldA = A_dim[1];
+  cublasOperation_t transA = transpose_A ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t transB = transpose_B ? CUBLAS_OP_T : CUBLAS_OP_N;
+  if (transpose_A)
+  {
+    std::swap(A_dim[0], A_dim[1]);
+  }
+  if (transpose_B)
+  {
+    std::swap(B_dim[0], B_dim[1]);
+  }
+
+  const float alpha = 1;
+  const float beta = 1;
+  if(stream)
+  {
+    HANDLE_ERROR(cublasSetStream(handle, stream));
+  }
+  HANDLE_ERROR(cublasSgemmBatched(handle, transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, B_ptrs_data, ldB,
+    A_ptrs_data, ldA, &beta, C_ptrs_data, B_dim[1], 2 * batch_size));
 }
 
 //offsets is used for x time-shifts of A and B
