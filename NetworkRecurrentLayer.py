@@ -289,8 +289,11 @@ class LSTMB(Unit):
     super(LSTMB, self).__init__(n_units, n_units * 4, n_units * 2, n_units * 4, 2)
 
   def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
-    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
-    result = BLSTMOpInstance(z,z[::-1],W_re, W_re, outputs_info[1], T.zeros_like(outputs_info[1]), i)
+    W_re_b = self.parent.add_param(
+      self.parent.create_recurrent_weights(self.n_units, self.n_re, name="W_re_b_%s" % self.parent.name))
+    z_f = T.inc_subtensor(z[0], T.dot(outputs_info[0],W_re))
+    z_b = T.inc_subtensor(z[-1], T.dot(outputs_info[0],W_re_b))[::-1]
+    result = BLSTMOpInstance(z_f,z_b, W_re, W_re_b, outputs_info[1], T.zeros_like(outputs_info[1]), i)
     return [ T.concatenate(result[:2],axis=2), T.concatenate(result[4:6],axis=1).dimshuffle('x',0,1) ]
 BLSTM = LSTMB # alternative name
 

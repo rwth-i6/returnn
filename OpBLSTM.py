@@ -203,8 +203,8 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
       #so we only mark that output 0 destroys input 0
       #anyway theano knows that input 0 will be destroyed, so it should be OK
       #TODO
-      self.destroy_map = {0: [0], 1: [1]} # use this if z_fw and z_bw differ
-      #self.destroy_map = {0: [0]}
+      #self.destroy_map = {0: [0], 1: [1]} # use this if z_fw and z_bw differ
+      self.destroy_map = {0: [0]}
 
   def __eq__(self, other):
     return type(self) == type(other) and self.inplace == other.inplace
