@@ -453,7 +453,7 @@ class SequenceOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw'), 'invalid loss: ' + self.loss
+    assert self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim = 2)
     if not self.attrs.get("apply_softmax", True):
       self.p_y_given_x_flat = self.y_m
@@ -478,7 +478,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return T.cast(source.output_sizes[:, 1], "int32")
-    return T.cast(T.sum(self.sources[0].index, axis=0), 'int32')
+    return T.cast(T.sum(T.cast(self.sources[0].index,'int32'), axis=0), 'int32')
 
   def output_index(self):
     for source in self.sources:
@@ -594,6 +594,20 @@ class SequenceOutputLayer(OutputLayer):
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
+    elif self.loss == 'warp_ctc':
+      try:
+        import ctc
+      except Exception:
+        assert False, "install this: https://github.com/sherjilozair/ctc"
+      from theano.tensor.extra_ops import cpu_contiguous
+      cost = ctc.cpu_ctc_th(self.z, self.index_for_ctc(),
+                            cpu_contiguous(self.y_data_flat), T.cast(T.sum(T.cast(self.index,'int32'), axis=0),'int32'))
+      cost = T.mean(T.switch(T.or_(T.isnan(cost), T.isinf(cost)),
+                            numpy.float32(-numpy.log(1. / self.attrs['n_out'])),
+                            cost))
+      from TheanoUtil import print_to_file
+      cost = print_to_file('cost',cost)
+      return cost, known_grads
     elif self.loss == 'ce_ctc':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x = T.nnet.softmax(y_m)
@@ -620,7 +634,7 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'viterbi':
@@ -630,6 +644,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors()
     else:
       return super(SequenceOutputLayer, self).errors()
+
 
 from TheanoUtil import print_to_file
 class UnsupervisedOutputLayer(OutputLayer):
