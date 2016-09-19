@@ -1199,6 +1199,25 @@ class TimeConcatLayer(HiddenLayer):
     self.index = T.concatenate([x.index for x in self.sources],axis=0)
 
 
+class KernelLayer(ForwardLayer):
+  layer_class = "kernel"
+
+  def __init__(self, kernel='gauss', base=None, sigma=4.0, **kwargs):
+    super(KernelLayer, self).__init__(**kwargs)
+    self.params = {}
+    sigma = T.constant(sigma,'float32')
+    m = self.sources[0].output.dimshuffle('x', 1, 0, 2).repeat(base[0].output.shape[0],axis=0)  # TBVD
+    self.pm = numpy.float32(1) / T.sqrt(T.constant(numpy.float32(2)*numpy.pi,'float32')*sigma)
+    x = base[0].output.dimshuffle(0, 1, 'x', 2).repeat(m.shape[2], axis=2)  # TBVD
+    self.punk = T.exp(-T.sum((x - m.mean(axis=2,keepdims=True))**2/sigma,axis=3)) / T.sqrt(T.constant(numpy.float32(2)*numpy.pi,'float32')*sigma)  # TBVD
+    q = (m.sum(axis=2,keepdims=True) - m) / T.cast(m.shape[2]-1,'float32')
+    if kernel == 'gauss':
+      self.negative = T.exp(-T.sum((x - q)**2/sigma,axis=3)) / T.sqrt(T.constant(numpy.float32(2)*numpy.pi,'float32')*sigma)
+      self.output = T.exp(-T.sum((x - m)**2/sigma,axis=3)) / T.sqrt(T.constant(numpy.float32(2)*numpy.pi,'float32')*sigma)
+    else:
+      raise NotImplementedError()
+
+
 class CollapseLayer(HiddenLayer):
   layer_class = "collapse"
 

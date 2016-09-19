@@ -3,6 +3,7 @@ from Log import log
 from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
 from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance, CropToBatchImageSizeZeroInstance
 from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
+from cuda_implementation.BiDirectionalTwoDLSTMOp import BidirectionalTwoDLSTMOpInstance
 from cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
 from cuda_implementation.PoolHWBCOp import PoolHWBCOp
 from cuda_implementation.FractionalMaxPoolingOp import fmp
@@ -78,6 +79,64 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     self.set_attr('n_out', n_out)
 
 
+class DeepLSTM(TwoDBaseLayer):
+  layer_class = "deep_lstm"
+  recurrent = True
+
+  def __init__(self, n_out, depth, **kwargs):
+    super(DeepLSTM, self).__init__(n_out, **kwargs)
+    X = T.concatenate([s.output for s in self.sources],axis=2).dimshuffle('x',0,1,2).repeat(depth,axis=0)
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    assert X.dtype == "float32"
+
+    width = T.maximum(T.sum(self.index, axis=0), T.ones_like(self.index[0]))
+    batch = X.shape[2]
+    sizes = T.zeros((batch, 2), dtype="float32")
+    sizes = T.set_subtensor(sizes[:, 0], numpy.float32(depth))
+    sizes = T.set_subtensor(sizes[:, 1], T.cast(width,'float32'))
+    X = T.unbroadcast(X, 0)
+    self.output_sizes = sizes
+
+    # dropout
+    assert len(self.masks) == 1
+    mask = self.masks[0]
+    if mask is not None:
+      X = self.mass * mask * X
+
+    b1 = self.create_and_add_bias(n_out, "1")
+    b2 = self.create_and_add_bias(n_out, "2")
+
+    W1, V_h1, V_v1 = self.create_and_add_2d_lstm_weights(n_in, n_out, "1")
+    W2, V_h2, V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
+
+    if str(theano.config.device).startswith('cpu'):
+      Y = T.zeros_like(X)
+    else:
+      Y1, Y2 = BidirectionalTwoDLSTMOpInstance(X, W1, W2, V_h1, V_h2, V_v1, V_v2, b1, b2, sizes)[:2]
+      Y = T.concatenate([Y1,Y2],axis=3)
+
+    Y.name = 'Y'
+    self.set_attr('n_out', n_out*2)
+    self.output = Y[-1]
+
+  def create_and_add_2d_lstm_weights(self, n, m, name_suffix):
+    W, U, V = self.create_xavier_weights((n, 5 * m), "W" + name_suffix), \
+              self.create_xavier_weights((m, 5 * m), "U" + name_suffix), \
+              self.create_xavier_weights((m, 5 * m), "V" + name_suffix)
+    W = self.add_param(W)
+    U = self.add_param(U)
+    V = self.add_param(V)
+    return W, U, V
+
+
+  def create_and_add_bias(self, n_cells, name_suffix):
+    b_val = numpy.zeros((5 * n_cells,), dtype=theano.config.floatX)
+    b_val[1 * n_cells:2 * n_cells] = forget_gate_initial_bias
+    b_val[2 * n_cells:3 * n_cells] = lambda_gate_initial_bias
+    b = theano.shared(b_val, borrow=True, name="b" + name_suffix + "_" + self.name)
+    b = self.add_param(b)
+    return b
+
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
 
@@ -134,7 +193,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     self.index, _ = theano.scan(index_fn, [index_init, T.cast(sizes[:,1],"int32")])
     self.index = self.index.dimshuffle(1, 0)
 
-    if collapse_output == 'sum':
+    if collapse_output == 'sum' or collapse_output == True:
       Y = Y.sum(axis=0)
       #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':
@@ -284,7 +343,7 @@ class ConvPoolLayer2(ConvBaseLayer):
       return x
     fixed_X, _ = theano.scan(pad_fn, [self.X.dimshuffle(2,0,1,3), T.cast(sizes_raw, "int32")])
     fixed_X = fixed_X.dimshuffle(1,2,0,3)
-    self.X = ifelse(size_problem, fixed_X, self.X)
+    self.X = ifelse(size_problem, T.unbroadcast(fixed_X,3), self.X)
     #end handle size problems
 
     self.output_sizes = self.output_size_from_input_size(sizes)

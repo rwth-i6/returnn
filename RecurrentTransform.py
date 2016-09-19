@@ -519,7 +519,8 @@ class AttentionList(AttentionBase):
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
     c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-    z_p = T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0) + T.dot(y_p, W_att_re) + b_att_re
+    #z_p = T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0) + T.dot(y_p, W_att_re) + b_att_re
+    z_p = T.dot(y_p, W_att_re) + b_att_re
     if self.attrs['momentum'] == 'conv1d':
       from theano.tensor.nnet import conv
       att = self.item('att', i)

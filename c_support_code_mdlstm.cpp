@@ -318,6 +318,47 @@ void do_lstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray *
 	 data_old_state, x > 0, data_Y, n_cells, n_batch, data_i);
 }
 
+void do_blstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x, const CudaNdarray * i)
+{
+	assert(y == 0 && "2d LSTM not supported yet");
+	int dims[2];
+	lastTwoDims(H, dims);
+	assert(dims[1] % 8 == 0); //3 gates + cell
+	int n_cells = dims[1] / 4;
+	int n_batch = dims[0];
+
+	float * data_H = data_ptr(H, y, x);
+	const float * data_prev = CudaNdarray_DEV_DATA(prev);
+	const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
+	float * data_out = data_ptr(out, y, x);
+	const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
+	//TODO tune launch configuration
+	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i);
+}
+
+//epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
+//Dd stores the derivative w.r.t. end state
+void do_blstm_bwd(CudaNdarray * delta, CudaNdarray * epsilon, const CudaNdarray * Y, const CudaNdarray * Dd,
+ const CudaNdarray * c, int y, int x, bool rightBorder, const CudaNdarray * i)
+{
+	assert(y == 0 && "2d LSTM not supported yet");
+	int dims[2];
+	lastTwoDims(delta, dims);
+	assert(dims[1] % 4 == 0); //3 gates + cell
+	int n_cells = dims[1] / 4;
+	int n_batch = dims[0];
+
+	float * data_delta = data_ptr(delta, y, x);
+	float * data_epsilon = data_ptr(epsilon, y, x);
+	const float * data_next_epsilon = rightBorder ? CudaNdarray_DEV_DATA(Dd) : data_ptr(epsilon, y, x + 1);
+	const float * data_old_state = x > 0 ? data_ptr(delta, y, x - 1) + 3 * n_cells : CudaNdarray_DEV_DATA(c);
+	const float * data_Y = data_ptr(Y, y, x);
+	const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
+	//TODO tune launch configuration
+	lstm_bwd_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_delta, data_epsilon, data_next_epsilon,
+	 data_old_state, x > 0, data_Y, n_cells, n_batch, data_i);
+}
+
 void mul_with_tanh_deriv(CudaNdarray * dst, const CudaNdarray * tanhVals, int y, int x)
 {
 	float * data_dst = data_ptr(dst, y, x);
