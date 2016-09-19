@@ -164,7 +164,7 @@ class OutputLayer(Layer):
     for label in exclude_labels:
       index_flat = T.set_subtensor(index_flat[(T.eq(self.y_data_flat, label) > 0).nonzero()], numpy.int8(0))
     self.i = (index_flat > 0).nonzero()
-    self.j = ((1 - index_flat) > 0).nonzero()
+    self.j = ((numpy.int32(1) - index_flat) > 0).nonzero()
     self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
     if compute_priors:
@@ -598,15 +598,17 @@ class SequenceOutputLayer(OutputLayer):
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'warp_ctc':
       import os
-      os.environ['CTC_LIB'] = self.attrs.get('warp_ctc_lib',os.getcwd())
+      os.environ['CTC_LIB'] = self.attrs.get('warp_ctc_lib',"/usr/lib")
       try:
         from theano_ctc import ctc_cost
+        #from theano_ctc.cpu_ctc import CpuCtc
       except Exception:
         assert False, "install this: https://github.com/mcf06/theano_ctc"
       from TheanoUtil import print_to_file
-      yr = T.set_subtensor(self.y_data_flat[self.j],numpy.int32(-1)).reshape(self.y.shape)
+      yr = T.set_subtensor(self.y.flatten()[self.j],numpy.int32(-1)).reshape(self.y.shape).dimshuffle(1,0)
       yr = print_to_file('yr', yr)
-      cost = T.mean(ctc_cost(self.output, yr, self.index_for_ctc()))
+      cost = T.mean(ctc_cost(self.p_y_given_x, yr, self.index_for_ctc()))
+      #cost = T.mean(CpuCtc()(self.p_y_given_x, yr, self.index_for_ctc()))
       cost = print_to_file('cost',cost)
       return cost, known_grads
     elif self.loss == 'ce_ctc':
