@@ -1,8 +1,8 @@
 import theano
 import numpy
 from theano import tensor as T
-from theano.tensor.nnet import conv
-from theano.tensor.signal import downsample
+from theano.tensor.nnet import conv2d
+from theano.tensor.signal import pool
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from NetworkHiddenLayer import _NoOpLayer
 from cuda_implementation.FractionalMaxPoolingOp import fmp
@@ -177,7 +177,7 @@ class CNN(_NoOpLayer):
     return self.shared(
       numpy.asarray(
         self.rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
-        dtype=theano.config.floatX
+        dtype="float32"
       ),
       borrow=True,
       name="W_conv"
@@ -188,7 +188,7 @@ class CNN(_NoOpLayer):
     return self.shared(
       numpy.zeros(
         (n_features,),
-        dtype=theano.config.floatX
+        dtype="float32"
       ),
       borrow=True,
       name="b_conv"
@@ -215,22 +215,24 @@ class CNN(_NoOpLayer):
       inputs = inputs * mass
     return inputs
 
-  def convolution(self, border_mode, w, inputs):
+  def convolution(self, border_mode, w, inputs, filter_shape):
     # convolution function
     # when border mode = same, remove width and height from beginning and last based on the filter size
     if border_mode == "same":
       new_filter_size_row = (w.shape[2] - 1) / 2
       new_filter_size_col = (w.shape[3] - 1) / 2
-      conv_out = conv.conv2d(
+      conv_out = conv2d(
         input=inputs,
         filters=w,
-        border_mode="full"
+        border_mode="full",
+        filter_shape=filter_shape
       )[:, :, new_filter_size_row:-new_filter_size_row, new_filter_size_col:-new_filter_size_col]
     else:
-      conv_out = conv.conv2d(
+      conv_out = conv2d(
         input=inputs,
         filters=w,
-        border_mode=border_mode
+        border_mode=border_mode,
+        filter_shape=filter_shape
       )
     conv_out.name = "conv_layer_conv_out"
     conv_out = self.calculate_index(conv_out)
@@ -254,7 +256,7 @@ class CNN(_NoOpLayer):
       pooled_out, _ = fmp(X, sizes, pool_size[0])
       return pooled_out.dimshuffle(2, 3, 0, 1)
 
-    return downsample.pool.pool_2d(
+    return pool.pool_2d(
       input=inputs,
       ds=pool_size,
       ignore_border=ignore_border,
@@ -273,7 +275,7 @@ class CNN(_NoOpLayer):
       inputs = self.calculate_dropout(dropout, inputs)
 
     # convolutions function
-    conv_out = self.convolution(border_mode, w, inputs)  # (batch, nb filters, nb row, nb col)
+    conv_out = self.convolution(border_mode, w, inputs, filter_shape)  # (batch, nb filters, nb row, nb col)
 
     # max pooling function
     pool_out = self.pooling(conv_out, pool_size, ignore_border, mode)
