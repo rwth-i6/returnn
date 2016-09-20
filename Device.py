@@ -529,13 +529,14 @@ class Device(object):
           layer = self.testnet.get_layer(param)
           p_y_given_x = layer.p_y_given_x
           priors = layer.priors if 'compute_priors' in layer.attrs else 1.
-          scale = config.float('prior_scale', 1.0)
+          prior_scale = config.float('prior_scale', layer.attrs.get('prior_scale', 1.0))
+          posterior_scale = config.float('posterior_scale', layer.attrs.get('am_scale', 1.0))
           index = self.testnet.get_layer(param).output_index()
           if p_y_given_x.ndim == 2:
             p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
           assert p_y_given_x.ndim == 3
           source.append(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'),
-                                 T.log(p_y_given_x) - scale * T.log(priors), numpy.float32(0)))
+                                 posterior_scale * T.log(p_y_given_x) - prior_scale * T.log(priors), numpy.float32(0)))
         elif extract == "log-posteriors-hacked":
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
