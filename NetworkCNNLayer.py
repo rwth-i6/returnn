@@ -123,6 +123,7 @@ class CNN(_NoOpLayer):
     elif border_mode == "same":
       new_d_row = self.d_row / self.pool_size[0]
       new_d_col = self.d_col / self.pool_size[1]
+      border_mode = "half"
     else:
       assert False, "invalid border_mode %r" % border_mode
 
@@ -218,22 +219,12 @@ class CNN(_NoOpLayer):
   def convolution(self, border_mode, w, inputs, filter_shape):
     # convolution function
     # when border mode = same, remove width and height from beginning and last based on the filter size
-    if border_mode == "same":
-      new_filter_size_row = (w.shape[2] - 1) / 2
-      new_filter_size_col = (w.shape[3] - 1) / 2
-      conv_out = conv2d(
-        input=inputs,
-        filters=w,
-        border_mode="full",
-        filter_shape=filter_shape
-      )[:, :, new_filter_size_row:-new_filter_size_row, new_filter_size_col:-new_filter_size_col]
-    else:
-      conv_out = conv2d(
-        input=inputs,
-        filters=w,
-        border_mode=border_mode,
-        filter_shape=filter_shape
-      )
+    conv_out = conv2d(
+      input=inputs,
+      filters=w,
+      border_mode=border_mode,
+      filter_shape=filter_shape
+    )
     conv_out.name = "conv_layer_conv_out"
     conv_out = self.calculate_index(conv_out)
     return conv_out

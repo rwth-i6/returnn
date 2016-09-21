@@ -32,14 +32,15 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, V_f, V_b, c_f, c_b, idx, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b):
+  def make_node(self, V_f, V_b, c_f, c_b, idx_f, idx_b, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b):
     V_f = gpu_contiguous(as_cuda_ndarray_variable(V_f))
     V_b = gpu_contiguous(as_cuda_ndarray_variable(V_b))
     c_f = gpu_contiguous(as_cuda_ndarray_variable(c_f))
     c_b = gpu_contiguous(as_cuda_ndarray_variable(c_b))
     DY_f = gpu_contiguous(as_cuda_ndarray_variable(DY_f))
     DY_b = gpu_contiguous(as_cuda_ndarray_variable(DY_b))
-    idx = gpu_contiguous(as_cuda_ndarray_variable(T.cast(idx,'float32')))
+    idx_f = gpu_contiguous(as_cuda_ndarray_variable(T.cast(idx_f,'float32')))
+    idx_b = gpu_contiguous(as_cuda_ndarray_variable(T.cast(idx_b, 'float32')))
     Dd_f = gpu_contiguous(as_cuda_ndarray_variable(Dd_f))
     Dd_b = gpu_contiguous(as_cuda_ndarray_variable(Dd_b))
     assert V_f.dtype == "float32"
@@ -62,13 +63,14 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     assert H_b.ndim == 3
     assert c_f.ndim == 2
     assert c_b.ndim == 2
-    assert idx.ndim == 2
+    assert idx_f.ndim == 2
+    assert idx_b.ndim == 2
 
-    return theano.Apply(self, [V_f, V_b, c_f, c_b, idx, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b],
+    return theano.Apply(self, [V_f, V_b, c_f, c_b, idx_f, idx_b, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b],
                         [H_f.type(), H_b.type(), V_f.type(), V_b.type(), c_f.type(), c_b.type()])
 
   def infer_shape(self, node, input_shapes):
-    V_fs, V_bs, c_fs, c_bs, idxs, Dd_fs, Dd_bs, DYs_fs, DYs_bs, Y_fs, Y_bs, H_fs, H_bs = input_shapes
+    V_fs, V_bs, c_fs, c_bs, idx_fs, idx_bs, Dd_fs, Dd_bs, DYs_fs, DYs_bs, Y_fs, Y_bs, H_fs, H_bs = input_shapes
     return [H_fs, H_bs, V_fs, V_bs, c_fs, c_bs]
 
   def c_support_code(self):
@@ -77,7 +79,7 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    V_f, V_b, c_f, c_b, i, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b = input_names
+    V_f, V_b, c_f, c_b, i_f, i_b, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b = input_names
     DZ_f, DZ_b, DV_f, DV_b, Dc_f, Dc_b = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -133,7 +135,7 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta_f, y, x, %(V_f)s, y, x, epsilon_f, false, true);
       }
 
-      do_lstm_bwd(delta_f, epsilon_f, %(Y_f)s, %(Dd_f)s, %(c_f)s, y, x, rightBorder, %(i)s);
+      do_lstm_bwd(delta_f, epsilon_f, %(Y_f)s, %(Dd_f)s, %(c_f)s, y, x, rightBorder, %(i_f)s);
     }
 
     for(int x = H_dim[0]-1; x >= 0; --x)
@@ -145,7 +147,7 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x+1, delta_b, y, x, %(V_b)s, y, x, epsilon_b, false, true);
       }
 
-      do_lstm_bwd(delta_b, epsilon_b, %(Y_b)s, %(Dd_b)s, %(c_b)s, y, x, rightBorder, %(i)s);
+      do_lstm_bwd(delta_b, epsilon_b, %(Y_b)s, %(Dd_b)s, %(c_b)s, y, x, rightBorder, %(i_b)s);
     }
 
     %(DV_f)s = CudaNdarray_uninitialized_like(%(V_f)s);
@@ -218,7 +220,7 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
   def __hash__(self):
     return hash(type(self)) ^ hash(self.inplace)
 
-  def make_node(self, Z_f, Z_b, V_f, V_b, c_f, c_b, i):
+  def make_node(self, Z_f, Z_b, V_f, V_b, c_f, c_b, i_f, i_b):
     """
     :param Z_f: {input,output,forget} gate + cell state forward. 3d (time,batch,dim*4)
     :param Z_b: {input,output,forget} gate + cell state backward. 3d (time,batch,dim*4)
@@ -234,7 +236,8 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
     V_b = gpu_contiguous(as_cuda_ndarray_variable(V_b))
     c_f = gpu_contiguous(as_cuda_ndarray_variable(c_f))
     c_b = gpu_contiguous(as_cuda_ndarray_variable(c_b))
-    i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
+    i_f = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i_f,'float32')))
+    i_b = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i_b, 'float32')))
     assert Z_f.dtype == "float32"
     assert Z_f.dtype == "float32"
     assert V_f.dtype == "float32"
@@ -245,12 +248,13 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
     assert c_b.ndim == 2
     assert Z_f.ndim == 3
     assert Z_b.ndim == 3
-    assert i.ndim == 2
+    assert i_f.ndim == 2
+    assert i_b.ndim == 2
     assert V_f.ndim == 2
     assert V_b.ndim == 2
 
     # results: output Y, (gates and cell state) H, (final cell state) d
-    return theano.Apply(self, [Z_f, Z_b, V_f, V_b, c_f, c_b, i],
+    return theano.Apply(self, [Z_f, Z_b, V_f, V_b, c_f, c_b, i_f, i_b],
                         [Z_f.type(), Z_f.type(), Z_f.type(), Z_f.type(), c_f.type(), c_b.type()])
 
   def c_support_code(self):
@@ -259,7 +263,7 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
       return f.read()
 
   def c_code(self, node, name, input_names, output_names, sub):
-    Z_f, Z_b, V_f, V_b, c_f, c_b, i = input_names
+    Z_f, Z_b, V_f, V_b, c_f, c_b, i_f, i_b = input_names
     Y_f, Y_b, H_f, H_b, d_f, d_b = output_names
     fail = sub['fail']
     inplace = "true" if self.inplace else "false"
@@ -314,7 +318,7 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x-1, %(Y_f)s, y, x, %(V_f)s, y, x, %(H_f)s);
       }
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_f)s) : 0;
-      do_lstm(%(H_f)s, %(Y_f)s, %(c_f)s, d_ptr, y, x, %(i)s);
+      do_lstm(%(H_f)s, %(Y_f)s, %(c_f)s, d_ptr, y, x, %(i_f)s);
     }
 
     for(int x = 0; x < Z_dim[0]; ++x)
@@ -325,23 +329,12 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
         affine_y_x(y, x-1, %(Y_b)s, y, x, %(V_b)s, y, x, %(H_b)s);
       }
       float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
-      do_lstm(%(H_b)s, %(Y_b)s, %(c_b)s, d_ptr, y, x, %(i)s);
+      do_lstm(%(H_b)s, %(Y_b)s, %(c_b)s, d_ptr, y, x, %(i_b)s);
     }
-
-    /*for(int x = Z_dim[0] - 1; x >= 0; ++x)
-    {
-      if(x < Z_dim[0] - 1)
-      {
-        //H += Y[x-1]*V_h
-        affine_y_x(y, x+1, %(Y_b)s, y, x, %(V_b)s, y, x, %(H_b)s);
-      }
-      float * d_ptr = (x == 0) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
-      do_lstm(%(H_b)s, %(Y_b)s, %(c_b)s, d_ptr, y, x, %(i)s);
-    }*/
     """ % locals()
 
   def grad(self, inputs, output_grads):
-    Z_f, Z_b, V_f, V_b, c_f, c_b, i = inputs
+    Z_f, Z_b, V_f, V_b, c_f, c_b, i_f, i_b = inputs
     DY_f, DY_b, DH_f, DH_b, Dd_f, Dd_b = output_grads
 
     Z_f_raw = Z_f.owner.inputs[0].owner.inputs[0]
@@ -351,11 +344,12 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
     V_b_raw = V_b.owner.inputs[0]
     c_f_raw = c_f.owner.inputs[0].owner.inputs[0]
     c_b_raw = c_b.owner.inputs[0].owner.inputs[0]
-    i_raw = i.owner.inputs[0].owner.inputs[0]
+    i_f_raw = i_f.owner.inputs[0].owner.inputs[0]
+    i_b_raw = i_b.owner.inputs[0].owner.inputs[0]
     #we have to make sure that this in only computed once!
     #for this we have to extract the raw variables before conversion to continuous gpu array
     #so that theano can merge the nodes
-    Y_f, Y_b, H_f, H_b, d_f, d_b = BLSTMOpInstance(Z_f_raw, Z_b_raw, V_f_raw, V_b_raw, c_f_raw, c_b_raw, i_raw)
+    Y_f, Y_b, H_f, H_b, d_f, d_b = BLSTMOpInstance(Z_f_raw, Z_b_raw, V_f_raw, V_b_raw, c_f_raw, c_b_raw, i_f_raw, i_b_raw)
     if isinstance(DY_f.type, theano.gradient.DisconnectedType):
       DY_f = T.zeros_like(Z_f)
     if isinstance(DY_b.type, theano.gradient.DisconnectedType):
@@ -364,13 +358,14 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
       Dd_f = T.zeros_like(c_f)
     if isinstance(Dd_b.type, theano.gradient.DisconnectedType):
       Dd_b = T.zeros_like(c_b)
-    DZ_f, DZ_b, DV_f, DV_b, Dc_f, Dc_b = BLSTMOpGradNoInplaceInstance(V_f, V_b, c_f, c_b, i, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b)
-    Di = theano.gradient.grad_undefined(self, 5, inputs[5], 'cannot diff w.r.t. index')
+    DZ_f, DZ_b, DV_f, DV_b, Dc_f, Dc_b = BLSTMOpGradNoInplaceInstance(V_f, V_b, c_f, c_b, i_f, i_b, Dd_f, Dd_b, DY_f, DY_b, Y_f, Y_b, H_f, H_b)
+    Di_f = theano.gradient.grad_undefined(self, 5, inputs[5], 'cannot diff w.r.t. index')
+    Di_b = theano.gradient.grad_undefined(self, 6, inputs[6], 'cannot diff w.r.t. index')
 
-    return [DZ_f, DZ_b, DV_f, DV_b, Dc_f, Dc_b, Di]
+    return [DZ_f, DZ_b, DV_f, DV_b, Dc_f, Dc_b, Di_f, Di_b]
 
   def infer_shape(self, node, input_shapes):
-    Z_fs, Z_bs, V_fs, V_bs, c_fs, c_bs, idxs = input_shapes
+    Z_fs, Z_bs, V_fs, V_bs, c_fs, c_bs, idx_fs, idx_bs = input_shapes
     Y_shape = (Z_fs[0], Z_fs[1], Z_fs[2] / 4)
     H_shape = (Z_fs[0], Z_fs[1], Z_fs[2])
     d_shape = (Z_fs[1], Z_fs[2] / 4)
