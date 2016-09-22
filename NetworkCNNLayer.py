@@ -13,8 +13,10 @@ from math import ceil, sqrt
 class CNN(_NoOpLayer):
   recurrent = True  # to force same behavior in feed-forward networks
 
-  def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2), mode="max", activation='tanh',
-               border_mode="valid", ignore_border=True, dropout=0.0, factor=0.5, **kwargs):
+  def __init__(self, n_features=1, filter=1, d_row=-1, pool_size=(2, 2),
+               mode="max", activation='tanh', border_mode="valid",
+               ignore_border=True, dropout=0.0, factor=0.5,
+               stride=(1, 1), **kwargs):
 
     """
 
@@ -127,6 +129,10 @@ class CNN(_NoOpLayer):
     else:
       assert False, "invalid border_mode %r" % border_mode
 
+    if stride <> [1, 1]:
+      new_d_row = int(ceil(new_d_row / float(stride[0])))
+      new_d_col = int(ceil(new_d_col / float(stride[1])))
+
     self.border_mode = border_mode
 
     assert (mode == "max" or mode == "sum" or mode == "avg" or mode == "fmp"), "invalid pooling mode!"
@@ -146,6 +152,7 @@ class CNN(_NoOpLayer):
     self.ignore_border = ignore_border
     self.dropout = dropout
     self.factor = factor
+    self.stride = stride
 
     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
     self.filter_shape = (self.n_features, self.stack_size, self.filters[0], self.filters[1])
@@ -161,6 +168,7 @@ class CNN(_NoOpLayer):
     self.set_attr("dropout", self.dropout)
     self.set_attr("activation", activation)
     self.set_attr("factor", self.factor)
+    self.set_attr("stride", self.stride)
     self.set_attr("n_out", self.n_out)  # number of output dimension
 
   def get_status(self, sources):
@@ -216,15 +224,17 @@ class CNN(_NoOpLayer):
       inputs = inputs * mass
     return inputs
 
-  def convolution(self, border_mode, w, inputs, filter_shape):
+  def convolution(self, border_mode, w, inputs, filter_shape, stride):
     # convolution function
     # when border mode = same, remove width and height from beginning and last based on the filter size
     conv_out = conv2d(
       input=inputs,
       filters=w,
       border_mode=border_mode,
-      filter_shape=filter_shape
+      filter_shape=filter_shape,
+      subsample=stride
     )
+    conv_out = theano.printing.Print("---->shape:", attrs=['shape'])(conv_out)
     conv_out.name = "conv_layer_conv_out"
     conv_out = self.calculate_index(conv_out)
     return conv_out
@@ -254,7 +264,8 @@ class CNN(_NoOpLayer):
       mode=modes
     )
 
-  def run_cnn(self, filter_shape, pool_size, n_features, inputs, dropout, border_mode, ignore_border, mode, factor):
+  def run_cnn(self, filter_shape, pool_size, n_features, inputs, dropout,
+              border_mode, ignore_border, mode, factor, stride):
     # weight parameter
     w = self.add_param(self.create_weights(filter_shape, pool_size, factor))
 
@@ -266,7 +277,7 @@ class CNN(_NoOpLayer):
       inputs = self.calculate_dropout(dropout, inputs)
 
     # convolutions function
-    conv_out = self.convolution(border_mode, w, inputs, filter_shape)  # (batch, nb filters, nb row, nb col)
+    conv_out = self.convolution(border_mode, w, inputs, filter_shape, stride)  # (batch, nb filters, nb row, nb col)
 
     # max pooling function
     pool_out = self.pooling(conv_out, pool_size, ignore_border, mode)
@@ -309,8 +320,10 @@ class NewConv(CNN):
       self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
     self.input.name = "conv_layer_input_final"
 
-    self.Output = self.run_cnn(self.filter_shape, self.pool_size, self.n_features, self.input, self.dropout,
-                               self.border_mode, self.ignore_border, self.mode, self.factor)  # (time*batch, maps, out-row, out-col)
+    self.Output = self.run_cnn(self.filter_shape, self.pool_size, self.n_features,
+                               self.input, self.dropout, self.border_mode,
+                               self.ignore_border, self.mode, self.factor,
+                               self.stride)  # (time*batch, maps, out-row, out-col)
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
@@ -364,7 +377,7 @@ class ConcatConv(CNN):
     self.tmp_Output = self.run_cnn(self.filter_shape, self.pool_size,
                                    self.n_features, self.input, self.dropout,
                                    self.border_mode, self.ignore_border,
-                                   self.mode, self.factor)   # (batch, features, out-row, out-col)
+                                   self.mode, self.factor, self.stride)   # (batch, features, out-row, out-col)
 
     if self.attrs['batch_norm']:
       self.tmp_Output = self.batch_norm(self.tmp_Output.dimshuffle(0,2,3,1).reshape(
