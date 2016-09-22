@@ -185,7 +185,6 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       Y = self.batch_norm(Y.reshape((Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3])),
                           self.attrs['n_out'], force_sample=True).reshape(Y.shape)
 
-
     #index handling
     def index_fn(index, size):
       return T.set_subtensor(index[:size], numpy.cast['int8'](1))
@@ -198,7 +197,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':
       Y = Y.mean(axis=0)
-      #self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
+      self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
     elif collapse_output == 'flatten':
       Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
       self.index = T.ones((Y.shape[0] * Y.shape[1],Y.shape[2]), dtype='int8')
