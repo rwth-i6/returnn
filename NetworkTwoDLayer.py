@@ -145,7 +145,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
   layer_class = "mdlstm"
   recurrent = True
 
-  def __init__(self, n_out, collapse_output=False, **kwargs):
+  def __init__(self, n_out, collapse_output=False, directions=4, projection='average', **kwargs):
     super(TwoDLSTMLayer, self).__init__(n_out, **kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
@@ -154,6 +154,8 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     assert X.ndim == 4
     sizes = source.output_sizes
     self.output_sizes = sizes
+    assert directions in [1,2,4], "only 1, 2 or 4 directions are supported"
+    assert projection in ['average', 'concat'], "invalid projection"
 
     #dropout
     assert len(self.masks) == 1
@@ -163,24 +165,40 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 
     b1 = self.create_and_add_bias(n_out, "1")
     b2 = self.create_and_add_bias(n_out, "2")
-    b3 = self.create_and_add_bias(n_out, "3")
-    b4 = self.create_and_add_bias(n_out, "4")
+    if directions >= 1:
+      b3 = self.create_and_add_bias(n_out, "3")
+      b4 = self.create_and_add_bias(n_out, "4")
 
     W1, V_h1, V_v1 = self.create_and_add_2d_lstm_weights(n_in, n_out, "1")
     W2, V_h2, V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
-    W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
-    W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
+    if directions >= 1:
+      W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
+      W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
     if str(theano.config.device).startswith('cpu'):
       Y = T.zeros_like(X)
     else:
-      Y1, Y2, Y3, Y4 = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
-                                                          V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)[:4]
-      Y = 0.25 * (Y1 + Y2 + Y3 + Y4)
+      if directions <= 2:
+        Y = BidirectionalTwoDLSTMOpInstance(X, W1, W2, V_h1, V_h2, V_v1, V_v2, b1, b2, sizes)
+      else:
+        Y = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
+                                                  V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)
+
+      if directions > 1:
+        Y = T.stack(Y[:directions],axis=-1)
+        if projection == 'average':
+          Y = Y.mean(axis=-1)
+        elif projection == 'concat':
+          Y = Y.reshape(Y.shape[:2] + [Y.shape[3] * directions], ndim=4)
+          n_out *= directions
+      else:
+        Y = Y[0]
 
     Y.name = 'Y'
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)
+    self.set_attr('directions', directions)
+    self.set_attr('projection', projection)
     if self.attrs['batch_norm']:
       Y = self.batch_norm(Y.reshape((Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3])),
                           self.attrs['n_out'], force_sample=True).reshape(Y.shape)
@@ -197,7 +215,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':
       Y = Y.mean(axis=0)
-      self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
+      #self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
     elif collapse_output == 'flatten':
       Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
       self.index = T.ones((Y.shape[0] * Y.shape[1],Y.shape[2]), dtype='int8')
