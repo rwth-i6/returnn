@@ -1,7 +1,7 @@
 #include <thrust/device_vector.h>
 
 #define DIM_GRID 64
-#define DIM_BLOCK 1024
+#define DIM_BLOCK 512
 
 static const char *_cudaGetErrorEnum(cublasStatus_t error)
 {
