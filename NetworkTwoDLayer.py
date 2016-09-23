@@ -78,6 +78,8 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     n_out = 1
     self.set_attr('n_out', n_out)
 
+forget_gate_initial_bias = 1.0
+lambda_gate_initial_bias = 0.0
 
 class DeepLSTM(TwoDBaseLayer):
   layer_class = "deep_lstm"
@@ -110,7 +112,7 @@ class DeepLSTM(TwoDBaseLayer):
     W2, V_h2, V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
 
     if str(theano.config.device).startswith('cpu'):
-      Y = T.zeros_like(X)
+      Y = T.dot(X,W1)[:n_out*2]
     else:
       Y1, Y2 = BidirectionalTwoDLSTMOpInstance(X, W1, W2, V_h1, V_h2, V_v1, V_v2, b1, b2, sizes)[:2]
       Y = T.concatenate([Y1,Y2],axis=3)
@@ -136,9 +138,6 @@ class DeepLSTM(TwoDBaseLayer):
     b = theano.shared(b_val, borrow=True, name="b" + name_suffix + "_" + self.name)
     b = self.add_param(b)
     return b
-
-forget_gate_initial_bias = 1.0
-lambda_gate_initial_bias = 0.0
 
 
 class TwoDLSTMLayer(TwoDBaseLayer):

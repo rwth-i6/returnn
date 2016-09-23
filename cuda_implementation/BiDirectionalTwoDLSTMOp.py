@@ -253,8 +253,8 @@ class BidirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   #!!! change this when changing the code!
-  def c_code_cache_version(self):
-    return 3, 1
+  #def c_code_cache_version(self):
+  #  return 3, 1
 
 BidirectionalTwoDLSTMOpGradNoInplaceInstance = BidirectionalTwoDLSTMOpGrad(inplace=False)
 BidirectionalTwoDLSTMOpGradInplaceInstance = BidirectionalTwoDLSTMOpGrad(inplace=True)
@@ -422,7 +422,7 @@ class BidirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     return [Y_shape, Y_shape, H_shape, H_shape]
 
   #!!! change this when changing the code!
-  def c_code_cache_version(self):
-    return 3, 2
+  #def c_code_cache_version(self):
+  #  return 3, 2
 
 BidirectionalTwoDLSTMOpInstance = BidirectionalTwoDLSTMOp()
