@@ -466,7 +466,9 @@ class SequenceOutputLayer(OutputLayer):
       self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
-    self.output = self.p_y_given_x.reshape(self.output.shape)
+    self.output = self.p_y_given_x
+    if self.loss in ['ctc', 'ctc_warp']:
+      self.index = self.sources[0].index
     if self.attrs.get('compute_priors', False):
       exp_average = self.attrs.get("compute_priors_exp_average", 0)
       self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
