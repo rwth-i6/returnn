@@ -428,7 +428,7 @@ class AttentionList(AttentionBase):
     self.__setattr__("W_att_re_%d" % i, self.custom_vars['W_att_re_%d' % i])
     self.__setattr__("b_att_re_%d" % i, self.custom_vars['b_att_re_%d' % i])
     self.__setattr__("W_att_in_%d" % i, self.custom_vars['W_att_in_%d' % i])
-    shape = self.layer.base[i].index.shape
+    shape = self.layer.base[i].output_index().shape
     if self.attrs['store']:
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
     if self.attrs['smooth']:
@@ -469,7 +469,7 @@ class AttentionList(AttentionBase):
       values = numpy.zeros((n_tmp,),dtype='float32')
       b_att_bs = self.layer.add_param(self.layer.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
       self.add_input(T.tanh(T.dot(self.base[i].output[::direction], W_att_bs) + b_att_bs), 'C_%d' % i)
-      self.add_input(T.cast(self.base[i].index[::direction], 'float32'), 'I_%d' % i)
+      self.add_input(T.cast(self.base[i].output_index()[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
       values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
