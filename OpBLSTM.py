@@ -133,21 +133,14 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
       if(!rightBorder)
       {
         affine_y_x(y, x+1, delta_f, y, x, %(V_f)s, y, x, epsilon_f, false, true);
-      }
-
-      do_lstm_bwd(delta_f, epsilon_f, %(Y_f)s, %(Dd_f)s, %(c_f)s, y, x, rightBorder, %(i_f)s);
-    }
-
-    for(int x = H_dim[0]-1; x >= 0; --x)
-    {
-      //add recurrent
-      bool rightBorder = (x == H_dim[0]-1);
-      if(!rightBorder)
-      {
         affine_y_x(y, x+1, delta_b, y, x, %(V_b)s, y, x, epsilon_b, false, true);
       }
-
+      /*
+      do_lstm_bwd(delta_f, epsilon_f, %(Y_f)s, %(Dd_f)s, %(c_f)s, y, x, rightBorder, %(i_f)s);
       do_lstm_bwd(delta_b, epsilon_b, %(Y_b)s, %(Dd_b)s, %(c_b)s, y, x, rightBorder, %(i_b)s);
+      */
+      do_blstm_bwd(delta_f, delta_b, epsilon_f, epsilon_b, %(Y_f)s, %(Y_b)s, %(Dd_f)s, %(Dd_b)s, %(c_f)s, %(c_b)s,
+                    y, x, rightBorder, %(i_f)s, %(i_b)s);
     }
 
     %(DV_f)s = CudaNdarray_uninitialized_like(%(V_f)s);
@@ -316,21 +309,19 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
       {
         //H += Y[x-1]*V_h
         affine_y_x(y, x-1, %(Y_f)s, y, x, %(V_f)s, y, x, %(H_f)s);
-      }
-      float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_f)s) : 0;
-      do_lstm(%(H_f)s, %(Y_f)s, %(c_f)s, d_ptr, y, x, %(i_f)s);
-    }
-
-    for(int x = 0; x < Z_dim[0]; ++x)
-    {
-      if(x > 0)
-      {
-        //H += Y[x-1]*V_h
         affine_y_x(y, x-1, %(Y_b)s, y, x, %(V_b)s, y, x, %(H_b)s);
       }
-      float * d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
-      do_lstm(%(H_b)s, %(Y_b)s, %(c_b)s, d_ptr, y, x, %(i_b)s);
+      float * d_ptr_f = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_f)s) : 0;
+      float * d_ptr_b = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
+      /*float * d_ptr_f = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_f)s) : 0;
+      float * d_ptr_b = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
+      do_lstm(%(H_f)s, %(Y_f)s, %(c_f)s, d_ptr, y, x, %(i_f)s);
+      d_ptr = (x == Z_dim[0] - 1) ? CudaNdarray_DEV_DATA(%(d_b)s) : 0;
+      do_lstm(%(H_b)s, %(Y_b)s, %(c_b)s, d_ptr, y, x, %(i_b)s);*/
+
+      do_blstm(%(H_f)s, %(H_b)s, %(Y_f)s, %(Y_b)s, %(c_f)s, %(c_b)s, d_ptr_f, d_ptr_b, y, x, %(i_f)s, %(i_b)s);
     }
+
     """ % locals()
 
   def grad(self, inputs, output_grads):

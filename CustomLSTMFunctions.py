@@ -5,6 +5,7 @@ import theano.tensor as T
 import numpy
 from Log import log
 import theano.sandbox.cuda as theano_cuda
+from collections import OrderedDict
 
 
 debug_function_hook = None
@@ -50,7 +51,7 @@ def make_bwd_fun(recurrent_transform):
       known_grads[k] = theano_cuda.host_from_gpu(v)
 
   all_wrt = [y_p] + custom_vars + state_vars_prev
-  all_grads = T.grad(None, all_wrt, known_grads=known_grads, disconnected_inputs="ignore")
+  all_grads = T.grad(None, all_wrt, known_grads=OrderedDict(known_grads), disconnected_inputs="ignore")
   assert len(all_grads) == 1 + len(custom_vars) + len(state_vars_prev)
   Dy_p = all_grads[0]
   custom_grads = all_grads[1:len(custom_vars)+1]
