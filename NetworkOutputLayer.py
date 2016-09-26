@@ -494,7 +494,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return source.index
-    if self.loss == 'viterbi':
+    if self.loss in ['viterbi', 'ctc', 'warp_ctc']:
       return self.sources[0].index
     return super(SequenceOutputLayer, self).output_index()
 
