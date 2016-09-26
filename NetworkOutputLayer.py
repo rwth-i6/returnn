@@ -561,7 +561,7 @@ class SequenceOutputLayer(OutputLayer):
       if am_scale != 1:
         am_scale = numpy.float32(am_scale)
         am_scores *= am_scale
-      if self.prior_scale:
+      if self.prior_scale and not self.attrs.get("substract_prior_from_output", False):
         assert self.log_prior is not None
         # Scores are in -log space, self.log_prior is in +log space.
         # We want to subtract the prior, thus `-=`.
