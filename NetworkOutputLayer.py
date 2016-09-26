@@ -30,7 +30,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
-               compute_priors=False, compute_priors_exp_average=0,
+               compute_priors=False, compute_priors_exp_average=0, init_priors='uniform',
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
                apply_softmax=True,
@@ -44,6 +44,7 @@ class OutputLayer(Layer):
     """
     super(OutputLayer, self).__init__(**kwargs)
     self.set_attr("normalize_length", normalize_length)
+    self.set_attr("init_priors", init_priors)
     if dtype:
       self.set_attr('dtype', dtype)
     if copy_input:
@@ -467,12 +468,16 @@ class SequenceOutputLayer(OutputLayer):
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x
-    #if self.loss in ['ctc', 'ctc_warp']:
-    #  self.index = self.sources[0].index
     if self.attrs.get('compute_priors', False):
       exp_average = self.attrs.get("compute_priors_exp_average", 0)
-      self.priors = self.add_param(theano.shared(numpy.ones((self.attrs['n_out'],), 'float32') / self.attrs['n_out'], 'priors'), 'priors',
-                                   custom_update=T.mean(self.p_y_given_x_flat[self.i], axis=0),
+      custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
+      custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
+      if self.attrs.get('init_priors', 'uniform') == 'linear': # use labels to compute priors in first epoch
+        custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i],self.attrs['n_out'],'float32'),axis=0)
+        custom = T.switch(T.eq(self.network.epoch,1), custom_0, custom)
+        custom_init = numpy.zeros((self.attrs['n_out'],), 'float32')
+      self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
+                                   custom_update=custom,
                                    custom_update_normalized=not exp_average,
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(T.maximum(self.priors,numpy.float32(1e-20)))
