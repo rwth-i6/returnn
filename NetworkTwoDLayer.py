@@ -176,6 +176,9 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 
     if str(theano.config.device).startswith('cpu'):
       Y = T.zeros_like(X)
+      if projection == 'concat':
+        Y = Y.repeat(directions,axis=-1)
+        n_out *= directions
     else:
       if directions <= 2:
         Y = BidirectionalTwoDLSTMOpInstance(X, W1, W2, V_h1, V_h2, V_v1, V_v2, b1, b2, sizes)
@@ -188,7 +191,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
         if projection == 'average':
           Y = Y.mean(axis=-1)
         elif projection == 'concat':
-          Y = Y.reshape(Y.shape[:2] + [Y.shape[3] * directions], ndim=4)
+          Y = Y.reshape((Y.shape[0],Y.shape[1],Y.shape[2],Y.shape[3]*Y.shape[4]))
           n_out *= directions
       else:
         Y = Y[0]
@@ -211,13 +214,21 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 
     if collapse_output == 'sum' or collapse_output == True:
       Y = Y.sum(axis=0)
-      #self.index = T.ones((Y.shape[0],Y.shape[1]),dtype='int8')
     elif collapse_output == 'mean':
       Y = Y.mean(axis=0)
-      #self.index = T.ones((Y.shape[0], Y.shape[1]), dtype='int8')
+    elif collapse_output == 'conv':
+      from TheanoUtil import circular_convolution
+      Y, _ = theano.scan(lambda x_i,x_p:circular_convolution(x_i,x_p),Y,Y[0])
+      Y = Y[-1]
     elif collapse_output == 'flatten':
       self.index = T.ones((Y.shape[0] * Y.shape[1], Y.shape[2]), dtype='int8')
       Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
+    elif str(collapse_output).startswith('pad_'):
+      pad = numpy.int32(collapse_output.split('_')[-1])
+      Y = ifelse(T.lt(Y.shape[0],pad),T.concatenate([Y,T.zeros((pad-Y.shape[0],Y.shape[1],Y.shape[2],Y.shape[3]),'float32')],axis=0),
+                 ifelse(T.gt(Y.shape[0],pad),Y[:pad],Y))
+      Y = Y.dimshuffle(1,2,3,0).reshape((Y.shape[1],Y.shape[2],Y.shape[3]*Y.shape[0]))
+      self.attrs['n_out'] *= pad
     elif collapse_output != False:
       assert False, "invalid collapse mode"
     self.output = Y

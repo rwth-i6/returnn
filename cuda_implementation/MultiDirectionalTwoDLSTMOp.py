@@ -339,7 +339,7 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 2, 9
+    return 2, 10
 
 MultiDirectionalTwoDLSTMOpGradNoInplaceInstance = MultiDirectionalTwoDLSTMOpGrad(inplace=False)
 MultiDirectionalTwoDLSTMOpGradInplaceInstance = MultiDirectionalTwoDLSTMOpGrad(inplace=True)
@@ -407,7 +407,7 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
     //std::cout << "MultiDirectionalTwoDLSTMOp called" << std::endl;
     if(%(Y1)s || %(Y2)s || %(Y3)s || %(Y4)s || %(H1)s || %(H2)s || %(H3)s || %(H4)s)
     {
-      cout << "Ys or Hs already exist" << endl;
+      //cout << "Ys or Hs already exist" << endl;
       //TODO check if we can reuse it
       Py_XDECREF(%(Y1)s);
       Py_XDECREF(%(Y2)s);
@@ -539,6 +539,6 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
 
   #!!! change this when changing the code!
   def c_code_cache_version(self):
-    return 2, 9
+    return 2, 10
 
 MultiDirectionalTwoDLSTMOpInstance = MultiDirectionalTwoDLSTMOp()
