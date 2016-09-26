@@ -3,6 +3,7 @@ from Updater import Updater
 from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from Log import log
 from Network import LayerNetwork
+from collections import OrderedDict
 import numpy
 import sys
 import os
@@ -384,7 +385,7 @@ class Device(object):
           gparam = 0
         else:
           try:
-            gparam = T.grad(self.trainnet.get_objective(), param, known_grads=self.trainnet.known_grads)
+            gparam = T.grad(self.trainnet.get_objective(), param, known_grads=OrderedDict(self.trainnet.known_grads))
           except theano.gradient.DisconnectedInputError:
             gparam = 0
         if gparam == 0:
