@@ -172,8 +172,8 @@ class BLSTMOpGrad(theano.sandbox.cuda.GpuOp):
     """ % locals()
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 5
+  def c_code_cache_version(self):
+    return 1, 7
 
 BLSTMOpGradNoInplaceInstance = BLSTMOpGrad(inplace=False)
 BLSTMOpGradInplaceInstance = BLSTMOpGrad(inplace=True)
@@ -363,8 +363,8 @@ class BLSTMOp(theano.sandbox.cuda.GpuOp):
     return [Y_shape, Y_shape, H_shape, H_shape, d_shape, d_shape]
 
   #!!! change this when changing the code!
-  #def c_code_cache_version(self):
-  #  return 1, 6
+  def c_code_cache_version(self):
+    return 1, 7
 
 BLSTMOpInstance = BLSTMOp(inplace=False)
 BLSTMOpInplaceInstance = BLSTMOp(inplace=True)

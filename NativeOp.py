@@ -1711,11 +1711,11 @@ class FastBaumWelchOp(NativeOpGenBase):
   """
   in_info = (
     {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True,  "gradient": "disconnected"},
-    {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True,  "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"},
     {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True,  "gradient": "disconnected"}
+    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"}
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
@@ -1896,6 +1896,46 @@ class FastBaumWelchOp(NativeOpGenBase):
 
         atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
       }
+    """,
+    "23_write_alignment_to_file": """
+      void write_alignment_to_file(float* d_state_buffer, float* d_index, unsigned index_stride,
+                                   unsigned* d_start_states, unsigned* d_end_states,
+                                   float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_states, unsigned batch_idx) {
+        std::vector<float>    state_buffer((n_frames + 1u) * n_states);
+        std::vector<float>    index       (n_frames * index_stride);
+        std::vector<unsigned> start_states(n_seqs);
+        std::vector<unsigned> end_states  (n_seqs);
+
+        HANDLE_ERROR(cudaMemcpy(state_buffer.data(), d_state_buffer, state_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(index.data(),        d_index,        index.size()        * sizeof(float), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(start_states.data(), d_start_states, start_states.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(end_states.data(),   d_end_states,   end_states.size()   * sizeof(float), cudaMemcpyDeviceToHost));
+
+        for (unsigned seq = 0u; seq < n_seqs; seq++) {
+          std::stringstream filename;
+          filename << "alignment.dump." << batch_idx << '.' << seq;
+          std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
+          for (unsigned t = 0u; t <= n_frames; t++) {
+            if (t > 0u and index[seq * index_stride + t] <= 0.0) {
+              break;
+            }
+            float sum = std::numeric_limits<float>::infinity();
+            for (unsigned s = start_states[seq]; s <= end_states[seq]; s++) {
+              const float val = state_buffer[t * n_states + s];
+              float diff = val - sum;
+              if (!isnan(diff)) {
+                sum = -log1p(exp(-abs(diff))) + min(sum, val);
+              }
+            }
+            for (unsigned s = start_states[seq]; s <= end_states[seq]; s++) {
+              const float val = state_buffer[t * n_states + s] - sum;
+              if (val <= pruning) {
+                out << t << ' ' << (s - start_states[seq]) << ' ' << val << '\\n';
+              }
+            }
+          }
+        }
+      }
     """
   }
 
@@ -1916,6 +1956,11 @@ class FastBaumWelchOp(NativeOpGenBase):
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
     assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+
+    bool            dump_alignment = false;
+    unsigned        dump_every = 40u;
+    static unsigned batch_idx = 0u;
+    float           pruning = 10.f;
 
     unsigned* d_from              = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 0 * CudaNdarray_HOST_STRIDES(edges)[0]);
     unsigned* d_to                = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 1 * CudaNdarray_HOST_STRIDES(edges)[0]);
@@ -1957,7 +2002,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     //std::cerr << "index_stride: "     << index_stride    << std::endl;
 
     // initialize edge buffer
-    float* d_edge_buffer = (float*) device_malloc(n_edges * n_frames * sizeof(float));
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
     HANDLE_ERROR(cudaGetLastError());
@@ -1968,6 +2013,13 @@ class FastBaumWelchOp(NativeOpGenBase):
     HANDLE_ERROR(cudaGetLastError());
     set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
 
+    // initialize full state buffer (only used to dump the alignment)
+    float* d_state_buffer_all = NULL;
+    if (dump_alignment and batch_idx %% dump_every == 0) {
+      d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
+      cudaMemcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+    }
+
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
@@ -1976,6 +2028,9 @@ class FastBaumWelchOp(NativeOpGenBase):
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
       HANDLE_ERROR(cudaGetLastError());
+      if (dump_alignment and batch_idx %% dump_every == 0) {
+        cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+      }
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
 
@@ -1986,6 +2041,11 @@ class FastBaumWelchOp(NativeOpGenBase):
     HANDLE_ERROR(cudaGetLastError());
     for (unsigned t = n_frames; t > 0; t--) {
       init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
+      HANDLE_ERROR(cudaGetLastError());
+      if (dump_alignment and batch_idx %% dump_every == 0) {
+        float alpha = 1.0f;
+        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+      }
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
       HANDLE_ERROR(cudaGetLastError());
       next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
@@ -1994,15 +2054,28 @@ class FastBaumWelchOp(NativeOpGenBase):
       HANDLE_ERROR(cudaGetLastError());
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
+    if (dump_alignment and batch_idx %% dump_every == 0) {
+      float alpha = 1.0f;
+      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
+    }
 
     //std::cerr << "bwd finished" << std::endl;
 
+    // normalize at each time frame
     dim3 blocks(n_frames, n_seqs);
     //normalize<<<blocks, n_threads, n_threads * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, d_debug_sum);
     normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs);
     HANDLE_ERROR(cudaGetLastError());
 
     //std::cerr << "normalize finished" << std::endl;
+
+    // dump alignment
+    if (dump_alignment and batch_idx %% dump_every == 0) {
+      write_alignment_to_file(d_state_buffer_all, d_index, index_stride, d_start_states, d_end_states,
+                              pruning, n_frames, n_seqs, n_states, batch_idx);
+    }
+
+    //std::cerr << "dump finished" << std::endl;
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
@@ -2016,7 +2089,11 @@ class FastBaumWelchOp(NativeOpGenBase):
     HANDLE_ERROR(cudaGetLastError());
 
     device_free(d_edge_buffer);
+    if (d_state_buffer_all != NULL) {
+      device_free(d_state_buffer_all);
+    }
     //std::cerr << "fast_bw finished" << std::endl;
+    batch_idx++;
   """
 
   c_bw_code = None
