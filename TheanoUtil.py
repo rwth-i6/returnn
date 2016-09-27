@@ -443,8 +443,19 @@ def indices_in_flatten_array(ndim, shape, *args):
   return indices
 
 def circular_convolution(a, b):
-  from theano.sandbox.cuda.fftconv import cufft,cifft
-  return cuifft(cufft(a) * cufft(b))
+  from Device import is_using_gpu
+  has_gpuarray = is_using_gpu()
+  try:
+    import pygpu
+  except Exception:
+    has_gpuarray = False
+  if has_gpuarray:
+    from theano.gpuarray.fft import curfft as fft
+    from theano.gpuarray.fft import cuirfft as ifft
+  else:
+    from theano.tensor.fft import rfft as fft
+    from theano.tensor.fft import irfft as ifft
+  return ifft(fft(a) * fft(b))
 
 
 def unroll_scan(fn, sequences=(), outputs_info=(), non_sequences=(), n_steps=None,

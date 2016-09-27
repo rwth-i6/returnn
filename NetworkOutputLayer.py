@@ -30,7 +30,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
-               compute_priors=False, compute_priors_exp_average=0, init_priors='uniform',
+               compute_priors=False, compute_priors_exp_average=0,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
                apply_softmax=True,
@@ -44,7 +44,6 @@ class OutputLayer(Layer):
     """
     super(OutputLayer, self).__init__(**kwargs)
     self.set_attr("normalize_length", normalize_length)
-    self.set_attr("init_priors", init_priors)
     if dtype:
       self.set_attr('dtype', dtype)
     if copy_input:
@@ -393,7 +392,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
 
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None,
+  def __init__(self, prior_scale=0.0, log_prior=None, use_label_priors = 0,
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
@@ -402,6 +401,8 @@ class SequenceOutputLayer(OutputLayer):
                **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.prior_scale = prior_scale
+    if use_label_priors:
+      self.set_attr("use_label_priors", use_label_priors)
     if prior_scale:
       self.set_attr("prior_scale", prior_scale)
     if log_prior is not None:
@@ -466,9 +467,9 @@ class SequenceOutputLayer(OutputLayer):
       exp_average = self.attrs.get("compute_priors_exp_average", 0)
       custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
-      if self.attrs.get('init_priors', 'uniform') == 'linear': # use labels to compute priors in first epoch
+      if self.attrs.get('use_label_priors', 0) > 0: # use labels to compute priors in first epoch
         custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i],self.attrs['n_out'],'float32'),axis=0)
-        custom = T.switch(T.eq(self.network.epoch,1), custom_0, custom)
+        custom = T.switch(T.le(self.network.epoch,self.attrs.get('use_label_priors', 0)), custom_0, custom)
         custom_init = numpy.zeros((self.attrs['n_out'],), 'float32')
       self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
                                    custom_update=custom,
@@ -487,7 +488,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return source.index
-    if self.loss == 'viterbi':
+    if self.loss in ['viterbi', 'ctc', 'warp_ctc']:
       return self.sources[0].index
     return super(SequenceOutputLayer, self).output_index()
 
