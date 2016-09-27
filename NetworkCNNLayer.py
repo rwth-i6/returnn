@@ -5,7 +5,10 @@ from math import ceil, sqrt
 
 from theano import tensor as T
 from theano.tensor.nnet import conv2d
-from theano.tensor.signal import pool
+try:
+  from theano.tensor.signal import pool
+except ImportError:
+  pool = None
 
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
