@@ -378,7 +378,7 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
     res = 0.0
     for s in self.y_s:
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=s.reshape((s.shape[0]*s.shape[1],s.shape[2]))[self.i], y_idx=self.y_data_flat[self.i])
-      res += T.sum(nll) #T.sum(T.log(s.reshape((s.shape[0]*s.shape[1],s.shape[2]))[self.i,self.y_data_flat[self.i]]))
+      res += T.sum(nll)
     return res / float(len(self.y_s)), None
 
   def initialize(self):
@@ -386,9 +386,8 @@ class DecoderOutputLayer(FramewiseOutputLayer): # must be connected to a layer w
     self.y_s = []
     #i = T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2),'float32')
     for s in self.sources:
-      self.y_s.append(T.dot(s.output,s.W_lm_in))
+      self.y_s.append(T.dot(s.output,s.W_lm_in) + s.b_lm_in)
       output += self.y_s[-1]
-      #output += T.concatenate([T.dot(s.output[:-1],s.W_lm_in), T.eye(self.attrs['n_out'], 1).flatten().dimshuffle('x','x',0).repeat(self.index.shape[1], axis=1)], axis=0)
     self.params = {}
     self.y_m = output.reshape((output.shape[0]*output.shape[1],output.shape[2]))
     h = T.exp(self.y_m)

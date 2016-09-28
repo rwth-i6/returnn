@@ -287,6 +287,7 @@ class AttentionBase(RecurrentTransformBase):
       self.W_T = self.add_param(self.layer.shared(value=values, name="W_T"))
     if self.attrs['lm'] != "none":
       self.W_lm_in = self.add_var(self.layer.W_lm_in, name="W_lm_in")
+      self.b_lm_in = self.add_var(self.layer.b_lm_in, name="b_lm_in")
       self.W_lm_out = self.add_var(self.layer.W_lm_out, name="W_lm_out")
       self.drop_mask = self.add_var(self.layer.lmmask, "drop_mask")
       y = self.layer.y_in[self.layer.attrs['target']].flatten()
@@ -310,7 +311,7 @@ class AttentionBase(RecurrentTransformBase):
     self.glimpses = []
     updates = self.default_updates()
     if self.attrs['lm'] != "none":
-      p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in))
+      p_re = T.nnet.softmax(T.dot(y_p, self.W_lm_in) + self.b_lm_in)
       if self.layer.attrs['droplm'] < 1.0:
         mask = self.drop_mask[T.cast(self.n[0],'int32')]
         if self.attrs['lm'] == "hard":
@@ -333,7 +334,8 @@ class AttentionBase(RecurrentTransformBase):
     assert H.ndim == 3
     if dist == 'l2':
       dst = T.sqrt(T.sum((C - H) ** 2, axis=2))
-      #return T.mean((C - H) ** 2, axis=2)
+    elif dist == 'sqr':
+      dst = T.mean((C - H) ** 2, axis=2)
     elif dist == 'dot':
       dst = T.sum(C * H, axis=2)
     elif dist == 'l1':
@@ -429,6 +431,10 @@ class AttentionList(AttentionBase):
     self.__setattr__("W_att_re_%d" % i, self.custom_vars['W_att_re_%d' % i])
     self.__setattr__("b_att_re_%d" % i, self.custom_vars['b_att_re_%d' % i])
     self.__setattr__("W_att_in_%d" % i, self.custom_vars['W_att_in_%d' % i])
+    self.__setattr__("b_att_in_%d" % i, self.custom_vars['b_att_in_%d' % i])
+    if 'b_att_bs_%d' % i in self.custom_vars.keys():
+      self.__setattr__("W_att_bs_%d" % i, self.custom_vars['W_att_bs_%d' % i])
+      self.__setattr__("b_att_bs_%d" % i, self.custom_vars['b_att_bs_%d' % i])
     shape = self.layer.base[i].output_index().shape
     if self.attrs['store']:
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
@@ -448,6 +454,17 @@ class AttentionList(AttentionBase):
       self.__setattr__("D_out_%d" % i, self.custom_vars['D_out_%d' % i])
       self.__setattr__("Db_out_%d" % i, self.custom_vars['Db_out_%d' % i])
 
+  def create_bias(self, n, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    values = numpy.zeros((n,), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
+  def create_weights(self, n, m, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    l = sqrt(6.) / sqrt(n + m)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
   def create_vars(self):
     super(AttentionList, self).create_vars()
     n_tmp = self.attrs['template']
@@ -456,28 +473,25 @@ class AttentionList(AttentionBase):
     for i,e in enumerate(self.base):
       # base output
       B = e.output[::direction]
-      if self.attrs['bn']:
-        B = self.layer.batch_norm(B, e.attrs['n_out'])
       self.add_input(B, 'B_%d' % i)
       # mapping from base output to template size
-      l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re) # + self.base[i].attrs['n_out'])
-      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.layer.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
-      self.add_param(self.layer.shared(values, "W_att_re_%d" % i))
-      values = numpy.zeros((n_tmp,),dtype='float32')
-      self.add_param(self.layer.shared(value=values, borrow=True, name="b_att_re_%d" % i))
-      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], n_tmp)), dtype=theano.config.floatX)
-      W_att_bs = self.layer.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_bs_%d" % i))
-      values = numpy.zeros((n_tmp,),dtype='float32')
-      b_att_bs = self.layer.add_param(self.layer.shared(value=values, borrow=True, name="b_att_bs_%d" % i))
-      self.add_input(T.tanh(T.dot(self.base[i].output[::direction], W_att_bs) + b_att_bs), 'C_%d' % i)
+      self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re", i)
+      self.create_bias(n_tmp, "b_att_re", i)
+      if e.attrs['n_out'] == n_tmp:
+        self.add_input(B, 'C_%d' % i)
+      else:
+        W_att_bs = self.create_weights(e.attrs['n_out'], n_tmp, "W_att_bs", i)
+        b_att_bs = self.create_bias(n_tmp, "b_att_bs", i)
+        h_att = T.tanh(T.dot(B, W_att_bs) + b_att_bs)
+        if self.attrs['bn']:
+          h_att = self.layer.batch_norm(h_att, n_tmp, index = e.output_index())
+        self.add_input(h_att, 'C_%d' % i)
       self.add_input(T.cast(self.base[i].output_index()[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
-      l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
-      values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(e.attrs['n_out'], self.layer.attrs['n_out'] * 4)), dtype=theano.config.floatX)
-      self.add_param(self.layer.shared(value=values, borrow=True, name = "W_att_in_%d" % i))
+      self.create_weights(e.attrs['n_out'], self.layer.unit.n_in, "W_att_in", i)
+      self.create_bias(self.layer.unit.n_in, "b_att_in", i)
       if self.attrs['momentum'] == 'conv1d':
         context = 5
-        #values = numpy.asarray(self.layer.rng.uniform(low=0.5, high=1, size=(n_tmp, 1, context, 1)), dtype=theano.config.floatX)
         values = numpy.ones((self.attrs['filters'], 1, context, 1), 'float32')
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
         l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + n_tmp + self.layer.unit.n_re)
@@ -519,14 +533,14 @@ class AttentionList(AttentionBase):
       I = I.reshape((I.shape[0]*I.shape[1],))[beam_idx].reshape((beam_size,I.shape[1]))
       C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[beam_idx].reshape((beam_size,C.shape[1],C.shape[2]))
       B = B.reshape((B.shape[0]*B.shape[1],B.shape[2]))[beam_idx].reshape((beam_size,B.shape[1],B.shape[2]))
-    c_i = T.cast(I.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),'float32')
-    #z_p = T.sum(C * c_i,axis=0) / T.sum(c_i,axis=0) + T.dot(y_p, W_att_re) + b_att_re
-    z_p = T.dot(y_p, W_att_re) + b_att_re
+    if self.attrs['template'] != self.layer.unit.n_out:
+      z_p = T.dot(y_p, W_att_re) + b_att_re
+    else:
+      z_p = y_p
     if self.attrs['momentum'] == 'conv1d':
       from theano.tensor.nnet import conv
       att = self.item('att', i)
       F = self.item("F", i)
-      #F = T.printing.Print("F")(F)
       v = T.dot(T.sum(conv.conv2d(border_mode='full',
         input=att.dimshuffle(1, 'x', 0, 'x'),
         filters=F).dimshuffle(2,3,0,1),axis=1)[F.shape[2]/2:-F.shape[2]/2+1],self.item("U",i))
@@ -535,13 +549,13 @@ class AttentionList(AttentionBase):
     if g > 0:
       z_p += self.glimpses[i][-1]
     h_p = T.tanh(z_p)
-    return B, C, I, h_p, self.item("W_att_in", i)
+    return B, C, I, h_p, self.item("W_att_in", i), self.item("b_att_in", i)
 
   def attend(self, y_p):
     inp, updates = 0, {}
     for i in range(len(self.base)):
       for g in range(self.n_glm):
-        B, C, I, H, W_att_in = self.get(y_p, i, g)
+        B, C, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
         z_i = self.distance(C, H)
         w_i = self.softmax(z_i, I)
         if self.attrs['momentum'] == 'conv2d':
@@ -581,7 +595,7 @@ class AttentionList(AttentionBase):
           z = B[T.argmax(w_i,axis=0),T.arange(w_i.shape[1])]
         else:
           z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
-      inp += T.dot(z, W_att_in)
+      inp += T.dot(z, W_att_in) + b_att_in
     ifelse(T.eq(T.mod(self.n[0],self.attrs['ndec']),0), inp, T.zeros((self.n.shape[0],self.layer.attrs['n_out'] * 4),'float32'))
     return inp, updates
 
