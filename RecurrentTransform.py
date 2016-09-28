@@ -6,6 +6,7 @@ import theano.sandbox.cuda as cuda
 import numpy
 from MultiBatchBeam import multi_batch_beam
 from ActivationFunctions import elu
+from theano.ifelse import ifelse
 
 
 class RecurrentTransformBase(object):
@@ -581,6 +582,7 @@ class AttentionList(AttentionBase):
         else:
           z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
       inp += T.dot(z, W_att_in)
+    ifelse(T.eq(T.mod(self.n[0],self.attrs['ndec']),0), inp, T.zeros((self.n.shape[0],self.layer.attrs['n_out'] * 4),'float32'))
     return inp, updates
 
   def cost(self):
