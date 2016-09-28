@@ -387,9 +387,10 @@ class AttentionBase(RecurrentTransformBase):
   def softmax(self, D, I):
     D = D * T.constant(self.attrs['sharpening'], 'float32')
     if self.attrs['norm'] == 'exp':
-      E = T.exp(-D)
+      E = T.exp(-D) * I
+      E = E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
     elif self.attrs['norm'] == 'sigmoid':
-      E = T.nnet.sigmoid(D)
+      E = (numpy.float32(1) - T.tanh(D)**2) * I
     elif self.attrs['norm'] == 'lstm':
       n_out = self.attrs['template']
       def lstm(z, i_t, s_p, h_p):
@@ -406,12 +407,11 @@ class AttentionBase(RecurrentTransformBase):
       E = T.nnet.sigmoid(T.dot(E,self.N_out))
     else:
       raise NotImplementedError()
-    E = E * I
     if self.attrs['nbest'] > 1:
       opt = T.minimum(self.attrs['nbest'], E.shape[0])
       score = (T.sort(E, axis=0)[-opt]).dimshuffle('x',0).repeat(E.shape[0],axis=0)
       E = T.switch(T.lt(E,score), T.zeros_like(E), E)
-    return E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
+    return E
 
 
 class AttentionList(AttentionBase):
