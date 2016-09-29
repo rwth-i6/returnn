@@ -412,6 +412,7 @@ class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer 
 
 class SequenceOutputLayer(OutputLayer):
   def __init__(self, prior_scale=0.0, log_prior=None, use_label_priors=0,
+               compute_priors_via_baum_welch=False,
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
@@ -433,6 +434,9 @@ class SequenceOutputLayer(OutputLayer):
       log_prior = load_txt_vector(log_prior)
       assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
       log_prior = numpy.array(log_prior, dtype="float32")
+    if compute_priors_via_baum_welch:
+      self.set_attr("compute_priors_via_baum_welch", compute_priors_via_baum_welch)
+      assert self.attrs.get("compute_priors", False)
     self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
@@ -593,6 +597,9 @@ class SequenceOutputLayer(OutputLayer):
         fwdbwd *= numpy.float32(gamma)
         need_renorm = True
       bw = T.exp(-fwdbwd)
+      if self.attrs.get("compute_priors_via_baum_welch", False):
+        assert self.priors.custom_update is not None
+        self.priors.custom_update = T.sum(bw * float_idx_bc, axis=(0, 1)) / idx_sum
       if self.attrs.get("bw_norm_class_avg", False):
         cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
         bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
