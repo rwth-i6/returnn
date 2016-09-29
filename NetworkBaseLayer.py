@@ -676,6 +676,10 @@ class Layer(Container):
     if h.ndim == 3:
       if index is None: index = self.index
       x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(index.flatten()>0).nonzero()]
+    elif h.ndim == 4: # index is sizes here
+      assert index is not None
+      x = h.reshape((h.shape[0] * h.shape[1] * h.shape[2], h.shape[3]))
+      #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
     mean = T.mean(x,axis=0)
     std = T.std(x,axis=0)
     sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
@@ -689,6 +693,9 @@ class Layer(Container):
     if h.ndim == 3:
       mean = mean.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
       std = std.dimshuffle('x', 'x', 0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
+    elif h.ndim == 4:
+      mean = mean.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
+      std = std.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
     else:
       mean = mean.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
       std = std.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
@@ -697,6 +704,8 @@ class Layer(Container):
       gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
       if h.ndim == 3:
         bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
+      elif h.ndim == 4:
+        bn *= gamma.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
       else:
         bn *= gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
     if use_shift:
