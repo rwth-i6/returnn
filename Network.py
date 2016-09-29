@@ -390,7 +390,7 @@ class LayerNetwork(object):
       if cl == 'softmax' or cl == 'decoder':
         if not 'target' in params:
           params['target'] = target
-        if 'loss' in obj and obj['loss'] == 'ctc':
+        if 'loss' in obj and obj['loss'] in ('ctc','hmm'):
           params['index'] = network.i
         elif target != "null":
           params['index'] = network.j[target] #output_index
@@ -701,7 +701,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'):
+    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'):
       layer_class = SequenceOutputLayer
       # We must keep sequences as they are. Setting us as recurrent
       # will tell other code to leave seqs as they are (e.g. the dataset batch building).
@@ -722,6 +722,8 @@ class LayerNetwork(object):
       targets = None
     if self.loss == "ctc":
       self.n_out[target][0] += 1
+    elif self.loss == "hmm":
+      self.n_out[target][0] *= 2
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
