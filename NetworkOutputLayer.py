@@ -416,6 +416,7 @@ class SequenceOutputLayer(OutputLayer):
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
+               sigmoid_outputs=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
@@ -446,6 +447,8 @@ class SequenceOutputLayer(OutputLayer):
     self.exp_normalize = exp_normalize
     if not exp_normalize:
       self.set_attr("exp_normalize", exp_normalize)
+    if sigmoid_outputs:
+      self.set_attr("sigmoid_outputs", sigmoid_outputs)
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
@@ -573,6 +576,8 @@ class SequenceOutputLayer(OutputLayer):
         self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
+      if self.attrs.get("sigmoid_outputs", False):
+        y = T.nnet.sigmoid(self.z)
       assert y.ndim == 3
       y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
       nlog_scores = -T.log(y)  # in -log space
