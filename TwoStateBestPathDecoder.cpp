@@ -22,7 +22,7 @@ private:
 	std::vector<int> label(CArrayF& activs, int idx)
 	{
 	    std::vector<int> labelling;
-	    int lastLabel = (nLabels_ - 2 + (nLabels_ % 2)) / 2;
+	    int lastLabel = ((nLabels_ + (nLabels_ % 2) - 1) / 2;
 	    for(int t = 0; t < T_; ++t)
 	    {
 	        int bestLabel = 0;
