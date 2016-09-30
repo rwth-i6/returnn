@@ -723,7 +723,7 @@ class LayerNetwork(object):
     if self.loss == "ctc":
       self.n_out[target][0] += 1
     elif self.loss == "hmm":
-      self.n_out[target][0] *= 2
+      self.n_out[target][0] = 2 * self.n_out[target][0] - 1  # silence has only 1 state
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
