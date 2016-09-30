@@ -671,10 +671,15 @@ class Layer(Container):
     else:
       assert False, "consensus method unknown: " + cns
 
-  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False):
+  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False, index=None):
     x = h
     if h.ndim == 3:
-      x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(self.index.flatten()>0).nonzero()]
+      if index is None: index = self.index
+      x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(index.flatten()>0).nonzero()]
+    elif h.ndim == 4: # index is sizes here
+      assert index is not None
+      x = h.reshape((h.shape[0] * h.shape[1] * h.shape[2], h.shape[3]))
+      #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
     mean = T.mean(x,axis=0)
     std = T.std(x,axis=0)
     sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
@@ -682,21 +687,25 @@ class Layer(Container):
                                  custom_update_normalized=True)
     sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
     if not self.train_flag and not force_sample:
-      use_sample=1.0
+      use_sample = 1.0
     mean = T.constant(1.-use_sample,'float32') * mean + T.constant(use_sample,'float32') * sample_mean
     std = T.constant(1.-use_sample,'float32') * std + T.constant(use_sample,'float32') * sample_std
     if h.ndim == 3:
       mean = mean.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
       std = std.dimshuffle('x', 'x', 0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
+    elif h.ndim == 4:
+      mean = mean.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
+      std = std.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
     else:
       mean = mean.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
       std = std.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
-
     bn = (h - mean) / (std + numpy.float32(1e-10))
     if use_std:
       gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
       if h.ndim == 3:
         bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
+      elif h.ndim == 4:
+        bn *= gamma.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
       else:
         bn *= gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
     if use_shift:

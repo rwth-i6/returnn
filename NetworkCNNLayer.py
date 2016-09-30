@@ -5,7 +5,10 @@ from math import ceil, sqrt
 
 from theano import tensor as T
 from theano.tensor.nnet import conv2d
-from theano.tensor.signal import pool
+try:
+  from theano.tensor.signal import pool
+except ImportError:
+  pool = None
 
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
@@ -86,10 +89,10 @@ class CNN(_NoOpLayer):
 
     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
     self.filter_shape = (n_features, stack_size, filter[0], filter[1])
-    self.input_shape = (d_row, d_col)
-    self.modes = (border_mode, ignore_border, mode, activation)
-    self.pool_params = (pool_size, pool_stride, pool_padding, conv_stride)
-    self.other_params = (dropout, factor)
+    self.input_shape = [d_row, d_col]
+    self.modes = [border_mode, ignore_border, mode, activation]
+    self.pool_params = [pool_size, pool_stride, pool_padding, conv_stride]
+    self.other_params = [dropout, factor]
 
     # set attributes
     self.set_attr("n_features", n_features)
@@ -153,8 +156,13 @@ class CNN(_NoOpLayer):
       inputs = inputs * mass
     return inputs
 
-  def convolution(self, inputs, filter_shape, stride, border_mode, factor):
-    W_bound = numpy.sqrt(2./filter_shape[0]*numpy.prod(filter_shape[2:]))*factor
+  def convolution(self, inputs, filter_shape, stride, border_mode, factor, pool_size):
+    #W_bound = numpy.sqrt(2./filter_shape[0]*numpy.prod(filter_shape[2:]))*factor
+    fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))
+    #         (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
+
+    W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
     W = self.add_param(
       self.shared(
         value=numpy.asarray(
@@ -227,7 +235,7 @@ class CNN(_NoOpLayer):
     if others[0] > 0.0:
       inputs = self.calculate_dropout(others[0], inputs)
 
-    conv_out = self.convolution(inputs, filter_shape, params[3], modes[0], others[1])
+    conv_out = self.convolution(inputs, filter_shape, params[3], modes[0], others[1], params[0])
     pool_out = self.pooling(conv_out, params[0], modes[1], params[1], params[2], modes[2])
 
     if self.is_1d:
@@ -264,6 +272,8 @@ class NewConv(CNN):
       self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
     self.input.name = "conv_layer_input_final"
 
+    act = strtoact(self.modes[3])
+    self.modes[3] = "identity"
     self.Output = self.run_cnn(
       inputs=self.input,
       filter_shape=self.filter_shape,
@@ -276,11 +286,12 @@ class NewConv(CNN):
     # so, we have to convert back the output to 3D tensor
     # self.make_output(self.Output2)
     if self.attrs['batch_norm']:
-      self.Output = self.batch_norm(
+      self.Output = act(self.batch_norm(
         self.Output.reshape(
           (self.Output.shape[0],
            self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3])
-        ), self.attrs['n_out']).reshape(self.Output.shape)
+        ), self.attrs['n_out']
+      ).reshape(self.Output.shape))
 
     if self.modes[3] == 'maxout':
       self.Output = T.max(self.Output, axis=1).dimshuffle(0, 'x', 1, 2)
@@ -367,9 +378,15 @@ class ResNet(CNN):
     batch = x.output.shape[1]
 
     self.input = T.add(x.Output, f_x.Output)
+    self.Output = T.nnet.relu(self.input)
 
-    act = strtoact("relu")
-    self.Output = act(self.input)
+    if self.attrs['batch_norm']:
+      self.Output = self.batch_norm(
+        self.Output.reshape(
+          (self.Output.shape[0],
+           self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3])
+        ), self.attrs['n_out']).reshape(self.Output.shape)
 
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
+

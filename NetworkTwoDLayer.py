@@ -231,6 +231,10 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       self.attrs['n_out'] *= pad
     elif collapse_output != False:
       assert False, "invalid collapse mode"
+
+    if self.attrs['batch_norm']:
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes)
+
     self.output = Y
 
   def create_and_add_2d_lstm_weights(self, n, m, name_suffix):
@@ -379,6 +383,9 @@ class ConvPoolLayer2(ConvBaseLayer):
     Z = conv_crop_pool_op(self.X, sizes, self.output_sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
                           self.filter_width, pool_size)
     Y = self.activation(Z)
+    if self.attrs['batch_norm']:
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes)
+
     self.output = Y
 
     #index handling

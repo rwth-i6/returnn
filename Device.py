@@ -364,7 +364,7 @@ class Device(object):
               for k in self.used_data_keys}
     self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
               for k in self.used_data_keys}
-    if self.trainnet.loss in ('ctc','ce_ctc'):
+    if self.trainnet.loss in ('ctc','ce_ctc', 'hmm'):
       self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
       self.c = T.cast(self.cp, 'int32')
     if self.network_task in ['train', 'theano_graph']:
@@ -413,7 +413,7 @@ class Device(object):
 
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
-      if self.trainnet.loss == 'ctc':
+      if self.trainnet.loss in ('ctc', 'hmm'):
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
       elif self.trainnet.loss == 'ce_ctc':
@@ -1081,7 +1081,7 @@ class Device(object):
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       for k in self.used_data_keys:
         self.j[k].set_value(self.output_index[k], borrow = True)
-      if self.trainnet.loss in ('ctc','ce_ctc'):
+      if self.trainnet.loss in ('ctc','ce_ctc', 'hmm'):
         self.cp.set_value(self.ctc_targets)
       self.update_total_time += time.time() - update_start_time
     else:
@@ -1094,7 +1094,7 @@ class Device(object):
       for k in target_keys:
         self.input_queue.send(self.output_index[k])
       self.input_queue.send(self.tags)
-      if self.config.value('loss','') == 'ctc':
+      if self.config.value('loss','') in ('ctc', 'hmm'):
         self.input_queue.send(self.ctc_targets)
 
   def set_learning_rate(self, learning_rate):

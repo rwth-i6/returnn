@@ -318,7 +318,7 @@ class LSTMC(Unit):
     # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     op_res = op(z[::-(2 * go_backwards - 1)],
-                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], W_re, *(custom_vars + initial_state_vars))
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], T.constant(1,'float32'), W_re, *(custom_vars + initial_state_vars))
     result = [ op_res[0], op_res[2].dimshuffle('x',0,1) ] + op_res[3:]
     assert len(result) == len(outputs_info)
     return result
@@ -418,6 +418,7 @@ class RecurrentUnitLayer(Layer):
                attention_accumulator = 'sum',
                attention_bn = 0,
                attention_lm = 'none',
+               attention_ndec = 1,
                base = None,
                lm = False,
                force_lm = False,
@@ -510,6 +511,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_lm', attention_lm)
     self.set_attr('attention_bn', attention_bn)
     self.set_attr('attention_accumulator', attention_accumulator)
+    self.set_attr('attention_ndec', attention_ndec)
     self.set_attr('n_dec', n_dec)
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
@@ -580,13 +582,14 @@ class RecurrentUnitLayer(Layer):
     num_batches = self.index.shape[1]
     self.num_batches = num_batches
     non_sequences = []
-    if self.attrs['lm']:
+    if self.attrs['lm'] or attention_lm != 'none':
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
       if self.attrs['droplm'] > 0.0 or not (self.train_flag or force_lm):
         l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
         values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
         self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
+        self.b_lm_in = self.create_bias(self.y_in[self.attrs['target']].n_out, 'b_lm_in')
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
       self.W_lm_out = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
