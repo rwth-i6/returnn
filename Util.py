@@ -927,3 +927,9 @@ def fsa_for_label_seq(num_labels, label_seq):
       weight is a float
   """
   # TODO @Chris ...
+
+
+def fsa_to_dot_format(num_states, edges):
+  f = open("/tmp/dummy-fsa.dot", "w")
+  # evtl mit graphviz
+  # dot -T svg /tmp/dummy-fsa.dot > dummy-fsa.svg
