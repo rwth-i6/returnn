@@ -3,6 +3,7 @@ import os
 from theano import tensor as T
 import theano
 from BestPathDecoder import BestPathDecodeOp
+from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
@@ -677,8 +678,8 @@ class SequenceOutputLayer(OutputLayer):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm':
-      #TODO
-      return T.as_tensor_variable(numpy.cast["float32"](0))
+      from theano.tensor.extra_ops import cpu_contiguous
+      return T.sum(TwoStateBestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
