@@ -416,7 +416,7 @@ class SequenceOutputLayer(OutputLayer):
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
-               sigmoid_outputs=False, exp_outputs=False,
+               sigmoid_outputs=False, exp_outputs=False, loss_with_softmax_prob=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
@@ -451,6 +451,8 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("sigmoid_outputs", sigmoid_outputs)
     if exp_outputs:
       self.set_attr("exp_outputs", exp_outputs)
+    if loss_with_softmax_prob:
+      self.set_attr("loss_with_softmax_prob", loss_with_softmax_prob)
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
@@ -622,6 +624,9 @@ class SequenceOutputLayer(OutputLayer):
         assert target_layer  # we could also use self.y but so far we only want this
         bw2 = self.network.output[target_layer].baumwelch_alignment
         bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
+      if self.attrs.get("loss_with_softmax_prob", False):
+        y = self.p_y_given_x
+        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
