@@ -1,5 +1,6 @@
 import theano
 import theano.tensor as T
+import numpy
 import os
 Tfloat = theano.config.floatX  # @UndefinedVariable
 
@@ -14,7 +15,9 @@ class TwoStateHMMOp(theano.Op):
     def __str__(self):
         return self.__class__.__name__
 
-    def make_node(self, x, y, seq_lengths):
+    def make_node(self, x, y, seq_lengths,
+                  tdp_loop=T.as_tensor_variable(numpy.cast["float32"](0)),
+                  tdp_fwd=T.as_tensor_variable(numpy.cast["float32"](0))):
         x = theano.tensor.as_tensor_variable(x)
         assert x.ndim == 3  # tensor: nframes x nseqs x dim
         y = theano.tensor.as_tensor_variable(y)
@@ -22,8 +25,12 @@ class TwoStateHMMOp(theano.Op):
         seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
         assert seq_lengths.ndim == 1  # vector of seqs lengths
         assert seq_lengths.dtype == "int32"
+        assert tdp_loop.dtype == "float32"
+        assert tdp_fwd.dtype == "float32"
+        assert tdp_loop.ndim == 0
+        assert tdp_fwd.ndim == 0
         
-        return theano.Apply(self, [x, y, seq_lengths], [T.fvector(), T.ftensor3(), T.fmatrix()])
+        return theano.Apply(self, [x, y, seq_lengths, tdp_loop, tdp_fwd], [T.fvector(), T.ftensor3(), T.fmatrix()])
         # first output: CTC error per sequence
         # second output: Derivative w.r.t. Softmax net input
         
@@ -40,7 +47,7 @@ class TwoStateHMMOp(theano.Op):
         return ['-fopenmp']	
 
     def c_code(self, node, name, inp, out, sub):
-        x, y, seq_lengths = inp
+        x, y, seq_lengths, tdp_loop, tdp_fwd = inp
         errs, err_sigs, priors = out
         fail = sub['fail']        
         return """
@@ -64,6 +71,12 @@ class TwoStateHMMOp(theano.Op):
                 ArrayF xWr(%(x)s);
                 ArrayI yWr(%(y)s);
                 CArrayI seqLensWr(%(seq_lengths)s);
+
+                CArrayF tdp_loopWr(%(tdp_fwd)s);
+                CArrayF tdp_fwdWr(%(tdp_loop)s);
+                //convert from log space back to probabilities
+                float tdp_loop = exp(tdp_loopWr());
+                float tdp_fwd = exp(tdp_fwdWr());
                 
                 /*errsWr.debugPrint("errsWr");
                 errSigsWr.debugPrint("errSigsWr");
@@ -78,11 +91,12 @@ class TwoStateHMMOp(theano.Op):
                     TwoStateHMM hmm;
                     SArrayF errSigsSWr(errSigsWr, 1, i);
                     SArrayF priorsSWr(priorsWr, 0, i);
-                    hmm.forwardBackward(CSArrayF(xWr, 1, i), CSArrayI(yWr, 0, i), seqLensWr(i), errsWr(i), errSigsSWr, priorsSWr);
+                    hmm.forwardBackward(CSArrayF(xWr, 1, i), CSArrayI(yWr, 0, i), seqLensWr(i), errsWr(i),
+                      errSigsSWr, priorsSWr, tdp_loop, tdp_fwd);
                 }
             }            
         """ % locals()
     
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
-        return (1.0,)
+        return (1.3,)

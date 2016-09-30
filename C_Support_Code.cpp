@@ -186,6 +186,15 @@ public:
         return PyArray_DIM(a_,idx);
     }
 
+    T& operator()()
+    {
+        if(PyArray_NDIM(a_) != 0)
+        {
+            printf("zero-dimensional index operator used on higher-dimensional array\n");
+        }
+        return *reinterpret_cast<T*>(PyArray_DATA(a_));
+    }
+
     T& operator()(int idx)
     {
         if(PyArray_NDIM(a_) != 1)
@@ -227,6 +236,11 @@ public:
                    idx2, (int) PyArray_DIM(a_, 1), idx3, (int) PyArray_DIM(a_, 2));
         }
         return *reinterpret_cast<T*>(PyArray_DATA(a_) + idx);
+    }
+
+    const T& operator()() const
+    {
+        return const_cast<PyArrayWrapper<T>&>(*this)();
     }
 
     const T& operator()(int idx) const

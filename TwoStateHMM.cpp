@@ -3,14 +3,16 @@ class TwoStateHMM
 {
 public:
     void forwardBackward(CSArrayF& activs, CSArrayI& labellings,
-        int seqLen, float& err, SArrayF& errSigs, SArrayF& priors)
+        int seqLen, float& err, SArrayF& errSigs, SArrayF& priors, float tdp_loop, float tdp_fwd)
     {                
         nLabels_ = activs.dim(1);
+        verify((nLabels_ + 1) % 2 == 0);
+        si_ = (nLabels_ + 1) / 2 - 1;
         T_ = seqLen;
         N_ = calcLen(labellings);
         canonical_ = calcCanonical(labellings, N_);
         M_ = canonical_.size();
-        errorSignal(activs, labellings, err, errSigs, priors);
+        errorSignal(activs, labellings, err, errSigs, priors, tdp_loop, tdp_fwd);
     }
 private:
     int emissionLabel(int chr, int state)
@@ -19,7 +21,7 @@ private:
       return 2 * chr + state;
     }
 
-    void forwardAlgo(CSArrayF& activs, CSArrayI& labellings)
+    void forwardAlgo(CSArrayF& activs, CSArrayI& labellings, float tdp_loop, float tdp_fwd)
     {
         fwdTable_.resize(T_, M_);
         fwdTable_(0,0) = activs(0, canonical_[0]);
@@ -42,14 +44,23 @@ private:
                 myLog sum = 0;
                 for(int i = start; i <= n; ++i)
                 {
-                    sum += fwdTable_(t-1,i);
+                    float tdp = 0;
+                    if(i == n)
+                    {
+                      tdp = tdp_loop;
+                    }
+                    else
+                    {
+                      tdp = tdp_fwd;
+                    }
+                    sum += fwdTable_(t-1,i) * myLog(tdp);
                 }
                 fwdTable_(t,n) = y * sum;
             }
         }
     }
 
-    void backwardAlgo(CSArrayF& activs, CSArrayI& labellings)
+    void backwardAlgo(CSArrayF& activs, CSArrayI& labellings, float tdp_loop, float tdp_fwd)
     {
         bwdTable_.resize(T_, M_);
         bwdTable_(T_-1,M_-1) = 1;
@@ -71,18 +82,29 @@ private:
                 myLog sum = 0;
                 for(int i = n; i <= end; ++i)
                 {
+                    float tdp = 0;
+                    if(i == n)
+                    {
+                      tdp = tdp_loop;
+                    }
+                    else
+                    {
+                      tdp = tdp_fwd;
+                    }
+
                     myLog y = activs(t+1, canonical_[i]);
-                    sum += bwdTable_(t+1,i) * y;
+                    sum += bwdTable_(t+1,i) * y * myLog(tdp);
                 }
                 bwdTable_(t,n) = sum;
             }
         }
     }
 
-    void errorSignal(CSArrayF& activs, CSArrayI& labellings, float& err, SArrayF& errSigs, SArrayF& priors)
+    void errorSignal(CSArrayF& activs, CSArrayI& labellings, float& err, SArrayF& errSigs, SArrayF& priors,
+                     float tdp_loop, float tdp_fwd)
     {
-        forwardAlgo(activs, labellings);
-        backwardAlgo(activs, labellings);
+        forwardAlgo(activs, labellings, tdp_loop, tdp_fwd);
+        backwardAlgo(activs, labellings, tdp_loop, tdp_fwd);
 
         myLog totalSum = 0;
         for(int t = 0; t < T_; ++t)
@@ -143,8 +165,16 @@ private:
         for(int i = 0; i < len; ++i)
         {
             int chr = labellings(i);
-            canonical.push_back(emissionLabel(chr, 0));
-            canonical.push_back(emissionLabel(chr, 1));
+            if(chr == si_)
+            {
+                //silence has only 1 state
+                canonical.push_back(emissionLabel(chr, 0));
+            }
+            else
+            {
+                canonical.push_back(emissionLabel(chr, 0));
+                canonical.push_back(emissionLabel(chr, 1));
+            }
         }
         return canonical;
     }
@@ -153,6 +183,7 @@ private:
     int N_;
     int M_;
     int nLabels_;
+    int si_;
     std::vector<int> canonical_;
     TwoDArray<myLog> fwdTable_;
     TwoDArray<myLog> bwdTable_;
