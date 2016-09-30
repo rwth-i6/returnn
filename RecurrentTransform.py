@@ -478,7 +478,7 @@ class AttentionList(AttentionBase):
       self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re", i)
       self.create_bias(n_tmp, "b_att_re", i)
       if e.attrs['n_out'] == n_tmp:
-        self.add_input(B, 'C_%d' % i)
+        self.add_input(e.output[::direction], 'C_%d' % i)
       else:
         W_att_bs = self.create_weights(e.attrs['n_out'], n_tmp, "W_att_bs", i)
         b_att_bs = self.create_bias(n_tmp, "b_att_bs", i)
