@@ -170,7 +170,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       //call custom function here
       //const float *freqs = data_ptr(%(freq)s)
       //if(!rightBorder && x %% (int)(freqs[0]) == 0)
-      if(!rightBorder && x %% 1 == 0)
+      if(!rightBorder && x %% 10 == 0)
       {
         CudaNdarray * y_p = 0;
         //x-1?
@@ -490,40 +490,40 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       }
 
       // call custom function here
-
-      CudaNdarray* state_vars[ARRAY_LEN(state_vars_seqs_ptr)];
-      for(int i = 0; i < ARRAY_LEN(state_vars_seqs_ptr); ++i) {
-        state_vars[i] = (CudaNdarray*) PyObject_CallMethod((PyObject*) *state_vars_seqs_ptr[i], "__getitem__", "(i)", x);
-        assert(state_vars[i]);
-      }
-
-      CudaNdarray * y_p = 0;
-      if(leftBorder)
-      {
-        y_p = %(y0)s;
-      }
-      else
-      {
-        PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
-        assert(y_p_obj);
-        y_p = (CudaNdarray*) y_p_obj;
-      }
-      //std::cerr << "t=" << x << std::endl;
-      // fwd fun args: y_p, custom inputs, state vars
-      CudaNdarray* fun_args[1 + ARRAY_LEN(custom_inputs) + ARRAY_LEN(state_vars)];
-      {
-        int idx = 0;
-        fun_args[idx++] = y_p;
-        for(int i = 0; i < ARRAY_LEN(custom_inputs); ++i)
-          fun_args[idx++] = custom_inputs[i];
-        for(int i = 0; i < ARRAY_LEN(state_vars); ++i)
-          fun_args[idx++] = state_vars[i];
-        assert(idx == ARRAY_LEN(fun_args));
-      }
       //const float *freqs = data_ptr(%(freq)s);
       //if(x %% (int)(freqs[0]) == 0)
-      if(x %% 1 == 0)
+      if(x %% 10 == 0)
       {
+        CudaNdarray* state_vars[ARRAY_LEN(state_vars_seqs_ptr)];
+        for(int i = 0; i < ARRAY_LEN(state_vars_seqs_ptr); ++i) {
+          state_vars[i] = (CudaNdarray*) PyObject_CallMethod((PyObject*) *state_vars_seqs_ptr[i], "__getitem__", "(i)", x);
+          assert(state_vars[i]);
+        }
+
+        CudaNdarray * y_p = 0;
+        if(leftBorder)
+        {
+          y_p = %(y0)s;
+        }
+        else
+        {
+          PyObject * y_p_obj = PyObject_CallMethod((PyObject*) %(Y)s, "__getitem__", "(i)", x-1);
+          assert(y_p_obj);
+          y_p = (CudaNdarray*) y_p_obj;
+        }
+        //std::cerr << "t=" << x << std::endl;
+        // fwd fun args: y_p, custom inputs, state vars
+        CudaNdarray* fun_args[1 + ARRAY_LEN(custom_inputs) + ARRAY_LEN(state_vars)];
+        {
+          int idx = 0;
+          fun_args[idx++] = y_p;
+          for(int i = 0; i < ARRAY_LEN(custom_inputs); ++i)
+            fun_args[idx++] = custom_inputs[i];
+          for(int i = 0; i < ARRAY_LEN(state_vars); ++i)
+            fun_args[idx++] = state_vars[i];
+          assert(idx == ARRAY_LEN(fun_args));
+        }
+
         std::vector<CudaNdarray*> res_vec = %(fwd_fun)s.call(fun_args, ARRAY_LEN(fun_args));
         assert(res_vec.size() == 1 + ARRAY_LEN(initial_state_vars));
 
