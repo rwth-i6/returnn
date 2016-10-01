@@ -22,25 +22,42 @@ private:
 	std::vector<int> label(CArrayF& activs, int idx)
 	{
 	    std::vector<int> labelling;
-	    int lastLabel = ((nLabels_ + (nLabels_ % 2) - 1) / 2;
+	    int lastLabel = nLabels_ - 1;
 	    for(int t = 0; t < T_; ++t)
 	    {
 	        int bestLabel = 0;
 	        float bestLabelProb = 0;
-	        for(int l = 0; l < nLabels_; ++l)
+	        if(lastLabel % 2 == 1)
 	        {
-	            float prob = activs(t, idx, l);
-	            if(prob > bestLabelProb)
-	            {
-	                bestLabel = l / 2;
-	                bestLabelProb = prob;
-	            }
-	        }
-	        if(bestLabel != lastLabel)
+              for(int l = 0; l < nLabels_; l += 2)
+              {
+                  float prob = activs(t, idx, l);
+                  if(prob > bestLabelProb)
+                  {
+                      bestLabel = l
+                      bestLabelProb = prob;
+                  }
+              }
+             }
+             else
+             {
+                 float loop = activs(t, idx, lastLabel)
+                 float forward = activs(t, idx, lastLabel+1)
+                 bestLabel = lastLabel + (int)(forward > loop);
+             }
+	        if(bestLabel/2 != lastLabel/2 && bestLabel % 2 == 1)
 	        {
-	            labelling.push_back(bestLabel);
+	            labelling.push_back(bestLabel/2);
 	            lastLabel = bestLabel;
 	        }
+	    }
+	    while(labelling[0] == nLabels/2 - 1)
+	    {
+	        labelling.pop_front();
+	    }
+	    while(labelling[labelling.size()-1] == nLabels/2 - 1)
+	    {
+	        labelling.pop_back();
 	    }
 	    return labelling;
 	}
