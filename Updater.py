@@ -630,27 +630,44 @@ class Updater:
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
 
       elif self.adamdelta: # adam moment normalization + adadelta learning rate scaling
+        m_cache = self.var(1, name="momemtum_cache")
+        m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
+        self.adam_offset = numpy.float32(1e-8)
+
+        mt = (beta1 * (1 - 0.5 * 0.96 ** (
+        i_t * float(self.nadam_decay))))  # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mtnext = beta1 * (1 - 0.5 * 0.96 ** ((i_t + 1) * float(self.nadam_decay)))  # for simplified NAG
+
+        m_cache_new = m_cache * mt
+        bias_corr = m_cache_new * mtnext
+
+        _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
+
+        m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        _m = m / T.cast(1 - bias_corr,
+                        dtype="float32")  # bias correction (with momentum schedule (include the next t+1))
+
+        v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas ** 2)
+        _v = v / T.cast(1 - beta2 ** i_t, dtype="float32")
+        __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
+        g = __m / (T.sqrt(_v) + self.adam_offset)
+
         decay = self.adadelta_decay
         offset = self.adadelta_offset
-        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * (deltas ** 2)
-        self.adam_offset = numpy.float32(1e-16)
-        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
-        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
+        g2 = g ** 2
+        eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * g2
+        dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
+        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * dx_new ** 2
 
-        dsq = deltas ** 2
-        m_t = decay * m_prev + (numpy.float32(1) - decay) * deltas
-        v_t = decay * v_prev + (numpy.float32(1) - decay) * dsq
-        a_t = self.learning_rate_var * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
+        upd[param] += self.learning_rate_var * dx_new
 
-        step = a_t * m_t / (T.sqrt(v_t + 1.))
-
-        updates.append((m_prev, m_t))
-        updates.append((v_prev, v_t))
-        upd[param] += -step
-        edx2_new = decay * self.edx2[param] + (numpy.float32(1) - decay) * ((deltas*a_t) ** 2)
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
-        updates.append((self.dx[param], -step))
+        updates.append((self.dx[param], dx_new))
+        updates.append((m_cache, m_cache_new))
+        updates.append((m_prev, m))
+        updates.append((v_prev, v))
 
       elif self.adadelta:
         decay = self.adadelta_decay
