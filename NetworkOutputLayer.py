@@ -31,7 +31,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
-               compute_priors=False, compute_priors_exp_average=0,
+               compute_priors=False, compute_priors_exp_average=0, compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
                apply_softmax=True,
@@ -51,6 +51,8 @@ class OutputLayer(Layer):
       self.set_attr("copy_input", copy_input.name)
     if grad_clip_z is not None:
       self.set_attr("grad_clip_z", grad_clip_z)
+    if compute_distortions:
+      self.set_attr("compute_distortions", compute_distortions)
     if grad_discard_out_of_bound_z is not None:
       self.set_attr("grad_discard_out_of_bound_z", grad_discard_out_of_bound_z)
     if not apply_softmax:
@@ -148,9 +150,9 @@ class OutputLayer(Layer):
       self.norm *= num / T.cast(T.sum(self.index), 'float32')
     elif time_limit > 0:
       end = T.min([self.z.shape[0], T.constant(time_limit, 'int32')])
-      nom = T.cast(T.sum(self.index), 'float32')
+      num = T.cast(T.sum(self.index), 'float32')
       self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
-      self.norm = nom / T.cast(T.sum(self.index), 'float32')
+      self.norm = num / T.cast(T.sum(self.index), 'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
 
     # xs = [s.output for s in self.sources]
@@ -289,6 +291,20 @@ class FramewiseOutputLayer(OutputLayer):
                                    custom_update_normalized=(not exp_average) and self.attrs.get('trainable', True),
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(self.priors)
+    if self.attrs.get('compute_distortions', False):
+      p = self.p_y_given_x_flat[self.i]
+      momentum = p[:-1] * p[1:]
+      momentum = T.sum(momentum,axis=-1)
+      loop = T.mean(momentum)
+      forward = numpy.float32(1) - loop
+      self.distortions = {
+        'loop' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'loop'), 'loop',
+                                custom_update = loop,
+                                custom_update_normalized=True),
+        'forward' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'forward'), 'forward',
+                                   custom_update = forward,
+                                   custom_update_normalized=True)
+      }
     self._maybe_substract_prior_from_output()
 
   def cost(self):
@@ -504,6 +520,20 @@ class SequenceOutputLayer(OutputLayer):
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
     self._maybe_substract_prior_from_output()
+    if self.attrs.get('compute_distortions', False):
+      p = self.p_y_given_x_flat[self.i]
+      momentum = p[:-1] * p[1:]
+      momentum = T.sum(momentum,axis=-1)
+      loop = T.mean(momentum)
+      forward = numpy.float32(1) - loop
+      self.distortions = {
+        'loop' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'loop'), 'loop',
+                                custom_update = loop,
+                                custom_update_normalized=True),
+        'forward' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'forward'), 'forward',
+                                   custom_update = forward,
+                                   custom_update_normalized=True)
+      }
 
   def index_for_ctc(self):
     for source in self.sources:
