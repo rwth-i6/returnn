@@ -45,7 +45,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
   def _get_num_state_vars(self):
     return len(self.recurrent_transform.state_vars)
 
-  def make_node(self, Y, H, c, y0, i, Dd, DY, W_re, freq, *args):
+  def make_node(self, Y, H, c, y0, i, freq, Dd, DY, W_re, *args):
     c = gpu_contiguous(as_cuda_ndarray_variable(c))
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
@@ -53,8 +53,11 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     DY = gpu_contiguous(as_cuda_ndarray_variable(DY))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
     args = [gpu_contiguous(as_cuda_ndarray_variable(x)) for x in args]
+    freq = gpu_contiguous(as_cuda_ndarray_variable(freq))
+
     # args = custom_inputs + state_vars_seqs
     assert len(args) == self._get_num_custom_vars() + self._get_num_state_vars()
+    assert freq.dtype == 'float32'
     assert DY.dtype == 'float32'
     assert Y.dtype == 'float32'
     assert H.dtype == 'float32'
@@ -165,7 +168,9 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       }
 
       //call custom function here
-      if(!rightBorder && x % %(freq)d == 0)
+      //const float *freqs = data_ptr(%(freq)s)
+      //if(!rightBorder && x %% (int)(freqs[0]) == 0)
+      if(!rightBorder && x %% 1 == 0)
       {
         CudaNdarray * y_p = 0;
         //x-1?
@@ -368,6 +373,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
+    freq = gpu_contiguous(as_cuda_ndarray_variable(freq))
     assert Z.dtype == "float32"
     assert c.dtype == "float32"
     assert y0.dtype == "float32"
@@ -514,8 +520,9 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
           fun_args[idx++] = state_vars[i];
         assert(idx == ARRAY_LEN(fun_args));
       }
-
-      if(x % %(freq)d == 0)
+      //const float *freqs = data_ptr(%(freq)s);
+      //if(x %% (int)(freqs[0]) == 0)
+      if(x %% 1 == 0)
       {
         std::vector<CudaNdarray*> res_vec = %(fwd_fun)s.call(fun_args, ARRAY_LEN(fun_args));
         assert(res_vec.size() == 1 + ARRAY_LEN(initial_state_vars));
@@ -592,8 +599,9 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     custom_input_grads = remaining_grads[:self._get_num_custom_vars()]
     initial_state_var_grads = remaining_grads[self._get_num_custom_vars():]
     Di = theano.gradient.grad_undefined(self, 3, inputs[3], 'cannot diff w.r.t. index')
+    Dfreq = theano.gradient.grad_undefined(self, 4, inputs[4], 'cannot diff w.r.t. frequency')
 
-    return [DZ, Dc, Dy0, Di, DW_re] + custom_input_grads + initial_state_var_grads
+    return [DZ, Dc, Dy0, Di, Dfreq, DW_re] + custom_input_grads + initial_state_var_grads
 
 
 function_ops = {}; ":type: dict[(str,int),LSTMCustomOp]"

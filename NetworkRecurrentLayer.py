@@ -318,7 +318,7 @@ class LSTMC(Unit):
     # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     op_res = op(z[::-(2 * go_backwards - 1)],
-                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], T.constant(1,'float32'), W_re, *(custom_vars + initial_state_vars))
+                outputs_info[1], outputs_info[0], i[::-(2 * go_backwards - 1)], T.ones((i.shape[1],),'float32'), W_re, *(custom_vars + initial_state_vars))
     result = [ op_res[0], op_res[2].dimshuffle('x',0,1) ] + op_res[3:]
     assert len(result) == len(outputs_info)
     return result
