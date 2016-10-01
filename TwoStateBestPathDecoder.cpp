@@ -41,13 +41,13 @@ private:
              }
             else
             {
-                 float loop = activs(t, idx, lastLabel)
-                 float forward = activs(t, idx, lastLabel+1)
+                 float loop = activs(t, idx, lastLabel);
+                 float forward = activs(t, idx, lastLabel+1);
                  bestLabel = lastLabel + (int)(forward > loop);
             }
 	        if(bestLabel != lastLabel)
 	        {
-	            if (lastLabel % 2 == 1))
+	            if (lastLabel % 2 == 1)
 	              labelling.push_back(lastLabel/2);
 	            lastLabel = bestLabel;
 	        }
@@ -55,14 +55,6 @@ private:
 	        {
 	            labelling.push_back(bestLabel/2);
 	        }
-	    }
-	    while(labelling[0] == (nLabels - 1)/2)
-	    {
-	        labelling.pop_front();
-	    }
-	    while(labelling[labelling.size()-1] == (nLabels - 1)/2)
-	    {
-	        labelling.pop_back();
 	    }
 	    return labelling;
 	}
