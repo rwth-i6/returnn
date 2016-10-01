@@ -92,6 +92,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
 
   def c_code(self, node, name, input_names, output_names, sub):
     (Y, H, c, y0, i, freq, Dd, DY, W_re), remaining_inputs = input_names[:9], input_names[9:]
+    freq = 1 # TODO
     assert len(remaining_inputs) == self._get_num_custom_vars() + self._get_num_state_vars()
     custom_inputs = remaining_inputs[:self._get_num_custom_vars()]
     seq_state_var_names = remaining_inputs[self._get_num_custom_vars():]
@@ -170,7 +171,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
       //call custom function here
       //const float *freqs = data_ptr(%(freq)s)
       //if(!rightBorder && x %% (int)(freqs[0]) == 0)
-      if(!rightBorder && x %% 10 == 0)
+      if(!rightBorder && x %% %(freq)d == 0)
       {
         CudaNdarray * y_p = 0;
         //x-1?
@@ -373,7 +374,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     y0 = gpu_contiguous(as_cuda_ndarray_variable(y0))
     i = gpu_contiguous(as_cuda_ndarray_variable(T.cast(i,'float32')))
     W_re = gpu_contiguous(as_cuda_ndarray_variable(W_re))
-    freq = gpu_contiguous(as_cuda_ndarray_variable(freq))
+    self.freq = gpu_contiguous(as_cuda_ndarray_variable(freq))
     assert Z.dtype == "float32"
     assert c.dtype == "float32"
     assert y0.dtype == "float32"
@@ -406,6 +407,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     # Z/H: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
     # d: last state (= Y[T-1]). 2d (batch,dim)
     Z, c, y0, i, freq, W_re = input_names[:6]
+    freq = 1 # TODO
     custom_inputs = input_names[6:]
     assert len(custom_inputs) == self._get_num_custom_vars() + self._get_num_state_vars()
     custom_inputs, initial_state_vars = custom_inputs[:self._get_num_custom_vars()], custom_inputs[self._get_num_custom_vars():]
@@ -492,7 +494,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
       // call custom function here
       //const float *freqs = data_ptr(%(freq)s);
       //if(x %% (int)(freqs[0]) == 0)
-      if(x %% 10 == 0)
+      if(x %% %(freq)d == 0)
       {
         CudaNdarray* state_vars[ARRAY_LEN(state_vars_seqs_ptr)];
         for(int i = 0; i < ARRAY_LEN(state_vars_seqs_ptr); ++i) {
