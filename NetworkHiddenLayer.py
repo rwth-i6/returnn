@@ -10,7 +10,7 @@ from theano.tensor.signal import downsample
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
-from TheanoUtil import class_idx_seq_to_1_of_k, windowed_batch
+from TheanoUtil import class_idx_seq_to_1_of_k
 from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
@@ -162,12 +162,17 @@ class CopyLayer(_NoOpLayer):
 class WindowLayer(_NoOpLayer):
   layer_class = "window"
 
-  def __init__(self, window, **kwargs):
+  def __init__(self, window, delta=0, delta_delta=0, **kwargs):
     super(WindowLayer, self).__init__(**kwargs)
     source, n_out = concat_sources(self.sources, unsparse=False)
     self.set_attr('n_out', n_out * window)
     self.set_attr('window', window)
-    self.make_output(windowed_batch(source, window=window))
+    self.set_attr('delta', delta)
+    self.set_attr('delta_delta', delta_delta)
+    from TheanoUtil import windowed_batch, delta_batch
+    out = windowed_batch(source, window=window)
+    #d = delta_batch()  # TODO...
+    self.make_output(out)
 
 
 class DownsampleLayer(_NoOpLayer):
