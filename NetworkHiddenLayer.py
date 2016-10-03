@@ -679,6 +679,22 @@ class TimeUnChunkingLayer(_NoOpLayer):
     self.output, self.index, _ = unchunk(
       x, index=chunking_layer_o.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
 
+class TimeFlatLayer(_NoOpLayer):
+  layer_class = "time_flat"
+
+  def __init__(self, chunk_size, chunk_step, **kwargs):
+    super(TimeFlatLayer, self).__init__(**kwargs)
+    self.set_attr("chunk_size", chunk_size)
+    self.set_attr("chunk_step", chunk_step)
+    x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+    self.set_attr("n_out", n_in)
+    self.source_index = self.index
+    n_time = self.index.shape[0] * chunk_size
+    n_batch = self.index.shape[1]
+    from NativeOp import unchunk
+    self.output, self.index, _ = unchunk(
+      x, index=self.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+
 
 class RBFLayer(_NoOpLayer):
   """
@@ -1412,6 +1428,34 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     elif method == 'average':
       output = z.mean(axis=0)
     self.make_output(output)
+
+
+class TimeToBatchLayer(ForwardLayer):
+  layer_class = "time_to_batch"
+
+  def __init__(self, **kwargs):
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
+    super(TimeToBatchLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
+    self.n_batch = self.index.shape[1]
+    self.output = z.reshape((1,z.shape[0] * z.shape[1],z.shape[2]))
+    self.index = self.index.reshape((1, self.index.shape[0] * self.index.shape[1]))
+
+
+class BatchToTimeLayer(ForwardLayer):
+  layer_class = "batch_to_time"
+
+  def __init__(self, base, **kwargs):
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
+    n_batch = base[0].n_batch
+    super(BatchToTimeLayer, self).__init__(**kwargs)
+    self.params = {}
+    z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
+    z = z.reshape((z.shape[0] * z.shape[1],z.shape[2]))
+    self.output = z.reshape((z.shape[0]/n_batch,n_batch,z.shape[1]))
+    self.index = self.index.reshape((self.index.shape[0] * self.index.shape[1],))
+    self.index = self.index.reshape((self.index.shape[0]/n_batch,n_batch))
 
 
 class LengthLayer(HiddenLayer):

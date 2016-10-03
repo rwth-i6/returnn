@@ -201,9 +201,6 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     self.set_attr('collapse_output', collapse_output)
     self.set_attr('directions', directions)
     self.set_attr('projection', projection)
-    if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y.reshape((Y.shape[0]*Y.shape[1]*Y.shape[2],Y.shape[3])),
-                          self.attrs['n_out'], force_sample=True).reshape(Y.shape)
 
     #index handling
     def index_fn(index, size):
@@ -233,7 +230,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       assert False, "invalid collapse mode"
 
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes)
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes if not collapse_output else self.index)
 
     self.output = Y
 

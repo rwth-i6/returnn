@@ -538,6 +538,7 @@ class RecurrentUnitLayer(Layer):
         self.index = idx.dimshuffle(1,0)[:-1]
         n_dec = T.cast(T.ceil(T.cast(source_index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
       else:
+        self.index = encoder[0].index
         self.index = T.ones((n_dec,self.index.shape[1]),'int64') # TODO: this gives a graph replacement error for int8
     else:
       n_dec = self.index.shape[0]
