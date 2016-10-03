@@ -51,6 +51,8 @@ class OneDToTwoDLayer(TwoDBaseLayer):
     assert X.ndim == 3
     assert X.dtype == "float32"
     Y = OneDToTwoDOp()(X, sizes)
+    if self.attrs['batch_norm']:
+      Y = self.batch_norm(Y,n_out,index=sizes)
     self.output = Y
     self.set_attr('n_out', n_out)
 
