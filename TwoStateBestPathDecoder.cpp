@@ -34,7 +34,7 @@ private:
                   float prob = activs(t, idx, l);
                   if(prob > bestLabelProb)
                   {
-                      bestLabel = l
+                      bestLabel = l;
                       bestLabelProb = prob;
                   }
               }
