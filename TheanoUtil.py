@@ -57,6 +57,11 @@ def opt_contiguous_on_gpu(x):
 
 
 def windowed_batch(source, window):
+  """
+  :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
+  :param int|theano.Variable window: window size
+  :return: tensor of shape (n_time, n_batch, window * n_dim)
+  """
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
   n_time = source.shape[0]
   n_batch = source.shape[1]
@@ -82,6 +87,19 @@ def windowed_batch(source, window):
   final_sub = final_dimshuffle[:n_time]  # (n_time,batch,window,dim)
   final_concat_dim = final_sub.reshape((n_time, n_batch, window * n_dim))
   return final_concat_dim
+
+
+def delta_batch(source, window):
+  """
+  :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
+  :param int|theano.Variable window: window size
+  :return: tensor of shape (n_time, n_batch, window * n_dim)
+  Similar as numpy.diff. Also called delta.
+  TODO with conv op
+  """
+  assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
+  w = windowed_batch(source, window + 1)
+  return w[1:] - w[:-1]
 
 
 def slice_for_axis(axis, s):
