@@ -214,6 +214,7 @@ class OutputLayer(Layer):
     # self.make_output(self.z, collapse = False)
     # Note that self.output is going to be overwritten in our derived classes.
     self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
+    self.y_m = None  # flat log(self.p_y_given_x)
 
   def create_bias(self, n, prefix='b', name=""):
     if not name:
@@ -427,7 +428,8 @@ class SequenceOutputLayer(OutputLayer):
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
-               sigmoid_outputs=False, exp_outputs=False, loss_with_softmax_prob=False,
+               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False,
+               loss_with_softmax_prob=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
@@ -462,6 +464,8 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("sigmoid_outputs", sigmoid_outputs)
     if exp_outputs:
       self.set_attr("exp_outputs", exp_outputs)
+    if gauss_outputs:
+      self.set_attr("gauss_outputs", gauss_outputs)
     if loss_with_softmax_prob:
       self.set_attr("loss_with_softmax_prob", loss_with_softmax_prob)
     if am_scale != 1:
@@ -500,7 +504,11 @@ class SequenceOutputLayer(OutputLayer):
       self.p_y_given_x = self.z
       self.z = T.log(self.z)
       self.y_m = T.log(self.y_m)
-    else:
+    elif self.attrs.get("gauss_outputs", False):
+      self.y_m = -T.sqr(self.y_m)
+      self.p_y_given_x_flat = T.exp(self.y_m)
+      self.p_y_given_x = T.reshape(self.p_y_given_x_flat, self.z.shape)
+    else:  # standard case
       self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
@@ -613,6 +621,10 @@ class SequenceOutputLayer(OutputLayer):
       if self.attrs.get("exp_outputs", False):
         y = T.exp(self.z)
         nlog_scores = -self.z  # in -log space
+      if self.attrs.get("gauss_outputs", False):
+        z_sqr = T.sqr(self.z)
+        y = T.exp(-z_sqr)
+        nlog_scores = z_sqr  # in -log space
       am_scores = nlog_scores
       am_scale = self.attrs.get("am_scale", 1)
       if am_scale != 1:
@@ -654,6 +666,8 @@ class SequenceOutputLayer(OutputLayer):
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err = (bw * nlog_scores * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
+      if self.attrs.get("gauss_outputs", False):
+        del known_grads[self.z]
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
         bw_sum0 = T.sum(bw * float_idx_bc, axis=(0, 1))
         assert bw_sum0.ndim == self.priors.ndim == 1
