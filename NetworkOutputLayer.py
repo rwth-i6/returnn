@@ -429,6 +429,7 @@ class SequenceOutputLayer(OutputLayer):
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False,
+               log_score_penalty=0,
                loss_with_softmax_prob=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
@@ -466,6 +467,8 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("exp_outputs", exp_outputs)
     if gauss_outputs:
       self.set_attr("gauss_outputs", gauss_outputs)
+    if log_score_penalty:
+      self.set_attr("log_score_penalty", log_score_penalty)
     if loss_with_softmax_prob:
       self.set_attr("loss_with_softmax_prob", loss_with_softmax_prob)
     if am_scale != 1:
@@ -664,7 +667,10 @@ class SequenceOutputLayer(OutputLayer):
       if self.attrs.get("loss_with_softmax_prob", False):
         y = self.p_y_given_x
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
-      err = (bw * nlog_scores * float_idx_bc).sum()
+      err_inner = bw * nlog_scores
+      if self.attrs.get("log_score_penalty", 0):
+        err_inner -= numpy.float32(self.attrs["log_score_penalty"]) * nlog_scores
+      err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.attrs.get("gauss_outputs", False):
         del known_grads[self.z]
