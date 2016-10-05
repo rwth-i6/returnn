@@ -681,11 +681,11 @@ class Layer(Container):
       x = h.reshape((h.shape[0] * h.shape[1] * h.shape[2], h.shape[3]))
       #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
     mean = T.mean(x,axis=0)
-    std = T.std(x,axis=0)
+    std = T.mean((x - mean)**2,axis=0)
     sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
                                  custom_update=mean,
                                  custom_update_normalized=True)
-    sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
+    sample_std = T.mean((x - sample_mean)**2,axis=0)
     if not self.train_flag and not force_sample:
       use_sample = 1.0
     mean = T.constant(1.-use_sample,'float32') * mean + T.constant(use_sample,'float32') * sample_mean

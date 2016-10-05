@@ -538,7 +538,8 @@ class RecurrentUnitLayer(Layer):
         self.index = idx.dimshuffle(1,0)[:-1]
         n_dec = T.cast(T.ceil(T.cast(source_index.shape[0],'float32') * numpy.float32(n_dec)),'int32')
       else:
-        self.index = encoder[0].index
+        if encoder:
+          self.index = encoder[0].index
         self.index = T.ones((n_dec,self.index.shape[1]),'int64') # TODO: this gives a graph replacement error for int8
     else:
       n_dec = self.index.shape[0]
@@ -610,8 +611,10 @@ class RecurrentUnitLayer(Layer):
       src_names = []
       n_in = 0
       for e in base:
-        src_base = [ s for s in e.sources if s.name not in src_names ]
-        src_names += [ s.name for s in e.sources ]
+        #src_base = [ s for s in e.sources if s.name not in src_names ]
+        #src_names += [ s.name for s in e.sources ]
+        src_base = [ e ]
+        src_names += [e.name]
         src += [s.output for s in src_base]
         n_in += sum([s.attrs['n_out'] for s in src_base])
       self.xc = T.concatenate(src, axis=2)
@@ -638,7 +641,7 @@ class RecurrentUnitLayer(Layer):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
           outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
-        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
+        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else numpy.float32(0))
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_units) for a in range(unit.n_act) ]
 
@@ -650,7 +653,7 @@ class RecurrentUnitLayer(Layer):
           sequences += self.W_lm_out[y].reshape((index.shape[0],index.shape[1],unit.n_in))
 
       if sequences == self.b:
-        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else 0)
+        sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else numpy.float32(0))
 
       if unit.recurrent_transform:
         outputs_info += unit.recurrent_transform.get_sorted_state_vars_initial()

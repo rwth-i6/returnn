@@ -28,7 +28,7 @@ class TwoDBaseLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
   def create_xavier_weights(self, shape, name):
-    p = shape[0] + numpy.prod(shape[1:])
+    p = shape[0] + numpy.prod(shape[1:]) * 4
     W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
                       dtype=theano.config.floatX)
     return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
