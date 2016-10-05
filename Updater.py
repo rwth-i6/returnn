@@ -303,7 +303,7 @@ class Updater:
     prev_epoch = self.var(numpy.zeros((), dtype="int32"),'prev_epoch',dtype='int32')
     updates.append((prev_epoch, self.network.epoch))
     e_t = T.switch(T.eq(self.network.epoch,prev_epoch), self.e + dt,
-                   T.switch(T.eq(i_t, self.e), numpy.float32(1), numpy.float32(1) + dt))
+                   T.switch(T.eq(i_t, self.e), numpy.float32(1), self.e/numpy.float32(2) + dt))
     updates.append((self.e, e_t))
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)

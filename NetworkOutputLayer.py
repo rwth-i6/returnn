@@ -299,10 +299,10 @@ class FramewiseOutputLayer(OutputLayer):
       loop = T.mean(momentum)
       forward = numpy.float32(1) - loop
       self.distortions = {
-        'loop' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'loop'), 'loop',
+        'loop' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'loop'), 'loop',
                                 custom_update = loop,
                                 custom_update_normalized=True),
-        'forward' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'forward'), 'forward',
+        'forward' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'forward'), 'forward',
                                    custom_update = forward,
                                    custom_update_normalized=True)
       }
@@ -538,10 +538,10 @@ class SequenceOutputLayer(OutputLayer):
       loop = T.mean(momentum)
       forward = numpy.float32(1) - loop
       self.distortions = {
-        'loop' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'loop'), 'loop',
+        'loop' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'loop'), 'loop',
                                 custom_update = loop,
                                 custom_update_normalized=True),
-        'forward' : self.add_param(theano.shared(numpy.ones(1,) * numpy.float32(0.5), 'forward'), 'forward',
+        'forward' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'forward'), 'forward',
                                    custom_update = forward,
                                    custom_update_normalized=True)
       }
@@ -688,8 +688,16 @@ class SequenceOutputLayer(OutputLayer):
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'hmm':
       from theano.tensor.extra_ops import cpu_contiguous
-      err, grad, priors = TwoStateHMMOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)),
-                                          self.index_for_ctc())
+      emissions = self.p_y_given_x
+      tdp_loop = T.as_tensor_variable(numpy.cast["float32"](0))
+      tdp_fwd = T.as_tensor_variable(numpy.cast["float32"](0))
+      if self.attrs.get('compute_priors', False):
+        emissions = T.exp(T.log(emissions) - self.prior_scale *  T.log(T.maximum(self.priors,1e-10)))
+      if self.attrs.get('compute_distortions', False):
+        tdp_loop = T.as_tensor_variable(T.log(self.distortions['loop'][0]))
+        tdp_fwd = T.as_tensor_variable(T.log(self.distortions['forward'][0]))
+      err, grad, priors = TwoStateHMMOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)),
+                                          self.index_for_ctc(),tdp_loop,tdp_fwd)
       known_grads = {self.z: grad}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'warp_ctc':
@@ -737,8 +745,11 @@ class SequenceOutputLayer(OutputLayer):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm':
+      emissions = self.p_y_given_x
+      if self.attrs.get('compute_priors', False):
+        emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       from theano.tensor.extra_ops import cpu_contiguous
-      return T.sum(TwoStateBestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+      return T.sum(TwoStateBestPathDecodeOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
