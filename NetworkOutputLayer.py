@@ -385,8 +385,8 @@ class SequenceOutputLayer(OutputLayer):
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
-               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False,
-               log_score_penalty=0,
+               sigmoid_outputs=False, exp_outputs=False,
+               fast_bw_opts=None,
                loss_with_softmax_prob=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
@@ -422,10 +422,13 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("sigmoid_outputs", sigmoid_outputs)
     if exp_outputs:
       self.set_attr("exp_outputs", exp_outputs)
-    if gauss_outputs:
-      self.set_attr("gauss_outputs", gauss_outputs)
-    if log_score_penalty:
-      self.set_attr("log_score_penalty", log_score_penalty)
+    if fast_bw_opts:
+      if not isinstance(fast_bw_opts, dict):
+        import json
+        fast_bw_opts = json.loads(fast_bw_opts)
+      self.set_attr("fast_bw_opts", fast_bw_opts)
+    from Util import CollectionReadCheckCovered
+    self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
     if loss_with_softmax_prob:
       self.set_attr("loss_with_softmax_prob", loss_with_softmax_prob)
     if am_scale != 1:
@@ -448,9 +451,12 @@ class SequenceOutputLayer(OutputLayer):
       self.trained_softmax_prior_p = self.add_param(theano.shared(initialization, 'trained_softmax_prior_p'))
       self.priors = T.nnet.softmax(self.trained_softmax_prior_p).reshape((self.attrs['n_out'],))
       self.log_prior = T.log(self.priors)
-    self.sprint_opts = sprint_opts
-    if sprint_opts:
+    if sprint_opts is not None:
+      if not isinstance(sprint_opts, dict):
+        import json
+        sprint_opts = json.loads(sprint_opts)
       self.set_attr("sprint_opts", sprint_opts)
+    self.sprint_opts = sprint_opts
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     self.initialize()
@@ -464,10 +470,6 @@ class SequenceOutputLayer(OutputLayer):
       self.p_y_given_x = self.z
       self.z = T.log(self.z)
       self.y_m = T.log(self.y_m)
-    elif self.attrs.get("gauss_outputs", False):
-      self.y_m = -T.sqr(self.y_m)
-      self.p_y_given_x_flat = T.exp(self.y_m)
-      self.p_y_given_x = T.reshape(self.p_y_given_x_flat, self.z.shape)
     else:  # standard case
       self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
@@ -527,9 +529,6 @@ class SequenceOutputLayer(OutputLayer):
     # However, the right index for self.p_y_given_x and many others is the index from the source layers.
     src_index = self.sources[0].index
     if self.loss == 'sprint':
-      if not isinstance(self.sprint_opts, dict):
-        import json
-        self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.exp_normalize:
         log_probs = T.log(self.p_y_given_x)
@@ -568,23 +567,23 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad}
       return err, known_grads
     elif self.loss == 'fast_bw':
-      if not isinstance(self.sprint_opts, dict):
-        import json
-        self.sprint_opts = json.loads(self.sprint_opts)
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
+      assert y.ndim == 3
+      need_clip = True
       if self.attrs.get("sigmoid_outputs", False):
         y = T.nnet.sigmoid(self.z)
-      assert y.ndim == 3
-      y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
-      nlog_scores = -T.log(y)  # in -log space
       if self.attrs.get("exp_outputs", False):
         y = T.exp(self.z)
-        nlog_scores = -self.z  # in -log space
-      if self.attrs.get("gauss_outputs", False):
-        z_sqr = T.sqr(self.z)
-        y = T.exp(-z_sqr)
-        nlog_scores = z_sqr  # in -log space
+        need_clip = False
+      if self.fast_bw_opts.get("y_gauss_blur_sigma"):
+        from TheanoUtil import gaussian_filter_1d
+        y = gaussian_filter_1d(y, axis=0,
+          sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
+          window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
+      if need_clip:
+        y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
+      nlog_scores = -T.log(y)  # in -log space
       am_scores = nlog_scores
       am_scale = self.attrs.get("am_scale", 1)
       if am_scale != 1:
@@ -609,7 +608,7 @@ class SequenceOutputLayer(OutputLayer):
       if self.attrs.get("compute_priors_via_baum_welch", False):
         assert self.priors.custom_update is not None
         self.priors.custom_update = T.sum(bw * float_idx_bc, axis=(0, 1)) / idx_sum
-      if self.attrs.get("bw_norm_class_avg", False):
+      if self.fast_bw_opts.get("bw_norm_class_avg"):
         cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
         bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
         need_renorm = True
@@ -621,15 +620,15 @@ class SequenceOutputLayer(OutputLayer):
         assert target_layer  # we could also use self.y but so far we only want this
         bw2 = self.network.output[target_layer].baumwelch_alignment
         bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
-      if self.attrs.get("loss_with_softmax_prob", False):
+      if self.fast_bw_opts.get("loss_with_softmax_prob"):
         y = self.p_y_given_x
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err_inner = bw * nlog_scores
-      if self.attrs.get("log_score_penalty", 0):
-        err_inner -= numpy.float32(self.attrs["log_score_penalty"]) * nlog_scores
+      if self.fast_bw_opts.get("log_score_penalty"):
+        err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
-      if self.attrs.get("gauss_outputs", False):
+      if self.fast_bw_opts.get("no_explicit_z_grad"):
         del known_grads[self.z]
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
         bw_sum0 = T.sum(bw * float_idx_bc, axis=(0, 1))
@@ -637,6 +636,7 @@ class SequenceOutputLayer(OutputLayer):
         # Note that this is the other way around as usually (`bw - y` instead of `y - bw`).
         # That is because the prior is in the denominator.
         known_grads[self.trained_softmax_prior_p] = numpy.float32(self.prior_scale) * (bw_sum0 - self.priors * idx_sum)
+      self.fast_bw_opts.assert_all_read()
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
