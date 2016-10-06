@@ -626,13 +626,14 @@ class DumpOp(theano.Op):
   __props__ = ("filename", "with_grad")
   view_map = {0: [0]}
 
-  def __init__(self, filename, container=None, with_grad=True, parent=None):
+  def __init__(self, filename, container=None, with_grad=True, parent=None, step=1):
     super(DumpOp, self).__init__()
     self.filename = filename
     self.container = container
     self.with_grad = with_grad
     self.counter = 0
     self.parent = parent
+    self.step = step
 
   def make_node(self, x):
     x = T.as_tensor_variable(x)
@@ -653,18 +654,22 @@ class DumpOp(theano.Op):
 
   def dump(self, x):
     filename = self.get_full_filename()
-    if self.container is not None:
-      assert filename not in self.container
-      self.container[filename] = x.copy()
-    else:
-      import os, numpy
-      assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
-      numpy.save(filename, x)
+    if filename is not None:
+      if self.container is not None:
+        assert filename not in self.container
+        self.container[filename] = x.copy()
+      else:
+        import os, numpy
+        assert not os.path.exists(filename), "%s already exists, not overwriting" % filename
+        numpy.save(filename, x)
 
   def get_full_filename(self):
     counter = self.get_counter()
     self.inc_counter()
-    return "%s.%i.npy" % (self.filename, counter)
+    if counter % self.step == 0:
+      return "%s.%i.npy" % (self.filename, counter)
+    else:
+      return None
 
   def get_counter(self):
     if self.parent: return self.parent.get_counter() - 1
