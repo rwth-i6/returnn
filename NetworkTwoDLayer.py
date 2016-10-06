@@ -28,7 +28,7 @@ class TwoDBaseLayer(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
   def create_xavier_weights(self, shape, name):
-    p = shape[0] + numpy.prod(shape[1:])
+    p = shape[0] + numpy.prod(shape[1:]) * 4
     W = numpy.asarray(self.rng.uniform(low=-sqrt(6) / sqrt(p), high = sqrt(6) / sqrt(p), size=shape),
                       dtype=theano.config.floatX)
     return theano.shared(value=W, borrow=True, name=name + "_" + self.name)
@@ -52,7 +52,7 @@ class OneDToTwoDLayer(TwoDBaseLayer):
     assert X.dtype == "float32"
     Y = OneDToTwoDOp()(X, sizes)
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,n_out,index=sizes)
+      Y = self.batch_norm(Y, n_out, index=sizes, force_sample=True)
     self.output = Y
     self.set_attr('n_out', n_out)
 
@@ -232,7 +232,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       assert False, "invalid collapse mode"
 
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes if not collapse_output else self.index)
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes if not collapse_output else self.index, force_sample=True)
 
     self.output = Y
 
@@ -383,7 +383,7 @@ class ConvPoolLayer2(ConvBaseLayer):
                           self.filter_width, pool_size)
     Y = self.activation(Z)
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes)
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes, force_sample=True)
 
     self.output = Y
 

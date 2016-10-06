@@ -486,8 +486,13 @@ class Dataset(object):
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
-        if length.max_value() > max_seq_length:
+        if max_seq_length < 0 and length['classes'] > -max_seq_length:
+          #print "a", length['classes']
           continue
+        elif max_seq_length > 0 and length.max_value() > max_seq_length:
+          #print "b", length.max_value()
+          continue
+        #print "c"
         if length.max_value() > batch_size:
           print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
         dt, ds = batch.try_sequence_as_slice(length)

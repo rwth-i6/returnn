@@ -681,7 +681,7 @@ class Layer(Container):
       x = h.reshape((h.shape[0] * h.shape[1] * h.shape[2], h.shape[3]))
       #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
     mean = T.mean(x,axis=0)
-    std = T.std(x,axis=0)
+    std = T.sqrt(T.mean((x - mean)**2,axis=0))
     sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
                                  custom_update=mean,
                                  custom_update_normalized=True)

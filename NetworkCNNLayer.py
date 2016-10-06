@@ -10,6 +10,8 @@ try:
 except ImportError:
   pool = None
 
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
 from cuda_implementation.FractionalMaxPoolingOp import fmp
@@ -20,7 +22,8 @@ class CNN(_NoOpLayer):
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
                conv_stride=(1,1), pool_size=(2,2), ignore_border=True,
                pool_stride=(2,2), pool_padding=(0,0), mode="max",
-               activation="tanh", dropout=0.0, factor=0.5, **kwargs):
+               activation="tanh", dropout=0.0, factor=0.5,
+               force_sample=False, **kwargs):
     super(CNN, self).__init__(**kwargs)
 
     src = self.sources
@@ -93,6 +96,8 @@ class CNN(_NoOpLayer):
     self.modes = [border_mode, ignore_border, mode, activation]
     self.pool_params = [pool_size, pool_stride, pool_padding, conv_stride]
     self.other_params = [dropout, factor]
+
+    self.force_sample = bool(force_sample)
 
     # set attributes
     self.set_attr("n_features", n_features)
@@ -272,8 +277,10 @@ class NewConv(CNN):
       self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
     self.input.name = "conv_layer_input_final"
 
-    act = strtoact(self.modes[3])
-    self.modes[3] = "identity"
+    if self.modes[3] != "tanh":
+      act = strtoact(self.modes[3])
+      self.modes[3] = "identity"
+
     self.Output = self.run_cnn(
       inputs=self.input,
       filter_shape=self.filter_shape,
@@ -286,12 +293,16 @@ class NewConv(CNN):
     # so, we have to convert back the output to 3D tensor
     # self.make_output(self.Output2)
     if self.attrs['batch_norm']:
-      self.Output = act(self.batch_norm(
-        self.Output.reshape(
+      self.Output = self.batch_norm(
+        h=self.Output.reshape(
           (self.Output.shape[0],
            self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3])
-        ), self.attrs['n_out']
-      ).reshape(self.Output.shape))
+        ),
+        dim=self.attrs['n_out'],
+        force_sample=self.force_sample
+      ).reshape(self.Output.shape)
+      if self.modes[3] != "tanh":
+        self.Output = act(self.Output)
 
     if self.modes[3] == 'maxout':
       self.Output = T.max(self.Output, axis=1).dimshuffle(0, 'x', 1, 2)
@@ -345,11 +356,12 @@ class ConcatConv(CNN):
 
     if self.attrs['batch_norm']:
       self.Output = self.batch_norm(
-        self.Output.dimshuffle(0, 2, 3, 1).reshape(
+        h=self.Output.dimshuffle(0, 2, 3, 1).reshape(
           (self.Output.shape[0] * self.Output.shape[2] * self.Output.shape[3],
            self.Output.shape[1])
         ),
-        self.attrs['n_features']
+        dim=self.attrs['n_features'],
+        force_sample=self.force_sample
       ).reshape((self.Output.shape[0],
                  self.Output.shape[2],
                  self.Output.shape[3],
@@ -382,10 +394,13 @@ class ResNet(CNN):
 
     if self.attrs['batch_norm']:
       self.Output = self.batch_norm(
-        self.Output.reshape(
+        h=self.Output.reshape(
           (self.Output.shape[0],
            self.Output.shape[1] * self.Output.shape[2] * self.Output.shape[3])
-        ), self.attrs['n_out']).reshape(self.Output.shape)
+        ),
+        dim=self.attrs['n_out'],
+        force_sample=self.force_sample
+      ).reshape(self.Output.shape)
 
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, filter)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
