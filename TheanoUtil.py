@@ -246,7 +246,13 @@ def gaussian_filter_1d(x, sigma, axis, window_radius=40):
   filter_1d = filter_1d / filter_1d.sum()
   filter_1d = filter_1d.astype(x.dtype)  # 1D, window-dim
 
-  blur_dims = [1] + [i for i in range(x.ndim) if i not in (1, axis)] + [axis]
+  # transform `x` so that it is valid input for T.nnet.conv2d (batch size, stack size, nb row, nb col).
+  # first, axis 1 of `x` because that is the number of batches.
+  # then, a dummy stack size dim (not exactly sure about that. GpuDnnConv images and kernel must have the same stack size)
+  # at the end the axis where we want to apply the conv on.
+  # in between all remaining axes.
+  # e.g., if axis==0 and x.ndim==3, we should get [1, 'x', 2, 0]
+  blur_dims = [1] + ['x'] + [i for i in range(x.ndim) if i not in (1, axis)] + [axis]
   while len(blur_dims) < 4:
     blur_dims.insert(len(blur_dims) - 1, 'x')
   assert len(blur_dims) == 4
@@ -264,13 +270,15 @@ def gaussian_filter_1d(x, sigma, axis, window_radius=40):
 
   # padded_input supposed to be 4D (batch size, stack size, nb row, nb col).
   # filter_W supposed to be 4D (nb filters, stack size, nb row, nb col).
-  blur_op = T.nnet.conv2d(padded_input, filter_W, border_mode='valid', filter_shape=[1, 1, 1, None])
+  blur_op = T.nnet.conv2d(padded_input, filter_W, border_mode='valid',
+                          filter_shape=[1, 1, 1, (2*window_radius + 1) if isinstance(window_radius, int) else None])
   # blur_op is 4D (batch size, nb filters, output row, output col).
   # output row = stack size * nb row.
   blur_op = blur_op[:, 0, :, :]  # only one filter, remove dimension
   # blur_op is 3D (batch size, output row, output col).
   y = blur_op.dimshuffle({0:2,2:1}[axis], 0, {0:1,2:2}[axis])
   if x.ndim == 2: y = y[:, :, 0]
+  assert x.ndim == y.ndim
   return y
 
 
