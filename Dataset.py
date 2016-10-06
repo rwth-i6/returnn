@@ -226,7 +226,7 @@ class Dataset(object):
     Call this when you reset the seq list.
     """
     self.epoch = epoch
-    self.rnd_batch_variance = Random(epoch or 1)
+    self.rnd_seq_drop = Random(epoch or 1)
     return False
 
   def initialize(self):
@@ -454,7 +454,7 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxsize):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
@@ -463,48 +463,31 @@ class Dataset(object):
     """
     if batch_size == 0: batch_size = sys.maxsize
     assert batch_size > 0
-    ms = max_seqs
-    bs = batch_size
     if max_seqs == -1: max_seqs = float('inf')
     assert max_seqs > 0
+    assert seq_drop <= 1.0
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
       if chunk_size != 0:
         print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
         chunk_size = 0
-
-    assert batch_variance <= 1.0
-    if batch_variance > 0.0:
-      r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
-      if max_seqs > 0:
-        max_seqs = max(int(r * ms), 1)
-      #if batch_size > 0:
-      #  batch_size = max(int(r * bs), 1)
-
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:
-          #print "a", length['classes']
           continue
         elif max_seq_length > 0 and length.max_value() > max_seq_length:
-          #print "b", length.max_value()
           continue
-        #print "c"
         if length.max_value() > batch_size:
           print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
+        if self.rnd_seq_drop.random() < seq_drop:
+          continue
         dt, ds = batch.try_sequence_as_slice(length)
         if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
           yield batch
           batch = Batch()
-          if batch_variance > 0.0:
-            r = (1.0 - self.rnd_batch_variance.random() * batch_variance)
-            if max_seqs > 0:
-              max_seqs = max(int(r * ms), 1)
-            #if batch_size > 0:
-            #  batch_size = max(int(r * bs), 1)
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():
@@ -520,7 +503,7 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, batch_variance=0.0, max_seq_length=sys.maxsize, shuffle_batches=False):
+  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, shuffle_batches=False):
     """
     :type recurrent_net: bool
     :type batch_size: int
@@ -528,7 +511,7 @@ class Dataset(object):
     :type shuffle_batches: bool
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, batch_variance, max_seq_length), shuffle_batches)
+    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, seq_drop, max_seq_length), shuffle_batches)
 
   def shapes_for_batches(self, batches, data_keys):
     """

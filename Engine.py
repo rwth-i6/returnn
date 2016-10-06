@@ -200,7 +200,7 @@ class Engine:
     self.exclude = config.int_list('exclude', [])
     self.init_train_epoch_posthook = config.value('init_train_epoch_posthook', None)
     self.share_batches = config.bool('share_batches', False)
-    self.batch_variance = config.float('batch_variance', 0.0)
+    self.seq_drop = config.float('seq_drop', 0.0)
     self.max_seq_length = config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if self.max_seq_length == 0:
@@ -338,7 +338,7 @@ class Engine:
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
-      rebatch = self.batch_variance > 0.0 or rebatch
+      rebatch = self.seq_drop > 0.0 or rebatch
       self.epoch = epoch
 
       for dataset_name,dataset in self.get_eval_datasets().items():
@@ -450,7 +450,7 @@ class Engine:
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
                                                                        max_seq_length=int(self.max_seq_length),
-                                                                       batch_variance=self.batch_variance,
+                                                                       seq_drop=self.seq_drop,
                                                                        shuffle_batches=self.shuffle_batches)
     else:
       self.dataset_batches['train'].reset()
