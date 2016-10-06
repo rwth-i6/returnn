@@ -913,6 +913,34 @@ def load_txt_vector(filename):
   return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]
 
 
+class CollectionReadCheckCovered:
+  def __init__(self, collection):
+    self.collection = collection
+    self.got_items = set()
+
+  def __getitem__(self, item):
+    res = self.collection[item]
+    self.got_items.add(item)
+    return res
+
+  def get(self, item, default=None):
+    try:
+      return self[item]
+    except KeyError:
+      return default
+
+  def __len__(self):
+    return len(self.collection)
+
+  def __iter__(self):
+    for k in self.collection:
+      yield self[k]
+
+  def assert_all_read(self):
+    remaining = set(self.collection).difference(self.got_items)
+    assert not remaining, "The keys %r were not read in the collection %r." % (remaining, self.collection)
+
+
 def fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels
