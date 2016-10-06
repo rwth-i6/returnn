@@ -15,17 +15,6 @@ from Util import as_str
 from Log import log
 
 
-# from Accumulator import AccumulatorOpInstance
-
-# def step(*args): # requires same amount of memory
-#  xs = args[:(len(args)-1)/2]
-#  ws = args[(len(args)-1)/2:-1]
-#  b = args[-1]
-#  out = b
-#  for w,x in zip(ws,xs):
-#    out += T.dot(x,w)
-#  return out
-
 class OutputLayer(Layer):
   layer_class = "softmax"
 
@@ -126,10 +115,6 @@ class OutputLayer(Layer):
     self.norm = numpy.float32(1)
     self.target_index = self.index
     if time_limit == 'inf':
-      # target_length = self.index.shape[0]
-      # mass = T.cast(T.sum(self.index),'float32')
-      # self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0],target_length),self.sources[0].index,self.index)
-      # self.norm = mass / T.cast(T.sum(self.index),'float32')
       num = T.cast(T.sum(self.index), 'float32')
       if self.eval_flag:
         self.index = self.sources[0].index
@@ -141,10 +126,8 @@ class OutputLayer(Layer):
         padi = T.ones((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int8')
         self.z = theano.ifelse.ifelse(T.lt(self.z.shape[0], self.index.shape[0]),
                                       T.concatenate([self.z, padx], axis=0), self.z)
-        # self.z = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),self.z[:self.index.shape[0]], self.z)
         self.y_data_flat = time_batch_make_flat(theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
                                                                      T.concatenate([y, pady], axis=0), y))
-        # self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]), T.concatenate([T.ones((self.z.shape[0] - self.index.shape[0],self.z.shape[1]),'int8'), self.index], axis=0), self.index)
         self.index = theano.ifelse.ifelse(T.gt(self.z.shape[0], self.index.shape[0]),
                                           T.concatenate([padi, self.index], axis=0), self.index)
       self.norm *= num / T.cast(T.sum(self.index), 'float32')
@@ -154,14 +137,6 @@ class OutputLayer(Layer):
       self.index = T.set_subtensor(self.index[end:], T.zeros_like(self.index[end:]))
       self.norm = num / T.cast(T.sum(self.index), 'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
-
-    # xs = [s.output for s in self.sources]
-    # self.z = AccumulatorOpInstance(*[self.b] + xs + self.W_in)
-    # outputs_info = None #[ T.alloc(numpy.cast[theano.config.floatX](0), index.shape[1], self.attrs['n_out']) ]
-
-    # self.z, _ = theano.scan(step,
-    #                        sequences = [s.output for s in self.sources],
-    #                        non_sequences = self.W_in + [self.b])
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     index_flat = self.index.flatten()
@@ -265,7 +240,6 @@ class FramewiseOutputLayer(OutputLayer):
     self.initialize()
 
   def initialize(self):
-    # self.y_m = self.output.dimshuffle(2,0,1).flatten(ndim = 2).dimshuffle(1,0)
     output = self.output
     self.y_m = output.reshape((output.shape[0] * output.shape[1], output.shape[2]))
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
@@ -344,15 +318,7 @@ class FramewiseOutputLayer(OutputLayer):
       if self.y_data_flat.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        # idx = self.index.flatten().dimshuffle(0,'x').repeat(self.y_m.shape[1],axis=1) # faster than line below
-        # nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m * idx, y_idx=self.y_data_flat * self.index.flatten())
         nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
-        # nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
-        # nll = -T.log(T.nnet.softmax(self.y_m)[self.i,self.y_data_flat[self.i]])
-        # z_c = T.exp(self.z[:,self.y])
-        # nll = -T.log(z_c / T.sum(z_c,axis=2,keepdims=True))
-        # nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
-        # nll = T.set_subtensor(nll[self.j], T.constant(0.0))
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
       return self.norm * T.sum(nll), known_grads
@@ -361,14 +327,11 @@ class FramewiseOutputLayer(OutputLayer):
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape(
         (self.index.shape[0], self.index.shape[1], self.attrs['n_out'])), 1.e-6, 1.e6)  # TBD
       ee = -T.sum(pcx[self.i] * T.log(pcx[self.i]))  # TB
-      # nll, pcxs = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y[self.i])
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)  # TB
       ce = nll.reshape(self.index.shape) * self.index  # TB
       y = self.y_data_flat.reshape(self.index.shape) * self.index  # TB
       f = T.any(T.gt(y, 0), axis=0)  # B
       return T.sum(f * T.sum(ce, axis=0) + (1 - f) * T.sum(ee, axis=0)), known_grads
-      # return T.sum(T.switch(T.gt(T.sum(y,axis=0),0), T.sum(ce, axis=0), -T.sum(ee, axis=0))), known_grads
-      # return T.switch(T.gt(T.sum(self.y_m[self.i]),0), T.sum(nll), -T.sum(pcx * T.log(pcx))), known_grads
     elif self.loss == 'priori':
       pcx = self.p_y_given_x[self.i, self.y_data_flat[self.i]]
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
@@ -380,13 +343,8 @@ class FramewiseOutputLayer(OutputLayer):
         y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
         return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
       else:
-        # return T.sum(T.sum(T.sqr(self.y_m - self.y.reshape(self.y_m.shape)), axis=1)[self.i]), known_grads
         return T.sum(
           T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]), axis=1)), known_grads
-        # return T.sum(T.sum(T.sqr(self.z - (self.y.reshape((self.index.shape[0], self.index.shape[1], self.attrs['n_out']))[:self.z.shape[0]])), axis=2).flatten()[self.i]), known_grads
-        # y_z = T.set_subtensor(T.zeros((self.index.shape[0],self.index.shape[1],self.attrs['n_out']), dtype='float32')[:self.z.shape[0]], self.z).flatten()
-        # return T.sum(T.sqr(y_z[self.i] - self.y[self.i])), known_grads
-        # return T.sum(T.sqr(self.y_m - self.y[:self.z.shape[0]*self.index.shape[1]]).flatten()[self.i]), known_grads
     else:
       assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
 
@@ -410,14 +368,13 @@ class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer 
   def initialize(self):
     output = 0
     self.y_s = []
-    # i = T.cast(self.index.dimshuffle(0,1,'x').repeat(self.attrs['n_out'],axis=2),'float32')
     for s in self.sources:
       self.y_s.append(T.dot(s.output, s.W_lm_in) + s.b_lm_in)
       output += self.y_s[-1]
     self.params = {}
     self.y_m = output.reshape((output.shape[0] * output.shape[1], output.shape[2]))
     h = T.exp(self.y_m)
-    self.p_y_given_x = T.nnet.softmax(self.y_m)  # h / h.sum(axis=1,keepdims=True) #T.nnet.softmax(self.y_m)
+    self.p_y_given_x = T.nnet.softmax(self.y_m)
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
 
@@ -712,13 +669,11 @@ class SequenceOutputLayer(OutputLayer):
       yr = T.set_subtensor(self.y.flatten()[self.j], numpy.int32(-1)).reshape(self.y.shape).dimshuffle(1, 0)
       yr = print_to_file('yr', yr)
       cost = T.mean(ctc_cost(self.p_y_given_x, yr, self.index_for_ctc()))
-      # cost = T.mean(CpuCtc()(self.p_y_given_x, yr, self.index_for_ctc()))
       cost = print_to_file('cost', cost)
       return cost, known_grads
     elif self.loss == 'ce_ctc':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       p_y_given_x = T.nnet.softmax(y_m)
-      # pcx = p_y_given_x[(self.i > 0).nonzero(), y_f[(self.i > 0).nonzero()]]
       pcx = p_y_given_x[self.i, self.y_data_flat[self.i]]
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
@@ -794,19 +749,12 @@ class UnsupervisedOutputLayer(OutputLayer):
       hyp.shape[1], axis=1).repeat(hyp.shape[0], axis=0)
 
     order = T.argsort(self.hyp)[::-1]
-    # order = print_to_file('order', order)
 
     shyp = hyp[:, :, order]
     spcx = pcx[:, :, order]
 
-    # spcx = print_to_file('pcx', spcx)
-    # shyp = print_to_file('shyp', shyp)
-
     K = numpy.float32(1. / (1. - momentum)) * T.sum(T.sum(pc * T.log(pc / shyp), axis=2), axis=0)
     Q = -T.sum(T.sum(pcx * T.log(pcx), axis=2), axis=0)
-
-    # K = print_to_file('K', K)
-    # Q = print_to_file('Q', Q)
 
     self.L = T.sum(T.switch(domax, Q, K))
     self.y_m = spcx.reshape((spcx.shape[0] * spcx.shape[1], spcx.shape[2]))
@@ -817,9 +765,6 @@ class UnsupervisedOutputLayer(OutputLayer):
       return self.L, known_grads
     else:
       p = self.y_m
-      # p = self.x_m / (self.x_m.sum(axis=1, keepdims=True) + self.punk)
-      # if self.attrs['oracle'] and self.train_flag:
-      #  p = self.x_m / (self.x_m.sum(axis=1,keepdims=True) + self.punk)
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
 
