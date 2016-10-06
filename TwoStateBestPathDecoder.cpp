@@ -7,6 +7,7 @@ public:
 		nLabels_ = activs.dim(2);
 		T_ = seqLengths(idx);
 		int len = calcLen(labellings, idx);
+		si_ = nLabels_ - 1;
 
 	    std::vector<int> labelling = label(activs, idx);
 	    std::vector<int> reference(len);
@@ -27,7 +28,7 @@ private:
 	    {
 	        int bestLabel = 0;
 	        float bestLabelProb = 0;
-	        if(lastLabel % 2 == 1)
+	        if(lastLabel % 2 == 1 || lastLabel == si_)
 	        {
               for(int l = 0; l < nLabels_; l += 2)
               {
@@ -73,5 +74,6 @@ private:
     }
 
     int T_;
+    int si_;
     int nLabels_;
 };
