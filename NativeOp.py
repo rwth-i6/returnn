@@ -1936,6 +1936,33 @@ class FastBaumWelchOp(NativeOpGenBase):
           }
         }
       }
+    """,
+    "24_write_output_to_file": """
+      void write_output_to_file(float* d_out, float* d_index, unsigned index_stride,
+                                float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_emissions, unsigned batch_idx) {
+        std::vector<float> buffer(n_frames * n_seqs * n_emissions);
+        std::vector<float> index (n_frames * index_stride);
+
+        HANDLE_ERROR(cudaMemcpy(buffer.data(), d_out,   buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(index.data(),  d_index, index.size()  * sizeof(float), cudaMemcpyDeviceToHost));
+
+        for (unsigned seq = 0u; seq < n_seqs; seq++) {
+          std::stringstream filename;
+          filename << "target.dump." << batch_idx << '.' << seq;
+          std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
+          for (unsigned t = 0u; t <= n_frames; t++) {
+            if (t > 0u and index[seq * index_stride + t] <= 0.0) {
+              break;
+            }
+            for (unsigned e = 0u; e < n_emissions; e++) {
+              const float val = buffer[t * n_seqs * n_emissions + seq * n_emissions + e];
+              if (val <= pruning) {
+                out << t << ' ' << e << ' ' << val << '\\n';
+              }
+            }
+          }
+        }
+      }
     """
   }
 
@@ -1958,9 +1985,10 @@ class FastBaumWelchOp(NativeOpGenBase):
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
 
     bool            dump_alignment = false;
+    bool            dump_output    = false;
     unsigned        dump_every = 40u;
-    static unsigned batch_idx = 0u;
-    float           pruning = 10.f;
+    static unsigned batch_idx  = 0u;
+    float           pruning    = 10.f;
 
     unsigned* d_from              = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 0 * CudaNdarray_HOST_STRIDES(edges)[0]);
     unsigned* d_to                = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 1 * CudaNdarray_HOST_STRIDES(edges)[0]);
@@ -2088,6 +2116,10 @@ class FastBaumWelchOp(NativeOpGenBase):
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
     HANDLE_ERROR(cudaGetLastError());
 
+    if (dump_output and batch_idx %% dump_every == 0) {
+      write_output_to_file(d_out, d_index, index_stride, pruning, n_frames, n_seqs, n_emissions, batch_idx);
+    }
+
     device_free(d_edge_buffer);
     if (d_state_buffer_all != NULL) {
       device_free(d_state_buffer_all);
@@ -2098,4 +2130,4 @@ class FastBaumWelchOp(NativeOpGenBase):
 
   c_bw_code = None
 
-  code_version = 53
+  code_version = 54
