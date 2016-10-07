@@ -581,6 +581,8 @@ class SequenceOutputLayer(OutputLayer):
         y = gaussian_filter_1d(y, axis=0,
           sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
           window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
+      if self.fast_bw_opts.get("y_lower_clip"):
+        y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
       if need_clip:
         y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
       nlog_scores = -T.log(y)  # in -log space
