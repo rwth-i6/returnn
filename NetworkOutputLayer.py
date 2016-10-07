@@ -704,7 +704,7 @@ class SequenceOutputLayer(OutputLayer):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
-    elif self.loss == 'hmm':
+    elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
       emissions = self.p_y_given_x
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
