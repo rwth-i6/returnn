@@ -387,7 +387,6 @@ class SequenceOutputLayer(OutputLayer):
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                sigmoid_outputs=False, exp_outputs=False,
                fast_bw_opts=None,
-               loss_with_softmax_prob=False,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
@@ -429,8 +428,6 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("fast_bw_opts", fast_bw_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
-    if loss_with_softmax_prob:
-      self.set_attr("loss_with_softmax_prob", loss_with_softmax_prob)
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
