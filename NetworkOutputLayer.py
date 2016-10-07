@@ -625,6 +625,9 @@ class SequenceOutputLayer(OutputLayer):
       if self.fast_bw_opts.get("loss_with_softmax_prob"):
         y = self.p_y_given_x
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+      if self.fast_bw_opts.get("loss_with_sigmoid_prob"):
+        y = T.nnet.sigmoid(self.z)
+        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
