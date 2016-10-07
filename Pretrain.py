@@ -235,7 +235,7 @@ class Pretrain:
         needed.remove(l)
       new_net[l] = deepcopy(self._original_network_json[l])
       update_needed(l)
-    if not needed:  # Nothing needed anymore, i.e. no missing layers.
+    if not needed:  # Nothing needed anymore, i.e. no missing layers, i.e. we arrived at the final network topology.
       return False
     # Now fill in all missing ones.
     for l in sorted(new_net.keys()):
