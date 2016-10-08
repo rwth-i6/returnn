@@ -24,6 +24,7 @@ class CachedDataset(Dataset):
     self.alloc_intervals = None
     self._seq_start = [] # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
+    self._index_map = range(len(self._seq_index))
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
     self.tags = []; """ :type: list[str] """  # uses real seq idx
     self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
@@ -64,10 +65,14 @@ class CachedDataset(Dataset):
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
-    self._init_alloc_intervals()
-    self._seq_index = seq_index
-    self._init_seq_starts()
-    self._init_start_cache()
+    if self.num_seqs_cached_at_start != len(seq_index):
+      self._index_map = range(self.num_seqs)
+      self._seq_index = seq_index
+      self._init_seq_starts()
+      self._init_alloc_intervals()
+      self._init_start_cache()
+    else:
+      self._index_map = seq_index
     return True
 
   def _init_alloc_intervals(self):
@@ -402,7 +407,7 @@ class CachedDataset(Dataset):
     :type sorted_seq_idx: int
     :rtype: (int,int)
     """
-    real_seq_idx = self._seq_index[sorted_seq_idx]
+    real_seq_idx = self._seq_index[self._index_map[sorted_seq_idx]]
     return self._seq_lengths[real_seq_idx]
 
   def get_seq_length(self, seq_idx):
@@ -423,6 +428,7 @@ class CachedDataset(Dataset):
     :rtype: (int,int)
     """
     return self._seq_start[sorted_seq_idx]
+    return self._seq_start[self._index_map[sorted_seq_idx]]
 
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
@@ -430,10 +436,12 @@ class CachedDataset(Dataset):
     return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_input_data(self, sorted_seq_idx):
-    idi = self.alloc_interval_index(sorted_seq_idx)
+    #sorted_seq_idx = self._index_map[sorted_seq_idx]
+    seq_idx = self._index_map[sorted_seq_idx]
+    idi = self.alloc_interval_index(seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx
     alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]
-    o = self.get_seq_start(sorted_seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
+    o = self.get_seq_start(seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
     assert o >= 0
     l = self.get_seq_length_2d(sorted_seq_idx)[0]
     assert alloc_data.shape[0] >= o + l
@@ -445,8 +453,9 @@ class CachedDataset(Dataset):
     return 1 if len(self.targets[key].shape) == 1 else self.targets[key].shape[1]
 
   def get_targets(self, target, sorted_seq_idx):
+    seq_idx = self._index_map[sorted_seq_idx]
     idx = self.target_keys.index(target) + 1
-    seq_start = self.get_seq_start(sorted_seq_idx)[idx]
+    seq_start = self.get_seq_start(seq_idx)[idx]
     seq_len = self.get_seq_length_2d(sorted_seq_idx)[idx]
     return self.targets[target][seq_start:seq_start + seq_len]
 
@@ -454,7 +463,7 @@ class CachedDataset(Dataset):
     return self.targets.keys()
 
   def get_ctc_targets(self, sorted_seq_idx):
-    ids = self._seq_index[sorted_seq_idx]
+    ids = self._seq_index[self._index_map[sorted_seq_idx]]
     return self.ctc_targets[ids]
 
   def has_ctc_targets(self):

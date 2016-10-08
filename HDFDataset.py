@@ -155,7 +155,7 @@ class HDFDataset(CachedDataset):
     assert self.is_cached(start, end)
 
   def get_tag(self, sorted_seq_idx):
-    ids = self._seq_index[sorted_seq_idx]
+    ids = self._seq_index[self._index_map[sorted_seq_idx]]
     return self.tags[ids]
 
   def is_data_sparse(self, key):
