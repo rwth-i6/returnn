@@ -656,8 +656,8 @@ class SequenceOutputLayer(OutputLayer):
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale *  T.log(T.maximum(self.priors,1e-10)))
       if self.attrs.get('compute_distortions', False):
-        tdp_loop = T.as_tensor_variable(-T.log(self.distortions['loop'][0]))
-        tdp_fwd = T.as_tensor_variable(-T.log(self.distortions['forward'][0]))
+        tdp_loop = T.as_tensor_variable(T.log(self.distortions['loop'][0]))
+        tdp_fwd = T.as_tensor_variable(T.log(self.distortions['forward'][0]))
       err, grad, priors = TwoStateHMMOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)),
                                           self.index_for_ctc(),tdp_loop,tdp_fwd)
       known_grads = {self.z: grad}
