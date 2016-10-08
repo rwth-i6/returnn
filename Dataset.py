@@ -204,6 +204,18 @@ class Dataset(object):
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
       seq_index.sort(key=get_seq_len)  # sort by length
+    elif self.seq_ordering.startswith('laplace'):
+      assert get_seq_len
+      tmp = self.seq_ordering.split(':')
+      nth = int(tmp[1]) if len(tmp) > 1 else 1
+      rnd_seed = ((epoch - 1) / nth + 1) if epoch else 1
+      rnd = Random(rnd_seed)
+      rnd.shuffle(seq_index)
+      inc = seq_index[:len(seq_index)/2]
+      inc.sort(key=get_seq_len)
+      dec = seq_index[len(seq_index)/2:]
+      dec.sort(key=get_seq_len,reverse=True)
+      seq_index = inc + dec
     elif self.seq_ordering.startswith('random'):
       tmp = self.seq_ordering.split(':')
       nth = int(tmp[1]) if len(tmp) > 1 else 1
