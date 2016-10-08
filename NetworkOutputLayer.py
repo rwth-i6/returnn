@@ -581,6 +581,8 @@ class SequenceOutputLayer(OutputLayer):
         y = gaussian_filter_1d(y, axis=0,
           sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
           window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
+      if self.fast_bw_opts.get("y_lower_clip"):
+        y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
       if need_clip:
         y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
       nlog_scores = -T.log(y)  # in -log space
@@ -623,6 +625,9 @@ class SequenceOutputLayer(OutputLayer):
       if self.fast_bw_opts.get("loss_with_softmax_prob"):
         y = self.p_y_given_x
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+      if self.fast_bw_opts.get("loss_with_sigmoid_prob"):
+        y = T.nnet.sigmoid(self.z)
+        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
@@ -651,8 +656,8 @@ class SequenceOutputLayer(OutputLayer):
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale *  T.log(T.maximum(self.priors,1e-10)))
       if self.attrs.get('compute_distortions', False):
-        tdp_loop = T.as_tensor_variable(-T.log(self.distortions['loop'][0]))
-        tdp_fwd = T.as_tensor_variable(-T.log(self.distortions['forward'][0]))
+        tdp_loop = T.as_tensor_variable(T.log(self.distortions['loop'][0]))
+        tdp_fwd = T.as_tensor_variable(T.log(self.distortions['forward'][0]))
       err, grad, priors = TwoStateHMMOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)),
                                           self.index_for_ctc(),tdp_loop,tdp_fwd)
       known_grads = {self.z: grad}
@@ -699,7 +704,7 @@ class SequenceOutputLayer(OutputLayer):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
-    elif self.loss == 'hmm':
+    elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
       emissions = self.p_y_given_x
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
