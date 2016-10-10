@@ -520,6 +520,7 @@ class LayerNetwork(object):
         params = { 'dropout' : 0.0,
                    'name' : 'output',
                    'mask' : mask,
+                   'network': network,
                    'train_flag' : train_flag }
         params.update(model[layer_name].attrs)
         if 'encoder' in model[layer_name].attrs:
