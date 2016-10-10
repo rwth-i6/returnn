@@ -149,21 +149,29 @@ class LayerNetworkDescription:
       num_outputs = {target: [config.int('num_outputs', 0), 1]}
     else:
       num_outputs = None
-    if not config.is_typed('num_outputs') and config.list('train') and ":" not in config.value('train', ''):
+    dataset = None
+    if config.list('train') and ":" not in config.value('train', ''):
+      dataset = config.list('train')[0]
+    if not config.is_typed('num_outputs') and dataset:
       try:
-        _num_inputs = hdf5_dimension(config.list('train')[0], 'inputCodeSize') * config.int('window', 1)
+        _num_inputs = hdf5_dimension(dataset, 'inputCodeSize') * config.int('window', 1)
       except Exception:
-        _num_inputs = hdf5_dimension(config.list('train')[0], 'inputPattSize') * config.int('window', 1)
+        _num_inputs = hdf5_dimension(dataset, 'inputPattSize') * config.int('window', 1)
       try:
-        _num_outputs = {target: [hdf5_dimension(config.list('train')[0], 'numLabels'), 1]}
+        _num_outputs = {target: [hdf5_dimension(dataset, 'numLabels'), 1]}
       except Exception:
-        _num_outputs = hdf5_group(config.list('train')[0], 'targets/size')
+        _num_outputs = hdf5_group(dataset, 'targets/size')
         for k in _num_outputs:
-          _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(config.list('train')[0], 'targets/data/' + k))]
+          _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(dataset, 'targets/data/' + k))]
       if num_inputs: assert num_inputs == _num_inputs
       if num_outputs: assert num_outputs == _num_outputs
       num_inputs = _num_inputs
       num_outputs = _num_outputs
+    if not num_inputs and not num_outputs and config.has("load"):
+      from Network import LayerNetwork
+      import h5py
+      model = h5py.File(config.value("load", ""), "r")
+      num_inputs, num_outputs = LayerNetwork._n_in_out_from_hdf_model(model)
     assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     return num_inputs, num_outputs
 
