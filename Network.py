@@ -431,164 +431,29 @@ class LayerNetwork(object):
     return n_in_model, n_out_model
 
   @classmethod
-  def from_hdf_model_topology(cls, model, n_in=None, n_out=None, **kwargs):
+  def from_hdf_model_topology(cls, model, **kwargs):
     """
     :type model: h5py.File
-    :param str mask: e.g. "unity"
     :rtype: LayerNetwork
     """
-    n_in_model, n_out_model = cls._n_in_out_from_hdf_model(model)
-    if n_in and n_in != n_in_model:
-      print >> log.v4, "Different HDF n_in:", n_in, n_in_model  # or error?
-    if n_out and n_out != n_out_model:
-      print >> log.v4, "Different HDF n_out:", n_out, n_out_model  # or error?
-    network = cls(n_in=n_in_model, n_out=n_out_model, **kwargs)
-    sparse_input = network.sparse_input
-    target = network.default_target
-    train_flag = network.train_flag
-    eval_flag = network.eval_flag
-
-    if 'target' in model['n_out'].attrs:
-      target = model['n_out'].attrs['target']
-    dtype = 'int32' if not 'dtype' in model['n_out'].attrs else model['n_out'].attrs['dtype']
-    if target != "null" and target not in network.y:
-      network.use_target(target, dtype=dtype)
-    network.y['data'].n_out = network.n_out['data'][0]
-    def traverse(model, layer_name, output_index):
-      index = output_index
-      mask = network.default_mask
-      if not mask and 'mask' in model[layer_name].attrs:
-        mask = model[layer_name].attrs['mask']
-      if 'from' in model[layer_name].attrs:
-        x_in = []
-        for s in model[layer_name].attrs['from'].split(','):
-          if s == 'data':
-            x_in.append(SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i))
-            index = network.i
-          elif s != "null" and s != "": # this is allowed, recurrent states can be passed as input
-            if not network.hidden.has_key(s):
-              index = traverse(model, s, index)
-            else:
-              index = network.hidden[s].index
-            x_in.append(network.hidden[s])
-          elif s == "":
-            assert not s
-            # Fix for old models via NetworkDescription.
-            s = Layer.guess_source_layer_name(layer_name)
-            if not s:
-              # Fix for data input. Just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.n_in, x_out=network.x, name="", index=network.i))
-            else:
-              if not network.hidden.has_key(s):
-                index = traverse(model, s, index)
-              else:
-                index = network.hidden[s].index
-              # Add just like in NetworkDescription, so that param names are correct.
-              x_in.append(SourceLayer(n_out=network.hidden[s].attrs['n_out'], x_out=network.hidden[s].output, name="", index=network.i))
-      else:
-        x_in = [ SourceLayer(network.n_in, network.x, sparse=sparse_input, name='data', index=network.i) ]
-      if 'encoder' in model[layer_name].attrs:
-        encoder = []
-        for s in model[layer_name].attrs['encoder'].split(','):
-          if s != "":
-            if not network.hidden.has_key(s):
-              traverse(model, s, index)
-            encoder.append(network.hidden[s])
-      if 'base' in model[layer_name].attrs: # TODO see json
-        base = []
-        for s in model[layer_name].attrs['base'].split(','):
-          if s != "":
-            if not network.hidden.has_key(s):
-              traverse(model, s, index)
-            base.append(network.hidden[s])
-      for key in ['copy_input', 'copy_output']:
-        if key in model[layer_name].attrs:
-          index = traverse(model, model[layer_name].attrs[key], index)
-          if key == 'copy_input':
-            copy_input = network.hidden[model[layer_name].attrs[key]]
-          if key == 'copy_output':
-            copy_output = network.hidden[model[layer_name].attrs[key]]
-      if 'encoder' in model[layer_name].attrs and not x_in:
-        index = output_index
-      if 'target' in model[layer_name].attrs:
-        target = model[layer_name].attrs['target']
-        if target != "null" and target not in network.y:
-          network.use_target(target, dtype=dtype)
-          index = network.j[target]
-      cl = model[layer_name].attrs['class']
-      if cl == 'softmax':
-        params = { 'dropout' : 0.0,
-                   'name' : 'output',
-                   'mask' : mask,
-                   'network': network,
-                   'train_flag' : train_flag }
-        params.update(model[layer_name].attrs)
-        if 'encoder' in model[layer_name].attrs:
-          params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
-        if 'base' in model[layer_name].attrs:
-          params['base'] = base
-        if 'copy_input' in model[layer_name].attrs:
-          params['copy_input'] = copy_input
-        if 'copy_output' in model[layer_name].attrs:
-          params['copy_output'] = copy_output
-        #if not 'target' in params:
-        #  params['target'] = target
-        params['index'] = index #output_index
-        params['sources'] = x_in
-        params['y_in'] = network.y
-        params.pop('from', None)
-        params.pop('class', None)
-        network.make_classifier(**params)
-      else:
-        params = { 'sources': x_in,
-                   'n_out': model[layer_name].attrs['n_out'],
-                   'dropout': model[layer_name].attrs['dropout'] if train_flag else 0.0,
-                   'name': layer_name,
-                   'mask': mask,
-                   'train_flag' : train_flag,
-                   "eval_flag": eval_flag,
-                   'network': network,
-                   'index' : index }
-        try:
-          act = model[layer_name].attrs['activation']
-          params["activation"] = act
-        except Exception:
-          pass
-        params['y_in'] = network.y
-        layer_class = get_layer_class(cl)
-        for p in collect_class_init_kwargs(layer_class):
-          if p in params: continue  # don't overwrite existing
-          if p in model[layer_name].attrs.keys():
-            params[p] = model[layer_name].attrs[p]
-        if 'encoder' in model[layer_name].attrs:
-          params['encoder'] = encoder #network.hidden[model[layer_name].attrs['encoder']] if model[layer_name].attrs['encoder'] in network.hidden else network.output[model[layer_name].attrs['encoder']]
-        if 'base' in model[layer_name].attrs:
-          params['base'] = base
-
-        if 'target' in model[layer_name].attrs:
-          params['target'] = model[layer_name].attrs['target']
-        if layer_class.recurrent:
-          network.recurrent = True
-        return network.add_layer(layer_class(**params)).index
-
-    for layer_name in model:
-      target = 'classes'
-      if 'target' in model[layer_name].attrs:
-        target = model[layer_name].attrs['target']
-      if target != "null" and target not in network.y:
-        network.use_target(target, dtype=dtype)
-      if layer_name == 'output' or 'target' in model[layer_name].attrs:
-        traverse(model, layer_name, network.j[target])
-    return network
+    return cls.from_hdf(model=model, filename=None, load_params=False, **kwargs)
 
   @classmethod
-  def from_hdf(cls, filename, load_params=True, **kwargs):
+  def from_hdf(cls, filename=None, model=None, load_params=True, **kwargs):
     """
     Gets the JSON from the hdf file, initializes the network and loads the network params.
-    :param str filename: filename of hdf
+    :param str|None filename: filename of hdf
+    :param h5py.File|None model: hdf, if no filename is provided
     :param bool load_params: whether to load the params
     """
-    model = h5py.File(filename, "r")
+    if model is None:
+      assert filename
+      model = h5py.File(filename, "r")
+      close_at_end = True
+    else:
+      assert not filename
+      close_at_end = False
+    assert "json" in model.attrs, "Maybe old network model where JSON was not stored. Use version before 2016-10-11."
     json_content_s = as_str(model.attrs['json'])
     assert json_content_s and json_content_s != "{}"
     json_content = json.loads(json_content_s)
@@ -600,7 +465,8 @@ class LayerNetwork(object):
     network = cls.from_json(json_content, **kwargs)
     if load_params:
       network.load_hdf(model)
-    model.close()
+    if close_at_end:
+      model.close()
     return network
 
   def use_target(self, target, dtype):
