@@ -13,6 +13,7 @@ public:
         canonical_ = calcCanonical(labellings, N_);
         M_ = canonical_.size();
         errorSignal(activs, labellings, err, errSigs, priors, tdp_loop, tdp_fwd);
+        skip_ = true;
     }
 private:
     int emissionLabel(int chr, int state)
@@ -33,11 +34,11 @@ private:
             {
                 myLog y(activs(t, canonical_[n]));
                 int start = 0;
-                if(n == 0)
+                if(skip_ && canonical_[n] % 2 == 0 && canonical_[n] != si_ && n > 1)
                 {
-                    start = 0;
+                    start = n-2;
                 }
-                else
+                else if(n > 0)
                 {
                     start = n-1;
                 }
@@ -77,6 +78,11 @@ private:
                 else
                 {
                     end = n+1;
+                }
+
+                if(skip_ && n % 2 == 0 && n < M_-2 && n != si_)
+                {
+                    end = n+2;
                 }
                 
                 myLog sum = 0;
@@ -179,6 +185,7 @@ private:
         return canonical;
     }
 
+    bool skip_;
     int T_;
     int N_;
     int M_;
