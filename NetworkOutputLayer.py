@@ -21,6 +21,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
+               sigmoid_outputs=False, exp_outputs=False,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
                compute_priors=False, compute_priors_exp_average=0, compute_distortions=False,
@@ -188,23 +189,23 @@ class OutputLayer(Layer):
       sim *= numpy.float32(input_output_similarity_scale) / findex_sum
       self.constraints -= sim
 
-    self.p_y_given_x = None
-    self.p_y_given_x_flat = None
+    if sigmoid_outputs:
+      self.set_attr("sigmoid_outputs", sigmoid_outputs)
+    if exp_outputs:
+      self.set_attr("exp_outputs", exp_outputs)
+
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)  # flat log(self.p_y_given_x)
-    if not self.attrs.get("apply_softmax", True):
+    if self.loss == 'sse' or not self.attrs.get("apply_softmax", True):
       self.p_y_given_x = self.z
-    elif self.loss == 'sse':
-      self.p_y_given_x = self.z
-    elif self.loss == 'priori':
-      self.p_y_given_x_flat = T.nnet.softmax(self.y_m) / self.priori
+    elif exp_outputs:  # or not exp_normalize:
+      self.p_y_given_x = T.exp(self.z)
+    elif sigmoid_outputs:
+      self.p_y_given_x = T.nnet.sigmoid(self.z)
     else:  # standard case
-      self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
-    if self.p_y_given_x is None:
-      assert self.p_y_given_x_flat is not None
-      self.p_y_given_x = T.reshape(self.p_y_given_x_flat, self.z.shape)
-    if self.p_y_given_x_flat is None:
-      assert self.p_y_given_x is not None
-      self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
+      self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
+    if self.loss == "priori":
+      self.p_y_given_x /= self.priori
+    self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x
 
@@ -403,9 +404,7 @@ class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer 
 class SequenceOutputLayer(OutputLayer):
   def __init__(self,
                ce_smoothing=0.0, ce_target_layer_align=None,
-               exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
-               sigmoid_outputs=False, exp_outputs=False,
                fast_bw_opts=None,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
@@ -416,13 +415,6 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("ce_smoothing", ce_smoothing)
     if ce_target_layer_align:
       self.set_attr("ce_target_layer_align", ce_target_layer_align)
-    self.exp_normalize = exp_normalize
-    if not exp_normalize:
-      self.set_attr("exp_normalize", exp_normalize)
-    if sigmoid_outputs:
-      self.set_attr("sigmoid_outputs", sigmoid_outputs)
-    if exp_outputs:
-      self.set_attr("exp_outputs", exp_outputs)
     if fast_bw_opts:
       if not isinstance(fast_bw_opts, dict):
         import json
@@ -486,10 +478,7 @@ class SequenceOutputLayer(OutputLayer):
     src_index = self.sources[0].index
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      if self.exp_normalize:
-        log_probs = T.log(self.p_y_given_x)
-      else:
-        log_probs = self.z
+      log_probs = T.log(self.p_y_given_x)
       if self.prior_scale:  # use own priors, assume prior scale in sprint config to be 0.0
         assert self.log_prior is not None
         log_probs -= numpy.float32(self.prior_scale) * self.log_prior
@@ -526,12 +515,6 @@ class SequenceOutputLayer(OutputLayer):
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
       assert y.ndim == 3
-      need_clip = True
-      if self.attrs.get("sigmoid_outputs", False):
-        y = T.nnet.sigmoid(self.z)
-      if self.attrs.get("exp_outputs", False):
-        y = T.exp(self.z)
-        need_clip = False
       if self.fast_bw_opts.get("y_gauss_blur_sigma"):
         from TheanoUtil import gaussian_filter_1d
         y = gaussian_filter_1d(y, axis=0,
@@ -539,8 +522,7 @@ class SequenceOutputLayer(OutputLayer):
           window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
       if self.fast_bw_opts.get("y_lower_clip"):
         y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
-      if need_clip:
-        y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
+      y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
       nlog_scores = -T.log(y)  # in -log space
       am_scores = nlog_scores
       am_scale = self.attrs.get("am_scale", 1)
@@ -579,7 +561,7 @@ class SequenceOutputLayer(OutputLayer):
         bw2 = self.network.output[target_layer].baumwelch_alignment
         bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
       if self.fast_bw_opts.get("loss_with_softmax_prob"):
-        y = self.p_y_given_x
+        y = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       if self.fast_bw_opts.get("loss_with_sigmoid_prob"):
         y = T.nnet.sigmoid(self.z)
