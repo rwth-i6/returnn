@@ -338,7 +338,8 @@ class Updater:
           upd[param] = alpha * (grads[param] - param)  # ((alpha - 1) * old + alpha * new)
         else:
           upd[param] = grads[param]
-        upd[param] = T.switch(param.custom_update_condition,upd[param],0)
+        if param.custom_update_condition is not None:
+          upd[param] = T.switch(param.custom_update_condition, upd[param], 0)
         continue
 
       if param.layer.device != self.device and param.layer.device is not None:

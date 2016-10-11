@@ -580,7 +580,7 @@ class Layer(Container):
     return None
 
   def add_param(self, param, name="", constraints=True,
-                custom_update=None, custom_update_normalized=False, custom_update_exp_average=0, custom_update_condition=1):
+                custom_update=None, custom_update_normalized=False, custom_update_exp_average=0, custom_update_condition=None):
     """
     :type param: theano.SharedVariable
     :type name: str
