@@ -24,7 +24,7 @@ class OutputLayer(Layer):
                sigmoid_outputs=False, exp_outputs=False,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
-               compute_priors=False, compute_priors_exp_average=0,
+               compute_priors=False, compute_priors_exp_average=0, compute_priors_accumulate_batches=None,
                compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
@@ -228,6 +228,8 @@ class OutputLayer(Layer):
       self.set_attr('compute_priors', compute_priors)
       if compute_priors_exp_average:
         self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
+      if compute_priors_accumulate_batches:
+        self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
       custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if self.attrs.get('use_label_priors', 0) > 0:  # use labels to compute priors in first epoch
@@ -237,7 +239,8 @@ class OutputLayer(Layer):
       self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
                                    custom_update=custom,
                                    custom_update_normalized=not compute_priors_exp_average,
-                                   custom_update_exp_average=compute_priors_exp_average)
+                                   custom_update_exp_average=compute_priors_exp_average,
+                                   custom_update_accumulate_batches=compute_priors_accumulate_batches)
       self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
 
     if self.attrs.get("substract_prior_from_output", False):
