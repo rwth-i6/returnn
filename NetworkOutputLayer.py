@@ -194,7 +194,7 @@ class OutputLayer(Layer):
     if exp_outputs:
       self.set_attr("exp_outputs", exp_outputs)
 
-    self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)  # flat log(self.p_y_given_x)
+    self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
     if self.loss == 'sse' or not self.attrs.get("apply_softmax", True):
       self.p_y_given_x = self.z
     elif exp_outputs:  # or not exp_normalize:
