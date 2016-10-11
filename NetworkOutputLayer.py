@@ -206,8 +206,6 @@ class OutputLayer(Layer):
     self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
     self.output = self.p_y_given_x
 
-    if use_label_priors:
-      self.set_attr("use_label_priors", use_label_priors)
     self.prior_scale = prior_scale
     if prior_scale:
       self.set_attr("prior_scale", prior_scale)
@@ -232,10 +230,11 @@ class OutputLayer(Layer):
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
       custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
-      if self.attrs.get('use_label_priors', 0) > 0:  # use labels to compute priors in first epoch
+      if use_label_priors > 0:  # use labels to compute priors in first epoch
+        self.set_attr("use_label_priors", use_label_priors)
         custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i], self.attrs['n_out'], 'float32'),
                           axis=0)
-        custom = T.switch(T.le(self.network.epoch, self.attrs.get('use_label_priors', 0)), custom_0, custom)
+        custom = T.switch(T.le(self.network.epoch, use_label_priors), custom_0, custom)
       self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
                                    custom_update=custom,
                                    custom_update_normalized=not compute_priors_exp_average,
