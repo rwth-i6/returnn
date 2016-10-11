@@ -2,6 +2,7 @@ import numpy
 import os
 from theano import tensor as T
 import theano
+import theano.ifelse
 from BestPathDecoder import BestPathDecodeOp
 from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
@@ -20,6 +21,8 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
+               prior_scale=0.0, log_prior=None, use_label_priors=0,
+               compute_priors_via_baum_welch=False,
                compute_priors=False, compute_priors_exp_average=0, compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
@@ -119,7 +122,6 @@ class OutputLayer(Layer):
       if self.eval_flag:
         self.index = self.sources[0].index
       else:
-        import theano.ifelse
         padx = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1], self.z.shape[2]),
                        'float32') + self.z[-1]
         pady = T.zeros((T.abs_(self.index.shape[0] - self.z.shape[0]), self.index.shape[1]), 'int32')  # + y[-1]
@@ -186,10 +188,75 @@ class OutputLayer(Layer):
       sim *= numpy.float32(input_output_similarity_scale) / findex_sum
       self.constraints -= sim
 
-    # self.make_output(self.z, collapse = False)
-    # Note that self.output is going to be overwritten in our derived classes.
-    self.output = self.make_consensus(self.z) if self.depth > 1 else self.z
-    self.y_m = None  # flat log(self.p_y_given_x)
+    self.p_y_given_x = None
+    self.p_y_given_x_flat = None
+    self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)  # flat log(self.p_y_given_x)
+    if not self.attrs.get("apply_softmax", True):
+      self.p_y_given_x = self.z
+    elif self.loss == 'sse':
+      self.p_y_given_x = self.z
+    elif self.loss == 'priori':
+      self.p_y_given_x_flat = T.nnet.softmax(self.y_m) / self.priori
+    else:  # standard case
+      self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
+    if self.p_y_given_x is None:
+      assert self.p_y_given_x_flat is not None
+      self.p_y_given_x = T.reshape(self.p_y_given_x_flat, self.z.shape)
+    if self.p_y_given_x_flat is None:
+      assert self.p_y_given_x is not None
+      self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
+    self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
+    self.output = self.p_y_given_x
+
+    if use_label_priors:
+      self.set_attr("use_label_priors", use_label_priors)
+    self.prior_scale = prior_scale
+    if prior_scale:
+      self.set_attr("prior_scale", prior_scale)
+    if log_prior is not None:
+      # We expect a filename to the priors, stored as txt, in +log space.
+      assert isinstance(log_prior, str)
+      self.set_attr("log_prior", log_prior)
+      from Util import load_txt_vector
+      assert os.path.exists(log_prior)
+      log_prior = load_txt_vector(log_prior)
+      assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
+      log_prior = numpy.array(log_prior, dtype="float32")
+    self.log_prior = log_prior
+    if compute_priors_via_baum_welch:
+      self.set_attr("compute_priors_via_baum_welch", compute_priors_via_baum_welch)
+      assert self.attrs.get("compute_priors", False)
+    if self.attrs.get('compute_priors', False):
+      exp_average = self.attrs.get("compute_priors_exp_average", 0)
+      custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
+      custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
+      if self.attrs.get('use_label_priors', 0) > 0:  # use labels to compute priors in first epoch
+        custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i], self.attrs['n_out'], 'float32'),
+                          axis=0)
+        custom = T.switch(T.le(self.network.epoch, self.attrs.get('use_label_priors', 0)), custom_0, custom)
+        custom_init = numpy.zeros((self.attrs['n_out'],), 'float32')
+      self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
+                                   custom_update=custom,
+                                   custom_update_normalized=not exp_average,
+                                   custom_update_exp_average=exp_average)
+      self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
+
+    self._maybe_substract_prior_from_output()
+
+    if self.attrs.get('compute_distortions', False):
+      p = self.p_y_given_x_flat[self.i]
+      momentum = p[:-1] * p[1:]
+      momentum = T.sum(momentum, axis=-1)
+      loop = T.mean(momentum)
+      forward = numpy.float32(1) - loop
+      self.distortions = {
+        'loop': self.add_param(theano.shared(numpy.ones((1,), 'float32') * numpy.float32(0.5), 'loop'), 'loop',
+                               custom_update=loop,
+                               custom_update_normalized=True),
+        'forward': self.add_param(theano.shared(numpy.ones((1,), 'float32') * numpy.float32(0.5), 'forward'), 'forward',
+                                  custom_update=forward,
+                                  custom_update_normalized=True)
+      }
 
   def create_bias(self, n, prefix='b', name=""):
     if not name:
@@ -232,55 +299,10 @@ class OutputLayer(Layer):
     prior_scale = numpy.float32(self.attrs.get("prior_scale", 1))
     self.output = T.exp(log_out - self.log_prior * prior_scale)
     self.p_y_given_x = self.output
+    self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
 
 
 class FramewiseOutputLayer(OutputLayer):
-  def __init__(self, **kwargs):
-    super(FramewiseOutputLayer, self).__init__(**kwargs)
-    self.initialize()
-
-  def initialize(self):
-    output = self.output
-    self.y_m = output.reshape((output.shape[0] * output.shape[1], output.shape[2]))
-    self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
-    if not self.attrs.get("apply_softmax", True):
-      self.p_y_given_x = self.y_m
-      self.z = T.log(self.z)
-      self.y_m = T.log(self.y_m)
-    elif self.loss in ['ce', 'entropy', 'none']:
-      self.p_y_given_x = T.nnet.softmax(self.y_m)
-    elif self.loss == 'sse':
-      self.p_y_given_x = self.y_m
-    elif self.loss == 'priori':
-      self.p_y_given_x = T.nnet.softmax(self.y_m) / self.priori
-    else:
-      assert False, "invalid loss: " + self.loss
-    self.p_y_given_x_flat = self.p_y_given_x  # a bit inconsistent here... it's always flat at the moment
-    self.output = self.p_y_given_x.reshape(self.output.shape)
-    if self.attrs.get('compute_priors', False):
-      custom = T.mean(self.p_y_given_x[self.i], axis=0) if self.attrs.get('trainable', True) else T.constant(0,
-                                                                                                             'float32')
-      exp_average = self.attrs.get("compute_priors_exp_average", 0)
-      self.priors = self.add_param(theano.shared(numpy.zeros((self.attrs['n_out'],), 'float32'), 'priors'), 'priors',
-                                   custom_update=custom,
-                                   custom_update_normalized=(not exp_average) and self.attrs.get('trainable', True),
-                                   custom_update_exp_average=exp_average)
-      self.log_prior = T.log(self.priors)
-    if self.attrs.get('compute_distortions', False):
-      p = self.p_y_given_x_flat[self.i]
-      momentum = p[:-1] * p[1:]
-      momentum = T.sum(momentum,axis=-1)
-      loop = T.mean(momentum)
-      forward = numpy.float32(1) - loop
-      self.distortions = {
-        'loop' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'loop'), 'loop',
-                                custom_update = loop,
-                                custom_update_normalized=True),
-        'forward' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'forward'), 'forward',
-                                   custom_update = forward,
-                                   custom_update_normalized=True)
-      }
-    self._maybe_substract_prior_from_output()
 
   def cost(self):
     """
@@ -292,19 +314,19 @@ class FramewiseOutputLayer(OutputLayer):
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
       if self.loss != "ce": raise NotImplementedError
-      assert self.p_y_given_x.ndim == 2  # flattened
+      assert self.p_y_given_x_flat.ndim == 2  # flattened
       index = T.cast(self.index, "float32").flatten()
       index_bc = index.dimshuffle(0, 'x')
       y_idx = self.y_data_flat
       assert y_idx.ndim == 1
-      p = T.clip(self.p_y_given_x, numpy.float32(1.e-38), numpy.float32(1.e20))
+      p = T.clip(self.p_y_given_x_flat, numpy.float32(1.e-38), numpy.float32(1.e20))
       from NativeOp import subtensor_batched_index
       logp = T.log(subtensor_batched_index(p, y_idx))
       assert logp.ndim == 1
       nll = -T.sum(logp * index)
       # the grad for p is: -y_ref/p
       known_grads = {
-        self.p_y_given_x: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
+        self.p_y_given_x_flat: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
       return self.norm * nll, known_grads
     elif self.loss == 'ce' or self.loss == 'priori':
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
@@ -320,7 +342,7 @@ class FramewiseOutputLayer(OutputLayer):
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
         nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
+        nll = -T.dot(T.log(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
       return self.norm * T.sum(nll), known_grads
     elif self.loss == 'entropy':
       h_e = T.exp(self.y_m)  # (TB)
@@ -333,7 +355,7 @@ class FramewiseOutputLayer(OutputLayer):
       f = T.any(T.gt(y, 0), axis=0)  # B
       return T.sum(f * T.sum(ce, axis=0) + (1 - f) * T.sum(ee, axis=0)), known_grads
     elif self.loss == 'priori':
-      pcx = self.p_y_given_x[self.i, self.y_data_flat[self.i]]
+      pcx = self.p_y_given_x_flat[self.i, self.y_data_flat[self.i]]
       pcx = T.clip(pcx, 1.e-38, 1.e20)  # For pcx near zero, the gradient will likely explode.
       return -T.sum(T.log(pcx)), known_grads
     elif self.loss == 'sse':
@@ -341,7 +363,7 @@ class FramewiseOutputLayer(OutputLayer):
         y_f = T.cast(T.reshape(self.y_data_flat, (self.y_data_flat.shape[0] * self.y_data_flat.shape[1]), ndim=1),
                      'int32')
         y_oh = T.eq(T.shape_padleft(T.arange(self.attrs['n_out']), y_f.ndim), T.shape_padright(y_f, 1))
-        return T.mean(T.sqr(self.p_y_given_x[self.i] - y_oh[self.i])), known_grads
+        return T.mean(T.sqr(self.p_y_given_x_flat[self.i] - y_oh[self.i])), known_grads
       else:
         return T.sum(
           T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]), axis=1)), known_grads
@@ -357,15 +379,6 @@ class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer 
     super(DecoderOutputLayer, self).__init__(**kwargs)
     self.set_attr('loss', 'decode')
 
-  def cost(self):
-    res = 0.0
-    for s in self.y_s:
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=s.reshape((s.shape[0] * s.shape[1], s.shape[2]))[self.i],
-                                                  y_idx=self.y_data_flat[self.i])
-      res += T.sum(nll)
-    return res / float(len(self.y_s)), None
-
-  def initialize(self):
     output = 0
     self.y_s = []
     for s in self.sources:
@@ -378,10 +391,17 @@ class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer 
     self.y_pred = T.argmax(self.y_m[self.i], axis=1, keepdims=True)
     self.output = self.p_y_given_x.reshape(self.output.shape)
 
+  def cost(self):
+    res = 0.0
+    for s in self.y_s:
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=s.reshape((s.shape[0] * s.shape[1], s.shape[2]))[self.i],
+                                                  y_idx=self.y_data_flat[self.i])
+      res += T.sum(nll)
+    return res / float(len(self.y_s)), None
+
 
 class SequenceOutputLayer(OutputLayer):
-  def __init__(self, prior_scale=0.0, log_prior=None, use_label_priors=0,
-               compute_priors_via_baum_welch=False,
+  def __init__(self,
                ce_smoothing=0.0, ce_target_layer_align=None,
                exp_normalize=True,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
@@ -391,24 +411,6 @@ class SequenceOutputLayer(OutputLayer):
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     super(SequenceOutputLayer, self).__init__(**kwargs)
-    self.prior_scale = prior_scale
-    if use_label_priors:
-      self.set_attr("use_label_priors", use_label_priors)
-    if prior_scale:
-      self.set_attr("prior_scale", prior_scale)
-    if log_prior is not None:
-      # We expect a filename to the priors, stored as txt, in +log space.
-      assert isinstance(log_prior, str)
-      self.set_attr("log_prior", log_prior)
-      from Util import load_txt_vector
-      assert os.path.exists(log_prior)
-      log_prior = load_txt_vector(log_prior)
-      assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
-      log_prior = numpy.array(log_prior, dtype="float32")
-    if compute_priors_via_baum_welch:
-      self.set_attr("compute_priors_via_baum_welch", compute_priors_via_baum_welch)
-      assert self.attrs.get("compute_priors", False)
-    self.log_prior = log_prior
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
@@ -456,51 +458,8 @@ class SequenceOutputLayer(OutputLayer):
     self.sprint_opts = sprint_opts
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
-    self.initialize()
-
-  def initialize(self):
     assert self.loss in (
       'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
-    self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-    if not self.attrs.get("apply_softmax", True):
-      self.p_y_given_x_flat = self.y_m
-      self.p_y_given_x = self.z
-      self.z = T.log(self.z)
-      self.y_m = T.log(self.y_m)
-    else:  # standard case
-      self.p_y_given_x_flat = T.nnet.softmax(self.y_m)
-      self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-    self.y_pred = T.argmax(self.p_y_given_x_flat, axis=-1)
-    self.output = self.p_y_given_x
-    if self.attrs.get('compute_priors', False):
-      exp_average = self.attrs.get("compute_priors_exp_average", 0)
-      custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
-      custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
-      if self.attrs.get('use_label_priors', 0) > 0:  # use labels to compute priors in first epoch
-        custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i], self.attrs['n_out'], 'float32'),
-                          axis=0)
-        custom = T.switch(T.le(self.network.epoch, self.attrs.get('use_label_priors', 0)), custom_0, custom)
-        custom_init = numpy.zeros((self.attrs['n_out'],), 'float32')
-      self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
-                                   custom_update=custom,
-                                   custom_update_normalized=not exp_average,
-                                   custom_update_exp_average=exp_average)
-      self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
-    self._maybe_substract_prior_from_output()
-    if self.attrs.get('compute_distortions', False):
-      p = self.p_y_given_x_flat[self.i]
-      momentum = p[:-1] * p[1:]
-      momentum = T.sum(momentum,axis=-1)
-      loop = T.mean(momentum)
-      forward = numpy.float32(1) - loop
-      self.distortions = {
-        'loop' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'loop'), 'loop',
-                                custom_update = loop,
-                                custom_update_normalized=True),
-        'forward' : self.add_param(theano.shared(numpy.ones((1,),'float32') * numpy.float32(0.5), 'forward'), 'forward',
-                                   custom_update = forward,
-                                   custom_update_normalized=True)
-      }
 
   def index_for_ctc(self):
     for source in self.sources:
