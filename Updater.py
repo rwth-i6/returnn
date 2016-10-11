@@ -329,7 +329,7 @@ class Updater:
       # This loops sets upd[param], where param_new = param + upd[param].
 
       if hasattr(param, 'custom_update'):
-        # grads[param] is not a gradient but actually the update (thus like negative gradient)
+        # For this case, Device will set grads[param] to custom_update (thus like negative gradient).
         # We also don't apply the learning rate here.
         if param.custom_update_normalized:  # cumulative moving average
           upd[param] = (grads[param] - param) / e_t
@@ -340,6 +340,24 @@ class Updater:
           upd[param] = grads[param]
         if param.custom_update_condition is not None:
           upd[param] = T.switch(param.custom_update_condition, upd[param], 0)
+        if param.custom_update_accumulate_batches is not None:
+          assert param.custom_update_accumulate_batches >= 1
+          do_update_now = T.eq(self.counter % param.custom_update_accumulate_batches, param.custom_update_accumulate_batches - 1)
+          accumulated_param = self.var(param, name="%s_accumulated" % param.name, zero=True)
+          accumulated_param_new = accumulated_param + upd[param]
+          updates.append((
+            accumulated_param,
+            theano.ifelse.ifelse(
+              do_update_now,
+              T.zeros_like(param),
+              accumulated_param_new
+            )
+          ))
+          upd[param] = theano.ifelse.ifelse(
+            do_update_now,
+            accumulated_param_new / numpy.float32(param.custom_update_accumulate_batches),
+            T.zeros_like(param)
+          )
         continue
 
       if param.layer.device != self.device and param.layer.device is not None:
