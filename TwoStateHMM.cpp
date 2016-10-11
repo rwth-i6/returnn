@@ -26,7 +26,6 @@ private:
     {
         fwdTable_.resize(T_, M_);
         fwdTable_(0,0) = activs(0, canonical_[0]);
-        fwdTable_(0,1) = activs(0, canonical_[1]);
 
         for(int t = 1; t < T_; ++t)
         {

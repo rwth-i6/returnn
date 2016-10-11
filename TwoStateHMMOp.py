@@ -99,4 +99,4 @@ class TwoStateHMMOp(theano.Op):
     
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
-        return (1.4,)
+        return (1.5,)
