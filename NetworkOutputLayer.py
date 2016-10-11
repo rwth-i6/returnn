@@ -242,7 +242,12 @@ class OutputLayer(Layer):
                                    custom_update_exp_average=exp_average)
       self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
 
-    self._maybe_substract_prior_from_output()
+    if self.attrs.get("substract_prior_from_output", False):
+      log_out = T.log(T.clip(self.output, numpy.float32(1.e-20), numpy.float(1.e20)))
+      prior_scale = numpy.float32(self.attrs.get("prior_scale", 1))
+      self.output = T.exp(log_out - self.log_prior * prior_scale)
+      self.p_y_given_x = self.output
+      self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
 
     if self.attrs.get('compute_distortions', False):
       p = self.p_y_given_x_flat[self.i]
@@ -271,7 +276,7 @@ class OutputLayer(Layer):
     """
     :rtype: theano.Variable
     """
-    return -T.sum(self.p_y_given_x[self.i] * T.log(self.p_y_given_x[self.i]))
+    return -T.sum(self.p_y_given_x_flat[self.i] * T.log(self.p_y_given_x_flat[self.i]))
 
   def errors(self):
     """
@@ -293,14 +298,6 @@ class OutputLayer(Layer):
       return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
     else:
       raise NotImplementedError()
-
-  def _maybe_substract_prior_from_output(self):
-    if not self.attrs.get("substract_prior_from_output", False): return
-    log_out = T.log(T.clip(self.output, numpy.float32(1.e-20), numpy.float(1.e20)))
-    prior_scale = numpy.float32(self.attrs.get("prior_scale", 1))
-    self.output = T.exp(log_out - self.log_prior * prior_scale)
-    self.p_y_given_x = self.output
-    self.p_y_given_x_flat = T.reshape(self.p_y_given_x, self.y_m.shape)
 
 
 class FramewiseOutputLayer(OutputLayer):

@@ -542,7 +542,8 @@ class LayerNetwork(object):
       if getattr(layer, "p_y_given_x", None) is None and layer.output:
         # Small little hack for layers which we use as output-layers which don't set this.
         from TheanoUtil import time_batch_make_flat
-        layer.p_y_given_x = time_batch_make_flat(layer.output)
+        layer.p_y_given_x = layer.output
+        layer.p_y_given_x_flat = time_batch_make_flat(layer.output)
       self.declare_train_params()
     return layer
 
