@@ -24,7 +24,8 @@ class OutputLayer(Layer):
                sigmoid_outputs=False, exp_outputs=False,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
-               compute_priors=False, compute_priors_exp_average=0, compute_distortions=False,
+               compute_priors=False, compute_priors_exp_average=0,
+               compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
                apply_softmax=True,
@@ -149,10 +150,6 @@ class OutputLayer(Layer):
     self.j = ((numpy.int32(1) - index_flat) > 0).nonzero()
     self.loss = as_str(loss.encode("utf8"))
     self.attrs['loss'] = self.loss
-    if compute_priors:
-      self.set_attr('compute_priors', compute_priors)
-      if compute_priors_exp_average:
-        self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
     if softmax_smoothing != 1.0:
       self.attrs['softmax_smoothing'] = softmax_smoothing
       print >> log.v4, "Logits before the softmax scaled with factor ", softmax_smoothing
@@ -226,20 +223,21 @@ class OutputLayer(Layer):
     self.log_prior = log_prior
     if compute_priors_via_baum_welch:
       self.set_attr("compute_priors_via_baum_welch", compute_priors_via_baum_welch)
-      assert self.attrs.get("compute_priors", False)
-    if self.attrs.get('compute_priors', False):
-      exp_average = self.attrs.get("compute_priors_exp_average", 0)
+      assert compute_priors
+    if compute_priors:
+      self.set_attr('compute_priors', compute_priors)
+      if compute_priors_exp_average:
+        self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
       custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if self.attrs.get('use_label_priors', 0) > 0:  # use labels to compute priors in first epoch
         custom_0 = T.mean(theano.tensor.extra_ops.to_one_hot(self.y_data_flat[self.i], self.attrs['n_out'], 'float32'),
                           axis=0)
         custom = T.switch(T.le(self.network.epoch, self.attrs.get('use_label_priors', 0)), custom_0, custom)
-        custom_init = numpy.zeros((self.attrs['n_out'],), 'float32')
       self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
                                    custom_update=custom,
-                                   custom_update_normalized=not exp_average,
-                                   custom_update_exp_average=exp_average)
+                                   custom_update_normalized=not compute_priors_exp_average,
+                                   custom_update_exp_average=compute_priors_exp_average)
       self.log_prior = T.log(T.maximum(self.priors, numpy.float32(1e-20)))
 
     if self.attrs.get("substract_prior_from_output", False):
