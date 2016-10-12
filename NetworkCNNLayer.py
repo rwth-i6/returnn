@@ -21,7 +21,7 @@ class CNN(_NoOpLayer):
 
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
                conv_stride=(1,1), pool_size=(2,2), ignore_border=1,
-               pool_stride=(2,2), pool_padding=(0,0), mode="max",
+               pool_stride=0, pool_padding=(0,0), mode="max",
                activation="tanh", dropout=0.0, factor=0.5,
                force_sample=False, **kwargs):
     super(CNN, self).__init__(**kwargs)
@@ -72,13 +72,17 @@ class CNN(_NoOpLayer):
       pool_size = [1, 1]
 
     assert ignore_border == 0 or ignore_border == 1
+    if pool_stride == 0:
+      pool_stride = pool_size
 
     _, new_d_row = self.get_dim(d_row, filter[0], pool_size[0],
                                 border_mode, conv_stride[0],
-                                pool_stride[0], ignore_border)
+                                pool_stride[0], ignore_border,
+                                pool_padding[0])
     border_mode, new_d_col = self.get_dim(d_col, filter[1], pool_size[1],
                                           border_mode, conv_stride[1],
-                                          pool_stride[1], ignore_border)
+                                          pool_stride[1], ignore_border,
+                                          pool_padding[1])
 
     assert (mode == "max" or mode == "sum" or
             mode == "avg" or mode == "fmp"), "invalid pooling mode!"
@@ -101,7 +105,7 @@ class CNN(_NoOpLayer):
     self.pool_params = [pool_size, pool_stride, pool_padding, conv_stride]
     self.other_params = [dropout, factor]
 
-    self.force_sample = bool(force_sample)
+    self.force_sample = force_sample
 
     # set attributes
     self.set_attr("n_features", n_features)
@@ -114,7 +118,7 @@ class CNN(_NoOpLayer):
                         for s in sources)
     return [is_conv_layer, n_sources]
 
-  def get_dim(self, input, filters, pools, border_mode, stride, pool_stride, ignore_border):
+  def get_dim(self, input, filters, pools, border_mode, stride, pool_stride, ignore_border, pad):
     if border_mode == "valid":
       result = (input - filters + 1)
     elif border_mode == "full":
@@ -130,6 +134,7 @@ class CNN(_NoOpLayer):
 
     result = (result - (pools - pool_stride)) / float(pool_stride)
     result = int(result) if ignore_border else int(ceil(result))
+    result += (2 * pad)
 
     return border_mode, result
 
