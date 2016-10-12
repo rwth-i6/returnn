@@ -258,6 +258,18 @@ def progress_bar_with_time(complete=1.0, prefix="", **kwargs):
   progress_bar(complete, prefix=prefix, **kwargs)
 
 
+def availablePhysicalMemoryInBytes():
+  try:
+    mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+  except Exception:
+    mem_bytes = 4 * (1024 ** 3)  # just some random number, 4GB
+  return mem_bytes
+
+def defaultCacheSizeInGBytes(factor=0.7):
+  mem_gbytes = availablePhysicalMemoryInBytes() / (1024. ** 3)
+  return int(mem_gbytes * factor)
+
+
 def betterRepr(o):
   """
   The main difference: this one is deterministic.

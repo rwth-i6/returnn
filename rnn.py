@@ -218,7 +218,8 @@ def getCacheByteSizes():
   :rtype: (int,int,int)
   :returns cache size in bytes for (train,dev,eval)
   """
-  cache_sizes_user = config.list('cache_size', ["1024G"])
+  import Util
+  cache_sizes_user = config.list('cache_size', ["%iG" % Util.defaultCacheSizeInGBytes()])
   num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
