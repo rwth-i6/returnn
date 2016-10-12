@@ -540,7 +540,7 @@ class RecurrentUnitLayer(Layer):
       else:
         if encoder:
           self.index = encoder[0].index
-        self.index = T.ones((n_dec,self.index.shape[1]),'int64') # TODO: this gives a graph replacement error for int8
+        self.index = T.ones((n_dec,self.index.shape[1]),'int8')
     else:
       n_dec = self.index.shape[0]
     # initialize recurrent weights
