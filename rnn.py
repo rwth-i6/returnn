@@ -388,7 +388,9 @@ def executeMainTask():
     combine_labels = config.value('combine_labels', '')
     output_file = config.value('output_file', '')
     engine.init_network_from_config(config)
-    engine.forward_to_hdf(eval_data, output_file, combine_labels)
+    engine.forward_to_hdf(
+      data=eval_data, output_file=output_file, combine_labels=combine_labels,
+      batch_size=config.int('forward_batch_size', 0))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)

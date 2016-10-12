@@ -535,7 +535,7 @@ class Engine:
           continue
         raise
 
-  def forward_to_hdf(self, data, output_file, combine_labels=''):
+  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
     :type data: Dataset.Dataset
     :type output_file: str
@@ -543,7 +543,7 @@ class Engine:
     """
     cache = h5py.File(output_file, "w")
     batches = data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=0, #data.get_num_timesteps(),
+                                    batch_size=batch_size,
                                     max_seqs=self.max_seqs)
     merge = {}
     forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
