@@ -20,7 +20,7 @@ class CNN(_NoOpLayer):
   recurrent = True
 
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
-               conv_stride=(1,1), pool_size=(2,2), ignore_border=True,
+               conv_stride=(1,1), pool_size=(2,2), ignore_border=1,
                pool_stride=(2,2), pool_padding=(0,0), mode="max",
                activation="tanh", dropout=0.0, factor=0.5,
                force_sample=False, **kwargs):
@@ -71,10 +71,14 @@ class CNN(_NoOpLayer):
       border_mode = "same"
       pool_size = [1, 1]
 
+    assert ignore_border == 0 or ignore_border == 1
+
     _, new_d_row = self.get_dim(d_row, filter[0], pool_size[0],
-                                border_mode, conv_stride[0])
+                                border_mode, conv_stride[0],
+                                pool_stride[0], ignore_border)
     border_mode, new_d_col = self.get_dim(d_col, filter[1], pool_size[1],
-                                          border_mode, conv_stride[1])
+                                          border_mode, conv_stride[1],
+                                          pool_stride[1], ignore_border)
 
     assert (mode == "max" or mode == "sum" or
             mode == "avg" or mode == "fmp"), "invalid pooling mode!"
@@ -110,7 +114,7 @@ class CNN(_NoOpLayer):
                         for s in sources)
     return [is_conv_layer, n_sources]
 
-  def get_dim(self, input, filters, pools, border_mode, stride):
+  def get_dim(self, input, filters, pools, border_mode, stride, pool_stride, ignore_border):
     if border_mode == "valid":
       result = (input - filters + 1)
     elif border_mode == "full":
@@ -124,7 +128,8 @@ class CNN(_NoOpLayer):
     if stride != 1:
       result = int(ceil(result/float(stride)))
 
-    result /= pools
+    result = (result - (pools - pool_stride)) / float(pool_stride)
+    result = int(result) if ignore_border else int(ceil(result))
 
     return border_mode, result
 
