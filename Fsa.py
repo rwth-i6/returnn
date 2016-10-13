@@ -1,4 +1,7 @@
 
+from __future__ import print_function
+
+
 def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels
@@ -32,3 +35,20 @@ def fsa_to_dot_format(num_states, edges):
   f = open("/tmp/dummy-fsa.dot", "w")
   # evtl mit graphviz
   # dot -T svg /tmp/dummy-fsa.dot > dummy-fsa.svg
+  # TODO @Chris ...
+
+
+def main():
+  from argparse import ArgumentParser
+  arg_parser = ArgumentParser()
+  arg_parser.add_argument("--blub")
+  arg_parser.add_argument("--num_labels", type=int, required=True)
+  arg_parser.add_argument("--label_seq", required=True)
+  args = arg_parser.parse_args()
+  print("Hey:", args.blub)
+  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  fsa_to_dot_format(num_states=num_states, edges=edges)
+
+
+if __name__ == "__main__":
+  main()
