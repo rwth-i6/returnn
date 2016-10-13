@@ -72,7 +72,7 @@ class CachedDataset(Dataset):
       self._init_alloc_intervals()
       self._init_start_cache()
     else:
-      self._index_map = seq_index
+      self._index_map = [ self._seq_index.index(i) for i in seq_index ]
     return True
 
   def _init_alloc_intervals(self):
