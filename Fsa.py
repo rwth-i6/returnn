@@ -10,7 +10,20 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
     edges: list[(from,to,label_idx,weight)]
       from and to are state_idx >= 0 and < num_states,
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float
+      weight is a float, in -log space
+  """
+  # TODO @Chris ...
+
+
+def hmm_fsa_for_word_seq(word_seq, lexicon_file,
+                         allo_num_states=3, allo_context_len=1,
+                         state_tying_file=None,
+                         tdps=None  # ...
+                         ):
+  """
+  :param list[str] word_seq: sequences of words
+  ... (like in LmDataset.PhoneSeqGenerator)
+  :returns (num_states, edges) like above
   """
   # TODO @Chris ...
 
