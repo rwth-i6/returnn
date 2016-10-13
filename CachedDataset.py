@@ -52,6 +52,7 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
+    self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if seq_list:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
@@ -66,7 +67,6 @@ class CachedDataset(Dataset):
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
     if self.num_seqs_cached_at_start != len(seq_index):
-      self._index_map = range(self.num_seqs)
       self._seq_index = seq_index
       self._init_seq_starts()
       self._init_alloc_intervals()
