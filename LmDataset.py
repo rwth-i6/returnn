@@ -20,7 +20,7 @@ class LmDataset(CachedDataset2):
                log_skipped_seqs=False, **kwargs):
     """
     :param str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param dict | None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see _PhoneSeqGenerator
+    :param dict | None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
     :param str | None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
     :param str | None orth_replace_map_file: JSON file with replacement dict for orth symbols
     :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data
@@ -38,7 +38,7 @@ class LmDataset(CachedDataset2):
     else:
       assert not orth_symbols_file
       assert isinstance(phone_info, dict)
-      self.seq_gen = _PhoneSeqGenerator(**phone_info)
+      self.seq_gen = PhoneSeqGenerator(**phone_info)
       self.orth_symbols = None
       self.labels["data"] = self.seq_gen.get_class_labels()
     if orth_replace_map_file:
@@ -211,7 +211,7 @@ def _iter_txt(filename, callback):
     callback(l)
 
 
-class _AllophoneState:
+class AllophoneState:
   # In Sprint, see AllophoneStateAlphabet::index().
   id = None  # u16 in Sprint. here just str
   context_history = ()  # list[u16] of phone id. here just list[str]
@@ -242,7 +242,7 @@ class _AllophoneState:
     self.boundary = self.boundary | 2
 
 
-class _Lexicon:
+class Lexicon:
 
   def __init__(self, filename):
     print >> log.v4, "Loading lexicon", filename
@@ -280,7 +280,7 @@ class _Lexicon:
     print >> log.v4, "Finished whole lexicon, %i lemmas" % len(self.lemmas)
 
 
-class _StateTying:
+class StateTying:
   def __init__(self, state_tying_file):
     self.allo_map = {}  # allophone-state-str -> class-idx
     self.class_map = {}  # class-idx -> set(allophone-state-str)
@@ -298,7 +298,7 @@ class _StateTying:
     self.num_classes = len(self.class_map)
 
 
-class _PhoneSeqGenerator:
+class PhoneSeqGenerator:
   def __init__(self, lexicon_file,
                allo_num_states=3, allo_context_len=1,
                state_tying_file=None,
@@ -315,7 +315,7 @@ class _PhoneSeqGenerator:
     :param float repetition: prob of repeating an allophone
     :param float silence_repetition: prob of repeating the silence allophone
     """
-    self.lexicon = _Lexicon(lexicon_file)
+    self.lexicon = Lexicon(lexicon_file)
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
     self.rnd = Random(0)
     self.allo_num_states = allo_num_states
@@ -328,7 +328,7 @@ class _PhoneSeqGenerator:
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
     self.si_phone = self.si_lemma["phons"][0]["phon"]
     if state_tying_file:
-      self.state_tying = _StateTying(state_tying_file)
+      self.state_tying = StateTying(state_tying_file)
     else:
       self.state_tying = None
 
@@ -345,7 +345,7 @@ class _PhoneSeqGenerator:
 
   def seq_to_class_idxs(self, phones, dtype=None):
     """
-    :param list[_AllophoneState] phones: list of allophone states
+    :param list[AllophoneState] phones: list of allophone states
     :param str dtype: eg "int32"
     :rtype: numpy.ndarray
     :returns 1D numpy array with the indices
@@ -393,14 +393,14 @@ class _PhoneSeqGenerator:
 
   def _phones_to_allos(self, phones):
     for p in phones:
-      a = _AllophoneState()
+      a = AllophoneState()
       a.id = p
       yield a
 
   def _random_allo_silence(self, phone=None):
     if phone is None: phone = self.si_phone
     while True:
-      a = _AllophoneState()
+      a = AllophoneState()
       a.id = phone
       a.mark_initial()
       a.mark_final()
@@ -417,7 +417,7 @@ class _PhoneSeqGenerator:
       else:  # non-silence
         for state in range(self.allo_num_states):
           while True:
-            a = _AllophoneState()
+            a = AllophoneState()
             a.id = _a.id
             a.context_history = _a.context_history
             a.context_future = _a.context_future
@@ -448,7 +448,7 @@ class _PhoneSeqGenerator:
   def generate_seq(self, orth):
     """
     :param str orth: orthography as a str. orth.split() should give words in the lexicon
-    :rtype: list[_AllophoneState]
+    :rtype: list[AllophoneState]
     :returns allophone state list. those will have repetitions etc
     """
     allos = []
@@ -484,7 +484,7 @@ class _PhoneSeqGenerator:
   def generate_garbage_seq(self, target_len):
     """
     :param int target_len: len of the returned seq
-    :rtype: list[_AllophoneState]
+    :rtype: list[AllophoneState]
     :returns allophone state list. those will have repetitions etc.
     It will randomly generate a sequence of phonemes and transform that
     into a list of allophones in a similar way than generate_seq().
