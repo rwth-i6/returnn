@@ -572,6 +572,8 @@ class SequenceOutputLayer(OutputLayer):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
+      if self.fast_bw_opts.get("gauss_grad"):
+        known_grads[self.z] *= -2 * self.z
       if self.fast_bw_opts.get("no_explicit_z_grad"):
         del known_grads[self.z]
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
