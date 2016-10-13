@@ -68,11 +68,12 @@ class CachedDataset(Dataset):
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
+      self._seq_index_inv = dict(zip(seq_index,range(len(seq_index))))
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
     else:
-      self._index_map = [ self._seq_index.index(i) for i in seq_index ]
+      self._index_map = [ self._seq_index_inv[i] for i in seq_index ]
     return True
 
   def _init_alloc_intervals(self):
