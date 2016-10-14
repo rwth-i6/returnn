@@ -294,12 +294,12 @@ class OutputLayer(Layer):
           return self.norm * T.sum(
             T.max(T.neq(T.argmax(self.output[:self.index.shape[0]], axis=2), self.y) * T.cast(self.index, 'float32'),
                   axis=0))
-        return self.norm * T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+        return self.norm * T.sum(T.neq(T.argmax(self.p_y_given_x_flat[self.i], axis=-1), self.y_data_flat[self.i]))
       else:
         return self.norm * T.sum(
-          T.neq(T.argmax(self.y_m[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis=-1)))
+          T.neq(T.argmax(self.p_y_given_x_flat[self.i], axis=-1), T.argmax(self.y_data_flat[self.i], axis=-1)))
     elif self.y_data_flat.dtype.startswith('float'):
-      return T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
+      return T.mean(T.sqr(self.p_y_given_x_flat[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]))
     else:
       raise NotImplementedError()
 
