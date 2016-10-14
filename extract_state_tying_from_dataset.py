@@ -71,6 +71,8 @@ def iter_dataset_targets(dataset):
 
 class OrthHandler:
 
+  allo_add_all = False  # only via lexicon
+
   def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1):
     self.lexicon = lexicon
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -115,6 +117,8 @@ class OrthHandler:
   def _iter_possible_ctx(self, phon_id, direction):
     if self.lexicon.phonemes[phon_id]["variation"] == "none":
       return [()]
+    if self.allo_add_all:
+      return [()] + [(p,) for p in sorted(self.lexicon.phonemes.keys())]
     return [
       ((p,) if p else ())
       for p in sorted(self.phon_to_possible_ctx_via_lex[direction][phon_id])]
@@ -211,6 +215,7 @@ def main():
   arg_parser.add_argument("--context", default=1, type=int)
   arg_parser.add_argument("--hmm_states", default=3, type=int)
   arg_parser.add_argument("--state_tying_output")
+  arg_parser.add_argument("--allo_add_all", action="store_true")
   args = arg_parser.parse_args()
 
   dataset = init_dataset_via_str(config_str=args.dataset) if args.dataset else None
@@ -231,6 +236,8 @@ def main():
     allo_num_states=args.hmm_states)
   map_idx_to_allo = defaultdict(set)  # type: dict[int, set[AllophoneState]]
   map_allo_to_idx = {}  # type: dict[AllophoneState, int]
+  if args.allo_add_all:
+    orth_handler.allo_add_all = True
 
   # NOTE: Assume monophone state tying for now!
   num_labels = orth_handler.expected_num_labels_for_monophone_state_tying()
