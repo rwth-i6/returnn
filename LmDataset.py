@@ -263,7 +263,10 @@ class Lexicon:
         tree = tree[:-1]
         if elem.tag == "phoneme":
           symbol = elem.find("symbol").text.strip()  # should be unicode
-          variation = elem.find("variation").text.strip()
+          if elem.find("variation"):
+            variation = elem.find("variation").text.strip()
+          else:
+            variation = "context"  # default
           assert symbol not in self.phonemes
           assert variation in ["context", "none"]
           self.phonemes[symbol] = {"index": len(self.phonemes), "symbol": symbol, "variation": variation}
@@ -272,10 +275,11 @@ class Lexicon:
           print >> log.v4, "Finished phoneme inventory, %i phonemes" % len(self.phonemes)
           root.clear()  # free memory
         elif elem.tag == "lemma":
-          orth = elem.find("orth").text.strip()
-          phons = [{"phon": e.text.strip(), "score": float(e.attrib.get("score", 0))} for e in elem.findall("phon")]
-          assert orth not in self.lemmas
-          self.lemmas[orth] = {"orth": orth, "phons": phons}
+          for orth_elem in elem.findall("orth"):
+            orth = (orth_elem.text or "").strip()
+            phons = [{"phon": e.text.strip(), "score": float(e.attrib.get("score", 0))} for e in elem.findall("phon")]
+            assert orth not in self.lemmas
+            self.lemmas[orth] = {"orth": orth, "phons": phons}
           root.clear()  # free memory
     print >> log.v4, "Finished whole lexicon, %i lemmas" % len(self.lemmas)
 
