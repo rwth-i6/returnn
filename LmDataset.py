@@ -218,6 +218,11 @@ class AllophoneState:
   context_future = ()  # list[u16] of phone id. here just list[str]
   boundary = 0  # s16. flags. 1 -> initial (@i), 2 -> final (@f)
   state = None  # s16, e.g. 0,1,2
+  _attrs = ["id", "context_history", "context_future", "boundary", "state"]
+
+  def __init__(self, id=None, state=None):
+    self.id = id
+    self.state = state
 
   def format(self):
     s = "%s{%s+%s}" % (
@@ -240,6 +245,18 @@ class AllophoneState:
 
   def mark_final(self):
     self.boundary = self.boundary | 2
+
+  def __hash__(self):
+    return hash(tuple([getattr(self, a) for a in self._attrs]))
+
+  def __eq__(self, other):
+    for a in self._attrs:
+      if getattr(self, a) != getattr(other, a):
+        return False
+    return True
+
+  def __ne__(self, other):
+    return not self == other
 
 
 class Lexicon:
