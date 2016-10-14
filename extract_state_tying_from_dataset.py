@@ -118,7 +118,10 @@ class OrthHandler:
     if self.lexicon.phonemes[phon_id]["variation"] == "none":
       return [()]
     if self.allo_add_all:
-      return [()] + [(p,) for p in sorted(self.lexicon.phonemes.keys())]
+      return [()] + [
+        (p,)
+        for p in sorted(self.lexicon.phonemes.keys())
+        if self.lexicon.phonemes[p]["variation"] == "context"]
     return [
       ((p,) if p else ())
       for p in sorted(self.phon_to_possible_ctx_via_lex[direction][phon_id])]

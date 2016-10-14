@@ -280,7 +280,7 @@ class Lexicon:
         tree = tree[:-1]
         if elem.tag == "phoneme":
           symbol = elem.find("symbol").text.strip()  # should be unicode
-          if elem.find("variation"):
+          if elem.find("variation") is not None:
             variation = elem.find("variation").text.strip()
           else:
             variation = "context"  # default
