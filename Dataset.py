@@ -638,7 +638,7 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   :param int|None cache_byte_size: optional, only for HDFDataset
   :rtype: Dataset
   """
-  if not 'window' in kwargs and config.has('window'):
+  if not 'window' in kwargs and config and config.has('window'):
     kwargs['window'] = config.int('window',1)
   from HDFDataset import HDFDataset
   if config_str.startswith("sprint:"):
