@@ -74,6 +74,15 @@ class OrthHandler:
   def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1):
     self.lexicon = lexicon
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+    self.phon_to_possible_ctx_via_lex = {-1: {}, 1: {}}
+    for lemma in self.lexicon.lemmas.values():
+      for pron in lemma["phons"]:
+        phons = pron["phon"].split()
+        for i in range(len(phons)):
+          ps = [phons[i + j] if (0 <= (i + j) < len(phons)) else None
+                for j in [-1, 0, 1]]
+          self.phon_to_possible_ctx_via_lex[1].setdefault(ps[1], set()).add(ps[2])
+          self.phon_to_possible_ctx_via_lex[-1].setdefault(ps[1], set()).add(ps[0])
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
     self.si_phone = self.si_lemma["phons"][0]["phon"]
     self.si_label = si_label
@@ -103,13 +112,12 @@ class OrthHandler:
       i += 1
       yield lemma
 
-  def _iter_possible_ctx(self, phon_id):
+  def _iter_possible_ctx(self, phon_id, direction):
     if self.lexicon.phonemes[phon_id]["variation"] == "none":
       return [()]
-    if self.allo_context_len == 0:
-      return [()]
-    assert self.allo_context_len == 1
-    return [()] + [(p,) for p in sorted(self.lexicon.phonemes.keys())]
+    return [
+      ((p,) if p else ())
+      for p in sorted(self.phon_to_possible_ctx_via_lex[direction])]
 
   def _num_states(self, phon_id):
     if phon_id == self.si_phone:
@@ -117,17 +125,18 @@ class OrthHandler:
     return self.allo_num_states
 
   def all_allophone_variations(self, phon):
-    for left_ctx in self._iter_possible_ctx(phon):
-      for right_ctx in self._iter_possible_ctx(phon):
+    for left_ctx in self._iter_possible_ctx(phon, -1):
+      for right_ctx in self._iter_possible_ctx(phon, 1):
         for state in range(self._num_states(phon)):
-          for boundary in range(4):
-            a = AllophoneState()
-            a.id = phon
-            a.context_history = left_ctx
-            a.context_future = right_ctx
-            a.state = state
-            a.boundary = boundary
-            yield a
+          a = AllophoneState()
+          a.id = phon
+          a.context_history = left_ctx
+          a.context_future = right_ctx
+          a.state = state
+          a.boundary = 0
+          if not left_ctx: a.boundary |= 1  # initial
+          if not right_ctx: a.boundary |= 2  # final
+          yield a
 
   def _phones_to_allos(self, phones):
     for p in phones:
