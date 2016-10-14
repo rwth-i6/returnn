@@ -432,6 +432,7 @@ class PhoneSeqGenerator:
               break
 
   def _allos_set_context(self, allos):
+    if self.allo_context_len == 0: return
     ctx = []
     for a in allos:
       if self.lexicon.phonemes[a.id]["variation"] == "context":
