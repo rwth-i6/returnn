@@ -117,17 +117,19 @@ class OrthHandler:
       return [()]
     return [
       ((p,) if p else ())
-      for p in sorted(self.phon_to_possible_ctx_via_lex[direction])]
+      for p in sorted(self.phon_to_possible_ctx_via_lex[direction][phon_id])]
 
   def _num_states(self, phon_id):
     if phon_id == self.si_phone:
       return 1
     return self.allo_num_states
 
-  def all_allophone_variations(self, phon):
+  def all_allophone_variations(self, phon, states=None):
+    if states is None:
+      states = range(self._num_states(phon))
     for left_ctx in self._iter_possible_ctx(phon, -1):
       for right_ctx in self._iter_possible_ctx(phon, 1):
-        for state in range(self._num_states(phon)):
+        for state in states:
           a = AllophoneState()
           a.id = phon
           a.context_history = left_ctx
@@ -298,10 +300,10 @@ def main():
     assert num_labels - 1 in map_idx_to_allo
     f = open(args.state_tying_output, "w")
     for i in range(num_labels):
-      phons = sorted(set([allo.id for allo in map_idx_to_allo[i]]))
+      phons = sorted(set([(allo.id, allo.state) for allo in map_idx_to_allo[i]]))
       assert len(phons) == 1
-      phon = phons[0]
-      for allo in orth_handler.all_allophone_variations(phon):
+      phon, state = phons[0]
+      for allo in orth_handler.all_allophone_variations(phon, states=[state]):
         f.write("%s %i\n" % (allo, i))
     f.close()
     print("Wrote state tying to %r." % args.state_tying_output, file=log.v1)
