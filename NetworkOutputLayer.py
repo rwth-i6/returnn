@@ -410,6 +410,8 @@ class SequenceOutputLayer(OutputLayer):
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
+    if fast_bw_opts is None: fast_bw_opts = {}
+    self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
@@ -453,6 +455,10 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
       'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
+
+  def _handle_old_kwargs(self, kwargs, fast_bw_opts):
+    if "loss_with_softmax_prob" in kwargs:
+      fast_bw_opts["loss_with_softmax_prob"] = kwargs.pop("loss_with_softmax_prob")
 
   def index_for_ctc(self):
     for source in self.sources:
