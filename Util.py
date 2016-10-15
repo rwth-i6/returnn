@@ -262,7 +262,7 @@ def availablePhysicalMemoryInBytes():
   try:
     mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
   except Exception:
-    mem_bytes = 4 * (1024 ** 3)  # just some random number, 4GB
+    mem_bytes = 1024 ** 4  # just some random number, 1TB
   return mem_bytes
 
 def defaultCacheSizeInGBytes(factor=0.7):
