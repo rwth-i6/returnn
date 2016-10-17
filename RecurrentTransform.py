@@ -217,6 +217,7 @@ class BatchNormTransform(RecurrentTransformBase):
     #return T.dot(y_p,self.W_re), {}
     return self.batch_norm(T.dot(y_p,self.W_re)), {}
 
+
 class LM(RecurrentTransformBase):
   name = "lm"
 
@@ -426,6 +427,10 @@ class AttentionList(AttentionBase):
         img += T.eye(self.custom_vars['C_%d' % i].shape[0],self.custom_vars['C_%d' % i].shape[0],b,dtype='float32')
       self.__setattr__("P_%d" % i, self.add_input(img, 'P_%d' %i))
     self.__setattr__("B_%d" % i, self.custom_vars['B_%d' % i])
+    if self.attrs['memory'] > 0:
+      self.__setattr__("M_%d" % i, self.state_vars['M_%d' % i])
+      self.__setattr__("W_mem_in_%d" % i, self.custom_vars['W_mem_in_%d' % i])
+      self.__setattr__("W_mem_write_%d" % i, self.custom_vars['W_mem_write_%d' % i])
     self.__setattr__("C_%d" % i, self.custom_vars['C_%d' % i])
     self.__setattr__("I_%d" % i, self.custom_vars['I_%d' % i])
     self.__setattr__("W_att_re_%d" % i, self.custom_vars['W_att_re_%d' % i])
@@ -485,11 +490,15 @@ class AttentionList(AttentionBase):
         h_att = T.tanh(T.dot(B, W_att_bs) + b_att_bs)
         if self.attrs['bn']:
           h_att = self.layer.batch_norm(h_att, n_tmp, index = e.output_index())
+        if self.attrs['memory'] > 0:
+          self.add_state_var(T.zeros((self.attrs['memory'], n_tmp), 'float32'), 'M_%d' % i)
+          self.create_weights(n_tmp, self.attrs['memory'], "W_mem_write", i)
         self.add_input(h_att, 'C_%d' % i)
       self.add_input(T.cast(self.base[i].output_index()[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       self.create_weights(e.attrs['n_out'], self.layer.unit.n_in, "W_att_in", i)
       self.create_bias(self.layer.unit.n_in, "b_att_in", i)
+      self.create_weights(n_tmp, self.layer.unit.n_in, "W_mem_in", i)
       if self.attrs['momentum'] == 'conv1d':
         context = 5
         values = numpy.ones((self.attrs['filters'], 1, context, 1), 'float32')
@@ -583,6 +592,14 @@ class AttentionList(AttentionBase):
         Q,K = self.align(w_i,self.item("Q", i))
         updates[self.state_vars['Q_%d' % i]] = Q
         updates[self.state_vars['K_%d' % i]] = K
+      if self.attrs['memory'] > 0:
+        M = self.get('M',i)
+        z_r = self.distance(M, H)
+        w_m = self.softmax(z_r, T.ones_like(M[0]))
+        inp += T.dot(T.sum(w_m*M,axis=0), self.get('W_mem_in',i))
+        v_m = T.nnet.sigmoid(T.dot(H, self.get('W_mem_write')))
+        mem = H.dimshuffle('x',0,1).repeat(self.attrs['memory'],axis=0)
+        updates[self.state_vars['M_%d' % i]] = (numpy.float32(1) - v_m) * M + v_m * mem
       if self.attrs['accumulator'] == 'rnn':
         def rnn(x_t, w_t, c_p):
           c = x_t * w_t + c_p * (numpy.float32(1.) - w_t)
@@ -606,6 +623,7 @@ class AttentionList(AttentionBase):
         penalty += theano.tensor.extra_ops.cumsum(self.get_state_vars_seq(self.state_vars['datt_%d' % i]),axis=0)
       return T.sum(T.maximum(penalty,T.zeros_like(penalty)))
     return 0
+
 
 class AttentionTime(AttentionList):
   """
@@ -639,7 +657,7 @@ class AttentionTree(AttentionList):
     for g in range(self.n_glm):
       prev = []
       for i in range(len(self.base)-1,-1,-1):
-        _, C, I, h_p, _ = self.get(y_p, i, g)
+        B, C, M, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
         h_p = sum([h_p] + prev) / T.constant(len(self.base)-i,'float32')
         w = self.softmax(self.distance(C, h_p), I)
         prev.append(T.sum(C * w.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
@@ -658,9 +676,9 @@ class AttentionBin(AttentionList):
     for g in range(self.attrs['glimpse']):
       for i in range(len(self.base)-1,-1,-1):
         factor = T.constant(self.base[i].attrs['factor'][0], 'int32') if i > 0 else 1
-        B, C, I, h_p, _ = self.get(y_p, i, g)
+        B, C, M, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
         if i == len(self.base) - 1:
-          z_i = self.distance(C, h_p)
+          z_i = self.distance(C, H)
         else:
           length = T.cast(T.max(T.sum(I,axis=0))+1,'int32')
           ext = T.cast(T.minimum(ext/factor,T.min(length)),'int32')
@@ -670,7 +688,7 @@ class AttentionBin(AttentionList):
           idx, _ = theano.map(pick, sequences = [pos/factor], non_sequences = [ext])
           idx = (idx.dimshuffle(1,0)[:-1].flatten() > 0).nonzero()
           C = C.reshape((C.shape[0]*C.shape[1],C.shape[2]))[idx].reshape((ext,C.shape[1],C.shape[2]))
-          z_i = self.distance(C, h_p)
+          z_i = self.distance(C, H)
           I = I.reshape((I.shape[0]*I.shape[1],))[idx].reshape((ext,I.shape[1]))
         if i > 0:
           pos = T.argmax(self.softmax(z_i,I),axis=0) * factor
