@@ -45,7 +45,8 @@ class Pretrain:
       must have n_in, n_out.
     :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
-    :param None | int | list[int] repetitions: how often to repeat certain pretrain steps. default is one epoch
+    :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
+      It can also be a dict, with keys like 'default' and 'final'. See code below.
     :param str construction_algo: e.g. "from_output"
     """
     if copy_output_layer is None:
@@ -67,12 +68,22 @@ class Pretrain:
     self._remove_non_trainable_added_only()
     if not repetitions:
       repetitions = 1
-    if not isinstance(repetitions, list):
-      repetitions = [repetitions]
-    assert isinstance(repetitions, list)
-    assert 0 < len(repetitions) <= len(self._step_net_jsons)
-    if len(repetitions) < len(self._step_net_jsons):
-      repetitions = repetitions + [repetitions[-1]] * (len(self._step_net_jsons) - len(repetitions))
+    if isinstance(repetitions, dict):
+      rep_dict = repetitions
+      default_rep = rep_dict.pop('default', 1)
+      repetitions = [default_rep] * len(self._step_net_jsons)
+      for k, v in sorted(rep_dict.items()):
+        if k == "final":
+          k = len(self._step_net_jsons) - 1
+        repetitions[k] = v
+    else:
+      if not isinstance(repetitions, list):
+        assert isinstance(repetitions, (int, long))
+        repetitions = [repetitions]
+      assert isinstance(repetitions, list)
+      assert 0 < len(repetitions) <= len(self._step_net_jsons)
+      if len(repetitions) < len(self._step_net_jsons):
+        repetitions = repetitions + [repetitions[-1]] * (len(self._step_net_jsons) - len(repetitions))
     self.repetitions = repetitions
     self._make_repetitions()
     self._resolve_wrapped_values()
@@ -379,7 +390,10 @@ def pretrainFromConfig(config):
     original_network_json = LayerNetwork.json_from_config(config)
     copy_output_layer = config.bool_or_other("pretrain_copy_output_layer", "ifpossible")
     greedy = config.bool("pretrain_greedy", None)
-    repetitions = config.int_list("pretrain_repetitions", None)
+    if config.is_typed("pretrain_repetitions"):
+      repetitions = config.typed_value("pretrain_repetitions")
+    else:
+      repetitions = config.int_list("pretrain_repetitions", None)
     construction_algo = config.value("pretrain_construction_algo", None)
     return Pretrain(original_network_json=original_network_json,
                     network_init_args=network_init_args,
