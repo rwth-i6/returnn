@@ -492,13 +492,13 @@ class AttentionList(AttentionBase):
           h_att = self.layer.batch_norm(h_att, n_tmp, index = e.output_index())
         if self.attrs['memory'] > 0:
           self.add_state_var(T.zeros((self.attrs['memory'], n_tmp), 'float32'), 'M_%d' % i)
+          self.create_weights(n_tmp, self.layer.unit.n_in, "W_mem_in", i)
           self.create_weights(n_tmp, self.attrs['memory'], "W_mem_write", i)
         self.add_input(h_att, 'C_%d' % i)
       self.add_input(T.cast(self.base[i].output_index()[::direction], 'float32'), 'I_%d' % i)
       # mapping from template size to cell input
       self.create_weights(e.attrs['n_out'], self.layer.unit.n_in, "W_att_in", i)
       self.create_bias(self.layer.unit.n_in, "b_att_in", i)
-      self.create_weights(n_tmp, self.layer.unit.n_in, "W_mem_in", i)
       if self.attrs['momentum'] == 'conv1d':
         context = 5
         values = numpy.ones((self.attrs['filters'], 1, context, 1), 'float32')
