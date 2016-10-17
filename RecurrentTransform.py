@@ -593,13 +593,13 @@ class AttentionList(AttentionBase):
         updates[self.state_vars['Q_%d' % i]] = Q
         updates[self.state_vars['K_%d' % i]] = K
       if self.attrs['memory'] > 0:
-        M = self.get('M',i)
+        M = self.item('M',i)
         z_r = self.distance(M, H)
         w_m = self.softmax(z_r, T.ones_like(M[0]))
-        inp += T.dot(T.sum(w_m*M,axis=0), self.get('W_mem_in',i))
-        v_m = T.nnet.sigmoid(T.dot(H, self.get('W_mem_write')))
+        inp += T.dot(T.sum(w_m*M,axis=0), self.item('W_mem_in',i))
+        v_m = T.nnet.sigmoid(T.dot(H, self.item('W_mem_write', i))).dimshuffle('x',0, 1).repeat(M.shape[0],axis=0)
         mem = H.dimshuffle('x',0,1).repeat(self.attrs['memory'],axis=0)
-        updates[self.state_vars['M_%d' % i]] = (numpy.float32(1) - v_m) * M + v_m * mem
+        updates[self.state_vars['M_%d' % i]] = T.sum((numpy.float32(1) - v_m) * M.dimshuffle(0,'x',1).repeat(v_m.shape[1],axis=1) + v_m * mem,axis=1)
       if self.attrs['accumulator'] == 'rnn':
         def rnn(x_t, w_t, c_p):
           c = x_t * w_t + c_p * (numpy.float32(1.) - w_t)
@@ -657,7 +657,7 @@ class AttentionTree(AttentionList):
     for g in range(self.n_glm):
       prev = []
       for i in range(len(self.base)-1,-1,-1):
-        B, C, M, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
+        B, C, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
         h_p = sum([h_p] + prev) / T.constant(len(self.base)-i,'float32')
         w = self.softmax(self.distance(C, h_p), I)
         prev.append(T.sum(C * w.dimshuffle(0,1,'x').repeat(C.shape[2],axis=2),axis=0))
@@ -676,7 +676,7 @@ class AttentionBin(AttentionList):
     for g in range(self.attrs['glimpse']):
       for i in range(len(self.base)-1,-1,-1):
         factor = T.constant(self.base[i].attrs['factor'][0], 'int32') if i > 0 else 1
-        B, C, M, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
+        B, C, I, H, W_att_in, b_att_in = self.get(y_p, i, g)
         if i == len(self.base) - 1:
           z_i = self.distance(C, H)
         else:
