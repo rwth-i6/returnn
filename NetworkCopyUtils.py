@@ -32,7 +32,6 @@ def intelli_copy_layer(old_layer, new_layer):
   old_output_params = old_layer.get_params_dict()
   new_output_params = {new_output_param_name_map[old_param_name]: param
                        for old_param_name, param in old_output_params.items()}
-  new_layer.set_params_by_dict(new_output_params)
   for p, v in new_output_params.items():
     self_param_shape = new_layer.params[p].get_value(borrow=True, return_internal_type=True).shape
     if self_param_shape != v.shape:
