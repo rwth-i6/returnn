@@ -288,6 +288,8 @@ class OutputLayer(Layer):
     """
     if self.attrs.get("target", "") == "null":
       return None
+    if self.loss == "sse":
+      return None
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
         if self.attrs['normalize_length']:
