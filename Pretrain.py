@@ -116,7 +116,7 @@ class Pretrain:
         if net2[l].get("trainable", True):
           have_new_trainable = True
           break
-      assert have_new
+      #assert have_new, "i: %i,\nold: %r,\nnew: %r" % (i, sorted(net1.keys()), sorted(net2.keys()))
       if have_new_trainable:
         self._step_net_jsons.append(net2)
     # Always add final net.
