@@ -205,16 +205,16 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     self.set_attr('directions', directions)
     self.set_attr('projection', projection)
 
+    if collapse_transpose:
+      assert collapse_output != False
+      Y = Y.dimshuffle(1, 0, 2, 3)
+
     #index handling
     def index_fn(index, size):
       return T.set_subtensor(index[:size], numpy.cast['int8'](1))
     index_init = T.zeros((Y.shape[2],Y.shape[1]), dtype='int8')
     self.index, _ = theano.scan(index_fn, [index_init, T.cast(sizes[:,1],"int32")])
     self.index = self.index.dimshuffle(1, 0)
-
-    if collapse_transpose:
-      assert collapse_output == False
-      Y = Y.dimshuffle(1, 0, 2, 3)
 
     if collapse_output == 'sum' or collapse_output == True:
       Y = Y.sum(axis=0)
