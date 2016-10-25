@@ -1,12 +1,14 @@
+#!/usr/bin/env python2.7
 
 from __future__ import print_function
+import graphviz
 
 
 def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
-  :returns (num_states, edges)
+  :returns (num_states, nodes, edges)
   where:
     num_states: int, number of states.
       per convention, state 0 is start state, state (num_states - 1) is single final state
@@ -15,7 +17,48 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  # TODO @Chris ...
+
+  num_states = 0
+  num_states_pred = 2*label_seq.__len__() + 2
+  nodes = []
+  edges = []
+
+  for j in range(0, num_states_pred):
+    nodes.append(str(j))
+
+  #print("node list:", nodes)
+
+  for m in range(0, label_seq.__len__()):
+    num_states, edges = __create_states_from_label(m, label_seq[m], num_labels, edges)
+
+  num_states, edges = __create_last_state(m, label_seq[m], num_states, num_labels, edges)
+
+  #print("edge list:", edges)
+
+  return num_states, nodes, edges
+
+
+def __create_states_from_label(m, label, num_labels, edges):
+  i = 2 * (m + 1) - 2
+  edges.append((str(i), str(i+1), num_labels, 1.))
+  edges.append((str(i + 1), str(i + 1), num_labels, 1.))
+  edges.append((str(i + 1), str(i + 2), label, 1.))
+  edges.append((str(i + 2), str(i + 2), label, 1.))
+  edges.append((str(i), str(i + 2), label, 1.))
+  num_states = 2 * (m + 2) - 1
+
+  return num_states, edges
+
+
+def __create_last_state(m, label, num_states, num_labels, edges):
+  i = num_states
+  edges.append((str(i - 1), str(i), num_labels, 1.))
+  edges.append((str(i), str(i), num_labels, 1.))
+  edges.append((str(i - 2), str(i), label, 1.))
+  edges.append((str(i - 3), str(i), label, 1.))
+  num_states += 1
+
+  return num_states, edges
 
 
 def hmm_fsa_for_word_seq(word_seq, lexicon_file,
@@ -31,11 +74,42 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   # TODO @Chris ...
 
 
-def fsa_to_dot_format(num_states, edges):
-  f = open("/tmp/dummy-fsa.dot", "w")
-  # evtl mit graphviz
-  # dot -T svg /tmp/dummy-fsa.dot > dummy-fsa.svg
-  # TODO @Chris ...
+def fsa_to_dot_format(num_states, nodes, edges):
+  '''
+  :param num_states:
+  :param nodes:
+  :param edges:
+  :return:
+
+  converts num_states and edges to dot file to svg file via graphviz
+  '''
+
+  G = graphviz.Digraph(format='svg')
+
+  __add_nodes(G, nodes)
+  __add_edges(G, edges)
+
+  #print(G.source)
+  filename = G.render(filename='./tmp/fsa')
+  print("File saved in:", filename)
+
+def __add_nodes(graph, nodes):
+  for n in nodes:
+    if isinstance(n, tuple):
+      graph.node(n[0], **n[1])
+    else:
+      graph.node(n)
+  return graph
+
+
+def __add_edges(graph, edges):
+  for e in edges:
+    e = ((e[0], e[1]), {'label': str(e[2])})
+    if isinstance(e[0], tuple):
+      graph.edge(*e[0], **e[1])
+    else:
+      graph.edge(*e)
+  return graph
 
 
 def main():
@@ -46,9 +120,8 @@ def main():
   arg_parser.add_argument("--label_seq", required=True)
   args = arg_parser.parse_args()
   print("Hey:", args.blub)
-  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
-  fsa_to_dot_format(num_states=num_states, edges=edges)
-
+  num_states, nodes, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  fsa_to_dot_format(num_states=num_states, nodes=nodes, edges=edges)
 
 if __name__ == "__main__":
   main()
