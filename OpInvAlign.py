@@ -17,8 +17,8 @@ class InvAlignOp(theano.Op):
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      alignment[:length_x, b] = self._fullAlignmentSequenceInv(0, length_x, scores[:length_x, b],
-                                                               transcriptions[:length_y, b])
+      alignment[:length_x, b] = self._fullSegmentationInv(0, length_x, scores[:length_x, b],
+                                                          transcriptions[:length_y, b])
     output_storage[0][0] = alignment
 
   def __init__(self, tdps): # TODO
