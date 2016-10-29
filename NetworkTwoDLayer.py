@@ -80,6 +80,52 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
     n_out = 1
     self.set_attr('n_out', n_out)
 
+class TwoDToOneDLayer(TwoDBaseLayer):
+  layer_class = "2Dto1D"
+  recurrent = False
+
+  def __init__(self, collapse='mean', transpose=False,**kwargs):
+    super(TwoDToOneDLayer, self).__init__(1, **kwargs)
+    self.set_attr('collapse', collapse)
+    self.set_attr('transpose', transpose)
+    Y = self.sources[0].output
+    if transpose:
+      assert transpose != False
+      Y = Y.dimshuffle(1, 0, 2, 3)
+
+    #index handling
+    def index_fn(index, size):
+      return T.set_subtensor(index[:size], numpy.cast['int8'](1))
+    index_init = T.zeros((Y.shape[2],Y.shape[1]), dtype='int8')
+    self.index, _ = theano.scan(index_fn, [index_init, T.cast(self.sources[0].output_sizes[:,1],"int32")])
+    self.index = self.index.dimshuffle(1, 0)
+
+    if collapse == 'sum' or collapse == True:
+      Y = Y.sum(axis=0)
+    elif collapse == 'mean':
+      Y = Y.mean(axis=0)
+    elif collapse == 'conv':
+      from TheanoUtil import circular_convolution
+      Y, _ = theano.scan(lambda x_i,x_p:circular_convolution(x_i,x_p),Y,Y[0])
+      Y = Y[-1]
+    elif collapse == 'flatten':
+      self.index = T.ones((Y.shape[0] * Y.shape[1], Y.shape[2]), dtype='int8')
+      Y = Y.reshape((Y.shape[0]*Y.shape[1],Y.shape[2],Y.shape[3]))
+    elif str(collapse).startswith('pad_'):
+      pad = numpy.int32(collapse.split('_')[-1])
+      Y = ifelse(T.lt(Y.shape[0],pad),T.concatenate([Y,T.zeros((pad-Y.shape[0],Y.shape[1],Y.shape[2],Y.shape[3]),'float32')],axis=0),
+                 ifelse(T.gt(Y.shape[0],pad),Y[:pad],Y))
+      Y = Y.dimshuffle(1,2,3,0).reshape((Y.shape[1],Y.shape[2],Y.shape[3]*Y.shape[0]))
+      self.attrs['n_out'] *= pad
+    elif collapse != False:
+      assert False, "invalid collapse mode"
+
+    n_out = self.sources[0].attrs['n_out']
+    if self.attrs['batch_norm']:
+      Y = self.batch_norm(Y, n_out, force_sample=True)
+    self.output = Y
+    self.set_attr('n_out', n_out)
+
 forget_gate_initial_bias = 1.0
 lambda_gate_initial_bias = 0.0
 
@@ -237,7 +283,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       assert False, "invalid collapse mode"
 
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes if not collapse_output else self.index, force_sample=True)
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes if not collapse_output else self.index, force_sample=False)
 
     self.output = Y
 
@@ -388,7 +434,7 @@ class ConvPoolLayer2(ConvBaseLayer):
                           self.filter_width, pool_size)
     Y = self.activation(Z)
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes, force_sample=True)
+      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes, force_sample=False)
 
     self.output = Y
 
