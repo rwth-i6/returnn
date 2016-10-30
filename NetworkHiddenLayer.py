@@ -1954,7 +1954,7 @@ class StateAlignmentLayer(HiddenLayer):
     kwargs['n_out'] = kwargs['y'][target].n_out
     super(StateAlignmentLayer,self).__init__(**kwargs)
     z = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
-    p = T.nnet.softmax(z)
+    p = T.nnet.softmax(z).reshape(self.z.shape)
     custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
     custom = T.mean(p[(self.index.flatten() > 0).nonzero()], axis=0)
     priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
@@ -1963,7 +1963,12 @@ class StateAlignmentLayer(HiddenLayer):
 
     nlog_scores = T.log(p) - numpy.float32(prior_scale) * T.log(priors)
     states = InvAlignOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(self.sources[0].index, self.index, -nlog_scores, self.y)
-    
+
+    inp, _ = theano.scan(lambda x, i, h, p: (x + h if i == p else x, i),
+                         sequences=[self.z, states], outputs_info=[T.zeros_like(self.z[0]), -T.ones_like(states[0])])
+    self.output = inp[0]
+
+
 
 class SignalSplittingLayer(HiddenLayer):
   layer_class = "signal_splitter"

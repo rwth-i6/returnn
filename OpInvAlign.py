@@ -44,6 +44,7 @@ class InvAlignOp(theano.Op):
 
     return hmm
 
+
   def _fullAlignmentSequenceInv(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end but in inverse manner"""
     inf = 1e30
@@ -155,5 +156,7 @@ class InvAlignOp(theano.Op):
 
       assert not -2 in alignment
       return alignment
+
+    
 
 invAlignOp = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])
