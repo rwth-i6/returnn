@@ -1946,6 +1946,24 @@ class AttentionVectorLayer(_NoOpLayer):
   def cost(self):
     return self.cost_val, None
 
+from OpInvAlign import InvAlignOp
+class StateAlignmentLayer(HiddenLayer):
+  layer_class = 'state_alignment'
+
+  def __init__(self, target, prior_scale = 0.0, **kwargs):
+    kwargs['n_out'] = kwargs['y'][target].n_out
+    super(StateAlignmentLayer,self).__init__(**kwargs)
+    z = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p = T.nnet.softmax(z)
+    custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
+    custom = T.mean(p[(self.index.flatten() > 0).nonzero()], axis=0)
+    priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
+                                 custom_update=custom,
+                                 custom_update_normalized=True)
+
+    nlog_scores = T.log(p) - numpy.float32(prior_scale) * T.log(priors)
+    states = InvAlignOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(self.sources[0].index, self.index, -nlog_scores, self.y)
+    
 
 class SignalSplittingLayer(HiddenLayer):
   layer_class = "signal_splitter"

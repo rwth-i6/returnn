@@ -8,6 +8,7 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
+from OpInvAlign import InvAlignOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
@@ -288,6 +289,8 @@ class OutputLayer(Layer):
     """
     if self.attrs.get("target", "") == "null":
       return None
+    if self.loss == "sse":
+      return None
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
         if self.attrs['normalize_length']:
@@ -454,7 +457,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -470,7 +473,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return source.index
-    if self.loss in ['viterbi', 'ctc', 'hmm', 'warp_ctc']:
+    if self.loss in ['viterbi', 'ctc', 'hmm', 'warp_ctc', 'inv']:
       return self.sources[0].index
     return super(SequenceOutputLayer, self).output_index()
 
@@ -646,6 +649,13 @@ class SequenceOutputLayer(OutputLayer):
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
+    elif self.loss == 'inv':
+      y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+      nlog_scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])(src_index, self.index, -nlog_scores, self.y)
+      self.y_data_flat = y.flatten()
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
+      return T.sum(nll), known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
@@ -660,6 +670,11 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
+      self.y_data_flat = y.flatten()
+      return super(SequenceOutputLayer, self).errors()
+    elif self.loss == 'inv':
+      scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
+      y = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])(self.sources[0].index, self.index, -scores, self.y)
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
     else:

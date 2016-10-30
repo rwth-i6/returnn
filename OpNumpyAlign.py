@@ -196,7 +196,7 @@ class NumpyAlignOp(theano.Op):
     rightScore = np.full((lengthT + skip - 1), inf, dtype=np.float64)
     bt = np.zeros((lengthS, lengthT), dtype=np.int)
 
-    # precompute all scores and desnities
+    # precompute all scores and densities
     score = np.full((lengthS, lengthT + skip - 1), inf)
     densities = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int)
     for t in range(0, lengthT):

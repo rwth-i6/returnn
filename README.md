@@ -12,6 +12,7 @@ Features include:
 - Mini-batch training of feed-forward neural networks
 - Sequence-chunking based batch training for recurrent neural networks
 - Long short-term memory recurrent neural networks
+- Multidimensional LSTM (GPU only, there is no CPU version)
 - Memory management for large data sets
 - Work distribution across multiple devices
 
