@@ -8,7 +8,7 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from OpInvAlign import InvAlignOp
+from OpInvAlign import InvAlignOp, InvDecodeOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
@@ -677,10 +677,10 @@ class SequenceOutputLayer(OutputLayer):
       src_index = self.sources[0].index
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       nlog_scores = T.log(self.p_y_given_x)  # - self.prior_scale * T.log(self.priors)
-      y = InvAlignOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(src_index, self.index, -nlog_scores, self.y)
+      y = InvDecodeOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(src_index, self.index, -nlog_scores)
       index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       k = (index_flat > 0).nonzero()
-      return T.sum(T.neq(T.argmax(y_m[k], axis=-1), self.y_data_flat[self.i]))
+      return T.sum(T.neq(T.argmax(y_m[k], axis=-1), y[self.i]))
     else:
       return super(SequenceOutputLayer, self).errors()
 

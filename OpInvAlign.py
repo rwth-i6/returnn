@@ -17,8 +17,7 @@ class InvAlignOp(theano.Op):
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b],
-                                                          transcriptions[:length_y, b])
+      alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
     output_storage[0][0] = alignment
 
   def __init__(self, tdps): # TODO
@@ -43,64 +42,6 @@ class InvAlignOp(theano.Op):
         hmm[i * self.numStates + s] = startState + s - 1
 
     return hmm
-
-
-  def _fullAlignmentSequenceInv(self, start, end, scores, transcription):
-    """Fully aligns sequence from start to end but in inverse manner"""
-    inf = 1e30
-    # max skip transitions derived from tdps
-    skip = len(self.tdps)
-
-    hmm = self._buildHmm(transcription)
-    lengthT = end - start
-    lengthS = transcription.shape[0] * self.numStates * self.repetitions
-
-    leftScore = np.full((lengthT + skip - 1), inf, dtype=np.float32)
-    rightScore = np.full((lengthT + skip - 1), inf, dtype=np.float32)
-    bt = np.zeros((lengthS, lengthT), dtype=np.int)
-
-    # precompute all scores and densities
-    score = np.full((lengthS, lengthT + skip - 1), inf)
-    densities = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int)
-    for t in range(0, lengthT):
-      for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.numStates]
-
-    # initialize first column
-    leftScore[0 + skip - 1] = score[0][0 + skip - 1]
-
-    # go through all following columns except last (silence)
-    for s in range(1, lengthS):
-      for t in range(0, lengthT):
-        # scores calculates just as in recognition
-        scores = np.add(np.add(
-            np.cumsum(np.append(
-                [0.], score[s, t + 1:t + skip][::-1])), self.tdps),
-                leftScore[t:t + skip][::-1])
-
-        # index corresponds to transition
-        bestChoice = np.argmin(scores)
-
-        rightScore[t + skip - 1] = scores[bestChoice]
-        bt[s][t] = bestChoice
-
-      leftScore, rightScore = rightScore, leftScore
-      rightScore = np.full((lengthT + skip - 1), inf, dtype=np.float32)
-
-    # backtrack alignment
-    result = [0] * lengthT
-    t = lengthT - 1
-    for s in range(lengthS - 1, -1, -1):
-      for span in range(0, bt[s][t]):
-          result[start + t - span] = int((hmm[s]/self.numStates + 1))
-      t = t - bt[s][t]
-      assert t >= 0, "invalid alignment"
-
-    # handle remaining timeframes -> silence
-    for span in range(0, t + 1):
-      result[start + span] = int((hmm[s]/self.numStates + 1))
-    return result
-
 
   def _fullSegmentationInv(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end but in inverse manner"""
@@ -214,3 +155,221 @@ class InvAlignOp(theano.Op):
 
 
 invAlignOp = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])
+
+class InvDecodeOp(theano.Op):
+  # Properties attribute
+  __props__ = ('tdps',)
+
+  # index_in, index_out, scores
+  itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3]
+  otypes = [theano.tensor.imatrix]
+
+  # Python implementation:
+  def perform(self, node, inputs_storage, output_storage):
+    index_in, index_out, scores, transcriptions = inputs_storage[:4]
+    transcript = np.zeros(index_out.shape,'int32')
+    for b in range(scores.shape[1]):
+      length_x = index_in[:,b].sum()
+      length_y = index_out[:,b].sum()
+      transcript[:length_y, b] = self._recognize(0, length_x, scores[:length_x, b], 3.0)
+    output_storage[0][0] = transcript
+
+  def __init__(self, tdps): # TODO
+    self.numStates = 1
+    self.pruningThreshold = 500.
+    self.tdps = tdps
+
+  def grad(self, inputs, output_grads):
+    return [output_grads[0] * 0]
+
+  def infer_shape(self, node, input_shapes):
+    return [input_shapes[0]]
+
+  def _buildHmm(self, transcription):
+    """Builds list of hmm states (with repetitions) for transcription"""
+    transcriptionLength = transcription.shape[0]
+    hmm = np.zeros(transcriptionLength * self.numStates, dtype=np.int32)
+
+    for i in range(0, transcriptionLength):
+      startState = transcription[i] * self.numStates + 1
+      for s in range(0, self.numStates):
+        hmm[i * self.numStates + s] = startState + s - 1
+
+    return hmm
+
+  def _recognize(self, start, end, scores, wordPenalty):
+    """recognizes a sequence from start until (excluded) end
+    with inverse search s -> t_s"""
+
+    bestResult = []
+    bestScore = self.inf
+
+    skip = len(self.tdps)
+    maxDuration = 0.8
+    mod_factor = 1.0
+
+    # repeat each hmm state
+    hmmLength = len(self.alphabet) * self.numStates + 1
+    seqLength = end - start
+    leftScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
+    rightScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
+
+    leftStart = np.full((hmmLength, seqLength + skip - 1), 0,
+                        dtype=np.uint64)
+    rightStart = np.full((hmmLength, seqLength + skip - 1), 0,
+                         dtype=np.uint64)
+
+    leftEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
+                        dtype=np.int64)
+    rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
+                         dtype=np.int64)
+
+    bestWordEnds = \
+      np.full((int(maxDuration * seqLength), seqLength), - 1,
+              dtype=np.int64)
+    bestWordEndsStart = \
+      np.full((int(maxDuration * seqLength), seqLength), - 1,
+              dtype=np.int64)
+    bestWordEndsEpoch = \
+      np.full((int(maxDuration * seqLength), seqLength), - 1,
+              dtype=np.int64)
+
+    # precompute all scores and densities
+    score = np.full((hmmLength, seqLength + skip - 1), self.inf)
+    for t in range(0, seqLength):
+      for s in range(0, hmmLength):
+        score[s][t + skip - 1] = scores[start + t, s][0]
+
+    # apply model scale
+    score = np.multiply(score, mod_factor)
+
+    # initalize for first timeframe
+    leftScore[0][skip - 1] = score[0][skip - 1]
+    leftEpoch[0][skip - 1] = 0
+    bestWordEnds[0][0] = 0
+    bestWordEndsStart[0][0] = 0
+    bestWordEndsEpoch[0][0] = 0
+
+    for s in range(1, hmmLength, self.numStates * 2):
+      leftScore[s][skip - 1] = score[s][skip - 1]
+      leftEpoch[s][skip - 1] = 0
+
+    for a in range(1, int(maxDuration * seqLength)):
+      # determine best word ends and score
+      bestWordEnd = np.argmin(np.concatenate(
+        ([leftScore[0]],
+         leftScore[self.numStates * 2:hmmLength:
+         self.numStates * 2] + wordPenalty)), axis=0)
+
+      bestWordEnd = bestWordEnd * self.numStates * 2
+
+      # two times min might be improved
+      bestWordEndScore = np.min(np.concatenate(
+        ([leftScore[0]],
+         leftScore[self.numStates * 2:hmmLength:
+         self.numStates * 2] + wordPenalty)), axis=0)
+
+      bestWordEnds[a] = bestWordEnd[skip - 1::]
+      for t in range(0, seqLength):
+        bestWordEndsStart[a][t] = \
+          leftStart[bestWordEnd[t + skip - 1]][t + skip - 1]
+        bestWordEndsEpoch[a][t] = \
+          leftEpoch[bestWordEnd[t + skip - 1]][t + skip - 1]
+
+      for s in range(0, hmmLength):
+        # for silence allow special transitions (only 1)
+        if s == 0:
+          for t in range(0, seqLength - 1):
+            if leftScore[0][t + skip - 1] < \
+              bestWordEndScore[t + skip - 1] or \
+                bestWordEnd[t + skip - 1] == 0:
+              # inner silence
+              rightScore[0][t + skip] = \
+                leftScore[0][t + skip - 1] + score[0][t + skip]
+              rightStart[0][t + skip] = \
+                leftStart[0][t + skip - 1]
+              rightEpoch[0][t + skip] = \
+                leftEpoch[0][t + skip - 1]
+            else:
+              # to silence
+              # only transition 1 is allowed
+              rightScore[0][t + skip] = \
+                bestWordEndScore[t + skip - 1] \
+                + score[0][t + skip]
+              rightStart[0][t + skip] = t + 1
+              rightEpoch[0][t + skip] = a
+
+        # between word transitions
+        elif s % (self.numStates * 2) == 1:
+          for t in range(0, seqLength):
+            # linear interpolate scores
+            scores = np.add(np.add(
+              np.cumsum(np.append(
+                [0.], score[s, t + 1:t + skip][::-1])), self.tdps),
+              bestWordEndScore[t:t + skip][::-1])
+
+            # index corresponds to transition
+            bestChoice = np.argmin(scores)
+
+            rightScore[s][t + skip - 1] = scores[bestChoice]
+            rightStart[s][t + skip - 1] = t + 1 - bestChoice
+            rightEpoch[s][t + skip - 1] = a
+
+        # inner word transitions
+        else:
+          for t in range(0, seqLength):
+            # linear interpolate scores
+            scores = np.add(np.add(
+              np.cumsum(np.append(
+                [0.], score[s, t + 1:t + skip][::-1])), self.tdps),
+              leftScore[s - 1, t:t + skip][::-1])
+
+            # index corresponds to transition
+            bestChoice = np.argmin(scores)
+
+            rightScore[s][t + skip - 1] = \
+              scores[bestChoice]
+            rightStart[s][t + skip - 1] = \
+              leftStart[s - 1][t + skip - 1 - bestChoice]
+            rightEpoch[s][t + skip - 1] = \
+              leftEpoch[s - 1][t + skip - 1 - bestChoice]
+
+      # print a, "- ending with", bestWordEnd[-1], "scoring" ,\
+      #     bestWordEndScore[-1]
+
+      # finish epoch
+      leftScore, rightScore = rightScore, leftScore
+      leftStart, rightStart = rightStart, leftStart
+      leftEpoch, rightEpoch = rightEpoch, leftEpoch
+
+      rightScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
+      rightStart = np.full((hmmLength, seqLength + skip - 1), start,
+                           dtype=np.uint64)
+      rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
+                           dtype=np.int64)
+
+      # backtrack
+      # backtrace = []
+      if bestWordEndScore[-1] < self.inf:
+
+        result = []
+        t_idx = seqLength - 1
+        a_idx = a
+        while t_idx > 0:
+          result.append(self.mixtures._encodeWord(
+            bestWordEnds[a_idx][t_idx]))
+
+          # backtrace.append((result[-1],
+          #     t_idx, bestWordEndsStart[a_idx][t_idx] - 1,
+          #     a_idx, bestWordEndsEpoch[a_idx][t_idx]))
+          t_idx_temp = bestWordEndsStart[a_idx][t_idx] - 1
+          a_idx = bestWordEndsEpoch[a_idx][t_idx]
+          t_idx = t_idx_temp
+
+        result = list(reversed(result))
+
+        if bestWordEndScore[-1] < bestScore:
+          bestResult = result
+          bestScore = bestWordEndScore[-1]
+
+    return bestResult

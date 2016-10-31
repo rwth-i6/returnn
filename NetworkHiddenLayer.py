@@ -1963,6 +1963,8 @@ class StateAlignmentLayer(HiddenLayer):
 
     nlog_scores = T.log(p) - numpy.float32(prior_scale) * T.log(priors)
     states = InvAlignOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(self.sources[0].index, self.index, -nlog_scores, self.y)
+    index_flat = T.set_subtensor(self.index.flatten()[(T.eq(states.flatten(), -1) > 0).nonzero()], numpy.int8(0))
+    k = (states.flatten() + numpy.int8(1) > 0).nonzero()
 
     inp, _ = theano.scan(lambda x, i, h, p: (x + h if i == p else x, i),
                          sequences=[self.z, states], outputs_info=[T.zeros_like(self.z[0]), -T.ones_like(states[0])])
