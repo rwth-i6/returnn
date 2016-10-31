@@ -124,6 +124,7 @@ class TwoDToOneDLayer(TwoDBaseLayer):
     if self.attrs['batch_norm']:
       Y = self.batch_norm(Y, n_out, force_sample=True)
     self.output = Y
+    self.act = [Y, Y]
     self.set_attr('n_out', n_out)
 
 forget_gate_initial_bias = 1.0
