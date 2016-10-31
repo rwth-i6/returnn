@@ -22,21 +22,23 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   edges = []
 
   for m in range(0, label_seq.__len__()):
-    num_states, edges = __create_states_from_label(m, label_seq[m], num_labels, edges)
+    num_states, edges = __create_states_from_label(m, num_labels, edges)
+    print("label:", label_seq[m], "=", m)
 
-  num_states, edges = __create_last_state(label_seq[m], num_states, num_labels, edges)
+  num_states, edges = __create_last_state(m, num_states, num_labels, edges)
+  print("label: blank =", m+1)
 
   return num_states, edges
 
 
-def __create_states_from_label(m, label, num_labels, edges):
-  i = 2 * (m + 1) - 2
+def __create_states_from_label(label, num_labels, edges):
+  i = 2 * (label + 1) - 2
   edges.append((str(i), str(i+1), num_labels, 1.))
   edges.append((str(i + 1), str(i + 1), num_labels, 1.))
   edges.append((str(i + 1), str(i + 2), label, 1.))
   edges.append((str(i + 2), str(i + 2), label, 1.))
   edges.append((str(i), str(i + 2), label, 1.))
-  num_states = 2 * (m + 2) - 1
+  num_states = 2 * (label + 2) - 1
 
   return num_states, edges
 
