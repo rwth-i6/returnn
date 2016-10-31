@@ -8,7 +8,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
-  :returns (num_states, nodes, edges)
+  :returns (num_states, edges)
   where:
     num_states: int, number of states.
       per convention, state 0 is start state, state (num_states - 1) is single final state
@@ -22,16 +22,29 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   edges = []
 
   for m in range(0, label_seq.__len__()):
-    num_states, edges = __create_states_from_label(m, num_labels, edges)
+    num_states, edges = __create_states_from_label_for_ctc(m, num_labels, edges)
     print("label:", label_seq[m], "=", m)
 
-  num_states, edges = __create_last_state(m, num_states, num_labels, edges)
+  num_states, edges = __create_last_state_for_ctc(m, num_states, num_labels, edges)
   print("label: blank =", m+1)
 
   return num_states, edges
 
 
-def __create_states_from_label(label, num_labels, edges):
+def __create_states_from_label_for_ctc(label, num_labels, edges):
+  """
+  :param int label: label number
+  :param int num_labels: number of labels
+  :param list edges: list of edges
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
   i = 2 * (label + 1) - 2
   edges.append((str(i), str(i+1), num_labels, 1.))
   edges.append((str(i + 1), str(i + 1), num_labels, 1.))
@@ -43,7 +56,21 @@ def __create_states_from_label(label, num_labels, edges):
   return num_states, edges
 
 
-def __create_last_state(label, num_states, num_labels, edges):
+def __create_last_state_for_ctc(label, num_states, num_labels, edges):
+  """
+  :param int label: label number
+  :param int num_states: number of states
+  :param int num_labels: number of labels
+  :param list edges: list of edges
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
   i = num_states
   edges.append((str(i - 1), str(i), num_labels, 1.))
   edges.append((str(i), str(i), num_labels, 1.))
@@ -70,7 +97,6 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
 def fsa_to_dot_format(num_states, edges):
   '''
   :param num_states:
-  :param nodes:
   :param edges:
   :return:
 
