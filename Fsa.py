@@ -22,16 +22,16 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   edges = []
 
   for m in range(0, label_seq.__len__()):
-    num_states, edges = __create_states_from_label_for_ctc(m, num_labels, edges)
+    num_states, edges = __create_states_from_label_for_ctc(label_seq, m, num_states, num_labels, edges)
     print("label:", label_seq[m], "=", m)
 
-  num_states, edges = __create_last_state_for_ctc(m, num_states, num_labels, edges)
+  num_states, edges = __create_last_state_for_ctc(label_seq, m, num_states, num_labels, edges)
   print("label: blank =", m+1)
 
   return num_states, edges
 
 
-def __create_states_from_label_for_ctc(label, num_labels, edges):
+def __create_states_from_label_for_ctc(label_seq, label, num_states, num_labels, edges):
   """
   :param int label: label number
   :param int num_labels: number of labels
@@ -50,13 +50,14 @@ def __create_states_from_label_for_ctc(label, num_labels, edges):
   edges.append((str(i + 1), str(i + 1), num_labels, 1.))
   edges.append((str(i + 1), str(i + 2), label, 1.))
   edges.append((str(i + 2), str(i + 2), label, 1.))
-  edges.append((str(i), str(i + 2), label, 1.))
+  if (label_seq[label] != label_seq[label-1]):
+    edges.append((str(i), str(i + 2), label, 1.))
   num_states = 2 * (label + 2) - 1
 
   return num_states, edges
 
 
-def __create_last_state_for_ctc(label, num_states, num_labels, edges):
+def __create_last_state_for_ctc(label_seq, label, num_states, num_labels, edges):
   """
   :param int label: label number
   :param int num_states: number of states
@@ -189,7 +190,7 @@ def main():
   arg_parser.add_argument("--label_seq", required=True)
   args = arg_parser.parse_args()
   print("Hey:", args.blub)
-  num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   fsa_to_dot_format(num_states=num_states, edges=edges)
 
 if __name__ == "__main__":
