@@ -19,23 +19,14 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
 
   num_states = 0
-  num_states_pred = 2*label_seq.__len__() + 2
-  nodes = []
   edges = []
-
-  for j in range(0, num_states_pred):
-    nodes.append(str(j))
-
-  #print("node list:", nodes)
 
   for m in range(0, label_seq.__len__()):
     num_states, edges = __create_states_from_label(m, label_seq[m], num_labels, edges)
 
-  num_states, edges = __create_last_state(m, label_seq[m], num_states, num_labels, edges)
+  num_states, edges = __create_last_state(label_seq[m], num_states, num_labels, edges)
 
-  #print("edge list:", edges)
-
-  return num_states, nodes, edges
+  return num_states, edges
 
 
 def __create_states_from_label(m, label, num_labels, edges):
@@ -50,7 +41,7 @@ def __create_states_from_label(m, label, num_labels, edges):
   return num_states, edges
 
 
-def __create_last_state(m, label, num_states, num_labels, edges):
+def __create_last_state(label, num_states, num_labels, edges):
   i = num_states
   edges.append((str(i - 1), str(i), num_labels, 1.))
   edges.append((str(i), str(i), num_labels, 1.))
@@ -74,7 +65,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   # TODO @Chris ...
 
 
-def fsa_to_dot_format(num_states, nodes, edges):
+def fsa_to_dot_format(num_states, edges):
   '''
   :param num_states:
   :param nodes:
@@ -85,6 +76,10 @@ def fsa_to_dot_format(num_states, nodes, edges):
   '''
 
   G = graphviz.Digraph(format='svg')
+
+  nodes = []
+  for i in range(0, num_states):
+    nodes.append(str(i))
 
   __add_nodes(G, nodes)
   __add_edges(G, edges)
@@ -120,8 +115,8 @@ def main():
   arg_parser.add_argument("--label_seq", required=True)
   args = arg_parser.parse_args()
   print("Hey:", args.blub)
-  num_states, nodes, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
-  fsa_to_dot_format(num_states=num_states, nodes=nodes, edges=edges)
+  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  fsa_to_dot_format(num_states=num_states, edges=edges)
 
 if __name__ == "__main__":
   main()
