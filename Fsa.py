@@ -141,7 +141,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   # TODO @Chris ...
 
 
-def fsa_to_dot_format(num_states, edges):
+def fsa_to_dot_format(file, num_states, edges):
   '''
   :param num_states:
   :param edges:
@@ -160,7 +160,8 @@ def fsa_to_dot_format(num_states, edges):
   __add_edges(G, edges)
 
   #print(G.source)
-  filename = G.render(filename='./tmp/fsa')
+  filepath = "./tmp/" + file
+  filename = G.render(filename=filepath)
   print("File saved in:", filename)
 
 def __add_nodes(graph, nodes):
@@ -185,13 +186,20 @@ def __add_edges(graph, edges):
 def main():
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()
-  arg_parser.add_argument("--blub")
+  arg_parser.add_argument("--file", required=True)
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
+  arg_parser.add_argument("--fsa", required=True)
   args = arg_parser.parse_args()
-  print("Hey:", args.blub)
-  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
-  fsa_to_dot_format(num_states=num_states, edges=edges)
+
+  if (args.fsa == 'ctc' or args.fsa == 'CTC'):
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  elif (args.fsa == 'asg' or args.fsa == 'ASG'):
+    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  elif (args.fsa == 'hmm' or args.fsa == 'HMM'):
+    num_states, edges = hmm_fsa_for_word_seq()
+
+  fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
 if __name__ == "__main__":
   main()
