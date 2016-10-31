@@ -192,11 +192,11 @@ def main():
   arg_parser.add_argument("--fsa", required=True)
   args = arg_parser.parse_args()
 
-  if (args.fsa == 'ctc' or args.fsa == 'CTC'):
+  if (args.fsa.lower() == 'ctc'):
     num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
-  elif (args.fsa == 'asg' or args.fsa == 'ASG'):
+  elif (args.fsa.lower() == 'asg'):
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
-  elif (args.fsa == 'hmm' or args.fsa == 'HMM'):
+  elif (args.fsa.lower() == 'hmm'):
     num_states, edges = hmm_fsa_for_word_seq()
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
