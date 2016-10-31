@@ -81,6 +81,52 @@ def __create_last_state_for_ctc(label, num_states, num_labels, edges):
   return num_states, edges
 
 
+def asg_fsa_for_label_seq(num_labels, label_seq):
+  """
+  :param int num_labels: number of labels
+  :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
+
+  num_states = 0
+  edges = []
+
+  for m in range(0, label_seq.__len__()):
+    num_states, edges = __create_states_from_label_for_asg(m, num_labels, edges)
+    print("label:", label_seq[m], "=", m)
+
+  return num_states, edges
+
+
+def __create_states_from_label_for_asg(label, num_labels, edges):
+  """
+  :param int label: label number
+  :param int num_labels: number of labels
+  :param list edges: list of edges
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
+  i = label
+  edges.append((str(i), str(i + 1), label, 1.))
+  edges.append((str(i + 1), str(i + 1), label, 1.))
+  num_states = num_labels
+
+  return num_states, edges
+
+
 def hmm_fsa_for_word_seq(word_seq, lexicon_file,
                          allo_num_states=3, allo_context_len=1,
                          state_tying_file=None,
@@ -143,7 +189,7 @@ def main():
   arg_parser.add_argument("--label_seq", required=True)
   args = arg_parser.parse_args()
   print("Hey:", args.blub)
-  num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+  num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   fsa_to_dot_format(num_states=num_states, edges=edges)
 
 if __name__ == "__main__":
