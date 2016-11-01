@@ -16,7 +16,6 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
   num_states = 0
   edges = []
 
@@ -94,7 +93,6 @@ def asg_fsa_for_label_seq(num_labels, label_seq):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
   num_states = 0
   edges = []
 
@@ -127,17 +125,64 @@ def __create_states_from_label_for_asg(label, num_labels, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file=None,
                          allo_num_states=3, allo_context_len=1,
                          state_tying_file=None,
                          tdps=None  # ...
                          ):
   """
   :param list[str] word_seq: sequences of words
+  :param str lexicon_file: lexicon XML file
+  :param int allo_num_states: hom much HMM states per allophone
+  :param int allo_context_len: how much context to store left and tight. 1 -> triphone
+  :param str | None state_tying_file: for state-tying, if you want that
   ... (like in LmDataset.PhoneSeqGenerator)
   :returns (num_states, edges) like above
   """
-  # TODO @Chris ...
+  print("Word sequence:", word_seq)
+  print("Silence: sil")
+  print("Place holder: epsilon")
+  num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+
+  return num_states, edges
+
+
+def __lemma_acceptor_for_hmm_fsa(word_seq):
+  """
+  :param word_seq:
+  :return: num_states, edges
+  """
+  num_states = 4
+  sil = 'sil'
+  edges = []
+
+  edges.append((str(0), str(1), sil, 1.))
+  edges.append((str(2), str(3), sil, 1.))
+  edges.append((str(1), str(2), word_seq, 1.))
+  edges.append((str(0), str(2), word_seq, 1.))
+  edges.append((str(1), str(3), word_seq, 1.))
+  edges.append((str(0), str(3), word_seq, 1.))
+
+  return num_states, edges
+
+def __phoneme_acceptor_for_hmm_fsa():
+  pass
+
+
+def __triphone_acceptor_for_hmm_fsa():
+  pass
+
+
+def __allophone_state_acceptor_for_hmm_fsa():
+  pass
+
+
+def __hmm_loops_for_hmm_fsa():
+  pass
+
+
+def __state_tying_for_hmm_fsa():
+  pass
 
 
 def fsa_to_dot_format(file, num_states, edges):
@@ -197,7 +242,7 @@ def main():
   elif (args.fsa.lower() == 'asg'):
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   elif (args.fsa.lower() == 'hmm'):
-    num_states, edges = hmm_fsa_for_word_seq()
+    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
