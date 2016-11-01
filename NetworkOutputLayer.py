@@ -652,14 +652,14 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'inv':
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       nlog_scores = T.log(self.p_y_given_x) #- self.prior_scale * T.log(self.priors)
-      y = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])(src_index, self.index, -nlog_scores, self.y)
+      y = InvAlignOp(( 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ))(src_index, self.index, -nlog_scores, self.y)
       index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       k = (index_flat > 0).nonzero()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[k], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'inv'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):

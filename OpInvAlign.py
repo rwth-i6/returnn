@@ -6,7 +6,7 @@ class InvAlignOp(theano.Op):
   # Properties attribute
   __props__ = ('tdps',)
 
-  # index_in, index_out, scores, transcription
+  # index_in, index_out, scores, transcriptions
   itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
   otypes = [theano.tensor.imatrix]
 
@@ -23,7 +23,7 @@ class InvAlignOp(theano.Op):
   def __init__(self, tdps): # TODO
     self.numStates = 1
     self.pruningThreshold = 500.
-    self.tdps = tdps
+    self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
     return [output_grads[0] * 0]
@@ -106,7 +106,7 @@ class InvAlignOp(theano.Op):
 
     hmm = self._buildHmm(transcription)
     lengthT = end - start
-    lengthS = transcription.shape[0] * self.numStates * self.repetitions
+    lengthS = transcription.shape[0] * self.numStates
 
     # with margins of skip at the bottom or top
     fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
@@ -166,7 +166,7 @@ class InvDecodeOp(theano.Op):
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
-    index_in, index_out, scores, transcriptions = inputs_storage[:4]
+    index_in, index_out, scores = inputs_storage[:3]
     transcript = np.zeros(index_out.shape,'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
@@ -177,7 +177,7 @@ class InvDecodeOp(theano.Op):
   def __init__(self, tdps): # TODO
     self.numStates = 1
     self.pruningThreshold = 500.
-    self.tdps = tdps
+    self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
     return [output_grads[0] * 0]
@@ -200,19 +200,19 @@ class InvDecodeOp(theano.Op):
   def _recognize(self, start, end, scores, wordPenalty):
     """recognizes a sequence from start until (excluded) end
     with inverse search s -> t_s"""
-
+    inf = 1e30
     bestResult = []
-    bestScore = self.inf
+    bestScore = inf
 
     skip = len(self.tdps)
     maxDuration = 0.8
     mod_factor = 1.0
 
     # repeat each hmm state
-    hmmLength = len(self.alphabet) * self.numStates + 1
+    hmmLength = scores.shape[1] * self.numStates + 1
     seqLength = end - start
-    leftScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
-    rightScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
+    leftScore = np.full((hmmLength, seqLength + skip - 1), inf)
+    rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
 
     leftStart = np.full((hmmLength, seqLength + skip - 1), 0,
                         dtype=np.uint64)
@@ -235,10 +235,10 @@ class InvDecodeOp(theano.Op):
               dtype=np.int64)
 
     # precompute all scores and densities
-    score = np.full((hmmLength, seqLength + skip - 1), self.inf)
+    score = np.full((hmmLength, seqLength + skip), inf)
     for t in range(0, seqLength):
       for s in range(0, hmmLength):
-        score[s][t + skip - 1] = scores[start + t, s][0]
+        score[s][t + skip - 1] = scores[start + t, s]
 
     # apply model scale
     score = np.multiply(score, mod_factor)
@@ -342,7 +342,7 @@ class InvDecodeOp(theano.Op):
       leftStart, rightStart = rightStart, leftStart
       leftEpoch, rightEpoch = rightEpoch, leftEpoch
 
-      rightScore = np.full((hmmLength, seqLength + skip - 1), self.inf)
+      rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
       rightStart = np.full((hmmLength, seqLength + skip - 1), start,
                            dtype=np.uint64)
       rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
@@ -350,7 +350,7 @@ class InvDecodeOp(theano.Op):
 
       # backtrack
       # backtrace = []
-      if bestWordEndScore[-1] < self.inf:
+      if bestWordEndScore[-1] < inf:
 
         result = []
         t_idx = seqLength - 1
