@@ -74,7 +74,7 @@ class InvAlignOp(theano.Op):
     scores = score[0, 0 + skip - 1:skip + skip - 2]
     # if allFeatures:
     #  scores = np.cumsum(scores)
-    scores = np.add(scores, self.tdps[1:])
+    scores = np.add(scores, self.tdps[1:skip])
     fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
     bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
 
