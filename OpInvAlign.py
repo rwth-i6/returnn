@@ -56,6 +56,7 @@ class InvAlignOp(theano.Op):
     hmm = self._buildHmm(transcription)
     lengthT = end - start
     skip = min(len(self.tdps), lengthT - self.nstates)
+    tdps = self.tdps[:skip]
     lengthS = transcription.shape[0] * self.nstates
 
     # with margins of skip at the bottom or top
@@ -74,7 +75,7 @@ class InvAlignOp(theano.Op):
     scores = score[0, 0 + skip - 1:skip + skip - 2]
     # if allFeatures:
     #  scores = np.cumsum(scores)
-    scores = np.add(scores, self.tdps[1:skip])
+    scores = np.add(scores, tdps[1:])
     fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
     bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
 
@@ -83,7 +84,7 @@ class InvAlignOp(theano.Op):
       for t in range(0, lengthT):
         previous = fwdScore[s - 1, t:t + skip]
         scores = score[s, t + skip - 1]
-        scores = np.add(scores, np.add(previous, self.tdps[::-1]))
+        scores = np.add(scores, np.add(previous, tdps[::-1]))
 
         best = np.argmin(scores)
         fwdScore[s, t + skip - 1] = scores[best]
