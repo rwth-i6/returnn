@@ -18,12 +18,8 @@ class InvAlignOp(theano.Op):
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
-      y = 0
-      for x in range(length_x):
-        if alignment[x,b] != -1 and alignment[x,b] % self.nstates == 0: # TODO
-          attention[y,b] = x
-          y += 1
+      alignment[:length_x, b], attention[:length_y, b] = \
+        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
     output_storage[0][0] = alignment
     output_storage[1][0] = attention
 
@@ -49,61 +45,6 @@ class InvAlignOp(theano.Op):
         hmm[i * self.nstates + s] = startState + s - 1
 
     return hmm
-
-  def _fullSegmentationInv(self, start, end, scores, transcription):
-    """Fully aligns sequence from start to end but in inverse manner"""
-    inf = 1e30
-    # max skip transitions derived from tdps
-    skip = len(self.tdps)
-
-    hmm = self._buildHmm(transcription)
-    lengthT = end - start
-    lengthS = transcription.shape[0] * self.nstates * self.repetitions
-
-    # with margins of skip at the bottom or top
-    fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
-    bt = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int32)
-
-    # precompute all scores and densities
-    score = np.full((lengthS, lengthT + skip - 1), inf)
-    for t in range(0, lengthT):
-      for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
-
-      # forward
-      # initialize first column
-      # assume virtual start at t = -1
-      scores = score[0, 0 + skip - 1:skip + skip - 2]
-      #if allFeatures:
-      #  scores = np.cumsum(scores)
-      scores = np.add(scores, self.tdps[1:])
-      fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
-      bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
-
-      # remaining columns
-      for s in range(1, lengthS):
-        for t in range(0, lengthT):
-          previous = fwdScore[s - 1, t:t + skip]
-          scores = score[s, t + skip - 1]
-          scores = np.add(scores, np.add(previous, self.tdps[::-1]))
-
-          best = np.argmin(scores)
-          fwdScore[s, t + skip - 1] = scores[best]
-          bt[s, t + skip - 1] = skip - 1 - best
-
-      alignment = np.full((lengthT), -2, dtype=np.int32)
-      # backtrack
-      t = lengthT - 1
-      alignment[t] = hmm[lengthS - 1]
-      for s in range(lengthS - 2, -1, -1):
-        tnew = t - bt[s + 1][t + skip - 1]
-        alignment[tnew:t] = hmm[s]
-        t = tnew
-
-      alignment[0:t] = 0
-
-      assert not -2 in alignment
-      return alignment
 
   def _viterbi(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end but in inverse manner"""
@@ -147,18 +88,22 @@ class InvAlignOp(theano.Op):
         bt[s, t + skip - 1] = skip - 1 - best
 
     alignment = np.full((lengthT), -2, dtype=np.int32)
+    attention = np.full((lengthS), -2, dtype=np.int32)
     # backtrack
     t = lengthT - 1
     alignment[t] = hmm[lengthS - 1]
+    attention[lengthS - 1] = lengthT - 1
     for s in range(lengthS - 2, -1, -1):
       tnew = t - bt[s + 1][t + skip - 1]
+      attention[s] = tnew
       alignment[tnew] = hmm[s]
       alignment[tnew + 1:t] = -1
       t = tnew
 
     alignment[0:t] = -1
     assert not -2 in alignment
-    return alignment
+    assert not -2 in attention
+    return alignment, attention
 
 
 class InvDecodeOp(theano.Op):
