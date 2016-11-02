@@ -4,7 +4,7 @@ import theano
 
 class InvAlignOp(theano.Op):
   # Properties attribute
-  __props__ = ('tdps',)
+  __props__ = ('tdps','nstates')
 
   # index_in, index_out, scores, transcriptions
   itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
@@ -18,12 +18,14 @@ class InvAlignOp(theano.Op):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
       alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
+      #if b == 0:
+      #  print alignment[:length_x, b]
     output_storage[0][0] = alignment
 
-  def __init__(self, tdps): # TODO
-    self.numStates = 1
-    self.pruningThreshold = 500.
+  def __init__(self, tdps, nstates):
+    self.nstates = nstates
     self.tdps = tuple(tdps)
+    self.pruningThreshold = 500.
 
   def grad(self, inputs, output_grads):
     return [output_grads[0] * 0]
@@ -34,12 +36,12 @@ class InvAlignOp(theano.Op):
   def _buildHmm(self, transcription):
     """Builds list of hmm states (with repetitions) for transcription"""
     transcriptionLength = transcription.shape[0]
-    hmm = np.zeros(transcriptionLength * self.numStates, dtype=np.int32)
+    hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
 
     for i in range(0, transcriptionLength):
-      startState = transcription[i] * self.numStates + 1
-      for s in range(0, self.numStates):
-        hmm[i * self.numStates + s] = startState + s - 1
+      startState = transcription[i] * self.nstates + 1
+      for s in range(0, self.nstates):
+        hmm[i * self.nstates + s] = startState + s - 1
 
     return hmm
 
@@ -51,7 +53,7 @@ class InvAlignOp(theano.Op):
 
     hmm = self._buildHmm(transcription)
     lengthT = end - start
-    lengthS = transcription.shape[0] * self.numStates * self.repetitions
+    lengthS = transcription.shape[0] * self.nstates * self.repetitions
 
     # with margins of skip at the bottom or top
     fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
@@ -61,7 +63,7 @@ class InvAlignOp(theano.Op):
     score = np.full((lengthS, lengthT + skip - 1), inf)
     for t in range(0, lengthT):
       for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.numStates]
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
 
       # forward
       # initialize first column
@@ -106,7 +108,7 @@ class InvAlignOp(theano.Op):
 
     hmm = self._buildHmm(transcription)
     lengthT = end - start
-    lengthS = transcription.shape[0] * self.numStates
+    lengthS = transcription.shape[0] * self.nstates
 
     # with margins of skip at the bottom or top
     fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
@@ -116,7 +118,7 @@ class InvAlignOp(theano.Op):
     score = np.full((lengthS, lengthT + skip - 1), inf)
     for t in range(0, lengthT):
       for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.numStates]
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
 
     # forward
     # initialize first column
@@ -154,8 +156,6 @@ class InvAlignOp(theano.Op):
     return alignment
 
 
-invAlignOp = InvAlignOp([ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ])
-
 class InvDecodeOp(theano.Op):
   # Properties attribute
   __props__ = ('tdps',)
@@ -175,7 +175,7 @@ class InvDecodeOp(theano.Op):
     output_storage[0][0] = transcript
 
   def __init__(self, tdps): # TODO
-    self.numStates = 1
+    self.nstates = 1
     self.pruningThreshold = 500.
     self.tdps = tuple(tdps)
 
@@ -188,12 +188,12 @@ class InvDecodeOp(theano.Op):
   def _buildHmm(self, transcription):
     """Builds list of hmm states (with repetitions) for transcription"""
     transcriptionLength = transcription.shape[0]
-    hmm = np.zeros(transcriptionLength * self.numStates, dtype=np.int32)
+    hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
 
     for i in range(0, transcriptionLength):
-      startState = transcription[i] * self.numStates + 1
-      for s in range(0, self.numStates):
-        hmm[i * self.numStates + s] = startState + s - 1
+      startState = transcription[i] * self.nstates + 1
+      for s in range(0, self.nstates):
+        hmm[i * self.nstates + s] = startState + s - 1
 
     return hmm
 
@@ -209,7 +209,7 @@ class InvDecodeOp(theano.Op):
     mod_factor = 1.0
 
     # repeat each hmm state
-    hmmLength = scores.shape[1] * self.numStates + 1
+    hmmLength = scores.shape[1] * self.nstates + 1
     seqLength = end - start
     leftScore = np.full((hmmLength, seqLength + skip - 1), inf)
     rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
@@ -250,7 +250,7 @@ class InvDecodeOp(theano.Op):
     bestWordEndsStart[0][0] = 0
     bestWordEndsEpoch[0][0] = 0
 
-    for s in range(1, hmmLength, self.numStates * 2):
+    for s in range(1, hmmLength, self.nstates * 2):
       leftScore[s][skip - 1] = score[s][skip - 1]
       leftEpoch[s][skip - 1] = 0
 
@@ -258,16 +258,16 @@ class InvDecodeOp(theano.Op):
       # determine best word ends and score
       bestWordEnd = np.argmin(np.concatenate(
         ([leftScore[0]],
-         leftScore[self.numStates * 2:hmmLength:
-         self.numStates * 2] + wordPenalty)), axis=0)
+         leftScore[self.nstates * 2:hmmLength:
+         self.nstates * 2] + wordPenalty)), axis=0)
 
-      bestWordEnd = bestWordEnd * self.numStates * 2
+      bestWordEnd = bestWordEnd * self.nstates * 2
 
       # two times min might be improved
       bestWordEndScore = np.min(np.concatenate(
         ([leftScore[0]],
-         leftScore[self.numStates * 2:hmmLength:
-         self.numStates * 2] + wordPenalty)), axis=0)
+         leftScore[self.nstates * 2:hmmLength:
+         self.nstates * 2] + wordPenalty)), axis=0)
 
       bestWordEnds[a] = bestWordEnd[skip - 1::]
       for t in range(0, seqLength):
@@ -300,7 +300,7 @@ class InvDecodeOp(theano.Op):
               rightEpoch[0][t + skip] = a
 
         # between word transitions
-        elif s % (self.numStates * 2) == 1:
+        elif s % (self.nstates * 2) == 1:
           for t in range(0, seqLength):
             # linear interpolate scores
             scores = np.add(np.add(

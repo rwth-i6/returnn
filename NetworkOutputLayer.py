@@ -411,9 +411,10 @@ class SequenceOutputLayer(OutputLayer):
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                fast_bw_opts=None,
                loss_like_ce=False, trained_softmax_prior=False,
-               sprint_opts=None, warp_ctc_lib=None,
+               sprint_opts=None, warp_ctc_lib=None, inv_opts=None,
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
+    if inv_opts is None: inv_opts = {}
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing
@@ -426,8 +427,14 @@ class SequenceOutputLayer(OutputLayer):
         import json
         fast_bw_opts = json.loads(fast_bw_opts)
       self.set_attr("fast_bw_opts", fast_bw_opts)
+    if inv_opts:
+      if not isinstance(inv_opts, dict):
+        import json
+        inv_opts = json.loads(inv_opts)
+      self.set_attr("inv_opts", inv_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
+    self.inv_opts = CollectionReadCheckCovered(inv_opts or {})
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
@@ -650,16 +657,18 @@ class SequenceOutputLayer(OutputLayer):
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
     elif self.loss == 'inv':
+      tdps = self.inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
+      nstates = self.inv_opts.get('nstates', 1)
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       nlog_scores = T.log(self.p_y_given_x) #- self.prior_scale * T.log(self.priors)
-      y = InvAlignOp(( 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ))(src_index, self.index, -nlog_scores, self.y)
+      y = InvAlignOp(tdps, nstates)(src_index, self.index, -nlog_scores, self.y)
       index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       k = (index_flat > 0).nonzero()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[k], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'inv'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
@@ -674,13 +683,15 @@ class SequenceOutputLayer(OutputLayer):
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
     elif self.loss == 'inv':
+      tdps = self.inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
+      nstates = self.inv_opts.get('nstates', 1)
       src_index = self.sources[0].index
       y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
       nlog_scores = T.log(self.p_y_given_x)  # - self.prior_scale * T.log(self.priors)
-      y = InvDecodeOp([1e10, 0., 1.9, 3., 2.5, 2., 1.4])(src_index, self.index, -nlog_scores)
+      y = InvAlignOp(tdps, nstates)(src_index, self.index, -nlog_scores, self.y)
       index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       k = (index_flat > 0).nonzero()
-      return T.sum(T.neq(T.argmax(y_m[k], axis=-1), y[self.i]))
+      return T.sum(T.neq(T.argmax(y_m[k], axis=-1), self.y_data_flat[self.i]))
     else:
       return super(SequenceOutputLayer, self).errors()
 
