@@ -451,7 +451,7 @@ class Device(object):
                                        outputs=outputs,
                                        givens=train_givens,
                                        updates=self.updater.getUpdateList(),
-                                       on_unused_input='warn',
+                                       on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                        no_default_updates=exclude,
                                        name="train_and_updater")
       else:
@@ -465,7 +465,7 @@ class Device(object):
                                        outputs=outputs,
                                        givens=train_givens,
                                        no_default_updates=False,
-                                       on_unused_input='warn',
+                                       on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                        name="train_distributed")
 
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
@@ -475,7 +475,7 @@ class Device(object):
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
                                     givens=test_givens,
-                                    on_unused_input='warn',
+                                    on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                     no_default_updates=True,
                                     name="tester")
 
@@ -488,7 +488,7 @@ class Device(object):
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
                                     givens=test_givens,
-                                    on_unused_input='warn',
+                                    on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                     no_default_updates=True,
                                     name="tester")
 
@@ -629,7 +629,7 @@ class Device(object):
       self.extractor = theano.function(inputs = [],
                                        outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
                                        givens = givens,
-                                       on_unused_input='warn',
+                                       on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                        name = "extractor")
 
     elif self.network_task == 'classify':
