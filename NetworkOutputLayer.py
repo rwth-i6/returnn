@@ -473,7 +473,10 @@ class SequenceOutputLayer(OutputLayer):
       n = inv_opts.get('nstates', 1)
       self.norm *= T.cast(self.index.sum(), 'float32')
       if n > 1: self.index = self.index.repeat(n, axis=0)
-      y, att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      if inv_opts.get('eval', 'align') == 'search':
+        y, att = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
+      else:
+        y, att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
       index_drop = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       self.norm /= T.cast(index_drop.sum(), 'float32')
       self.k = (index_drop > 0).nonzero()

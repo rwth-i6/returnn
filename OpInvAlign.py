@@ -109,32 +109,37 @@ class InvAlignOp(theano.Op):
 
 class InvDecodeOp(theano.Op):
   # Properties attribute
-  __props__ = ('tdps',)
+  __props__ = ('tdps', 'nstates')
 
-  # index_in, index_out, scores
-  itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3]
-  otypes = [theano.tensor.imatrix]
+  # index_in, scores
+  itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3]
+  otypes = [theano.tensor.imatrix, theano.tensor.imatrix]
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
-    index_in, index_out, scores = inputs_storage[:3]
-    transcript = np.zeros(index_out.shape,'int32')
+    index_in, scores = inputs_storage[:2]
+    transcript = np.zeros(index_in.shape,'int32')
+    attention = np.zeros(index_in.shape, 'int32')
+    max_length_y = 0
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
-      length_y = index_out[:,b].sum()
-      transcript[:length_y, b] = self._recognize(0, length_x, scores[:length_x, b], 3.0)
-    output_storage[0][0] = transcript
+      t, a = self._recognize(0, length_x, scores[:length_x, b], 3.0)
+      transcript[:t.shape[0], b] = t
+      attention[:a.shape[0], b] = a
+      max_length_y = max(t.shape[0], max_length_y)
+    output_storage[0][0] = transcript[:max_length_y]
+    output_storage[1][0] = attention[:max_length_y]
 
-  def __init__(self, tdps): # TODO
-    self.nstates = 1
+  def __init__(self, tdps, nstates): # TODO
+    self.nstates = nstates
     self.pruningThreshold = 500.
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0]
+    return [output_grads[0] * 0, output_grads[1] * 0]
 
   def infer_shape(self, node, input_shapes):
-    return [input_shapes[0]]
+    return [input_shapes[0], input_shapes[0]]
 
   def _buildHmm(self, transcription):
     """Builds list of hmm states (with repetitions) for transcription"""
@@ -152,6 +157,7 @@ class InvDecodeOp(theano.Op):
     """recognizes a sequence from start until (excluded) end
     with inverse search s -> t_s"""
     inf = 1e30
+    bestAttend = []
     bestResult = []
     bestScore = inf
 
@@ -304,11 +310,13 @@ class InvDecodeOp(theano.Op):
       if bestWordEndScore[-1] < inf:
 
         result = []
+        attend = []
         t_idx = seqLength - 1
         a_idx = a
         while t_idx > 0:
           result.append(self.mixtures._encodeWord(
             bestWordEnds[a_idx][t_idx]))
+          attend.append(t_idx)
 
           # backtrace.append((result[-1],
           #     t_idx, bestWordEndsStart[a_idx][t_idx] - 1,
@@ -317,10 +325,9 @@ class InvDecodeOp(theano.Op):
           a_idx = bestWordEndsEpoch[a_idx][t_idx]
           t_idx = t_idx_temp
 
-        result = list(reversed(result))
-
         if bestWordEndScore[-1] < bestScore:
-          bestResult = result
+          bestResult = list(reversed(result))
           bestScore = bestWordEndScore[-1]
+          bestAttend = list(reversed(attend))
 
-    return bestResult
+    return bestResult, bestAttend
