@@ -13,7 +13,7 @@ public:
         canonical_ = calcCanonical(labellings, N_);
         M_ = canonical_.size();
         errorSignal(activs, labellings, err, errSigs, priors, tdp_loop, tdp_fwd);
-        skip_ = true;
+        skip_ = false;
     }
 private:
     int emissionLabel(int chr, int state)

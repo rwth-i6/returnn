@@ -21,7 +21,7 @@ class InvAlignOp(theano.Op):
       alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
       y = 0
       for x in range(length_x):
-        if alignment[x,b] != -1:
+        if alignment[x,b] != -1 and alignment[x,b] % self.nstates == 0: # TODO
           attention[y,b] = x
           y += 1
     output_storage[0][0] = alignment
