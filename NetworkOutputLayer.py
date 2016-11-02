@@ -474,14 +474,14 @@ class SequenceOutputLayer(OutputLayer):
       nskips = inv_opts.get('nskips', 1)
       if len(tdps) - 2 < nskips:
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-      self.norm *= T.cast(self.index.sum(), 'float32')
-      if n > 1: self.index = self.index.repeat(n, axis=0)
-      if inv_opts.get('eval', 'align') == 'search':
-        y, att = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
+      if self.eval_flag or (inv_opts.get('eval', 'align') == 'search' and not self.train_flag):
+        y, att, idx = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
       else:
-        y, att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+        idx = self.index if n == 1 else self.index.repeat(n, axis=0)
+        y, att = InvAlignOp(tdps, n)(src_index, idx, -T.log(self.p_y_given_x), self.y)
       index_drop = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
-      self.norm /= T.cast(index_drop.sum(), 'float32')
+      self.index = idx
+      self.norm = T.cast(self.index.sum(), 'float32') / T.cast(index_drop.sum(), 'float32')
       self.k = (index_drop > 0).nonzero()
       self.y_data_flat = y.flatten()
       self.output = self.y_m[att].reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
