@@ -18,8 +18,11 @@ class InvAlignOp(theano.Op):
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      alignment[:length_x, b], attention[:length_y, b] = \
-        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
+      #alignment[:length_x, b], attention[:length_y, b] = \
+      #  self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
+      aln, att = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
+      alignment[:length_x, b] = aln
+      attention[:length_y, b] = att
     output_storage[0][0] = alignment
     output_storage[1][0] = attention
 
@@ -49,10 +52,10 @@ class InvAlignOp(theano.Op):
     """Fully aligns sequence from start to end but in inverse manner"""
     inf = 1e30
     # max skip transitions derived from tdps
-    skip = len(self.tdps)
 
     hmm = self._buildHmm(transcription)
     lengthT = end - start
+    skip = min(len(self.tdps), lengthT - self.nstates)
     lengthS = transcription.shape[0] * self.nstates
 
     # with margins of skip at the bottom or top
@@ -63,7 +66,7 @@ class InvAlignOp(theano.Op):
     score = np.full((lengthS, lengthT + skip - 1), inf)
     for t in range(0, lengthT):
       for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
+        score[s][t + skip - 1] = scores[start + t, hmm[s]]
 
     # forward
     # initialize first column
