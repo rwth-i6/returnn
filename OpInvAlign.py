@@ -8,19 +8,24 @@ class InvAlignOp(theano.Op):
 
   # index_in, index_out, scores, transcriptions
   itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
-  otypes = [theano.tensor.imatrix]
+  otypes = [theano.tensor.imatrix, theano.tensor.imatrix]
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
     alignment = np.zeros(index_in.shape,'int32')
+    attention = np.zeros(index_out.shape,'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
       alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
-      #if b == 0:
-      #  print alignment[:length_x, b]
+      y = 0
+      for x in range(length_x):
+        if alignment[x,b] != -1:
+          attention[y,b] = x
+          y += 1
     output_storage[0][0] = alignment
+    output_storage[1][0] = attention
 
   def __init__(self, tdps, nstates):
     self.nstates = nstates
@@ -28,13 +33,13 @@ class InvAlignOp(theano.Op):
     self.pruningThreshold = 500.
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0]
+    return [output_grads[0] * 0, output_grads[1] * 0]
 
   def infer_shape(self, node, input_shapes):
-    return [input_shapes[0]]
+    return [input_shapes[0], input_shapes[1]]
 
   def _buildHmm(self, transcription):
-    """Builds list of hmm states (with repetitions) for transcription"""
+    """Builds list of hmm states for transcription"""
     transcriptionLength = transcription.shape[0]
     hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
 

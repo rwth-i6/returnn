@@ -467,6 +467,15 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
       'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc', 'inv'), 'invalid loss: ' + self.loss
+    if self.loss == 'inv':
+      src_index = self.sources[0].index
+      tdps = inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
+      y, att = InvAlignOp(tdps, inv_opts.get('nstates', 1))(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      index_drop = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
+      self.norm *= T.cast(self.index.sum(), 'float32') / T.cast(index_drop.sum(), 'float32')
+      self.k = (index_drop > 0).nonzero()
+      self.y_data_flat = y.flatten()
+      self.output = self.y_m[att].reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -659,17 +668,8 @@ class SequenceOutputLayer(OutputLayer):
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
     elif self.loss == 'inv':
-      tdps = self.inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
-      nstates = self.inv_opts.get('nstates', 1)
-      y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-      nlog_scores = T.log(self.p_y_given_x) #- self.prior_scale * T.log(self.priors)
-      y = InvAlignOp(tdps, nstates)(src_index, self.index, -nlog_scores, self.y)
-      index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
-      k = (index_flat > 0).nonzero()
-      #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[k], y_idx=self.y_data_flat[self.i])
-      norm = T.cast(self.index.flatten().sum(), 'float32') / T.cast(index_flat.sum(), 'float32')
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[k], y_idx=y.flatten()[k])
-      return T.sum(nll) * norm, known_grads
+      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.k], y_idx=self.y_data_flat[self.k])
+      return T.sum(nll) * self.norm, known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
@@ -687,17 +687,7 @@ class SequenceOutputLayer(OutputLayer):
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
     elif self.loss == 'inv':
-      tdps = self.inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
-      nstates = self.inv_opts.get('nstates', 1)
-      src_index = self.sources[0].index
-      y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
-      nlog_scores = T.log(self.p_y_given_x)  # - self.prior_scale * T.log(self.priors)
-      y = InvAlignOp(tdps, nstates)(src_index, self.index, -nlog_scores, self.y)
-      index_flat = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
-      k = (index_flat > 0).nonzero()
-      #return T.sum(T.neq(T.argmax(y_m[k], axis=-1), self.y_data_flat[self.i]))
-      norm = T.cast(self.index.flatten().sum(), 'float32') / T.cast(index_flat.sum(), 'float32')
-      return T.sum(T.neq(T.argmax(y_m[k], axis=-1), y.flatten()[k])) * norm
+      return T.sum(T.neq(T.argmax(self.y_m[self.k], axis=-1), self.y_data_flat[self.k])) * self.norm
     else:
       return super(SequenceOutputLayer, self).errors()
 
@@ -753,7 +743,7 @@ class UnsupervisedOutputLayer(OutputLayer):
       return self.L, known_grads
     else:
       p = self.y_m
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat)
       return T.sum(nll), known_grads
 
   def errors(self):
