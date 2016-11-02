@@ -470,9 +470,12 @@ class SequenceOutputLayer(OutputLayer):
     if self.loss == 'inv':
       src_index = self.sources[0].index
       tdps = inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
-      y, att = InvAlignOp(tdps, inv_opts.get('nstates', 1))(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      n = inv_opts.get('nstates', 1)
+      self.norm *= T.cast(self.index.sum(), 'float32')
+      if n > 1: self.index = self.index.repeat(n, axis=0)
+      y, att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
       index_drop = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
-      self.norm *= T.cast(self.index.sum(), 'float32') / T.cast(index_drop.sum(), 'float32')
+      self.norm /= T.cast(index_drop.sum(), 'float32')
       self.k = (index_drop > 0).nonzero()
       self.y_data_flat = y.flatten()
       self.output = self.y_m[att].reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))

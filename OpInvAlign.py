@@ -14,12 +14,12 @@ class InvAlignOp(theano.Op):
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
     alignment = np.zeros(index_in.shape,'int32')
-    attention = np.zeros(index_out.shape,'int32')
+    attention = np.zeros(index_out.shape, 'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
       alignment[:length_x, b], attention[:length_y, b] = \
-        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y, b])
+        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
     output_storage[0][0] = alignment
     output_storage[1][0] = attention
 
@@ -89,6 +89,7 @@ class InvAlignOp(theano.Op):
 
     alignment = np.full((lengthT), -2, dtype=np.int32)
     attention = np.full((lengthS), -2, dtype=np.int32)
+
     # backtrack
     t = lengthT - 1
     alignment[t] = hmm[lengthS - 1]
@@ -103,7 +104,7 @@ class InvAlignOp(theano.Op):
     alignment[0:t] = -1
     assert not -2 in alignment
     assert not -2 in attention
-    return alignment, attention[::self.nstates]
+    return alignment, attention
 
 
 class InvDecodeOp(theano.Op):
