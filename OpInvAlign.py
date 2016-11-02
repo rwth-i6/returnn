@@ -103,7 +103,7 @@ class InvAlignOp(theano.Op):
     alignment[0:t] = -1
     assert not -2 in alignment
     assert not -2 in attention
-    return alignment, attention
+    return alignment, attention[::self.nstates]
 
 
 class InvDecodeOp(theano.Op):
