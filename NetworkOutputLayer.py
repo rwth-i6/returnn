@@ -743,7 +743,7 @@ class UnsupervisedOutputLayer(OutputLayer):
       return self.L, known_grads
     else:
       p = self.y_m
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat)
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=p[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
 
   def errors(self):
