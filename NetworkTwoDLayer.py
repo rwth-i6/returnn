@@ -10,7 +10,7 @@ from cuda_implementation.FractionalMaxPoolingOp import fmp
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
-from theano.tensor.signal import downsample
+from theano.tensor.signal import pool
 import numpy
 from math import sqrt
 from ActivationFunctions import strtoact
@@ -339,7 +339,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     else:
       #pooling cannot handle width > 512 (only with cuDNN), so we swap the axes and swap them back afterwards
       crop_out = crop_out.dimshuffle(0, 1, 3, 2)
-      pooled_out = downsample.max_pool_2d(
+      pooled_out = pool.max_pool_2d(
         input=crop_out,
         #max_pool_2d wants the sizes in the other order
         ds=poolsize[::-1],

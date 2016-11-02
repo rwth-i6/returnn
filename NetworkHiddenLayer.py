@@ -6,7 +6,7 @@ import h5py
 import sys
 from theano import tensor as T
 from theano.tensor.nnet import conv
-from theano.tensor.signal import downsample
+from theano.tensor.signal import pool
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
@@ -2518,7 +2518,7 @@ class ConvLayer(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    self.pooled_out = downsample.max_pool_2d(
+    self.pooled_out = pool.max_pool_2d(
       input=self.conv_out,
       ds=pool_size,
       ignore_border=ignore_border
@@ -2678,7 +2678,7 @@ class NewConvLayer(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    self.pooled_out = downsample.max_pool_2d(
+    self.pooled_out = pool.max_pool_2d(
       input=self.conv_out,
       ds=pool_size,
       ignore_border=ignore_border
