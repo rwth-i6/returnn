@@ -469,8 +469,11 @@ class SequenceOutputLayer(OutputLayer):
       'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc', 'inv'), 'invalid loss: ' + self.loss
     if self.loss == 'inv':
       src_index = self.sources[0].index
-      tdps = inv_opts.get('tdps', [1e10, 0., 1.9, 3., 2.5, 2., 1.4])
+      tdps = inv_opts.get('tdps', [1e10, 0., 3.])
       n = inv_opts.get('nstates', 1)
+      nskips = inv_opts.get('nskips', 1)
+      if len(tdps) - 2 < nskips:
+        tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
       self.norm *= T.cast(self.index.sum(), 'float32')
       if n > 1: self.index = self.index.repeat(n, axis=0)
       if inv_opts.get('eval', 'align') == 'search':
