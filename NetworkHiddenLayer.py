@@ -2518,7 +2518,7 @@ class ConvLayer(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    self.pooled_out = pool.max_pool_2d(
+    self.pooled_out = pool.pool_2d(
       input=self.conv_out,
       ds=pool_size,
       ignore_border=ignore_border
@@ -2678,7 +2678,7 @@ class NewConvLayer(_NoOpLayer):
     self.conv_out.name = 'conv_layer_conv_out'
 
     # max pooling function
-    self.pooled_out = pool.max_pool_2d(
+    self.pooled_out = pool.pool_2d(
       input=self.conv_out,
       ds=pool_size,
       ignore_border=ignore_border
@@ -3112,7 +3112,7 @@ class ConvFMP(_NoOpLayer):
 
     # max pooling function
 
-    #self.pooled_out = downsample.max_pool_2d(
+    #self.pooled_out = downsample.pool_2d(
     #  input=self.conv_out,
     #  ds=pool_size,
     #  ignore_border=ignore_border

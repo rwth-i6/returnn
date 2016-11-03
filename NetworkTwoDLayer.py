@@ -339,7 +339,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     else:
       #pooling cannot handle width > 512 (only with cuDNN), so we swap the axes and swap them back afterwards
       crop_out = crop_out.dimshuffle(0, 1, 3, 2)
-      pooled_out = pool.max_pool_2d(
+      pooled_out = pool.pool_2d(
         input=crop_out,
         #max_pool_2d wants the sizes in the other order
         ds=poolsize[::-1],

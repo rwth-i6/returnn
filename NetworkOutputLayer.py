@@ -474,18 +474,20 @@ class SequenceOutputLayer(OutputLayer):
       nskips = inv_opts.get('nskips', 1)
       if len(tdps) - 2 < nskips:
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-      if self.eval_flag or (inv_opts.get('eval', 'align') == 'search' and not self.train_flag):
+      if self.eval_flag or ((inv_opts.get('eval', 'align') == 'search' and not self.train_flag)):
         y, att, idx = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
-        self.index = idx
+        att = att[:T.max(T.sum(idx, axis=0))]
+        idx = idx[:T.max(T.sum(idx, axis=0))]
       else:
         idx = self.index if n == 1 else self.index.repeat(n, axis=0)
         y, att = InvAlignOp(tdps, n)(src_index, idx, -T.log(self.p_y_given_x), self.y)
       index_drop = T.set_subtensor(src_index.flatten()[(T.eq(y.flatten(), -1) > 0).nonzero()], numpy.int8(0))
       self.norm = T.cast(self.index.sum(), 'float32') / T.cast(index_drop.sum(), 'float32')
-      self.index = idx
+      self.index = idx[:T.max(T.sum(idx,axis=0))]
       self.k = (index_drop > 0).nonzero()
       self.y_data_flat = y.flatten()
       self.output = self.y_m[att].reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
+      self.p_y_given_x = self.p_y_given_x.reshape(self.y_m.shape)[att].reshape(self.output.shape)
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -501,7 +503,7 @@ class SequenceOutputLayer(OutputLayer):
     for source in self.sources:
       if hasattr(source, "output_sizes"):
         return source.index
-    if self.loss in ['viterbi', 'ctc', 'hmm', 'warp_ctc', 'inv']:
+    if self.loss in ['viterbi', 'ctc', 'hmm', 'warp_ctc']:
       return self.sources[0].index
     return super(SequenceOutputLayer, self).output_index()
 
