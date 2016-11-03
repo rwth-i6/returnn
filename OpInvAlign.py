@@ -18,11 +18,8 @@ class InvAlignOp(theano.Op):
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      #alignment[:length_x, b], attention[:length_y, b] = \
-      #  self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
-      aln, att = self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
-      alignment[:length_x, b] = aln
-      attention[:length_y, b] = att
+      alignment[:length_x, b], attention[:length_y, b] = \
+        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b])
     output_storage[0][0] = alignment
     output_storage[1][0] = attention
 
@@ -67,7 +64,7 @@ class InvAlignOp(theano.Op):
     score = np.full((lengthS, lengthT + skip - 1), inf)
     for t in range(0, lengthT):
       for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, hmm[s]]
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
 
     # forward
     # initialize first column
@@ -95,12 +92,12 @@ class InvAlignOp(theano.Op):
 
     # backtrack
     t = lengthT - 1
-    alignment[t] = hmm[lengthS - 1]
+    alignment[t] = hmm[lengthS - 1] / self.nstates
     attention[lengthS - 1] = lengthT - 1
     for s in range(lengthS - 2, -1, -1):
       tnew = t - bt[s + 1][t + skip - 1]
       attention[s] = tnew
-      alignment[tnew] = hmm[s]
+      alignment[tnew] = hmm[s] / self.nstates
       alignment[tnew + 1:t] = -1
       t = tnew
 
@@ -206,7 +203,7 @@ class InvDecodeOp(theano.Op):
     score = np.full((hmmLength, seqLength + skip), inf)
     for t in range(0, seqLength):
       for s in range(0, hmmLength):
-        score[s][t + skip - 1] = scores[start + t, s]
+        score[s][t + skip - 1] = scores[start + t, s / self.nstates]
 
     # apply model scale
     score = np.multiply(score, mod_factor)
@@ -321,7 +318,7 @@ class InvDecodeOp(theano.Op):
         t_idx = seqLength - 1
         a_idx = a
         while t_idx > 0:
-          result.append(a_idx)
+          result.append(a_idx / self.nstates)
           attend.append(t_idx)
 
           # backtrace.append((result[-1],

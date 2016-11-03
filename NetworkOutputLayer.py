@@ -415,8 +415,6 @@ class SequenceOutputLayer(OutputLayer):
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
     if inv_opts is None: inv_opts = {}
-    elif kwargs['loss'] == 'inv':
-      kwargs['n_out'] *= inv_opts.get('nstates', 1)
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing

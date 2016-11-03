@@ -502,7 +502,7 @@ class Device(object):
           param = extract.split(':')[1]
           extract = extract.split(':')[0]
         if extract == "classification":
-          source.append(T.argmax(self.testnet.get_layer('output').y_m, axis=1).reshape(self.testnet.get_layer('output').index.shape).dimshuffle(0,1,'x'))
+          source.append(T.argmax(self.testnet.get_layer('output').p_y_given_x, axis=-1).reshape(self.testnet.get_layer('output').index.shape).dimshuffle(0,1,'x'))
         elif extract == "log-posteriors":
           if not param:
             param = 'output'
