@@ -19,7 +19,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states = 0
   edges = []
 
-  for m in range(0, label_seq.__len__()):
+  for m in range(0, len(label_seq)):
     num_states, edges = __create_states_from_label_for_ctc(label_seq, m, num_states, num_labels, edges)
     print("label:", label_seq[m], "=", m)
 
@@ -96,7 +96,7 @@ def asg_fsa_for_label_seq(num_labels, label_seq):
   num_states = 0
   edges = []
 
-  for m in range(0, label_seq.__len__()):
+  for m in range(0, len(label_seq)):
     num_states, edges = __create_states_from_label_for_asg(m, num_labels, edges)
     print("label:", label_seq[m], "=", m)
 
