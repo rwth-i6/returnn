@@ -173,8 +173,7 @@ class InvDecodeOp(theano.Op):
     maxDuration = 0.8
     mod_factor = 1.0
 
-    # repeat each hmm state
-    hmmLength = scores.shape[1] * self.nstates #+ 1
+    hmmLength = scores.shape[1] * self.nstates
     seqLength = end - start
     leftScore = np.full((hmmLength, seqLength + skip - 1), inf)
     rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
@@ -215,7 +214,7 @@ class InvDecodeOp(theano.Op):
     bestWordEndsStart[0][0] = 0
     bestWordEndsEpoch[0][0] = 0
 
-    for s in range(1, hmmLength, self.nstates * 2):
+    for s in range(1, hmmLength, self.nstates):
       leftScore[s][skip - 1] = score[s][skip - 1]
       leftEpoch[s][skip - 1] = 0
 
@@ -223,16 +222,16 @@ class InvDecodeOp(theano.Op):
       # determine best word ends and score
       bestWordEnd = np.argmin(np.concatenate(
         ([leftScore[0]],
-         leftScore[self.nstates * 2:hmmLength:
-         self.nstates * 2] + wordPenalty)), axis=0)
+         leftScore[self.nstates:hmmLength:
+         self.nstates] + wordPenalty)), axis=0)
 
-      bestWordEnd = bestWordEnd * self.nstates * 2
+      bestWordEnd = bestWordEnd * self.nstates
 
       # two times min might be improved
       bestWordEndScore = np.min(np.concatenate(
         ([leftScore[0]],
-         leftScore[self.nstates * 2:hmmLength:
-         self.nstates * 2] + wordPenalty)), axis=0)
+         leftScore[self.nstates:hmmLength:
+         self.nstates] + wordPenalty)), axis=0)
 
       bestWordEnds[a] = bestWordEnd[skip - 1::]
       for t in range(0, seqLength):
@@ -265,7 +264,7 @@ class InvDecodeOp(theano.Op):
               rightEpoch[0][t + skip] = a
 
         # between word transitions
-        elif s % (self.nstates * 2) == 1:
+        elif s % self.nstates == 1:
           for t in range(0, seqLength):
             # linear interpolate scores
             scores = np.add(np.add(
