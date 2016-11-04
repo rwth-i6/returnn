@@ -121,22 +121,21 @@ class InvDecodeOp(theano.Op):
       index[:length_y, b] = 1
       max_length_y = max(length_y, max_length_y)
 
-    output_storage[0][0] = transcript[:max_length_y]
-    output_storage[1][0] = attention[:max_length_y]
-    output_storage[2][0] = index[:max_length_y]
+    output_storage[0][0] = transcript
+    output_storage[1][0] = attention
+    output_storage[2][0] = index
 
   def __init__(self, tdps, nstates): # TODO
     self.nstates = nstates
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0, output_grads[1] * 0, output_grads[1] * 0]
+    return [output_grads[0] * 0, output_grads[1] * 0, output_grads[2] * 0]
 
   def infer_shape(self, node, input_shapes):
     return [input_shapes[0], input_shapes[0], input_shapes[0]]
 
   def _buildHmm(self, transcription):
-    """Builds list of hmm states (with repetitions) for transcription"""
     transcriptionLength = transcription.shape[0]
     hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
 

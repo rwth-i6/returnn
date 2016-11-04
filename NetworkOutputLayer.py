@@ -481,10 +481,14 @@ class SequenceOutputLayer(OutputLayer):
       if self.eval_flag or ((inv_opts.get('eval', 'align') == 'search' and not self.train_flag)):
         y, att, idx = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
         self.y_data_flat = y.flatten()
-        self.index = idx
+        max_length_y = T.max(idx.sum(axis=0))
+        self.index = idx[:max_length_y]
+        att = att[:max_length_y]
+        y = y[:max_length_y]
       else:
         self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
         att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      self.i = (self.index.flatten() > 0).nonzero()
       self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
       self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
       self.y_m = self.output.reshape((self.index.shape[0] * self.index.shape[1], self.y_m.shape[1]))
