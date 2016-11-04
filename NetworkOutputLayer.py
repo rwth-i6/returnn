@@ -474,8 +474,6 @@ class SequenceOutputLayer(OutputLayer):
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
       if self.eval_flag or ((inv_opts.get('eval', 'align') == 'search' and not self.train_flag)):
         y, att, idx = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
-        att = att[:T.max(T.sum(idx, axis=0))]
-        idx = idx[:T.max(T.sum(idx, axis=0))]
         self.y_data_flat = y.flatten()
         self.index = idx
       else:
