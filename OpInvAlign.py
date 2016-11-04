@@ -117,7 +117,7 @@ class InvDecodeOp(theano.Op):
       t, a = self._recognize(0, length_x, scores[:length_x, b], 3.0)
       length_y = len(a)
       transcript[:length_y, b] = t
-      attention[:length_y, b] = a + b * index_in.shape[0]
+      attention[:length_y, b] = np.asarray(a) + b * index_in.shape[0]
       index[:length_y, b] = 1
       max_length_y = max(length_y, max_length_y)
 
