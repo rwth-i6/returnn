@@ -10,7 +10,10 @@ from cuda_implementation.FractionalMaxPoolingOp import fmp
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
-from theano.tensor.signal import pool
+try:
+  from theano.tensor.signal import pool
+except ImportError:  # old Theano or so...
+  pool = None
 import numpy
 from math import sqrt
 from ActivationFunctions import strtoact
