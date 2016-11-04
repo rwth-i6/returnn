@@ -90,7 +90,6 @@ class TwoDToOneDLayer(TwoDBaseLayer):
     self.set_attr('transpose', transpose)
     Y = self.sources[0].output
     if transpose:
-      assert transpose != False
       Y = Y.dimshuffle(1, 0, 2, 3)
 
     #index handling

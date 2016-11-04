@@ -479,11 +479,11 @@ class SequenceOutputLayer(OutputLayer):
         self.y_data_flat = y.flatten()
         self.index = idx
       else:
-        idx = self.index if n == 1 else self.index.repeat(n, axis=0)
-        att = InvAlignOp(tdps, n)(src_index, idx, -T.log(self.p_y_given_x), self.y)
-      self.y_m = self.y_m[att.flatten()]
-      shape = (self.index.shape[0], self.index.shape[1], self.y_m.shape[1])
-      self.output = self.y_m.reshape(shape)
+        self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
+        att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
+      self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
+      self.y_m = self.output.reshape((self.index.shape[0] * self.index.shape[1], self.y_m.shape[1]))
       self.p_y_given_x = T.nnet.softmax(self.y_m)
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):

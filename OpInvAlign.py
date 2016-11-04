@@ -13,12 +13,12 @@ class InvAlignOp(theano.Op):
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
     attention = np.zeros(index_out.shape, 'int32')
-    max_length_y = index_out.shape[0]
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      attention[:length_y, b] = \
-        self._viterbi(0, length_x, scores[:length_x, b], transcriptions[:length_y / self.nstates, b]) + b * index_out.shape[0]
+      attention[:length_y, b] = self._viterbi(0, length_x, scores[:length_x, b],
+                                              transcriptions[:length_y / self.nstates, b])
+      attention[:,b] += b * index_in.shape[0]
     output_storage[0][0] = attention
 
   def __init__(self, tdps, nstates):
