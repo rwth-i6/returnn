@@ -617,6 +617,8 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
         known_grads[self.z] *= -2 * self.z
+      if self.fast_bw_opts.get("generic_act_grad"):  # maybe use together with loss_with_out_norm
+        known_grads[self.z] *= T.grad(None, self.z, known_grads={T.log(self.p_y_given_x): T.ones(y.shape, y.dtype)})
       if self.fast_bw_opts.get("no_explicit_z_grad"):
         del known_grads[self.z]
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
