@@ -22,7 +22,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
-               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False,
+               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False, activation=None,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
                compute_priors=False, compute_priors_exp_average=0, compute_priors_accumulate_batches=None,
@@ -193,6 +193,8 @@ class OutputLayer(Layer):
       self.set_attr("exp_outputs", exp_outputs)
     if gauss_outputs:
       self.set_attr("gauss_outputs", gauss_outputs)
+    if activation:
+      self.set_attr("activation", activation)
 
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
     if self.loss == 'sse' or not self.attrs.get("apply_softmax", True):
@@ -203,6 +205,10 @@ class OutputLayer(Layer):
       self.p_y_given_x = T.nnet.sigmoid(self.z)
     elif gauss_outputs:
       self.p_y_given_x = T.exp(-T.sqr(self.z))
+    elif activation:
+      from ActivationFunctions import strtoact_single_joined
+      act_f = strtoact_single_joined(activation)
+      self.p_y_given_x = act_f(self.z)
     else:  # standard case
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     if self.loss == "priori":
