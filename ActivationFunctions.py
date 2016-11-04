@@ -81,7 +81,8 @@ ActivationFunctions = {
   'cos': T.cos,
   'complex_bound': complex_bound,
   'softmax': softmax,
-  'gauss': gauss
+  'gauss': gauss,
+  "erf": T.erf
 }
 
 
