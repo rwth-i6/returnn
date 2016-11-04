@@ -6,7 +6,10 @@ import h5py
 import sys
 from theano import tensor as T
 from theano.tensor.nnet import conv
-from theano.tensor.signal import pool
+try:
+  from theano.tensor.signal import pool
+except ImportError:  # old Theano or so...
+  pool = None
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
