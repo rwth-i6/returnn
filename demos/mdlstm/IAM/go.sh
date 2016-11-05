@@ -1,3 +1,3 @@
 ./create_IAM_dataset.py
-mkdir models log priors
+mkdir -p models log priors
 python ../../../rnn.py config_demo
