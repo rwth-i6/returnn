@@ -10,7 +10,10 @@ from cuda_implementation.FractionalMaxPoolingOp import fmp
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
-from theano.tensor.signal import pool
+try:
+  from theano.tensor.signal import pool
+except ImportError:  # old Theano or so...
+  pool = None
 import numpy
 from math import sqrt
 from ActivationFunctions import strtoact
@@ -407,18 +410,20 @@ class ConvPoolLayer2(ConvBaseLayer):
   layer_class = "conv2"
   recurrent = True
 
-  def __init__(self, pool_size, **kwargs):
+  def __init__(self, pool_size, padding=False, **kwargs):
     super(ConvPoolLayer2, self).__init__(**kwargs)
     self.pool_size = pool_size
+    self.set_attr('padding', padding)
     sizes_raw = self.source.output_sizes
 
     #handle size problems
     self.output_sizes = self.output_size_from_input_size(sizes_raw)
-    size_problem = T.min(self.output_sizes) <= 0
-    size_problem = theano.printing.Print(global_fn=maybe_print_pad_warning)(size_problem)
-    fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
+    if not padding:
+      padding = T.min(self.output_sizes) <= 0
+      padding = theano.printing.Print(global_fn=maybe_print_pad_warning)(padding)
 
-    sizes = ifelse(size_problem, fixed_sizes, sizes_raw)
+    fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
+    sizes = ifelse(padding, fixed_sizes, sizes_raw)
     X_size = T.cast(T.max(sizes, axis=0), "int32")
     def pad_fn(x_t, s):
       x = T.alloc(numpy.cast["float32"](0), X_size[0], X_size[1], self.X.shape[3])
@@ -426,7 +431,7 @@ class ConvPoolLayer2(ConvBaseLayer):
       return x
     fixed_X, _ = theano.scan(pad_fn, [self.X.dimshuffle(2,0,1,3), T.cast(sizes_raw, "int32")])
     fixed_X = fixed_X.dimshuffle(1,2,0,3)
-    self.X = ifelse(size_problem, T.unbroadcast(fixed_X,3), self.X)
+    self.X = ifelse(padding, T.unbroadcast(fixed_X,3), self.X)
     #end handle size problems
 
     self.output_sizes = self.output_size_from_input_size(sizes)

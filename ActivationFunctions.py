@@ -43,6 +43,19 @@ def softsquare(z):
 def maxout(z):
   return T.max(z, axis=0)
 
+def softmax(z):
+  assert z.ndim >= 1
+  if z.ndim <= 2:
+    return T.nnet.softmax(z)
+  else:
+    from TheanoUtil import time_batch_make_flat
+    z_flat = time_batch_make_flat(z)
+    assert z_flat.ndim == 2
+    return T.reshape(T.nnet.softmax(z_flat), z.shape)
+
+def gauss(z):
+  return T.exp(-T.sqr(z))
+
 def constant_one():
   return 1
 
@@ -66,7 +79,10 @@ ActivationFunctions = {
   'maxout': maxout,
   'sin': T.sin,
   'cos': T.cos,
-  'complex_bound': complex_bound
+  'complex_bound': complex_bound,
+  'softmax': softmax,
+  'gauss': gauss,
+  "erf": T.erf
 }
 
 

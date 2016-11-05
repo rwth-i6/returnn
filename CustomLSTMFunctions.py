@@ -25,7 +25,7 @@ def make_fwd_fun(recurrent_transform):
     updates += [(state_shared_vars[v], v_upd)]
     custom_out += [state_shared_vars[v]]
   fwd_fun = theano.function(inputs=[y_p] + custom_vars + state_vars, outputs=[],
-                            updates=updates, on_unused_input="warn")
+                            updates=updates, on_unused_input="ignore")
   if debug_function_hook:
     fwd_fun = debug_make_theano_function_wrapper(fwd_fun, "att_%i_fwd" % id(recurrent_transform), debug_function_hook, state_shared_vars.values())
   return fwd_fun, z_re_shared, custom_out
@@ -67,7 +67,7 @@ def make_bwd_fun(recurrent_transform):
   bwd_fun = theano.function(inputs=[y_p] + custom_vars + state_vars_prev + [Dz_re] + state_var_new_grads_list,
                             outputs=[],
                             updates=updates,
-                            on_unused_input="warn")
+                            on_unused_input="ignore")
 
   # Before we can accumulate the custom input grads, we need to initialize them with 0.
   custom_reset_updates = [(out, T.zeros_like(var)) for out, var in zip(out_custom_grads, custom_vars)]

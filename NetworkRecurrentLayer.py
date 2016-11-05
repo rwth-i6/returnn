@@ -391,7 +391,7 @@ class RecurrentUnitLayer(Layer):
   layer_class = "rec"
 
   def __init__(self,
-               n_out,
+               n_out = None,
                n_units = None,
                direction = 1,
                truncation = -1,
@@ -470,6 +470,9 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmc'
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
+    if n_out is None:
+      assert encoder
+      n_out = sum([enc.attrs['n_out'] for enc in encoder])
     kwargs.setdefault("n_out", n_out)
     if n_units is not None:
       assert n_units == n_out

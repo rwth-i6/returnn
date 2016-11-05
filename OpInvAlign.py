@@ -108,39 +108,34 @@ class InvDecodeOp(theano.Op):
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, scores = inputs_storage[:2]
-    alignment = np.zeros(index_in.shape,'int32') - 1
+    transcript = np.zeros(index_in.shape,'int32')
     attention = np.zeros(index_in.shape, 'int32')
     index = np.zeros(index_in.shape, 'int8')
     max_length_y = 0
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       t, a = self._recognize(0, length_x, scores[:length_x, b], 3.0)
-      y = []
-      for x in a:
-        y += [-1] * (x - len(y))
-        y.append(x)
       length_y = len(a)
-      alignment[:len(y), b] = y
-      attention[:length_y, b] = a
+      transcript[:length_y, b] = t
+      attention[:length_y, b] = np.asarray(a) + b * index_in.shape[0]
       index[:length_y, b] = 1
       max_length_y = max(length_y, max_length_y)
 
-    output_storage[0][0] = alignment
-    output_storage[1][0] = attention[:max_length_y]
-    output_storage[2][0] = index[:max_length_y]
+    output_storage[0][0] = transcript
+    output_storage[1][0] = attention
+    output_storage[2][0] = index
 
   def __init__(self, tdps, nstates): # TODO
     self.nstates = nstates
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0, output_grads[1] * 0, output_grads[1] * 0]
+    return [output_grads[0] * 0, output_grads[1] * 0, output_grads[2] * 0]
 
   def infer_shape(self, node, input_shapes):
     return [input_shapes[0], input_shapes[0], input_shapes[0]]
 
   def _buildHmm(self, transcription):
-    """Builds list of hmm states (with repetitions) for transcription"""
     transcriptionLength = transcription.shape[0]
     hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
 

@@ -22,7 +22,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
-               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False,
+               sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False, activation=None,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
                compute_priors=False, compute_priors_exp_average=0, compute_priors_accumulate_batches=None,
@@ -193,6 +193,8 @@ class OutputLayer(Layer):
       self.set_attr("exp_outputs", exp_outputs)
     if gauss_outputs:
       self.set_attr("gauss_outputs", gauss_outputs)
+    if activation:
+      self.set_attr("activation", activation)
 
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
     if self.loss == 'sse' or not self.attrs.get("apply_softmax", True):
@@ -203,6 +205,10 @@ class OutputLayer(Layer):
       self.p_y_given_x = T.nnet.sigmoid(self.z)
     elif gauss_outputs:
       self.p_y_given_x = T.exp(-T.sqr(self.z))
+    elif activation:
+      from ActivationFunctions import strtoact_single_joined
+      act_f = strtoact_single_joined(activation)
+      self.p_y_given_x = act_f(self.z)
     else:  # standard case
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     if self.loss == "priori":
@@ -474,13 +480,15 @@ class SequenceOutputLayer(OutputLayer):
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
       if self.eval_flag or ((inv_opts.get('eval', 'align') == 'search' and not self.train_flag)):
         y, att, idx = InvDecodeOp(tdps, n)(src_index, -T.log(self.p_y_given_x))
-        att = att[:T.max(T.sum(idx, axis=0))]
-        idx = idx[:T.max(T.sum(idx, axis=0))]
         self.y_data_flat = y.flatten()
-        self.index = idx
+        max_length_y = T.max(idx.sum(axis=0))
+        self.index = idx[:max_length_y]
+        att = att[:max_length_y]
+        y = y[:max_length_y]
       else:
         self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
         att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+      self.i = (self.index.flatten() > 0).nonzero()
       self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
       self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
       self.y_m = self.output.reshape((self.index.shape[0] * self.index.shape[1], self.y_m.shape[1]))
@@ -603,6 +611,9 @@ class SequenceOutputLayer(OutputLayer):
       if self.fast_bw_opts.get("loss_with_sigmoid_prob"):
         y = T.nnet.sigmoid(self.z)
         nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+      if self.fast_bw_opts.get("loss_with_out_norm"):
+        y /= T.sum(y, axis=2, keepdims=True)
+        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
@@ -610,6 +621,8 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
         known_grads[self.z] *= -2 * self.z
+      if self.fast_bw_opts.get("generic_act_grad"):  # maybe use together with loss_with_out_norm
+        known_grads[self.z] *= T.grad(None, self.z, known_grads={T.log(self.p_y_given_x): T.ones(y.shape, y.dtype)})
       if self.fast_bw_opts.get("no_explicit_z_grad"):
         del known_grads[self.z]
       if self.prior_scale and self.attrs.get('trained_softmax_prior', False):
