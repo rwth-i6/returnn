@@ -52,6 +52,7 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
+    old_index_map = self._index_map[:]
     self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if seq_list:
@@ -74,6 +75,8 @@ class CachedDataset(Dataset):
       self._init_start_cache()
     else:
       self._index_map = [ self._seq_index_inv[i] for i in seq_index ]
+      if self._index_map == old_index_map:
+        return False
     return True
 
   def _init_alloc_intervals(self):
