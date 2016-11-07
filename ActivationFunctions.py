@@ -56,6 +56,10 @@ def softmax(z):
 def gauss(z):
   return T.exp(-T.sqr(z))
 
+def cdf(z):
+  """Cumulative distribution function via erf (Error function)"""
+  return (numpy.float32(1) + T.erf(z)) / numpy.float32(2)
+
 def constant_one():
   return 1
 
@@ -83,7 +87,11 @@ ActivationFunctions = {
   'softmax': softmax,
   'gauss': gauss,
   "erf": T.erf,
-  "exp": T.exp
+  "exp": T.exp,
+  "abs": T.abs_,
+  "sqr": T.sqr,
+  "sqrt": T.sqrt,
+  "cdf": cdf
 }
 
 
