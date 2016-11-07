@@ -466,8 +466,32 @@ class ConvFMPLayer(ConvBaseLayer):
   layer_class = "conv_fmp"
   recurrent = False
 
-  def __init__(self, factor=numpy.sqrt(2), **kwargs):
+  def __init__(self, factor=numpy.sqrt(2), decay=1.0, min_factor=None, padding=False, **kwargs):
     super(ConvFMPLayer, self).__init__(**kwargs)
+    if min_factor is None:
+      min_factor = factor
+    factor = T.maximum(factor * (decay ** self.network.epoch), numpy.float32(min_factor))
+    sizes_raw = self.source.output_sizes
+
+    # handle size problems
+    if not padding:
+      padding = T.min(self.source.output_sizes / factor) <= 0
+      padding = theano.printing.Print(global_fn=maybe_print_pad_warning)(padding)
+
+    fixed_sizes = T.maximum(sizes_raw, T.cast(T.as_tensor(
+      [factor + self.filter_height - 1, factor + self.filter_width - 1]), 'float32'))
+    sizes = ifelse(padding, fixed_sizes, sizes_raw)
+    X_size = T.cast(T.max(sizes, axis=0), "int32")
+
+    def pad_fn(x_t, s):
+      x = T.alloc(numpy.cast["float32"](0), X_size[0], X_size[1], self.X.shape[3])
+      x = T.set_subtensor(x[:s[0], :s[1]], x_t[:s[0], :s[1]])
+      return x
+
+    fixed_X, _ = theano.scan(pad_fn, [self.X.dimshuffle(2, 0, 1, 3), T.cast(sizes_raw, "int32")])
+    fixed_X = fixed_X.dimshuffle(1, 2, 0, 3)
+    self.X = ifelse(padding, T.unbroadcast(fixed_X, 3), self.X)
+
     conv_out = CuDNNConvHWBCOpValidInstance(self.X, self.W, self.b)
-    conv_out_sizes = self.conv_output_size_from_input_size(self.source.output_sizes)
-    self.output, self.output_sizes = fmp(conv_out, conv_out_sizes, numpy.cast["float32"](factor))
+    conv_out_sizes = self.conv_output_size_from_input_size(sizes)
+    self.output, self.output_sizes = fmp(conv_out, conv_out_sizes, T.cast(factor,'float32'))
