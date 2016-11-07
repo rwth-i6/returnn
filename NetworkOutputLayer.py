@@ -378,6 +378,25 @@ class FramewiseOutputLayer(OutputLayer):
       else:
         return T.sum(
           T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]), axis=1)), known_grads
+    elif self.loss == "generic_ce":
+      # Should be generic for any activation function.
+      # (Except when the labels are not independent, such as for softmax.)
+      y = self.p_y_given_x  # Can be anything, e.g. exp or sigmoid, but not softmax.
+      y /= T.sum(y, axis=2, keepdims=True)
+      nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+      from TheanoUtil import class_idx_seq_to_1_of_k
+      y_idx = self.y
+      assert y_idx.ndim == 2
+      bw = class_idx_seq_to_1_of_k(y_idx, num_classes=self.attrs["n_out"])
+      assert bw.ndim == 3
+      err_inner = bw * nlog_scores
+      src_index = self.sources[0].index
+      float_idx = T.cast(src_index, "float32")
+      float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+      err = (err_inner * float_idx_bc).sum()
+      grad_f = T.grad(None, self.z, known_grads={T.log(self.p_y_given_x): T.ones(y.shape, y.dtype)})
+      known_grads = {self.z: grad_f * (y - bw) * float_idx_bc}
+      return err, known_grads
     else:
       assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
 
