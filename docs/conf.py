@@ -132,7 +132,7 @@ def linkcode_resolve(domain, info):
     except Exception:
         filename = info['module'].replace('.', '/') + '.py'
     tag = 'master' if 'dev' in release else ('v' + release)
-    return "https://github.com/doetsch/crnn/blob/%s/%s" % (tag, filename)
+    return "https://github.com/rwth-i6/crnn/blob/%s/%s" % (tag, filename)
 
 
 # -- Options for HTML output ----------------------------------------------
