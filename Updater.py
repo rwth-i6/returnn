@@ -24,8 +24,8 @@ class Updater:
     """
     Will construct a :class:`Updater` instance where all params are automatically determined by the given config.
 
-    :type config: Config.Config
-    :rtype Updater
+    :param Config.Config config:
+    :rtype: Updater
     """
     kwargs = {}
     for k, v in cls._get_kwarg_defaults().items():
