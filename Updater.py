@@ -14,10 +14,16 @@ from TheanoUtil import opt_contiguous_on_gpu
 
 class Updater:
 
+  """
+  This defines how to update the model parameters per mini-batch.
+  All kind of gradient-based optimization methods are implemented here, such as Adam etc.
+  """
+
   @classmethod
   def initFromConfig(cls, config):
     """
     Will construct a :class:`Updater` instance where all params are automatically determined by the given config.
+
     :type config: Config.Config
     :rtype Updater
     """
@@ -186,6 +192,7 @@ class Updater:
     This should be called in the process where you want to do the updating.
     All further calls must be from the same process.
     The network.gparams must be created in the same process.
+
     :type network: Network.LayerNetwork
     :type net_param_deltas: dict[theano.compile.sharedvalue.SharedVariable,theano.Variable] | None
     """
