@@ -358,7 +358,7 @@ class ConvBaseLayer(TwoDBaseLayer):
   layer_class = "conv_base"
   recurrent = False
 
-  def __init__(self, n_features, filter, activation="tanh", **kwargs):
+  def __init__(self, n_features, filter, base = [], activation="tanh", **kwargs):
     kwargs['n_out'] = n_features
     super(ConvBaseLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
@@ -377,8 +377,12 @@ class ConvBaseLayer(TwoDBaseLayer):
     self.filter_height = filter[0]
     self.filter_width = filter[1]
     self.activation = strtoact(activation)
-    self.W = self.create_conv_weights(n_features, self.n_in, self.filter_height, self.filter_width)
-    self.b = self.create_and_add_bias(n_features)
+    if base:
+      self.W = base[0].W
+      self.b = base[0].b
+    else:
+      self.W = self.create_conv_weights(n_features, self.n_in, self.filter_height, self.filter_width)
+      self.b = self.create_and_add_bias(n_features)
 
   def create_conv_weights(self, n_features, n_in, filter_height, filter_width, name_suffix = ""):
     filter_shape = (n_features, n_in, filter_height, filter_width)
