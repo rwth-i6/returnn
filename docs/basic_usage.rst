@@ -6,9 +6,7 @@ Basic usage
 
 Install RETURNN, :ref:`installation`.
 
-Now ``rnn.py`` is the main entry point. Usage:
-
-.. code-block::
+Now ``rnn.py`` is the main entry point. Usage::
 
 	./rnn.py <config-file> [other-params]
 
