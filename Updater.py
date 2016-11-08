@@ -16,6 +16,11 @@ class Updater:
 
   @classmethod
   def initFromConfig(cls, config):
+    """
+    Will construct a :class:`Updater` instance where all params are automatically determined by the given config.
+    :type config: Config.Config
+    :rtype Updater
+    """
     kwargs = {}
     for k, v in cls._get_kwarg_defaults().items():
       if type(v) == bool: g = config.bool
@@ -54,8 +59,8 @@ class Updater:
                adamdelta=False,
                adam_fit_learning_rate=True,
                adamax=False,
-               adamvr=False,  # adam with adasecant variance reduction
-               nadam=False,  # Adam with nag part momentum
+               adamvr=False,
+               nadam=False,
                nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
@@ -71,6 +76,45 @@ class Updater:
                grad_noise_rel_grad_norm=0.0,
                reset_update_params=False
                ):
+    """
+    Initializes the Updater class.
+    All the params determine the specific optimization variants and their hyper params.
+    Normally this is constructed by :func:`Updater.initFromConfig`.
+
+    :param momentum:
+    :param nesterov_momentum:
+    :param momentum2:
+    :param gradient_clip:
+    :param update_clip:
+    :param adagrad:
+    :param adadelta:
+    :param adadelta_decay:
+    :param adadelta_offset:
+    :param max_norm:
+    :param adasecant:
+    :param adam:
+    :param adamdelta:
+    :param adam_fit_learning_rate:
+    :param adamax:
+    :param adamvr: Adam with adasecant variance reduction
+    :param nadam: Adam with nag part momentum
+    :param nadam_decay:
+    :param mean_normalized_sgd:
+    :param mean_normalized_sgd_average_interpolation:
+    :param rmsprop:
+    :param smorms3:
+    :param update_multiple_models:
+    :param update_multiple_models_average_step:
+    :param update_multiple_models_average_step_i:
+    :param update_multiple_models_averaging:
+    :param update_multiple_models_param_is_cur_model:
+    :param multi_batch_update:
+    :param enforce_triangular_matrix_zero:
+    :param gradient_noise:
+    :param gradient_noise_decay:
+    :param grad_noise_rel_grad_norm:
+    :param reset_update_params:
+    """
     self.rng = numpy.random.RandomState(0o101)
     self.momentum = numpy.float32(momentum)
     self.nesterov_momentum = numpy.float32(nesterov_momentum)

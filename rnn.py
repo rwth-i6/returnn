@@ -1,5 +1,9 @@
 #!/usr/bin/env python2.7
 
+"""
+This is the main entry point. You can execute this file.
+"""
+
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
