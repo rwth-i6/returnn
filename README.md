@@ -16,8 +16,7 @@ Features include:
 - Memory management for large data sets
 - Work distribution across multiple devices
 
-There is some Sphinx documentation in `/docs`,
-but mostly in the code itself.
+[Please read the documentation for more information](http://returnn.readthedocs.io/).
 
 There are some example demos in `/demos`
 which work on artifically generated data,

@@ -11,6 +11,7 @@ User guide
 	:maxdepth: 2
 
 	installation
+	basic_usage
 
 
 API Reference
