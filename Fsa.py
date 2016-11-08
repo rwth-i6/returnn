@@ -1,7 +1,6 @@
 #!/usr/bin/env python2.7
 
 from __future__ import print_function
-import graphviz
 
 
 def ctc_fsa_for_label_seq(num_labels, label_seq):
@@ -149,7 +148,7 @@ def fsa_to_dot_format(file, num_states, edges):
 
   converts num_states and edges to dot file to svg file via graphviz
   '''
-
+  import graphviz
   G = graphviz.Digraph(format='svg')
 
   nodes = []
@@ -163,6 +162,7 @@ def fsa_to_dot_format(file, num_states, edges):
   filepath = "./tmp/" + file
   filename = G.render(filename=filepath)
   print("File saved in:", filename)
+
 
 def __add_nodes(graph, nodes):
   for n in nodes:
@@ -200,6 +200,7 @@ def main():
     num_states, edges = hmm_fsa_for_word_seq()
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
+
 
 if __name__ == "__main__":
   main()
