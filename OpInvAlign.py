@@ -99,7 +99,7 @@ class InvAlignOp(theano.Op):
 
 class InvDecodeOp(theano.Op):
   # Properties attribute
-  __props__ = ('tdps', 'nstates')
+  __props__ = ('tdps', 'nstates', "exit")
 
   # index_in, scores
   itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3]
@@ -114,7 +114,7 @@ class InvDecodeOp(theano.Op):
     max_length_y = 0
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
-      t, a = self._recognize(0, length_x, scores[:length_x, b], 3.0)
+      t, a = self._recognize(0, length_x, scores[:length_x, b])
       length_y = len(a)
       transcript[:length_y, b] = t
       attention[:length_y, b] = np.asarray(a) + b * index_in.shape[0]
@@ -125,8 +125,9 @@ class InvDecodeOp(theano.Op):
     output_storage[1][0] = attention
     output_storage[2][0] = index
 
-  def __init__(self, tdps, nstates): # TODO
+  def __init__(self, tdps, nstates, exit):
     self.nstates = nstates
+    self.exit = exit
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
@@ -146,7 +147,7 @@ class InvDecodeOp(theano.Op):
 
     return hmm
 
-  def _recognize(self, start, end, scores, wordPenalty):
+  def _recognize(self, start, end, scores):
     """recognizes a sequence from start until (excluded) end
     with inverse search s -> t_s"""
     inf = 1e30
@@ -163,25 +164,15 @@ class InvDecodeOp(theano.Op):
     leftScore = np.full((hmmLength, seqLength + skip - 1), inf)
     rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
 
-    leftStart = np.full((hmmLength, seqLength + skip - 1), 0,
-                        dtype=np.uint64)
-    rightStart = np.full((hmmLength, seqLength + skip - 1), 0,
-                         dtype=np.uint64)
+    leftStart = np.full((hmmLength, seqLength + skip - 1), 0, dtype=np.uint64)
+    rightStart = np.full((hmmLength, seqLength + skip - 1), 0, dtype=np.uint64)
 
-    leftEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
-                        dtype=np.int64)
-    rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
-                         dtype=np.int64)
+    leftEpoch = np.full((hmmLength, seqLength + skip - 1), - 1, dtype=np.int64)
+    rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1, dtype=np.int64)
 
-    bestWordEnds = \
-      np.full((int(maxDuration * seqLength), seqLength), - 1,
-              dtype=np.int64)
-    bestWordEndsStart = \
-      np.full((int(maxDuration * seqLength), seqLength), - 1,
-              dtype=np.int64)
-    bestWordEndsEpoch = \
-      np.full((int(maxDuration * seqLength), seqLength), - 1,
-              dtype=np.int64)
+    bestWordEnds = np.full((int(maxDuration * seqLength), seqLength), - 1, dtype=np.int64)
+    bestWordEndsStart = np.full((int(maxDuration * seqLength), seqLength), - 1, dtype=np.int64)
+    bestWordEndsEpoch = np.full((int(maxDuration * seqLength), seqLength), - 1, dtype=np.int64)
 
     # precompute all scores and densities
     score = np.full((hmmLength, seqLength + skip), inf)
@@ -208,7 +199,7 @@ class InvDecodeOp(theano.Op):
       bestWordEnd = np.argmin(np.concatenate(
         ([leftScore[0]],
          leftScore[self.nstates:hmmLength:
-         self.nstates] + wordPenalty)), axis=0)
+         self.nstates] + self.penalty)), axis=0)
 
       bestWordEnd = bestWordEnd * self.nstates
 
@@ -216,35 +207,26 @@ class InvDecodeOp(theano.Op):
       bestWordEndScore = np.min(np.concatenate(
         ([leftScore[0]],
          leftScore[self.nstates:hmmLength:
-         self.nstates] + wordPenalty)), axis=0)
+         self.nstates] + self.penalty)), axis=0)
 
       bestWordEnds[a] = bestWordEnd[skip - 1::]
       for t in range(0, seqLength):
-        bestWordEndsStart[a][t] = \
-          leftStart[bestWordEnd[t + skip - 1]][t + skip - 1]
-        bestWordEndsEpoch[a][t] = \
-          leftEpoch[bestWordEnd[t + skip - 1]][t + skip - 1]
+        bestWordEndsStart[a][t] = leftStart[bestWordEnd[t + skip - 1]][t + skip - 1]
+        bestWordEndsEpoch[a][t] = leftEpoch[bestWordEnd[t + skip - 1]][t + skip - 1]
 
       for s in range(0, hmmLength):
         # for silence allow special transitions (only 1)
         if s == 0:
           for t in range(0, seqLength - 1):
-            if leftScore[0][t + skip - 1] < \
-              bestWordEndScore[t + skip - 1] or \
-                bestWordEnd[t + skip - 1] == 0:
+            if leftScore[0][t + skip - 1] < bestWordEndScore[t + skip - 1] or bestWordEnd[t + skip - 1] == 0:
               # inner silence
-              rightScore[0][t + skip] = \
-                leftScore[0][t + skip - 1] + score[0][t + skip]
-              rightStart[0][t + skip] = \
-                leftStart[0][t + skip - 1]
-              rightEpoch[0][t + skip] = \
-                leftEpoch[0][t + skip - 1]
+              rightScore[0][t + skip] = leftScore[0][t + skip - 1] + score[0][t + skip]
+              rightStart[0][t + skip] = leftStart[0][t + skip - 1]
+              rightEpoch[0][t + skip] = leftEpoch[0][t + skip - 1]
             else:
               # to silence
               # only transition 1 is allowed
-              rightScore[0][t + skip] = \
-                bestWordEndScore[t + skip - 1] \
-                + score[0][t + skip]
+              rightScore[0][t + skip] = bestWordEndScore[t + skip - 1] + score[0][t + skip]
               rightStart[0][t + skip] = t + 1
               rightEpoch[0][t + skip] = a
 
@@ -276,12 +258,9 @@ class InvDecodeOp(theano.Op):
             # index corresponds to transition
             bestChoice = np.argmin(scores)
 
-            rightScore[s][t + skip - 1] = \
-              scores[bestChoice]
-            rightStart[s][t + skip - 1] = \
-              leftStart[s - 1][t + skip - 1 - bestChoice]
-            rightEpoch[s][t + skip - 1] = \
-              leftEpoch[s - 1][t + skip - 1 - bestChoice]
+            rightScore[s][t + skip - 1] = scores[bestChoice]
+            rightStart[s][t + skip - 1] = leftStart[s - 1][t + skip - 1 - bestChoice]
+            rightEpoch[s][t + skip - 1] = leftEpoch[s - 1][t + skip - 1 - bestChoice]
 
       # finish epoch
       leftScore, rightScore = rightScore, leftScore
@@ -289,10 +268,8 @@ class InvDecodeOp(theano.Op):
       leftEpoch, rightEpoch = rightEpoch, leftEpoch
 
       rightScore = np.full((hmmLength, seqLength + skip - 1), inf)
-      rightStart = np.full((hmmLength, seqLength + skip - 1), start,
-                           dtype=np.uint64)
-      rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1,
-                           dtype=np.int64)
+      rightStart = np.full((hmmLength, seqLength + skip - 1), start, dtype=np.uint64)
+      rightEpoch = np.full((hmmLength, seqLength + skip - 1), - 1, dtype=np.int64)
 
       # backtrack
       # backtrace = []
