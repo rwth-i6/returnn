@@ -60,7 +60,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'CRNN'
+project = u'RETURNN'
 copyright = u'2014–2016, %s contributors' % project
 
 # The version info for the project you're documenting, acts as replacement for
