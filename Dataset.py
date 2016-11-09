@@ -214,7 +214,7 @@ class Dataset(object):
       rnd.shuffle(seq_index)
       seq_index = []
       for i in xrange(bins):
-        if i == len(bins) - 1:
+        if i == bins - 1:
           part = seq_index[i * len(seq_index) / bins:]
         else:
           part = seq_index[i * len(seq_index) / bins:(i + 1) * len(seq_index) / bins]

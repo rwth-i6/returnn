@@ -322,7 +322,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
   if have_cudnn:
     conv_op = CuDNNConvHWBCOpValidInstance
     pool_op = PoolHWBCOp(poolsize)
-    conv_out = conv_op(X, W, b)
+    conv_out = conv_op(X, W, b) if filter_height * filter_width > 0 else X
     crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
     Y = pool_op(crop_out)
     Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
@@ -334,7 +334,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     filter_shape = (n_maps, n_in, filter_height, filter_width)
     X_shuffled = X.dimshuffle(2, 3, 0, 1)
     conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W, filter_shape=filter_shape,
-                           image_shape=(None, n_in, None, None))
+                           image_shape=(None, n_in, None, None)) if filter_height * filter_width > 0 else X
     crop_out = CropToBatchImageSizeInstance(conv_out.dimshuffle(2, 3, 0, 1), sizes).dimshuffle(2, 3, 0, 1)
     if poolsize == (1, 1):
       Y = crop_out
@@ -371,7 +371,7 @@ class ConvBaseLayer(TwoDBaseLayer):
     self.set_attr('n_features', n_features)
     self.set_attr('filter', filter)
     self.set_attr('activation', activation)
-    self.set_attr('n_out', n_features)
+    self.set_attr('n_out', n_features if numpy.prod(filter) > 0 else self.n_in)
 
     #TODO: maybe this ordering is not consistent with Dewis implementation
     self.filter_height = filter[0]
