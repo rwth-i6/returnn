@@ -218,7 +218,7 @@ class Dataset(object):
           part = seq_index[i * len(seq_index) / bins:]
         else:
           part = seq_index[i * len(seq_index) / bins:(i + 1) * len(seq_index) / bins]
-        part.sort(key=get_seq_len,reverse=(i%2==0))
+        part.sort(key=get_seq_len,reverse=(i%2==1))
         seq_index += part
     elif self.seq_ordering.startswith('random'):
       tmp = self.seq_ordering.split(':')
