@@ -99,7 +99,7 @@ class InvAlignOp(theano.Op):
 
 class InvDecodeOp(theano.Op):
   # Properties attribute
-  __props__ = ('tdps', 'nstates', "exit")
+  __props__ = ('tdps', 'nstates', "penalty")
 
   # index_in, scores
   itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3]
@@ -125,9 +125,9 @@ class InvDecodeOp(theano.Op):
     output_storage[1][0] = attention
     output_storage[2][0] = index
 
-  def __init__(self, tdps, nstates, exit):
+  def __init__(self, tdps, nstates, penalty):
     self.nstates = nstates
-    self.exit = exit
+    self.penalty = penalty
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
