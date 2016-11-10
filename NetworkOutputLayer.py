@@ -497,7 +497,13 @@ class SequenceOutputLayer(OutputLayer):
       nskips = inv_opts.get('nskips', 1)
       if len(tdps) - 2 < nskips:
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-      if self.eval_flag or ((inv_opts.get('eval', 'align') == 'search' and not self.train_flag)):
+      align = inv_opts.get('eval', 'align')
+      if self.eval_flag and align != 'time':
+        align = "search"
+      if self.eval_flag and align == 'time':
+        self.index = src_index
+        return
+      if not self.train_flag and align == 'search':
         y, att, idx = InvDecodeOp(tdps, n, inv_opts.get('penalty', 0))(src_index, -T.log(self.p_y_given_x))
         self.y_data_flat = y.flatten()
         max_length_y = T.max(idx.sum(axis=0))
