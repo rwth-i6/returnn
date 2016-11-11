@@ -7,29 +7,31 @@ class InvAlignOp(theano.Op):
 
   # index_in, index_out, scores, transcriptions
   itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
-  otypes = [theano.tensor.imatrix]
+  otypes = [theano.tensor.imatrix,theano.tensor.imatrix]
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
     attention = np.zeros(index_out.shape, 'int32')
+    alignment = np.zeros(index_in.shape, 'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
       length_y = index_out[:,b].sum()
-      attention[:length_y, b] = self._viterbi(0, length_x, scores[:length_x, b],
-                                              transcriptions[:length_y / self.nstates, b])
+      orth = transcriptions[:length_y / self.nstates, b]
+      attention[:length_y, b], alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
       attention[:,b] += b * index_in.shape[0]
-    output_storage[0][0] = attention
+    output_storage[0][0] = alignment
+    output_storage[1][0] = attention
 
   def __init__(self, tdps, nstates):
     self.nstates = nstates
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0]
+    return [output_grads[0] * 0,output_grads[0] * 0]
 
   def infer_shape(self, node, input_shapes):
-    return [input_shapes[1]]
+    return [input_shapes[0],input_shapes[1]]
 
   def _buildHmm(self, transcription):
     """Builds list of hmm states for transcription"""
@@ -86,6 +88,7 @@ class InvAlignOp(theano.Op):
         bt[s, t + skip - 1] = skip - 1 - best
 
     attention = np.full((lengthS), -1, dtype=np.int32)
+    alignment = np.full((lengthT), 0, dtype=np.int32)
 
     # backtrack
     t = lengthT - 1
@@ -93,8 +96,12 @@ class InvAlignOp(theano.Op):
     for s in range(lengthS - 2, -1, -1):
       tnew = t - bt[s + 1][t + skip - 1]
       attention[s] = tnew
+      #alignment[tnew:t] = 0
+      alignment[t] = 1
       t = tnew
-    return attention
+    #alignment[:t] = 0
+    alignment[t] = 1
+    return attention, alignment
 
 
 class InvDecodeOp(theano.Op):

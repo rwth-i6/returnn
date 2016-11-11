@@ -498,21 +498,54 @@ class SequenceOutputLayer(OutputLayer):
       if len(tdps) - 2 < nskips:
         tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
       align = inv_opts.get('eval', 'align')
-      if self.eval_flag and align != 'time':
+      if self.eval_flag and not align in ['time', 'predict']:
         align = "search"
       if self.eval_flag and align == 'time':
         self.index = src_index
         return
+      if align == 'predict':
+        self.seg = T.constant(0)
+        b_stop = self.add_param(self.create_bias(1,"b_stop_%s" % self.name))
+        stop = b_stop
+        self.W_stop = [self.add_param(
+          self.create_forward_weights(source.attrs['n_out'], 1, name="W_stop_%s_%s" % (source.name, self.name)))
+                       for source in self.sources]
+        for source, m, W in zip(self.sources, self.masks, self.W_stop):
+          stop += self.dot((self.mass * m if m is not None else numpy.float32(1)) * source.output, W)
+        stop = T.sin(T.cumsum(T.nnet.sigmoid(stop),axis=0)*numpy.float32(2*numpy.pi)) + numpy.float32(1)
+        stop = numpy.float32(0.5) * T.set_subtensor(stop[-1], T.ones_like(stop[-1]))[:,:,0]
       if not self.train_flag and align == 'search':
         y, att, idx = InvDecodeOp(tdps, n, inv_opts.get('penalty', 0))(src_index, -T.log(self.p_y_given_x))
         self.y_data_flat = y.flatten()
-        max_length_y = T.max(idx.sum(axis=0))
+        max_length_y = T.max(idx.sum(axis=0,acc_dtype='int32'))
         self.index = idx[:max_length_y]
         att = att[:max_length_y]
         self.y_data_flat = y[:max_length_y].flatten()
       else:
-        self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
-        att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+        if self.train_flag or align == 'align':
+          self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
+          aln, att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
+          if align == 'predict':
+            pick = stop.dimshuffle(1,0).flatten()[att.flatten()]
+            self.seg = -T.sum(T.log(T.maximum(pick,numpy.float32(1e-10))))
+        elif align == 'predict':
+          def reduce(b,x,y):
+            n_in = x.shape[0]
+            x = T.concatenate([T.zeros((1,),'float32'),x,T.zeros((1,),'float32')])
+            idx = (T.and_(T.ge(x[1:-1],x[:-2]), T.gt(x[1:-1],x[2:])) > 0).nonzero()[0] - numpy.int32(1)
+            n_out = T.maximum(idx.shape[0],y.shape[0])
+            index = T.concatenate([T.ones((n_out,), 'int8'), T.zeros((n_in - n_out + 1,), 'int8')], axis=0)
+            idx += b * stop.shape[0]
+            attend = T.concatenate([idx, idx[-1] + T.zeros((n_in - idx.shape[0] + 1,), 'int32')])
+            labels = T.concatenate([y, T.zeros((n_in - y.shape[0] + 1,), 'int32')])
+            return attend, index, labels
+          output, _ = theano.scan(reduce,[T.arange(stop.shape[1]),stop.dimshuffle(1,0),self.y.dimshuffle(1,0)])
+          index = output[1].dimshuffle(1,0)
+          max_length_y = T.max(T.sum(index,axis=0,acc_dtype='int32'))
+          att = output[0][:,:max_length_y].dimshuffle(1,0)
+          self.y_data_flat = output[2].dimshuffle(1,0)[:max_length_y].flatten()
+          self.norm = T.sum(self.index,dtype='float32')/T.sum(index,dtype='float32')
+          self.index = index[:max_length_y]
       self.i = (self.index.flatten() > 0).nonzero()
       self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
       self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
@@ -716,7 +749,7 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(nll), known_grads
     elif self.loss == 'inv':
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
-      return T.sum(nll) * self.norm, known_grads
+      return (self.seg + T.sum(nll)) * self.norm, known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
