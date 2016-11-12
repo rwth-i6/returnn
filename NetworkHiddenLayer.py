@@ -3349,9 +3349,14 @@ class AlignmentLayer(ForwardLayer):
       self.y_out = y_in
       max_length_y = y_in.shape[0]
       norm = numpy.float32(1)
+      ratt = att
+      rindex = self.index
     elif search == 'search':
       y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(p_skip))
-      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      if not self.eval_flag:
+        rindex = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
+        aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
+      norm = numpy.float32(1) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
       max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
       self.index = idx[:max_length_y]
       att = att[:max_length_y]
@@ -3371,24 +3376,33 @@ class AlignmentLayer(ForwardLayer):
     x_out = x_in.dimshuffle(1,0,2).reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[att.flatten()]
     self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
 
-    if search in ['align', 'decode']:
-      z_out = self.z.dimshuffle(1,0,2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
-      y_out = self.y_out.flatten()
-    elif search == 'search':
-      z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[att.flatten()]
-      y_out = T.concatenate([T.ones_like(att[:1]), att[1:] - att[:-1]]).flatten() - numpy.int32(1)
-    if search == 'time':
+    if search == 'time' or self.eval_flag:
       self.cost_val = 0
       self.error_val = 0
-    else:
+      return
+
+    self.known_grads = {}
+    if search in ['align', 'decode']:
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+      y_out = self.y_out.flatten()
       idx = (self.index.flatten() > 0).nonzero()
+    elif search == 'search':
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
+      y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1]]).flatten() - numpy.int32(1)
+      idx = (rindex.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      self.cost_val = norm * T.sum(nll)
-      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+      self.known_grads[self.z] = T.grad(norm * T.sum(nll), self.z)
+      z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[ratt.flatten()]
+    else:
+      assert False
+
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+    self.cost_val = norm * T.sum(nll)
+    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
 
   def cost(self):
-    return self.cost_val, None
+    return self.cost_val, self.known_grads
 
   def errors(self):
     return self.error_val

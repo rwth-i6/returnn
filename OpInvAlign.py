@@ -12,7 +12,7 @@ class InvAlignOp(theano.Op):
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
-    attention = np.zeros(index_out.shape, 'int32')
+    attention = np.zeros(index_out.shape, 'int32') - 1
     alignment = np.zeros(index_in.shape, 'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
@@ -116,7 +116,7 @@ class InvBacktrackOp(theano.Op):
   def perform(self, node, inputs_storage, output_storage):
     index_in, scores, transitions = inputs_storage[:3]
     transcript = np.zeros(index_in.shape,'int32')
-    attention = np.zeros(index_in.shape, 'int32')
+    attention = np.zeros(index_in.shape, 'int32') - 1
     index = np.zeros(index_in.shape, 'int8')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
