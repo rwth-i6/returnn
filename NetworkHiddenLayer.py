@@ -18,7 +18,7 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
+from OpInvAlign import InvAlignOp, InvDecodeOp, InvBacktrackOp
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -3307,3 +3307,88 @@ class DumpLayer(_NoOpLayer):
       from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
+
+class AlignmentLayer(ForwardLayer):
+  layer_class = "align"
+
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(AlignmentLayer, self).__init__(**kwargs)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    if self.eval_flag:
+      if search != 'time':
+        search = "search"
+      else:
+        self.index = self.sources[0].index
+        self.output = x_in
+        return
+
+    if search == 'search':
+      b_skip = self.add_param(self.create_bias(nskips + 1, "b_skip_%s" % self.name))
+      W_skip = self.add_param(self.create_forward_weights(n_out, nskips + 1, name="W_skip_%s" % self.name))
+      z_skip = self.dot(x_in, W_skip) + b_skip
+      p_skip = T.nnet.softmax(z_skip.reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))).reshape(z_skip.shape)
+
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    y_in = self.y_in[target].reshape(self.index.shape)
+
+    if self.train_flag or search == 'align':
+      self.index = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
+      aln, att = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      self.y_out = y_in
+      max_length_y = y_in.shape[0]
+      norm = numpy.float32(1)
+    elif search == 'search':
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(p_skip))
+      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    elif search == 'decode':
+      y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    else:
+      assert search == 'time'
+
+    x_out = x_in.dimshuffle(1,0,2).reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[att.flatten()]
+    self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+
+    if search in ['align', 'decode']:
+      z_out = self.z.dimshuffle(1,0,2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+      y_out = self.y_out.flatten()
+    elif search == 'search':
+      z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[att.flatten()]
+      y_out = T.concatenate([T.ones_like(att[:1]), att[1:] - att[:-1]]).flatten() - numpy.int32(1)
+    if search == 'time':
+      self.cost_val = 0
+      self.error_val = 0
+    else:
+      idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val

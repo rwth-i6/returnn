@@ -19,6 +19,8 @@ class InvAlignOp(theano.Op):
       length_y = index_out[:,b].sum()
       orth = transcriptions[:length_y / self.nstates, b]
       attention[:length_y, b], alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
+      #if b == 0:
+      #  print attention[:length_y, b]
       attention[:,b] += b * index_in.shape[0]
     output_storage[0][0] = alignment
     output_storage[1][0] = attention
@@ -96,13 +98,103 @@ class InvAlignOp(theano.Op):
     for s in range(lengthS - 2, -1, -1):
       tnew = t - bt[s + 1][t + skip - 1]
       attention[s] = tnew
-      #alignment[tnew:t] = 0
-      alignment[t] = 1
+      alignment[t] = t - tnew
       t = tnew
-    #alignment[:t] = 0
-    alignment[t] = 1
+    alignment[t] = t + 1
     return attention, alignment
 
+
+class InvBacktrackOp(theano.Op):
+  # Properties attribute
+  __props__ = ('tdps', 'nstates', "penalty")
+
+  # index_in, scores
+  itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3, theano.tensor.ftensor3]
+  otypes = [theano.tensor.imatrix, theano.tensor.imatrix, theano.tensor.bmatrix]
+
+  # Python implementation:
+  def perform(self, node, inputs_storage, output_storage):
+    index_in, scores, transitions = inputs_storage[:3]
+    transcript = np.zeros(index_in.shape,'int32')
+    attention = np.zeros(index_in.shape, 'int32')
+    index = np.zeros(index_in.shape, 'int8')
+    for b in range(scores.shape[1]):
+      length_x = index_in[:,b].sum()
+      t, a = self._recognize(scores[:length_x, b], transitions[:length_x, b])
+      #if b == 0:
+      #  print np.exp(-transitions[:length_x, b])
+      length_y = len(a)
+      transcript[:length_y, b] = t
+      attention[:length_y, b] = np.asarray(a) + b * index_in.shape[0]
+      index[:length_y, b] = 1
+
+    output_storage[0][0] = transcript
+    output_storage[1][0] = attention
+    output_storage[2][0] = index
+
+  def __init__(self, tdps, nstates, penalty):
+    self.nstates = nstates
+    self.penalty = penalty
+    self.tdps = tuple(tdps)
+
+  def grad(self, inputs, output_grads):
+    return [output_grads[0] * 0, output_grads[1] * 0, output_grads[2] * 0]
+
+  def infer_shape(self, node, input_shapes):
+    return [input_shapes[0], input_shapes[0], input_shapes[0]]
+
+  def _buildHmm(self, transcription):
+    transcriptionLength = transcription.shape[0]
+    hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
+
+    for i in range(0, transcriptionLength):
+      startState = transcription[i] * self.nstates + 1
+      for s in range(0, self.nstates):
+        hmm[i * self.nstates + s] = startState + s - 1
+
+    return hmm
+
+  def _recognize_old(self, scores, transitions):
+    lengthT = scores.shape[0]
+    transcript = []
+    attention = []
+    t = lengthT - 1
+    while t >= 0:
+      attention.append(t)
+      transcript.append(scores[t].argmax())
+      t -= transitions[t].argmax() + 1
+    return transcript, attention
+
+  def _recognize(self, scores, transitions):
+    lengthT = scores.shape[0]
+    lengthS = transitions.shape[1]
+
+    cost = np.full((lengthT, lengthT), np.inf, 'float32')
+    back = np.full((lengthT, lengthT), np.inf, 'int32')
+
+    cost[0] = np.min(scores[0])
+    back[0] = -1
+
+    transcript = []
+    attention = []
+
+    for s in xrange(1, lengthT):
+      for t in xrange(lengthT):
+        cost[s, t] = np.min(scores[s])
+        q = transitions[t].copy()
+        q[:min(t,lengthS)] += cost[s-1, t - min(t,lengthS) : t]
+        back[s, t] = q.argmin() + 1
+        cost[s, t] += q.min()
+
+    t = lengthT - 1
+    s = 1
+    while t >= 0 and s < lengthT:
+      if s == 1 or scores[t].argmin() != transcript[-1]:
+        attention.append(t)
+        transcript.append(scores[t].argmin())
+      t -= back[-s, t]
+      s += 1
+    return transcript[::-1], attention[::-1]
 
 class InvDecodeOp(theano.Op):
   # Properties attribute
@@ -115,12 +207,12 @@ class InvDecodeOp(theano.Op):
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, scores = inputs_storage[:2]
-    transcript = np.zeros(index_in.shape,'int32')
+    transcript = np.zeros(index_in.shape, 'int32')
     attention = np.zeros(index_in.shape, 'int32')
     index = np.zeros(index_in.shape, 'int8')
     max_length_y = 0
     for b in range(scores.shape[1]):
-      length_x = index_in[:,b].sum()
+      length_x = index_in[:, b].sum()
       t, a = self._recognize(0, length_x, scores[:length_x, b])
       length_y = len(a)
       transcript[:length_y, b] = t
