@@ -19,6 +19,7 @@ from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from OpInvAlign import InvAlignOp, InvDecodeOp, InvBacktrackOp
+from TheanoUtil import print_to_file
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -3346,8 +3347,8 @@ class AlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       self.index = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
       aln, att = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
-      self.y_out = y_in
-      max_length_y = y_in.shape[0]
+      self.y_out = y_in if nstates == 1 else y_in.repeat(nstates, axis=0)
+      max_length_y = self.y_out.shape[0]
       norm = numpy.float32(1)
       ratt = att
       rindex = self.index
@@ -3376,9 +3377,9 @@ class AlignmentLayer(ForwardLayer):
     x_out = x_in.dimshuffle(1,0,2).reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[att.flatten()]
     self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
 
+    self.cost_val = numpy.float32(0)
+    self.error_val = numpy.int32(0)
     if search == 'time' or self.eval_flag:
-      self.cost_val = 0
-      self.error_val = 0
       return
 
     self.known_grads = {}
@@ -3386,19 +3387,37 @@ class AlignmentLayer(ForwardLayer):
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
       y_out = self.y_out.flatten()
       idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
-      y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1]]).flatten() - numpy.int32(1)
+      y_out = self.y_out.flatten()
       idx = (rindex.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.known_grads[self.z] = T.grad(norm * T.sum(nll), self.z)
       z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[ratt.flatten()]
-    else:
-      assert False
+      y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1]],axis=0) - numpy.int32(1)
+      #if not self.train_flag:
+      #  y_out = print_to_file('yout', y_out)
+      #  rindex = print_to_file('idx', rindex)
+      y_out = y_out.flatten()
+      idx = rindex #T.concatenate([rindex,T.zeros_like(rindex[0]).dimshuffle('x',0)],axis=0)
+      idx = (T.set_subtensor(idx[0,:],numpy.int8(0) + T.eq(idx.shape[0],1)).flatten() > 0).nonzero()
+      #z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[att.flatten()]
+      #y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1],
+      #                       T.ones_like(ratt[:1]).repeat(att.shape[0] - T.maximum(att.shape[0], ratt.shape[0]) + 1, axis=0)
+      #                       ])[:-1].flatten() - numpy.int32(1)
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      import theano.ifelse
+      self.cost_val = norm * numpy.float32(1.0) * theano.ifelse.ifelse(T.gt(rindex.shape[0],1), T.sum(nll), self.cost_val)
+      self.error_val = norm * theano.ifelse.ifelse(T.gt(rindex.shape[0],1), T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]),dtype='int32'), self.error_val)
 
-    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-    self.cost_val = norm * T.sum(nll)
-    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+      #est = T.argmax(z_out, axis=1).reshape(rindex.shape)
+      #est = print_to_file('est', est)
+      #self.error_val = norm * theano.ifelse.ifelse(T.gt(rindex.shape[0], 1),
+      #                                             T.sum(T.neq(est.flatten()[idx], y_out[idx]),dtype='int32'), numpy.int32(0))
+
 
 
   def cost(self):

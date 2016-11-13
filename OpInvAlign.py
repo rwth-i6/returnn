@@ -12,7 +12,7 @@ class InvAlignOp(theano.Op):
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
-    attention = np.zeros(index_out.shape, 'int32') - 1
+    attention = np.zeros(index_out.shape, 'int32')
     alignment = np.zeros(index_in.shape, 'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
@@ -116,7 +116,7 @@ class InvBacktrackOp(theano.Op):
   def perform(self, node, inputs_storage, output_storage):
     index_in, scores, transitions = inputs_storage[:3]
     transcript = np.zeros(index_in.shape,'int32')
-    attention = np.zeros(index_in.shape, 'int32') - 1
+    attention = np.zeros(index_in.shape, 'int32')
     index = np.zeros(index_in.shape, 'int8')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
@@ -154,16 +154,19 @@ class InvBacktrackOp(theano.Op):
 
     return hmm
 
-  def _recognize_old(self, scores, transitions):
+  def _recognize2(self, scores, transitions):
     lengthT = scores.shape[0]
     transcript = []
     attention = []
     t = lengthT - 1
     while t >= 0:
-      attention.append(t)
-      transcript.append(scores[t].argmax())
-      t -= transitions[t].argmax() + 1
-    return transcript, attention
+      label = scores[t].argmin()
+      if label % self.nstates == self.nstates - 1:
+        if True or len(transcript) == 0 or label / self.nstates != transcript[-1]:
+          attention.append(t)
+          transcript.append(label / self.nstates)
+      t -= transitions[t].argmin() + 1
+    return transcript[::-1], attention[::-1]
 
   def _recognize(self, scores, transitions):
     lengthT = scores.shape[0]
@@ -179,22 +182,25 @@ class InvBacktrackOp(theano.Op):
     attention = []
 
     for s in xrange(1, lengthT):
-      for t in xrange(lengthT):
+      for t in xrange(min(s * lengthS, lengthT)):
+        #if s % self.nstates == 0: # end state
+
         cost[s, t] = np.min(scores[s])
         q = transitions[t].copy()
-        q[:min(t,lengthS)] += cost[s-1, t - min(t,lengthS) : t]
+        q[:min(t,lengthS)] += cost[s - 1, t - min(t,lengthS) : t]
         back[s, t] = q.argmin() + 1
         cost[s, t] += q.min()
 
     t = lengthT - 1
     s = 1
     while t >= 0 and s < lengthT:
-      if s == 1 or scores[t].argmin() != transcript[-1]:
+      if s % self.nstates == 0:
         attention.append(t)
-        transcript.append(scores[t].argmin())
+        transcript.append(scores[t].argmin()  / self.nstates)
       t -= back[-s, t]
       s += 1
     return transcript[::-1], attention[::-1]
+
 
 class InvDecodeOp(theano.Op):
   # Properties attribute
