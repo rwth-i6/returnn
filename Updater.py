@@ -679,28 +679,28 @@ class Updater:
 
         loss_ch_fact = loss / loss_prev
 
-        ch_fact_lbound = T.switch(T.greater(loss, loss_prev), 1 + thl, 1 / (1 + thu))
-        ch_fact_ubound = T.switch(T.greater(loss, loss_prev), 1 + thu, 1 / (1 + thl))
+        ch_fact_lbound = T.switch(T.gt(loss, loss_prev), 1 + thl, 1 / (1 + thu))
+        ch_fact_ubound = T.switch(T.gt(loss, loss_prev), 1 + thu, 1 / (1 + thl))
 
-        loss_ch_fact = T.switch(T.lesser(loss_ch_fact, ch_fact_lbound), ch_fact_lbound, loss_ch_fact)
-        loss_ch_fact = T.switch(T.greater(loss_ch_fact, ch_fact_ubound), ch_fact_ubound, loss_ch_fact)
-        loss_hat = T.switch(T.greater(i_t, 1), loss_prev * loss_ch_fact, loss)
+        loss_ch_fact = T.switch(T.lt(loss_ch_fact, ch_fact_lbound), ch_fact_lbound, loss_ch_fact)
+        loss_ch_fact = T.switch(T.gt(loss_ch_fact, ch_fact_ubound), ch_fact_ubound, loss_ch_fact)
+        loss_hat = T.switch(T.gt(i_t, 1), loss_prev * loss_ch_fact, loss)
 
-        d_den = T.switch(T.greater(loss_hat, loss_prev), loss_prev, loss_hat)
-        d_t = (beta3 * d_prev) + (1. - beta3) * T.abs( (loss_hat - loss_prev) / d_den )
-        d_t = T.switch(T.greater(i_t, 1), d_t, 1.)
+        d_den = T.switch(T.gt(loss_hat, loss_prev), loss_prev, loss_hat)
+        d_t = T.cast( (beta3 * d_prev) + (1. - beta3) * T.abs_((loss_hat - loss_prev) / d_den), dtype="float32" )
+        d_t = T.switch(T.gt(i_t, 1), d_t, 1.)
         updates.append((d_prev, d_t))
 
         m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        mhat_t = m_t / (1. - T.pow(beta_1, i_t))
+        mhat_t = m_t / (1. - T.pow(beta1, i_t))
         updates.append((m_prev, m_t))
 
         v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
-        vhat_t = v_t / (1. - T.pow(beta_2, i_t))
+        vhat_t = v_t / (1. - T.pow(beta2, i_t))
         updates.append((v_prev, v_t))
 
         self.adam_offset = numpy.float32(1e-16)
-        step = - (self.learning_rate_var / (1. + (i_t * self.decay))) * mhat_t / ((K.sqrt(vhat_t) * d_t) + self.adam_offset)
+        step = - self.learning_rate_var * mhat_t / ((T.sqrt(vhat_t) * d_t) + self.adam_offset)
         upd[param] += step
 
       elif self.adam:
