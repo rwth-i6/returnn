@@ -3313,7 +3313,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', **kwargs):
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -3322,9 +3322,13 @@ class AlignmentLayer(ForwardLayer):
       tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
     else:
       nskips = len(tdps) - 2
-    m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
-    kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    if train_skips:
+      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    else:
+      kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
+    self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
     self.set_attr('n_out', n_out)
@@ -3332,15 +3336,19 @@ class AlignmentLayer(ForwardLayer):
       tdps = [1e10, 0., 3.]
     if len(tdps) - 2 < nskips:
       tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-    else:
-      nskips = len(tdps) - 2
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
     if self.eval_flag:
       if search != 'time':
         search = "search"
       else:
         self.index = self.sources[0].index
         self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
         return
+    else:
+      if search == 'time':
+        search = 'align'
 
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
@@ -3379,34 +3387,35 @@ class AlignmentLayer(ForwardLayer):
     x_out = x_in.dimshuffle(1,0,2).reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[att.flatten()]
     self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
 
-    self.cost_val = numpy.float32(0)
-    self.error_val = numpy.int32(0)
-    if search == 'time' or self.eval_flag:
+    if self.attrs['search'] == 'time' or self.eval_flag:
       return
 
-    self.known_grads = {}
     if search in ['align', 'decode']:
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
-      y_out = self.y_out * len(m_skip)
-      y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
       idx = (self.index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
-      y_out = self.y_out * len(m_skip)
-      y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
-      #y_out = self.y_out.flatten()
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
       idx = (rindex.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      #self.known_grads[self.z] = T.grad(norm * T.sum(nll), self.z)
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
 
   def cost(self):
-    return self.cost_val, self.known_grads
+    return self.cost_val, None
 
   def errors(self):
     return self.error_val
