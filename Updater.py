@@ -68,6 +68,7 @@ class Updater:
                adamvr=False,
                nadam=False,
                nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
+               eve=False,
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -102,6 +103,7 @@ class Updater:
     :param adamdelta:
     :param adam_fit_learning_rate:
     :param adamax:
+    :param eve: Eve optimizer - Adam with a feedback from loss
     :param adamvr: Adam with adasecant variance reduction
     :param nadam: Adam with nag part momentum
     :param nadam_decay:
@@ -137,6 +139,7 @@ class Updater:
     self.nadam = nadam
     self.nadam_decay = nadam_decay
     self.adam = adam
+    self.eve = eve
     self.adamdelta = adamdelta
     self.adam_fit_learning_rate = adam_fit_learning_rate
     self.adamax = adamax
@@ -185,6 +188,8 @@ class Updater:
       print >> log.v4, "using adam"
     if self.nadam:
       print >> log.v4, "using adam with nag and momentum schedule"
+    if self.eve:
+      print >> log.v4, "using eve optimizer (Adam with feedback)"
 
   def initVars(self, network, net_param_deltas):
     """
@@ -358,6 +363,7 @@ class Updater:
     updates.append((self.e, e_t))
     beta1=numpy.float32(0.9)
     beta2=numpy.float32(0.999)
+    beta3=numpy.float32(0.999)
 
     default_output_layer = None
     batch_num_output_frames = None
@@ -660,6 +666,42 @@ class Updater:
         updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))
         updates.append((v_prev, v))
+
+      elif self.eve: # https://arxiv.org/pdf/1611.01505v1.pdf https://github.com/jayanthkoushik/sgd-feedback/blob/master/src/eve.py
+        loss = self.network.get_objective() # current objective value
+        loss_prev = self.var(0, name="loss at t-1")
+        d_prev = self.var(1, name="d_(t-1)")
+
+        m_prev = self.var(param, zero=True, name="eve_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="eve_v_%s" % param.name)
+        thl = 0.1
+        thu = 10.
+
+        loss_ch_fact = loss / loss_prev
+
+        ch_fact_lbound = T.switch(T.greater(loss, loss_prev), 1 + thl, 1 / (1 + thu))
+        ch_fact_ubound = T.switch(T.greater(loss, loss_prev), 1 + thu, 1 / (1 + thl))
+
+        loss_ch_fact = T.switch(T.lesser(loss_ch_fact, ch_fact_lbound), ch_fact_lbound, loss_ch_fact)
+        loss_ch_fact = T.switch(T.greater(loss_ch_fact, ch_fact_ubound), ch_fact_ubound, loss_ch_fact)
+        loss_hat = T.switch(T.greater(i_t, 1), loss_prev * loss_ch_fact, loss)
+
+        d_den = T.switch(T.greater(loss_hat, loss_prev), loss_prev, loss_hat)
+        d_t = (beta3 * d_prev) + (1. - beta3) * T.abs( (loss_hat - loss_prev) / d_den )
+        d_t = T.switch(T.greater(i_t, 1), d_t, 1.)
+        updates.append((d_prev, d_t))
+
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        mhat_t = m_t / (1. - T.pow(beta_1, i_t))
+        updates.append((m_prev, m_t))
+
+        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        vhat_t = v_t / (1. - T.pow(beta_2, i_t))
+        updates.append((v_prev, v_t))
+
+        self.adam_offset = numpy.float32(1e-16)
+        step = - (self.learning_rate_var / (1. + (i_t * self.decay))) * mhat_t / ((K.sqrt(vhat_t) * d_t) + self.adam_offset)
+        upd[param] += step
 
       elif self.adam:
         #epsilon = numpy.float32(1e-8)

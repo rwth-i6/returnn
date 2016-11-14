@@ -133,6 +133,7 @@ class ExternSprintDataset(SprintDataset):
     args = [
       self.sprintTrainerExecPath,
       "--*.seed=%i" % (epoch // self.partitionEpoch)]
+    print >> log.v1, "partitionEpoch = %d" % self.partitionEpoch
     if self.partitionEpoch > 1:
       args += [
         "--*.corpus.partition=%i" % self.partitionEpoch,
