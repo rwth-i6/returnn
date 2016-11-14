@@ -3309,13 +3309,21 @@ class DumpLayer(_NoOpLayer):
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
 
+
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
   def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+    kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
     super(AlignmentLayer, self).__init__(**kwargs)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
@@ -3334,12 +3342,6 @@ class AlignmentLayer(ForwardLayer):
         self.output = x_in
         return
 
-    if search == 'search':
-      b_skip = self.add_param(self.create_bias(nskips + 1, "b_skip_%s" % self.name))
-      W_skip = self.add_param(self.create_forward_weights(n_out, nskips + 1, name="W_skip_%s" % self.name))
-      z_skip = self.dot(x_in, W_skip) + b_skip
-      p_skip = T.nnet.softmax(z_skip.reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))).reshape(z_skip.shape)
-
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
     y_in = self.y_in[target].reshape(self.index.shape)
@@ -3353,7 +3355,7 @@ class AlignmentLayer(ForwardLayer):
       ratt = att
       rindex = self.index
     elif search == 'search':
-      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(p_skip))
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       if not self.eval_flag:
         rindex = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
         aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
@@ -3385,39 +3387,22 @@ class AlignmentLayer(ForwardLayer):
     self.known_grads = {}
     if search in ['align', 'decode']:
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
-      y_out = self.y_out.flatten()
+      y_out = self.y_out * len(m_skip)
+      y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       idx = (self.index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
-      y_out = self.y_out.flatten()
+      y_out = self.y_out * len(m_skip)
+      y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      #y_out = self.y_out.flatten()
       idx = (rindex.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      self.known_grads[self.z] = T.grad(norm * T.sum(nll), self.z)
-      z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[ratt.flatten()]
-      y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1]],axis=0) - numpy.int32(1)
-      #if not self.train_flag:
-      #  y_out = print_to_file('yout', y_out)
-      #  rindex = print_to_file('idx', rindex)
-      y_out = y_out.flatten()
-      idx = rindex #T.concatenate([rindex,T.zeros_like(rindex[0]).dimshuffle('x',0)],axis=0)
-      idx = (T.set_subtensor(idx[0,:],numpy.int8(0) + T.eq(idx.shape[0],1)).flatten() > 0).nonzero()
-      #z_out = z_skip.dimshuffle(1, 0, 2).reshape((z_skip.shape[0] * z_skip.shape[1], z_skip.shape[2]))[att.flatten()]
-      #y_out = T.concatenate([T.ones_like(ratt[:1]), ratt[1:] - ratt[:-1],
-      #                       T.ones_like(ratt[:1]).repeat(att.shape[0] - T.maximum(att.shape[0], ratt.shape[0]) + 1, axis=0)
-      #                       ])[:-1].flatten() - numpy.int32(1)
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      import theano.ifelse
-      self.cost_val = norm * numpy.float32(1.0) * theano.ifelse.ifelse(T.gt(rindex.shape[0],1), T.sum(nll), self.cost_val)
-      self.error_val = norm * theano.ifelse.ifelse(T.gt(rindex.shape[0],1), T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]),dtype='int32'), self.error_val)
-
-      #est = T.argmax(z_out, axis=1).reshape(rindex.shape)
-      #est = print_to_file('est', est)
-      #self.error_val = norm * theano.ifelse.ifelse(T.gt(rindex.shape[0], 1),
-      #                                             T.sum(T.neq(est.flatten()[idx], y_out[idx]),dtype='int32'), numpy.int32(0))
-
+      #self.known_grads[self.z] = T.grad(norm * T.sum(nll), self.z)
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
 
   def cost(self):
