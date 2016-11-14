@@ -667,17 +667,17 @@ class Updater:
         updates.append((m_prev, m))
         updates.append((v_prev, v))
 
-      elif self.eve: # https://arxiv.org/pdf/1611.01505v1.pdf https://github.com/jayanthkoushik/sgd-feedback/blob/master/src/eve.py
-        loss = self.network.get_objective() # current objective value
+      elif self.eve:  # https://arxiv.org/pdf/1611.01505v1.pdf https://github.com/jayanthkoushik/sgd-feedback/blob/master/src/eve.py
+        loss = self.network.get_objective()  # current objective value
         loss_prev = self.var(0, name="loss at t-1")
         d_prev = self.var(1, name="d_(t-1)")
 
         m_prev = self.var(param, zero=True, name="eve_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="eve_v_%s" % param.name)
-        thl = 0.1
-        thu = 10.
+        thl = numpy.float32(0.1)
+        thu = numpy.float32(10.)
 
-        loss_ch_fact = loss / loss_prev
+        loss_ch_fact = T.cast(loss / loss_prev, dtype="float32")
 
         ch_fact_lbound = T.switch(T.gt(loss, loss_prev), 1 + thl, 1 / (1 + thu))
         ch_fact_ubound = T.switch(T.gt(loss, loss_prev), 1 + thu, 1 / (1 + thl))
@@ -687,21 +687,22 @@ class Updater:
         loss_hat = T.switch(T.gt(i_t, 1), loss_prev * loss_ch_fact, loss)
 
         d_den = T.switch(T.gt(loss_hat, loss_prev), loss_prev, loss_hat)
-        d_t = T.cast( (beta3 * d_prev) + (1. - beta3) * T.abs_((loss_hat - loss_prev) / d_den), dtype="float32" )
-        d_t = T.switch(T.gt(i_t, 1), d_t, 1.)
+        d_t = T.cast( (beta3 * d_prev) + (1. - beta3) * T.abs_((loss_hat - loss_prev)) / d_den, dtype="float32" )
+        d_t = T.cast( T.switch(T.gt(i_t, 1), d_t, 1.), dtype="float32" )
         updates.append((d_prev, d_t))
 
         m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        mhat_t = m_t / (1. - T.pow(beta1, i_t))
+        mhat_t = m_t / (1. - beta1**i_t)
         updates.append((m_prev, m_t))
 
         v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
-        vhat_t = v_t / (1. - T.pow(beta2, i_t))
+        vhat_t = v_t / (1. - beta2**i_t)
         updates.append((v_prev, v_t))
 
         self.adam_offset = numpy.float32(1e-16)
-        step = - self.learning_rate_var * mhat_t / ((T.sqrt(vhat_t) * d_t) + self.adam_offset)
-        upd[param] += step
+        step = self.learning_rate_var * mhat_t / ((T.sqrt(vhat_t) * d_t) + self.adam_offset)
+        upd[param] += -step
+        updates.append((loss_prev, loss))
 
       elif self.adam:
         #epsilon = numpy.float32(1e-8)
