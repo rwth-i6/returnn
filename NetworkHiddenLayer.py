@@ -63,6 +63,18 @@ class ForwardLayer(HiddenLayer):
     self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+class ClippingLayer(HiddenLayer):
+  layer_class = "clip"
+
+  def __init__(self, sparse_window = 1, **kwargs):
+    super(ClippingLayer, self).__init__(**kwargs)
+    z = self.get_linear_forward_output()
+    target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    i = (self.y_in[target].flatten() > 0).nonzero()
+    znew = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+    #self.make_output(z)
+    self.make_output(znew[i].reshape((T.sum(self.y_in[target]), z.shape[1], z.shape[2])))
+    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class EmbeddingLayer(ForwardLayer):
   layer_class = "embedding"
