@@ -3349,19 +3349,17 @@ class AlignmentLayer(ForwardLayer):
     else:
       if search == 'time':
         search = 'align'
-
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
     y_in = self.y_in[target].reshape(self.index.shape)
 
     if self.train_flag or search == 'align':
-      self.index = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
-      aln, att = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
-      self.y_out = y_in if nstates == 1 else y_in.repeat(nstates, axis=0)
-      max_length_y = self.y_out.shape[0]
+      y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      max_length_y = y_out.shape[0]
       norm = numpy.float32(1)
       ratt = att
-      rindex = self.index
+      self.index = theano.gradient.disconnected_grad(rindex)
+      self.y_out = y_out
     elif search == 'search':
       y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       if not self.eval_flag:

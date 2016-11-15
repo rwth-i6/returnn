@@ -440,7 +440,6 @@ class SequenceOutputLayer(OutputLayer):
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
-    if inv_opts is None: inv_opts = {}
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing
@@ -453,14 +452,8 @@ class SequenceOutputLayer(OutputLayer):
         import json
         fast_bw_opts = json.loads(fast_bw_opts)
       self.set_attr("fast_bw_opts", fast_bw_opts)
-    if inv_opts:
-      if not isinstance(inv_opts, dict):
-        import json
-        inv_opts = json.loads(inv_opts)
-      self.set_attr("inv_opts", inv_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
-    self.inv_opts = CollectionReadCheckCovered(inv_opts or {})
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:

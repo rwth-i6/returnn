@@ -7,33 +7,36 @@ class InvAlignOp(theano.Op):
 
   # index_in, index_out, scores, transcriptions
   itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
-  otypes = [theano.tensor.imatrix,theano.tensor.imatrix]
+  otypes = [theano.tensor.imatrix,theano.tensor.imatrix,theano.tensor.bmatrix]
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
     index_in, index_out, scores, transcriptions = inputs_storage[:4]
-    attention = np.zeros(index_out.shape, 'int32')
-    alignment = np.zeros(index_in.shape, 'int32')
+    shape = (index_out.shape[0] * self.nstates, index_out.shape[1])
+    attention = np.zeros(shape, 'int32')
+    index = np.zeros(shape, 'int8')
+    labelling = np.zeros(shape, 'int32')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
-      length_y = index_out[:,b].sum()
+      length_y = index_out[:,b].sum() * self.nstates
+      index[:length_y, b] = np.int8(1)
       orth = transcriptions[:length_y / self.nstates, b]
-      attention[:length_y, b], alignment[:length_x, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
-      #if b == 0:
-      #  print attention[:length_y, b]
+      attention[:length_y, b], labelling[:length_y, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
       attention[:,b] += b * index_in.shape[0]
-    output_storage[0][0] = alignment
+    output_storage[0][0] = labelling
     output_storage[1][0] = attention
+    output_storage[2][0] = index
 
   def __init__(self, tdps, nstates):
     self.nstates = nstates
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0] * 0,output_grads[0] * 0]
+    return [output_grads[0],output_grads[1],output_grads[2]]
 
   def infer_shape(self, node, input_shapes):
-    return [input_shapes[0],input_shapes[1]]
+    shape = (input_shapes[1][0] * self.nstates, input_shapes[1][1])
+    return [shape,shape,shape]
 
   def _buildHmm(self, transcription):
     """Builds list of hmm states for transcription"""
@@ -90,18 +93,18 @@ class InvAlignOp(theano.Op):
         bt[s, t + skip - 1] = skip - 1 - best
 
     attention = np.full((lengthS), -1, dtype=np.int32)
-    alignment = np.full((lengthT), 0, dtype=np.int32)
+    labelling = np.full((lengthS), 0, dtype=np.int32)
 
     # backtrack
     t = lengthT - 1
     attention[lengthS - 1] = lengthT - 1
+    labelling[lengthS - 1] = transcription[-1]
     for s in range(lengthS - 2, -1, -1):
       tnew = t - bt[s + 1][t + skip - 1]
       attention[s] = tnew
-      alignment[t] = t - tnew
+      labelling[s] = transcription[s / self.nstates]
       t = tnew
-    alignment[t] = t + 1
-    return attention, alignment
+    return attention, labelling
 
 
 class InvBacktrackOp(theano.Op):
