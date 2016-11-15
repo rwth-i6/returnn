@@ -3313,7 +3313,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, **kwargs):
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -3382,8 +3382,12 @@ class AlignmentLayer(ForwardLayer):
     else:
       assert search == 'time'
 
-    x_out = x_in.dimshuffle(1,0,2).reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[att.flatten()]
-    self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+    if output_attention:
+      self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      self.attrs['n_out'] = 1
+    else:
+      x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+      self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
 
     if self.attrs['search'] == 'time' or self.eval_flag:
       return
