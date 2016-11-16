@@ -585,6 +585,11 @@ class SequenceOutputLayer(OutputLayer):
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       y = self.p_y_given_x
       assert y.ndim == 3
+      if self.fast_bw_opts.get("merge_y_from"):
+        factor = self.fast_bw_opts.get("merge_y_from_factor", 0.5)
+        out2 = self.fast_bw_opts.get("merge_y_from")
+        y2 = self.network.output[out2].p_y_given_x
+        y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
       if self.fast_bw_opts.get("y_gauss_blur_sigma"):
         from TheanoUtil import gaussian_filter_1d
         y = gaussian_filter_1d(y, axis=0,
