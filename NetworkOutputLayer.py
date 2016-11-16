@@ -587,32 +587,40 @@ class SequenceOutputLayer(OutputLayer):
         out2 = self.fast_bw_opts.get("bw_from")
         bw = self.network.output[out2].baumwelch_alignment
       else:
-        y = self.p_y_given_x
-        assert y.ndim == 3
-        if self.fast_bw_opts.get("merge_y_from"):
-          factor = self.fast_bw_opts.get("merge_y_from_factor", 0.5)
-          out2 = self.fast_bw_opts.get("merge_y_from")
-          y2 = self.network.output[out2].p_y_given_x
-          y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
-        if self.fast_bw_opts.get("y_gauss_blur_sigma"):
-          from TheanoUtil import gaussian_filter_1d
-          y = gaussian_filter_1d(y, axis=0,
-            sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
-            window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
-        if self.fast_bw_opts.get("y_lower_clip"):
-          y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
-        y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
-        nlog_scores = -T.log(y)  # in -log space
-        am_scores = nlog_scores
-        am_scale = self.attrs.get("am_scale", 1)
-        if am_scale != 1:
-          am_scale = numpy.float32(am_scale)
-          am_scores *= am_scale
-        if self.prior_scale and not self.attrs.get("substract_prior_from_output", False):
-          assert self.log_prior is not None
-          # Scores are in -log space, self.log_prior is in +log space.
-          # We want to subtract the prior, thus `-=`.
-          am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
+        def get_am_scores(layer):
+          y = layer.p_y_given_x
+          assert y.ndim == 3
+          if layer.fast_bw_opts.get("merge_y_from"):
+            factor = layer.fast_bw_opts.get("merge_y_from_factor", 0.5)
+            out2 = layer.fast_bw_opts.get("merge_y_from")
+            y2 = layer.network.output[out2].p_y_given_x
+            y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
+          if layer.fast_bw_opts.get("y_gauss_blur_sigma"):
+            from TheanoUtil import gaussian_filter_1d
+            y = gaussian_filter_1d(y, axis=0,
+              sigma=numpy.float32(layer.fast_bw_opts["y_gauss_blur_sigma"]),
+              window_radius=int(layer.fast_bw_opts.get("y_gauss_blur_window", layer.fast_bw_opts["y_gauss_blur_sigma"])))
+          if layer.fast_bw_opts.get("y_lower_clip"):
+            y = T.maximum(y, numpy.float32(layer.fast_bw_opts.get("y_lower_clip")))
+          y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
+          nlog_scores = -T.log(y)  # in -log space
+          am_scores = nlog_scores
+          am_scale = layer.attrs.get("am_scale", 1)
+          if am_scale != 1:
+            am_scale = numpy.float32(am_scale)
+            am_scores *= am_scale
+          if layer.prior_scale and not layer.attrs.get("substract_prior_from_output", False):
+            assert layer.log_prior is not None
+            # Scores are in -log space, self.log_prior is in +log space.
+            # We want to subtract the prior, thus `-=`.
+            am_scores -= -layer.log_prior * numpy.float32(layer.prior_scale)
+          return am_scores
+        am_scores = get_am_scores(self)
+        if self.fast_bw_opts.get("merge_am_from"):
+          factor = self.fast_bw_opts.get("merge_am_from_factor", 0.5)
+          out2 = self.fast_bw_opts.get("merge_am_from")
+          am2 = get_am_scores(self.network.output[out2])
+          am_scores = numpy.float32(factor) * am2 + numpy.float32(1.0 - factor) * am_scores
         edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
         float_idx = T.cast(src_index, "float32")
         float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
