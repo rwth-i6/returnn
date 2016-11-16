@@ -91,6 +91,7 @@ class LayerNetwork(object):
     self.json_content = "{}"
     self.costs = {}
     self.total_cost = T.constant(0)
+    self.objective = None
     self.update_step = 0
     self.errors = {}
     self.loss = None
@@ -415,6 +416,7 @@ class LayerNetwork(object):
         if trg != "null": index = network.j[trg]
         else: index = network.i
         traverse(json_content, layer_name, trg, index)
+    network.set_cost_constraints_and_objective()
     return network
 
   @classmethod
@@ -535,7 +537,6 @@ class LayerNetwork(object):
     else:
       is_output_layer = False
       self.hidden[layer.name] = layer
-    self.add_cost_and_constraints(layer)
     if layer_errors is not None:
       self.errors[layer.name] = layer_errors
     if is_output_layer:
@@ -600,8 +601,13 @@ class LayerNetwork(object):
     self.add_layer(layer)
     return layer.index
 
+  def set_cost_constraints_and_objective(self):
+    for name, layer in sorted(self.hidden.items()) + sorted(self.output.items()):
+      self.add_cost_and_constraints(layer)
+    self.objective = self.total_cost + self.total_constraints
+
   def get_objective(self):
-    return self.total_cost + self.total_constraints
+    return self.objective
 
   def get_params_vars(self, hidden_layer_selection, with_output):
     """
