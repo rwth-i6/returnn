@@ -106,6 +106,9 @@ class FileArchive:
   def __del__(self):
     self.f.close()
 
+  def file_list(self):
+    return self.ft.keys()
+
   def finalize(self):
     self.writeFileInfoTable()
 
@@ -162,66 +165,58 @@ class FileArchive:
       #raise NotImplementedError("Need to scan archive if no "
       #                          "file info table found.")
 
-  def read(self, filename, typ):
-    fi = self.ft[filename]
-    self.f.seek(fi.pos)
-    size = self.read_u32()
-    comp = self.read_u32()
-    chk  = self.read_u32()
+  def _raw_read(self, size, typ):
     if typ == "str":
-      if fi.compressed > 0:
-        return self.read_str(fi.compressed)
-      else:
-        return self.read_str(fi.size)
+      return self.read_str(size)
 
     elif typ == "feat":
-      type_len = self.read_u32()
+      type_len = self.read_U32()
       typ = self.read_str(type_len)
-      #print(typ)
+      # print(typ)
       assert typ == "vector-f32"
-      count = self.read_u32()
-      data  = [None] * count
-      time  = [None] * count
+      count = self.read_U32()
+      data = [None] * count
+      time = [None] * count
       for i in range(count):
-        size    = self.read_u32()
-        data[i] = self.read_v("f", size) # size x f32
-        time[i] = self.read_v("d", 2)    # 2    x f64
+        size = self.read_U32()
+        data[i] = self.read_v("f", size)  # size x f32
+        time[i] = self.read_v("d", 2)  # 2    x f64
       return time, data
 
     elif typ == "align":
-      type_len = self.read_u32()
+      type_len = self.read_U32()
       typ = self.read_str(type_len)
       assert typ == "flow-alignment"
-      flag = self.read_u32() #?
-      typ  = self.read_str(8)
+      flag = self.read_u32()  # ?
+      typ = self.read_str(8)
       if typ == "ALIGNRLE":
-        size = self.read_u32()
-        if size < (1<<31):
+        size = self.read_U32()
+        if size < (1 << 31):
           # RLE scheme
           time = 0
           alignment = []
           while len(alignment) < size:
             n = self.read_char()
-            #print(n)
+            # print(n)
             if n > 0:
-              while n>0:
+              while n > 0:
                 mix, state = self.getState(self.read_u32())
-                #print(mix, state)
-                #print(time, self.allophones[mix])
+                # print(mix, state)
+                # print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
                 time += 1
-                n    -= 1
+                n -= 1
             elif n < 0:
               mix, state = self.getState(self.read_u32())
-              while n<0:
-                #print(mix, state)
-                #print(time, self.allophones[mix])
+              while n < 0:
+                # print(mix, state)
+                # print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
                 time += 1
-                n    += 1
+                n += 1
             else:
               time = self.read_u32()
-              #print("time", time)
+              # print("time", time)
           return alignment
         else:
           raise NotImplementedError("No support for weighted "
@@ -229,6 +224,34 @@ class FileArchive:
       else:
         raise Exception("No valid alignment header found. Wrong cache?")
 
+  def read(self, filename, typ):
+    fi = self.ft[filename]
+    self.f.seek(fi.pos)
+    size = self.read_U32()
+    comp = self.read_U32()
+    chk  = self.read_U32()
+    if size == 0:
+      return None
+
+    if comp > 0:
+      import zlib, mmap
+      # read compressed bytes into memory as 'bytearray'
+      a = array.array('b')
+      a.fromfile(self.f, comp)
+      # unpack
+      b = zlib.decompress(a.tostring(), 15+32)
+      # substitute self.f by an anonymous memmap file object
+      # restore original file handle after we're done
+      backup_f = self.f
+      self.f = mmap.mmap(-1, len(b))
+      self.f.write(b)
+      self.f.seek(0)
+      try:
+        return self._raw_read(size=fi.size, typ=typ)
+      finally:
+        self.f = backup_f
+
+    return self._raw_read(size=fi.size, typ=typ)
 
   def getState(self, mix):
     max_states = 6
@@ -289,6 +312,167 @@ class FileArchive:
     self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
 
 
+class FileArchiveBundle():
+
+  def __init__(self, filename):
+    self.archives = {}  # :type: dict[str,FileArchive]  # filename -> FileArchive
+    self.files = {}  # :type: dict[str,FileArchive]  # archive content file -> FileArchive
+    for l in open(filename).read().splitlines():
+      self.archives[l] = a = FileArchive(l, must_exists=True)
+      for f in a.ft.keys():
+        self.files[f] = a
+
+  def file_list(self):
+    return self.files.keys()
+
+  def read(self, filename, typ):
+    return self.files[filename].read(filename, typ)
+
+  def setAllophones(self, filename):
+    for a in self.archives.values():
+      a.setAllophones(filename)
+
+
+def open_file_archive(archive_filename, must_exists=True):
+  if archive_filename.endswith(".bundle"):
+    assert must_exists
+    return FileArchiveBundle(archive_filename)
+  else:
+    return FileArchive(archive_filename, must_exists=must_exists)
+
+
+###############################################################################
+
+class MixtureSet:
+  # read routines
+  def read_u32(self):
+    return int(unpack('i', self.f.read(4))[0])
+
+  def read_U32(self):
+    return int(unpack('I', self.f.read(4))[0])
+
+  def read_u64(self):
+    return int(unpack('q', self.f.read(8))[0])
+
+  def read_char(self):
+    return unpack('b', self.f.read(1))[0]
+
+  def read_str(self, l, enc='ascii'):
+    a = array.array('b')
+    a.fromfile(self.f, l)
+    return a.tostring().decode(enc)
+
+  def read_f32(self):
+    return float(unpack('f', self.f.read(4))[0])
+
+  def read_f64(self):
+    return float(unpack('d', self.f.read(8))[0])
+
+  def read_v(self, size, a):
+    a.fromfile(self.f, size)
+    return a
+
+  def __init__(self, filename):
+    self.header = 'MIXSET\0'
+    self.f = open(filename, 'rb')
+    header = self.read_str(8)
+    assert header[:7] == self.header
+    self.version = self.read_u32()
+    self.dim = self.read_u32()
+
+    self.nMeans = self.read_u32()
+    self.means = np.zeros([self.nMeans, self.dim], dtype=np.float64)
+    self.meanWeights = np.zeros(self.nMeans, dtype=np.float64)
+
+    for n in range(self.nMeans):
+      size = self.read_u32()
+      assert size == self.dim
+      arr_f = array.array('d')
+      arr_f.fromfile(self.f, self.dim)
+      self.means[n, :] = np.array(arr_f)
+      self.meanWeights[n] = self.read_f64()
+
+    self.nCovs = self.read_u32()
+    self.covs = np.zeros([self.nCovs, self.dim], dtype=np.float64)
+    self.covWeights = np.zeros(self.nCovs, dtype=np.float64)
+
+    for n in range(self.nCovs):
+      size = self.read_u32()
+      assert size == self.dim
+      arr_f = array.array('d')
+      arr_f.fromfile(self.f, self.dim)
+      self.covs[n, :] = np.array(arr_f)
+      self.covWeights[n] = self.read_f64()
+
+    self.nDensities = self.read_u32()
+    self.densities = np.zeros((self.nDensities, 2), dtype=np.int32)
+    for n in range(self.nDensities):
+      mean_idx = self.read_u32()
+      cov_idx = self.read_u32()
+      self.densities[n, 0] = mean_idx
+      self.densities[n, 1] = cov_idx
+
+    self.nMixtures = self.read_u32()
+    self.mixtures = [None] * self.nMixtures
+    for n in range(self.nMixtures):
+      nDensities = self.read_u32()
+      dns_idx = []
+      dns_weight = []
+      for i in range(nDensities):
+        dns_idx.append(self.read_u32())
+        dns_weight.append(self.read_f64())
+      self.mixtures[n] = (dns_idx, dns_weight)
+
+  def write(self, filename):
+    self.f = open(filename, 'wb')
+    self.write_str(self.header + 't')
+    self.write_u32(self.version)
+    self.write_u32(self.dim)
+
+    self.write_u32(self.nMeans)
+
+    for n in range(self.nMeans):
+      self.write_u32(self.dim)
+      arr_f = array.array('d')
+      arr_f.fromlist(list(self.means[n, :]))
+      arr_f.tofile(self.f)
+      self.write_f64(self.meanWeights[n])
+
+    self.write_u32(self.nCovs)
+
+    for n in range(self.nCovs):
+      self.write_u32(self.dim)
+      arr_f = array.array('d')
+      arr_f.fromlist(list(self.covs[n, :]))
+      arr_f.tofile(self.f)
+      self.write_f64(self.covWeights[n])
+
+    self.write_u32(self.nDensities)
+    for n in range(self.nDensities):
+      self.write_u32(int(self.densities[n, 0]))
+      self.write_u32(int(self.densities[n, 1]))
+
+    self.write_u32(self.nMixtures)
+    for n in range(self.nMixtures):
+      nDensities = len(self.mixtures[n][0])
+      self.write_u32(nDensities)
+      for i in range(nDensities):
+        self.write_u32(self.mixtures[n][0][i])
+        self.write_f64(self.mixtures[n][1][i])
+
+  def __del__(self):
+    self.f.close()
+
+  def getMeanByIdx(self, idx):
+    return np.float32(self.means[idx, :] / self.meanWeights[idx])
+
+  def getCovByIdx(self, idx):
+    return np.float32(self.covs[idx, :] / self.covWeights[idx])
+
+  def getNumberMixtures(self):
+    return self.nMixtures
+
+
 ###############################################################################
 
 def main():
@@ -301,13 +485,14 @@ def main():
   arg_parser.add_argument("--allophone-file")
   args = arg_parser.parse_args()
 
-  a = FileArchive(args.archive, must_exists=True)
+  a = open_file_archive(args.archive, must_exists=True)
 
   if args.mode == "list":
-    print("\n".join(sorted(s for s in a.ft)))
+    print("\n".join(sorted(s for s in a.file_list())))
     sys.exit(0)
 
   elif args.mode == "show":
+    assert args.file, "need to provide 'file' for --mode show. see --help"
     if args.type == "align":
       if args.allophone_file:
         a.setAllophones(args.allophone_file)
