@@ -6,9 +6,13 @@
 This module is about reading (maybe later also writing) the Sprint archive format.
 """
 
-import sys, array
+import sys
+import os
+import array
 from struct import pack, unpack
-from os.path import exists
+import numpy
+import zlib
+import mmap
 
 
 class FileInfo:
@@ -20,7 +24,7 @@ class FileInfo:
     self.index      = index
 
   def __repr__(self):
-    return " ".join(str(s) for s in self.__dict__.values())
+    return "FileInfo(%s)" % " ".join(str(s) for s in self.__dict__.values())
 
 
 class FileArchive:
@@ -38,11 +42,11 @@ class FileArchive:
   def read_char(self):
     return unpack("b", self.f.read(1))[0]
 
+  def read_bytes(self, l):
+    return unpack('%ds' % l, self.f.read(l))[0]
+
   def read_str(self, l, enc='ascii'):
-    a = array.array('b')
-    a.fromfile(self.f, l)
-    return a.tostring().decode(enc)
-    #return unpack("%ds" % l, self.f.read(l))[0].decode(enc)
+    return self.read_bytes(l).decode(enc)
 
   def read_f32(self):
     return float(unpack("f", self.f.read(4))[0])
@@ -51,9 +55,20 @@ class FileArchive:
     return float(unpack("d", self.f.read(8))[0])
 
   def read_v(self, typ, size):
-    a = array.array(typ)
-    a.fromfile(self.f, size)
-    return a.tolist()
+    if   typ == 'f':
+        b = 4
+        t = numpy.float32
+    elif typ == 'd':
+        b = 8
+        t = numpy.float64
+    else:
+        raise NotImplementedError("typ: %r" % typ)
+    if isinstance(self.f, mmap.mmap):
+        res = numpy.frombuffer(self.f, t, size, self.f.tell())
+        self.f.seek(b * size, os.SEEK_CUR)
+    else:
+        res = numpy.fromfile(self.f, t, size, '')
+    return res
 
   # write routines
   def write_str(self, s):
@@ -83,7 +98,7 @@ class FileArchive:
     self.end_recovery_tag   = 0x55aa55aa
 
     self.ft = {}
-    if exists(filename):
+    if os.path.exists(filename):
       self.allophones = []
       self.f = open(filename, 'rb')
       header = self.read_str(8)
@@ -234,7 +249,6 @@ class FileArchive:
       return None
 
     if comp > 0:
-      import zlib, mmap
       # read compressed bytes into memory as 'bytearray'
       a = array.array('b')
       a.fromfile(self.f, comp)
