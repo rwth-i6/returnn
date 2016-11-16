@@ -77,7 +77,7 @@ class FileArchive:
     def write_f64(self, i):
         return self.f.write(pack("d", i))
 
-    def __init__(self, filename):
+    def __init__(self, filename, must_exists=True):
         self.header = "SP_ARC1\0"
         self.start_recovery_tag = 0xaa55aa55
         self.end_recovery_tag   = 0x55aa55aa
@@ -96,6 +96,7 @@ class FileArchive:
                 self.scanArchive()
 
         else:
+            assert not must_exists, "File does not exist: %r" % filename
             self.f = open(filename, 'wb')
             self.write_str(self.header)
             self.write_char(1)
@@ -287,28 +288,47 @@ class FileArchive:
         self.write_U32(self.end_recovery_tag)
         self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
 
+
 ###############################################################################
 
-def main(argv):
-    a = FileArchive(argv[1])
+def main():
+    from argparse import ArgumentParser
+    arg_parser = ArgumentParser()
+    arg_parser.add_argument("archive")
+    arg_parser.add_argument("file", nargs="?")
+    arg_parser.add_argument("--mode", default="list", help="list, show")
+    arg_parser.add_argument("--type", default="feat", help="ascii, feat, align, bin-matrix, flow-cache")
+    arg_parser.add_argument("--allophone-file")
+    args = arg_parser.parse_args()
 
-    if len(argv) < 3:
+    a = FileArchive(args.archive, must_exists=True)
+
+    if args.mode == "list":
         print("\n".join(sorted(s for s in a.ft)))
         sys.exit(0)
 
-    if len(argv) == 4:
-      a.setAllophones(argv[2])
-      f = a.read(argv[3], "align")
-      t=f
-    else:
-      t,f = a.read(argv[2], "feat")
-    for row, time in zip(f, t):
-      print(str(time) + "--------" + " ".join("%.6f " % x for x in row))
+    elif args.mode == "show":
+        if args.type == "align":
+            if args.allophone_file:
+                a.setAllophones(args.allophone_file)
 
-def usage(prog):
-    print("USAGE: %s <alignment.cache> [<allophones.txt>]" % prog)
-    sys.exit(-1)
+            f = a.read(args.file, "align")
+            for row in f:
+              print(" ".join("%.6f " % x for x in row))
+
+        elif args.type == "feat":
+            t, f = a.read(args.file, "feat")
+            for row, time in zip(f, t):
+                print(str(time) + "--------" + " ".join("%.6f " % x for x in row))
+
+        else:
+            raise NotImplementedError("invalid --type %r" % args.type)
+
+    else:
+        raise NotImplementedError("invalid --mode %r" % args.mode)
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2: usage(sys.argv[0])
-    main(sys.argv)
+    import better_exchook
+    better_exchook.install()
+    main()
