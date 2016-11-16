@@ -13,17 +13,18 @@ from os.path import exists
 
 class FileInfo:
   def __init__(self, name, pos, size, compressed, index):
-    self.name = name
-    self.pos = pos
-    self.size = size
+    self.name       = name
+    self.pos        = pos
+    self.size       = size
     self.compressed = compressed
-    self.index = index
+    self.index      = index
 
   def __repr__(self):
     return " ".join(str(s) for s in self.__dict__.values())
 
 
 class FileArchive:
+
   # read routines
   def read_u32(self):
     return int(unpack("i", self.f.read(4))[0])
@@ -41,7 +42,7 @@ class FileArchive:
     a = array.array('b')
     a.fromfile(self.f, l)
     return a.tostring().decode(enc)
-    # return unpack("%ds" % l, self.f.read(l))[0].decode(enc)
+    #return unpack("%ds" % l, self.f.read(l))[0].decode(enc)
 
   def read_f32(self):
     return float(unpack("f", self.f.read(4))[0])
@@ -79,7 +80,7 @@ class FileArchive:
   def __init__(self, filename, must_exists=True):
     self.header = "SP_ARC1\0"
     self.start_recovery_tag = 0xaa55aa55
-    self.end_recovery_tag = 0x55aa55aa
+    self.end_recovery_tag   = 0x55aa55aa
 
     self.ft = {}
     if exists(filename):
@@ -100,7 +101,7 @@ class FileArchive:
       self.write_str(self.header)
       self.write_char(1)
 
-      # print(self.ft)
+      #print(self.ft)
 
   def __del__(self):
     self.f.close()
@@ -115,9 +116,9 @@ class FileArchive:
     count = self.read_u32()
     if not count > 0: return
     for i in range(count):
-      l = self.read_u32()
+      l    = self.read_u32()
       name = self.read_str(l)
-      pos = self.read_u64()
+      pos  = self.read_u64()
       size = self.read_u32()
       comp = self.read_u32()
       self.ft[name] = FileInfo(name, pos, size, comp, i)
@@ -147,18 +148,18 @@ class FileArchive:
 
       fn_len = self.read_u32()
       name = self.read_str(fn_len)
-      pos = self.f.tell()
+      pos  = self.f.tell()
       size = self.read_u32()
       comp = self.read_u32()
-      chk = self.read_u32()
+      chk  = self.read_u32()
 
       self.f.seek(size, 1)
       self.ft[name] = FileInfo(name, pos, size, comp, i)
       i += 1
 
-      self.read_U32()  # end tag
+      self.read_U32() # end tag
 
-      # raise NotImplementedError("Need to scan archive if no "
+      #raise NotImplementedError("Need to scan archive if no "
       #                          "file info table found.")
 
   def read(self, filename, typ):
@@ -166,7 +167,7 @@ class FileArchive:
     self.f.seek(fi.pos)
     size = self.read_u32()
     comp = self.read_u32()
-    chk = self.read_u32()
+    chk  = self.read_u32()
     if typ == "str":
       if fi.compressed > 0:
         return self.read_str(fi.compressed)
@@ -176,51 +177,51 @@ class FileArchive:
     elif typ == "feat":
       type_len = self.read_u32()
       typ = self.read_str(type_len)
-      # print(typ)
+      #print(typ)
       assert typ == "vector-f32"
       count = self.read_u32()
-      data = [None] * count
-      time = [None] * count
+      data  = [None] * count
+      time  = [None] * count
       for i in range(count):
-        size = self.read_u32()
-        data[i] = self.read_v("f", size)  # size x f32
-        time[i] = self.read_v("d", 2)  # 2    x f64
+        size    = self.read_u32()
+        data[i] = self.read_v("f", size) # size x f32
+        time[i] = self.read_v("d", 2)    # 2    x f64
       return time, data
 
     elif typ == "align":
       type_len = self.read_u32()
       typ = self.read_str(type_len)
       assert typ == "flow-alignment"
-      flag = self.read_u32()  # ?
-      typ = self.read_str(8)
+      flag = self.read_u32() #?
+      typ  = self.read_str(8)
       if typ == "ALIGNRLE":
         size = self.read_u32()
-        if size < (1 << 31):
+        if size < (1<<31):
           # RLE scheme
           time = 0
           alignment = []
           while len(alignment) < size:
             n = self.read_char()
-            # print(n)
+            #print(n)
             if n > 0:
-              while n > 0:
+              while n>0:
                 mix, state = self.getState(self.read_u32())
-                # print(mix, state)
-                # print(time, self.allophones[mix])
+                #print(mix, state)
+                #print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
                 time += 1
-                n -= 1
+                n    -= 1
             elif n < 0:
               mix, state = self.getState(self.read_u32())
-              while n < 0:
-                # print(mix, state)
-                # print(time, self.allophones[mix])
+              while n<0:
+                #print(mix, state)
+                #print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
                 time += 1
-                n += 1
+                n    += 1
             else:
               time = self.read_u32()
-              # print("time", time)
+              #print("time", time)
           return alignment
         else:
           raise NotImplementedError("No support for weighted "
@@ -228,13 +229,14 @@ class FileArchive:
       else:
         raise Exception("No valid alignment header found. Wrong cache?")
 
+
   def getState(self, mix):
     max_states = 6
-    # print("Was:", mix)
+    #print("Was:", mix)
     for state in range(max_states):
       if mix >= len(self.allophones):
-        mix -= (1 << 26)
-    # print("Now:", mix)
+        mix -= (1<<26)
+    #print("Now:", mix)
     return (mix, state)
 
   def setAllophones(self, f):
@@ -258,9 +260,9 @@ class FileArchive:
     assert len(features) == len(times)
     self.write_u32(len(features))
     for f, t in zip(features, times):
-      self.write_u32(len(f))  # f.shape[0])
-      # print filename,len(f),f,t[0],t[1]
-      # f.tofile(self.f,"f")
+      self.write_u32(len(f)) #f.shape[0])
+      #print filename,len(f),f,t[0],t[1]
+      #f.tofile(self.f,"f")
       for x in f.flat:
         self.write_f32(x)
       self.write_f64(t[0])
@@ -272,13 +274,12 @@ class FileArchive:
     self.addAttributes(filename, len(features[0]), times[-1][1])
 
   def addAttributes(self, filename, dim, duration):
-    data = '<flow-attributes><flow-attribute name="datatype" value="vector-f32"/><flow-attribute name="sample-size" value="%d"/><flow-attribute name="total-duration" value="%.5f"/></flow-attributes>' % (
-    dim, duration)
+    data = '<flow-attributes><flow-attribute name="datatype" value="vector-f32"/><flow-attribute name="sample-size" value="%d"/><flow-attribute name="total-duration" value="%.5f"/></flow-attributes>' % (dim, duration)
     self.write_U32(self.start_recovery_tag)
     filename = "%s.attribs" % filename
     self.write_u32(len(filename))
     self.write_str(filename)
-    pos = self.f.tell()
+    pos  = self.f.tell()
     size = len(data)
     self.write_u32(size)
     self.write_u32(0)
@@ -329,6 +330,5 @@ def main():
 
 if __name__ == "__main__":
   import better_exchook
-
   better_exchook.install()
   main()
