@@ -583,67 +583,70 @@ class SequenceOutputLayer(OutputLayer):
       return err, known_grads
     elif self.loss == 'fast_bw':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
-      y = self.p_y_given_x
-      assert y.ndim == 3
-      if self.fast_bw_opts.get("merge_y_from"):
-        factor = self.fast_bw_opts.get("merge_y_from_factor", 0.5)
-        out2 = self.fast_bw_opts.get("merge_y_from")
-        y2 = self.network.output[out2].p_y_given_x
-        y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
-      if self.fast_bw_opts.get("y_gauss_blur_sigma"):
-        from TheanoUtil import gaussian_filter_1d
-        y = gaussian_filter_1d(y, axis=0,
-          sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
-          window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
-      if self.fast_bw_opts.get("y_lower_clip"):
-        y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
-      y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
-      nlog_scores = -T.log(y)  # in -log space
-      am_scores = nlog_scores
-      am_scale = self.attrs.get("am_scale", 1)
-      if am_scale != 1:
-        am_scale = numpy.float32(am_scale)
-        am_scores *= am_scale
-      if self.prior_scale and not self.attrs.get("substract_prior_from_output", False):
-        assert self.log_prior is not None
-        # Scores are in -log space, self.log_prior is in +log space.
-        # We want to subtract the prior, thus `-=`.
-        am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
-      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      float_idx = T.cast(src_index, "float32")
-      float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
-      idx_sum = T.sum(float_idx)
-      fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
-      gamma = self.attrs.get("gamma", 1)
-      need_renorm = False
-      if gamma != 1:
-        fwdbwd *= numpy.float32(gamma)
-        need_renorm = True
-      bw = T.exp(-fwdbwd)
-      if self.attrs.get("compute_priors_via_baum_welch", False):
-        assert self.priors.custom_update is not None
-        self.priors.custom_update = T.sum(bw * float_idx_bc, axis=(0, 1)) / idx_sum
-      if self.fast_bw_opts.get("bw_norm_class_avg"):
-        cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
-        bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
-        need_renorm = True
-      if need_renorm:
-        bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
+      if self.fast_bw_opts.get("bw_from"):
+        out2 = self.fast_bw_opts.get("bw_from")
+        bw = self.network.output[out2].baumwelch_alignment
+      else:
+        y = self.p_y_given_x
+        assert y.ndim == 3
+        if self.fast_bw_opts.get("merge_y_from"):
+          factor = self.fast_bw_opts.get("merge_y_from_factor", 0.5)
+          out2 = self.fast_bw_opts.get("merge_y_from")
+          y2 = self.network.output[out2].p_y_given_x
+          y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
+        if self.fast_bw_opts.get("y_gauss_blur_sigma"):
+          from TheanoUtil import gaussian_filter_1d
+          y = gaussian_filter_1d(y, axis=0,
+            sigma=numpy.float32(self.fast_bw_opts["y_gauss_blur_sigma"]),
+            window_radius=int(self.fast_bw_opts.get("y_gauss_blur_window", self.fast_bw_opts["y_gauss_blur_sigma"])))
+        if self.fast_bw_opts.get("y_lower_clip"):
+          y = T.maximum(y, numpy.float32(self.fast_bw_opts.get("y_lower_clip")))
+        y = T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20))
+        nlog_scores = -T.log(y)  # in -log space
+        am_scores = nlog_scores
+        am_scale = self.attrs.get("am_scale", 1)
+        if am_scale != 1:
+          am_scale = numpy.float32(am_scale)
+          am_scores *= am_scale
+        if self.prior_scale and not self.attrs.get("substract_prior_from_output", False):
+          assert self.log_prior is not None
+          # Scores are in -log space, self.log_prior is in +log space.
+          # We want to subtract the prior, thus `-=`.
+          am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
+        edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+        float_idx = T.cast(src_index, "float32")
+        float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+        idx_sum = T.sum(float_idx)
+        fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+        gamma = self.attrs.get("gamma", 1)
+        need_renorm = False
+        if gamma != 1:
+          fwdbwd *= numpy.float32(gamma)
+          need_renorm = True
+        bw = T.exp(-fwdbwd)
+        if self.attrs.get("compute_priors_via_baum_welch", False):
+          assert self.priors.custom_update is not None
+          self.priors.custom_update = T.sum(bw * float_idx_bc, axis=(0, 1)) / idx_sum
+        if self.fast_bw_opts.get("bw_norm_class_avg"):
+          cavg = T.sum(bw * float_idx_bc, axis=(0, 1), keepdims=True) / idx_sum
+          bw /= T.clip(cavg, numpy.float32(1.e-20), numpy.float(1.e20))
+          need_renorm = True
+        if need_renorm:
+          bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
       self.baumwelch_alignment = bw
       if self.ce_smoothing > 0:
         target_layer = self.attrs.get("ce_target_layer_align", None)
         assert target_layer  # we could also use self.y but so far we only want this
         bw2 = self.network.output[target_layer].baumwelch_alignment
         bw = numpy.float32(self.ce_smoothing) * bw2 + numpy.float32(1 - self.ce_smoothing) * bw
+      y = self.p_y_given_x
       if self.fast_bw_opts.get("loss_with_softmax_prob"):
         y = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
-        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       if self.fast_bw_opts.get("loss_with_sigmoid_prob"):
         y = T.nnet.sigmoid(self.z)
-        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       if self.fast_bw_opts.get("loss_with_out_norm"):
         y /= T.sum(y, axis=2, keepdims=True)
-        nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+      nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
