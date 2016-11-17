@@ -63,6 +63,18 @@ class ForwardLayer(HiddenLayer):
     self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+class ClippingLayer(HiddenLayer):
+  layer_class = "clip"
+
+  def __init__(self, sparse_window = 1, **kwargs):
+    super(ClippingLayer, self).__init__(**kwargs)
+    z = self.get_linear_forward_output()
+    target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    i = (self.y_in[target].flatten() > 0).nonzero()
+    znew = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+    #self.make_output(z)
+    self.make_output(znew[i].reshape((T.sum(self.y_in[target]), z.shape[1], z.shape[2])))
+    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class EmbeddingLayer(ForwardLayer):
   layer_class = "embedding"
@@ -484,6 +496,7 @@ class SubnetworkLayer(_NoOpLayer):
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
     assert self.subnetwork.output["output"].attrs['n_out'] == n_out
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
@@ -516,7 +529,7 @@ class SubnetworkLayer(_NoOpLayer):
   def make_constraints(self):
     if not self.trainable:
       return super(SubnetworkLayer, self).make_constraints()
-    return self.subnetwork.constraints
+    return self.subnetwork.total_constraints
 
 
 class ChunkingSublayer(_NoOpLayer):

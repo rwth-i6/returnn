@@ -535,6 +535,8 @@ class Dataset(object):
     :type batches: list[EngineBatch.Batch]
     :rtype: dict[str,list[int]] | None
     """
+    all_data_keys = set(data_keys) | {"data"}
+
     # The final device.data.shape is in format (time,batch,feature).
     shape = [NumbersDict(0), 0]  # time,batch
     for batch in batches:
@@ -542,8 +544,13 @@ class Dataset(object):
     if shape[1] == 0:
       return None
     assert shape[0].max_value() > 0
+    # Theano has some buggy behaviour with tensors with some shape of zero.
+    # We will just use one dummy frame in that case.
+    # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
+    for k in all_data_keys:
+      shape[0][k] = max(shape[0][k], 1)
 
-    d = {k: [shape[0][k], shape[1]] for k in (set(data_keys) | {"data"})}
+    d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
     for k in d:
       d[k] += self.get_data_shape(k)
     return d

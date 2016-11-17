@@ -55,6 +55,9 @@ class Container(object):
       self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
 
+  def __repr__(self):
+    return "<%s class:%s name:%s>" % (self.__class__, self.layer_class, self.name)
+
   def dot(self, vec, mat):
     if self.depth == 1:
       return T.dot(vec, mat)
