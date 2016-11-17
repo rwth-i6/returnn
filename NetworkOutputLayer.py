@@ -22,6 +22,7 @@ class OutputLayer(Layer):
 
   def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
+               auto_fix_target_length=False,
                sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False, activation=None,
                prior_scale=0.0, log_prior=None, use_label_priors=0,
                compute_priors_via_baum_welch=False,
@@ -94,6 +95,13 @@ class OutputLayer(Layer):
     if grad_discard_out_of_bound_z is not None:
       grad_discard_out_of_bound_z = numpy.float32(grad_discard_out_of_bound_z)
       self.z = grad_discard_out_of_bound(self.z, -grad_discard_out_of_bound_z, grad_discard_out_of_bound_z)
+    if auto_fix_target_length:
+      self.set_attr("auto_fix_target_length", auto_fix_target_length)
+      source_index = self.sources[0].index
+      from TheanoUtil import pad
+      self.index = pad(source=self.index, axis=0, target_axis_len=source_index.shape[0])
+      if y is not None:
+        y = pad(source=y, axis=0, target_axis_len=source_index.shape[0])
     if not copy_output:
       self.y = y
     else:
