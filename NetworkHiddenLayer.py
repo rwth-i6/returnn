@@ -528,7 +528,7 @@ class SubnetworkLayer(_NoOpLayer):
   def make_constraints(self):
     if not self.trainable:
       return super(SubnetworkLayer, self).make_constraints()
-    return self.subnetwork.constraints
+    return self.subnetwork.total_constraints
 
 
 class ChunkingSublayer(_NoOpLayer):
