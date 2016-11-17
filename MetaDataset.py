@@ -239,6 +239,126 @@ class ConcatDataset(CachedDataset2):
     return self.datasets[0].get_target_list()
 
 
+class MultilingualConcatDataset(CachedDataset2):
+  """
+  This concatenates multiple datasets. They are expected to provide the same data-keys and data-dimensions.
+  It will go through the datasets always in order.
+  """
+
+  def __init__(self, datasets, mix_languages=True, **kwargs):
+    """
+    :param list[str,dict[str]] datasets: list with labels and kwargs for init_dataset
+    """
+    super(MultilingualConcatDataset, self).__init__(**kwargs)
+    self.datasets = []
+    self.keyset = set([s[0] for s in datasets]) #unique list of languages
+    for [key,d_kwargs] in datasets:
+      d_kwargs["targetlabel"]=[key]+list(self.keyset-set([key])) # have the actual target always in first position
+      self.datasets.append(init_dataset(d_kwargs))
+    assert self.datasets
+    self.mix_languages = mix_languages
+    self.num_sets = len(datasets)
+    self.num_inputs = self.datasets[0].num_inputs
+    self.num_outputs = self.datasets[0].num_outputs
+    self.labels = self.datasets[0].labels
+    for ds in self.datasets[1:]:
+      assert ds.num_inputs == self.num_inputs
+      assert ds.num_outputs == self.num_outputs
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :type epoch: int|None
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    need_reinit = self.epoch is None or self.epoch != epoch
+    super(MultilingualConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self.dataset_seq_idx_offsets = [0]
+    if not need_reinit:
+      return False
+
+    if seq_list:  # reference order
+      seq_lists = []
+      for dataset in self.datasets:
+        # This depends on the num_seqs of our childs.
+        seq_lists += seq_list[:dataset.num_seqs]
+        seq_list = seq_list[dataset.num_seqs:]
+      assert len(seq_list) == 0  # we have consumed all
+    else:
+      seq_lists = [None] * len(self.datasets)
+#      if self.seq_ordering != "default":
+#        # Not sure about these cases (random / sorted). Maybe a separate implementation makes more sense.
+#        # I guess we will just let the sub datasets deal with segmentordering
+#        raise NotImplementedError("seq_ordering %s" % self.seq_ordering)
+
+    assert len(seq_lists) == len(self.datasets)
+    for dataset, sub_list in zip(self.datasets, seq_lists):
+      dataset.init_seq_order(epoch=epoch, seq_list=sub_list)
+    return True
+
+  def _get_dataset_for_seq_idx(self, seq_idx):
+    i = 0
+    while i < len(self.dataset_seq_idx_offsets):
+      if seq_idx + self.dataset_seq_idx_offsets[i] < 0:
+        return i - 1
+      i += 1
+    return i - 1
+
+  def _load_seqs(self, start, end):
+    if not self.mix_languages:
+      # We want to go first through the first language then the second etc.
+      sub_start = start
+      # We maybe need to call load_seqs on several of our datasets, thus we need this loop.
+      while True:
+        dataset_idx = self._get_dataset_for_seq_idx(sub_start)
+        dataset = self.datasets[dataset_idx]
+        dataset_seq_idx_start = sub_start + self.dataset_seq_idx_offsets[dataset_idx]
+        dataset_seq_idx_end = end + self.dataset_seq_idx_offsets[dataset_idx]
+        dataset.load_seqs(dataset_seq_idx_start, dataset_seq_idx_end)
+        if dataset.is_less_than_num_seqs(dataset_seq_idx_end):
+          # We are still inside this dataset and have loaded everything.
+          # Thus we can stop now.
+          break
+        # We have reached the end of the dataset.
+        if dataset_idx + 1 == len(self.datasets):
+          # We are at the last dataset.
+          break
+        # Continue with the next one.
+        self.dataset_seq_idx_offsets[dataset_idx + 1:dataset_idx + 2] = [
+          self.dataset_seq_idx_offsets[dataset_idx] - dataset.num_seqs]
+        sub_start = -self.dataset_seq_idx_offsets[dataset_idx + 1]
+    else:
+      # We want to intermix the languages i.e. segments [1,2,3,4,5,6,7,8,..] would correspond to
+      # lang1: [0,3,6, 9,..]
+      # lang2: [1,4,7,10,..]
+      # lang3: [2,5,8,11,..]
+      for i,dset in enumerate(self.datasets):
+        sub_start = start // self.num_sets + (start % self.num_sets > i)
+        sub_end = end // self.num_sets + (end % self.num_sets > i)
+        dset.load_seqs(sub_start,sub_end)
+    super(MultilingualConcatDataset, self)._load_seqs(start=start, end=end)
+
+  def _collect_single_seq(self, seq_idx):
+    if not self.mix_languages:
+      dataset_idx = self._get_dataset_for_seq_idx(seq_idx)
+      dataset_seq_idx = seq_idx + self.dataset_seq_idx_offsets[dataset_idx]
+    else:
+      dataset_idx = seq_idx % self.num_sets
+      dataset_seq_idx = seq_idx // self.num_sets
+
+    dataset = self.datasets[dataset_idx]
+    seq_tag = dataset.get_tag(dataset_seq_idx)
+    features = dataset.get_input_data(dataset_seq_idx)
+    targets = {k: dataset.get_targets(k, dataset_seq_idx) for k in dataset.get_target_list()}
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+
+  @property
+  def num_seqs(self):
+    return sum([ds.num_seqs for ds in self.datasets])
+
+  def get_target_list(self):
+    return self.datasets[0].get_target_list()
+
+
 class CombinedDataset(CachedDataset2):
   """
   This combines multiple different datasets, which provide different data-sources.
