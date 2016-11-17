@@ -547,6 +547,7 @@ class Dataset(object):
     # Theano has some buggy behaviour with tensors with some shape of zero.
     # We will just use one dummy frame in that case.
     # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
+    # However, also see the OutputLayer.output_index() behavior for forwarding.
     for k in all_data_keys:
       shape[0][k] = max(shape[0][k], 1)
 
