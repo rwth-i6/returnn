@@ -496,6 +496,7 @@ class SubnetworkLayer(_NoOpLayer):
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
     assert self.subnetwork.output["output"].attrs['n_out'] == n_out
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())

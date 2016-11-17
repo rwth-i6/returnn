@@ -233,6 +233,8 @@ class LayerNetwork(object):
     :param dict[str] kwargs: kwargs for __init__
     :rtype: LayerNetwork
     """
+    if "n_out" in kwargs and "n_in" not in kwargs:
+      kwargs["n_in"] = None
     network = cls(
       base_network=base_network,
       shared_params_network=base_network if share_params else None,
