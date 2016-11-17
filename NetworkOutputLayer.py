@@ -546,6 +546,9 @@ class SequenceOutputLayer(OutputLayer):
     # In case that our target has another index, self.index will be that index.
     # However, the right index for self.p_y_given_x and many others is the index from the source layers.
     src_index = self.sources[0].index
+    float_idx = T.cast(src_index, "float32")
+    float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+    idx_sum = T.sum(float_idx)
     if self.loss == 'sprint':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       log_probs = T.log(self.p_y_given_x)
@@ -622,9 +625,6 @@ class SequenceOutputLayer(OutputLayer):
           am2 = get_am_scores(self.network.output[out2])
           am_scores = numpy.float32(factor) * am2 + numpy.float32(1.0 - factor) * am_scores
         edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-        float_idx = T.cast(src_index, "float32")
-        float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
-        idx_sum = T.sum(float_idx)
         fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
