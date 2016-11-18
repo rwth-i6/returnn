@@ -259,11 +259,14 @@ class MultilingualConcatDataset(CachedDataset2):
     self.mix_languages = mix_languages
     self.num_sets = len(datasets)
     self.num_inputs = self.datasets[0].num_inputs
-    self.num_outputs = self.datasets[0].num_outputs
+    self.num_outputs = self.datasets[0].num_outputs.copy()
+    for ds in self.datasets[1:]:
+      self.num_outputs.update(ds.num_outputs)
+    
     self.labels = self.datasets[0].labels
     for ds in self.datasets[1:]:
       assert ds.num_inputs == self.num_inputs
-      assert ds.num_outputs == self.num_outputs
+      #assert ds.num_outputs == self.num_outputs
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
