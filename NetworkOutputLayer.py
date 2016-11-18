@@ -571,6 +571,9 @@ class SequenceOutputLayer(OutputLayer):
         # We want to subtract the prior, thus `-=`.
         am_scores -= -self.log_prior * numpy.float32(self.prior_scale)
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      #from TheanoUtil import print_to_file
+      #weights = print_to_file('weights', weights)
+      #edges = print_to_file('edges', edges)
       float_idx = T.cast(src_index, "float32")
       float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
       idx_sum = T.sum(float_idx)
@@ -608,6 +611,8 @@ class SequenceOutputLayer(OutputLayer):
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
+      #err = T.sum(err_inner.reshape((err_inner.shape[0] * err_inner.shape[1],
+      #                               err_inner.shape[2]))[(src_index.flatten() > 0).nonzero()])
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
@@ -624,6 +629,13 @@ class SequenceOutputLayer(OutputLayer):
         known_grads[self.trained_softmax_prior_p] = numpy.float32(self.prior_scale) * (bw_sum0 - self.priors * idx_sum)
       self.fast_bw_opts.assert_all_read()
       return err, known_grads
+    elif self.loss == 'fast_inv':
+      scores = -T.log(T.clip(self.p_y_given_x, numpy.float32(1.e-20), numpy.float(1.e20)))
+      scores = scores.reshape((scores.shape[0]*scores.shape[1],scores.shape[2]))[:,self.y_data_flat].dimshuffle(1,0).reshape((self.y_in.shape[0],scores.shape[1],scores.shape[0]))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      float_idx = T.cast(src_index, "float32")
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      att = T.argmax(fwdbwd,axis=2) # NB
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
