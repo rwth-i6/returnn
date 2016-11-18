@@ -17,7 +17,7 @@ class MultiDirectionalTwoDLSTMOpGrad(theano.sandbox.cuda.GpuOp):
   __props__ = ("inplace",)
 
   def __init__(self, inplace):
-    super(MultiDirectionalTwoDLSTMOpGrad, self).__init__(self)
+    super(MultiDirectionalTwoDLSTMOpGrad, self).__init__()
     self.inplace = inplace
     if inplace:
       #inputs: X, 4xW, 4xV_h, 4xV_v, 4xb, 4xDy, 4xY, 4xH
