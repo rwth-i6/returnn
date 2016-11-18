@@ -6,6 +6,7 @@ import h5py
 import sys
 from theano import tensor as T
 from theano.tensor.nnet import conv
+from theano.ifelse import ifelse
 try:
   from theano.tensor.signal import pool
 except ImportError:  # old Theano or so...
@@ -18,7 +19,8 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
+from OpInvAlign import InvAlignOp, InvDecodeOp, InvBacktrackOp
+from TheanoUtil import print_to_file
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -531,6 +533,128 @@ class SubnetworkLayer(_NoOpLayer):
       return super(SubnetworkLayer, self).make_constraints()
     return self.subnetwork.total_constraints
 
+
+class ClusterDependentSubnetworkLayer(_NoOpLayer):
+  layer_class = "clustersubnet"
+  recurrent = True  # we don't know. depends on the subnetwork.
+
+  def __init__(self, n_out, subnetwork, n_clusters, load="<random>", data_map=None, trainable=True,
+               concat_sources=True,
+               **kwargs):
+    """
+    :param int n_out: output dimension of output layer
+    :param dict[str,dict] network: subnetwork as dict (JSON content)
+    :param list[str] data_map: maps the sources (from) of the layer to data input.
+      the list should be as long as the sources.
+      default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
+    :param bool trainable: if we take over all params from the subnetwork
+    """
+    super(ClusterDependentSubnetworkLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(subnetwork, (str, unicode)):
+      subnetwork = json.loads(subnetwork)
+    self.set_attr("subnetwork", subnetwork)
+    self.set_attr("load", load)
+    if isinstance(data_map, (str, unicode)):
+      data_map = json.loads(data_map)
+    if data_map:
+      self.set_attr("data_map", data_map)
+    self.set_attr('concat_sources', concat_sources)
+    self.set_attr("trainable", trainable)
+    # self.trainable = trainable
+    self.set_attr("n_clusters", n_clusters)
+    self.n_clusters = n_clusters
+    print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
+    assert len(self.sources) >= 2, "need input, ..., cluster_map"
+    sources, cluster_map_source = self.sources[:-1], self.sources[-1]
+    if concat_sources:
+      assert not data_map, "We expect the implicit canonical data_map with concat_sources."
+      assert self.sources
+      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass[:-1])
+      s0 = sources[0]
+      sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
+                   "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {"data": data}
+      data_map_di = {"data": s0.index, "classes": self.index}
+      data_map = []
+    else:  # not concat_sources
+      if not data_map:
+        data_map = ["data"]
+      assert isinstance(data_map, list)
+      assert len(data_map) == len(sources)
+      sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {}
+      data_map_di = {"classes": self.index}
+      for k, s in zip(data_map, sources):
+        sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+        data_map_d[k] = s.output
+        data_map_di[k] = s.index
+    self.subnetworks = []
+    for idx in range(0, len(self.n_clusters)):
+      print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
+      self.subnetworks.append(self.network.new_subnetwork(
+        json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
+      assert self.subnetworks[idx].output["output"].attrs['n_out'] == n_out
+      if trainable:
+        self.params.update(self.subnetworks[idx].get_params_shared_flat_dict())
+      if load == "<random>":
+        print >>log.v2, "subnetwork with random initialization"
+      else:
+        from Config import get_global_config
+        config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+        model_filename = load % {"self": self,
+                                 "global_config_load": config.value("load", None),
+                                 "global_config_epoch": config.int("epoch", 0)}
+        print >>log.v2, "loading subnetwork weights from", model_filename
+        import h5py
+        model_hdf = h5py.File(model_filename, "r")
+        self.subnetworks[idx].load_hdf(model_hdf)
+        print >>log.v2, "done loading subnetwork weights for", self.name
+    #self.ref = theano.shared(0, 'ref') #ref needs to be updated to correspond to the cluster of the current sequence
+    self.ref = cluster_map_source.output[0]
+
+    ## generate output lists and sums with ifelse to only compute specified paths
+
+    # output
+    self.zero_output = T.zeros_like(self.subnetworks[0].output["output"].output)
+    self.y = [ifelse(T.neq(idx, self.ref), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, len(self.n_clusters))]
+    self.z = self.y[0]
+    for idx in range(1, len(self.n_clusters)):
+      self.z += self.y[idx]
+    self.output = self.z
+
+    # costs
+    self.costs = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_cost) for idx in
+                  range(0, len(self.n_clusters))]
+    self.total_cost = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+
+    # grads
+    self.output_grads = self.subnetworks[self.ref.get_value()].known_grads
+
+    # constraints
+    self.constraints = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
+                        range(0, len(self.n_clusters))]
+    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+
+  def cost(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).cost()
+    try:
+      const_cost = T.get_scalar_constant_value(self.total_cost)
+      if const_cost == 0:
+        return None, None
+    except T.NotScalarConstantError:
+      pass
+    return self.total_cost, self.output_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).make_constraints()
+    return self.total_constraints
+
+  def update_cluster_target(self, seq_tag):
+    self.ref.set_value(self.cluster_dict(seq_tag))
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
@@ -3320,3 +3444,219 @@ class DumpLayer(_NoOpLayer):
       from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
+
+
+class AlignmentLayer(ForwardLayer):
+  layer_class = "align"
+
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    if train_skips:
+      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    else:
+      kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(AlignmentLayer, self).__init__(**kwargs)
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search != 'time':
+        search = "search"
+      else:
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+    else:
+      if search == 'time':
+        search = 'align'
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    y_in = self.y_in[target].reshape(self.index.shape)
+
+    if self.train_flag or search == 'align':
+      y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      max_length_y = y_out.shape[0]
+      norm = numpy.float32(1)
+      ratt = att
+      self.index = theano.gradient.disconnected_grad(rindex)
+      self.y_out = y_out
+    elif search == 'search':
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      if not self.eval_flag:
+        rindex = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
+        aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
+      norm = numpy.float32(1) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    elif search == 'decode':
+      y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    else:
+      assert search == 'time'
+
+    if output_attention:
+      self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      self.attrs['n_out'] = 1
+      return
+    else:
+      x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+      self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+
+    if self.attrs['search'] == 'time' or self.eval_flag:
+      return
+
+    if search in ['align', 'decode']:
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
+      idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    elif search == 'search':
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
+      idx = (rindex.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+class RNNBlock(ForwardLayer):
+  recurrent = True
+  layer_class = 'rnnblock'
+
+  def __init__(self, num_layers=1, direction=0, **kwargs):
+    #kwargs['n_out'] *= 4
+    super(RNNBlock, self).__init__(**kwargs)
+    #self.set_attr('nout', self.attrs['n_out'] / 4)
+    from theano.gpuarray import dnn
+    from theano.gpuarray.type import gpuarray_shared_constructor
+    context_name = str(theano.config.device) # has to be provided in THEANO_FLAGS as e.g. contexts=gpu3->cuda3
+    if context_name == 'cpu':
+      context_name = 'gpu0'
+
+    rnnb = dnn.RNNBlock(
+      theano.config.floatX,
+      self.attrs['n_out'],
+      num_layers,
+      rnn_mode='lstm',
+      input_mode='linear',
+      direction_mode='unidirectional' if direction != 0 else 'bidirectional',
+      context_name=context_name
+      )
+    psize = rnnb.get_param_size([25, self.attrs['n_out']])
+    params_cudnn = gpuarray_shared_constructor(
+      numpy.zeros((psize,), dtype=theano.config.floatX),
+      target=context_name
+    )
+    X = self.sources[0].output #self.get_linear_forward_output()
+    #c_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
+    #h_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
+    #c_init = T.zeros((num_layers, X.shape[1], self.attrs['n_out']), theano.config.floatX)
+    #h_init = T.zeros((num_layers, X.shape[1], self.attrs['n_out']), theano.config.floatX)
+
+    c_init = gpuarray_shared_constructor(
+      numpy.zeros((num_layers, 25, self.attrs['n_out']), dtype=theano.config.floatX),
+      target=context_name
+    )
+    h_init = gpuarray_shared_constructor(
+      numpy.zeros((num_layers, 25, self.attrs['n_out']), dtype=theano.config.floatX),
+      target=context_name
+    )
+    self.output = rnnb.apply(params_cudnn, X[::direction or 1], h_init, c_init)[0]
+
+
+from NativeOp import FastBaumWelchOp
+from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+class FastAlignmentLayer(ForwardLayer):
+  layer_class = "fast_align"
+
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    if train_skips:
+      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    else:
+      kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(FastAlignmentLayer, self).__init__(**kwargs)
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search == 'time':
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+
+    if self.train_flag:
+      scores = -T.log(T.clip(p_in, numpy.float32(1.e-20), numpy.float(1.e20)))
+      scores = scores.reshape((scores.shape[0] * scores.shape[1], scores.shape[2]))
+      scores = scores[:, self.y_data_flat].dimshuffle(1, 0).reshape((self.y_in.shape[0], scores.shape[1], scores.shape[0]))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      float_idx = T.cast(self.sources[0].index, "float32")
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      att = T.argmin(fwdbwd, axis=2).flatten()  # NB
+      x_out = x_in.reshape((x_in.shape[0], x_in.shape[1] * x_in.shape[2]))[att]
+      self.output = x_out.reshape((fwdbwd.shape[0], fwdbwd.shape[1], x_in.shape[2]))
+      self.y_out = self.y_in[target].reshape(self.index.shape)
+    else:
+      self.index = self.sources[0].index
+      self.output = x_in
+      self.y_out = self.y_in[target].reshape(self.index.shape)

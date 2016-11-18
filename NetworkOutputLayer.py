@@ -8,7 +8,6 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from OpInvAlign import InvAlignOp, InvDecodeOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
@@ -104,9 +103,11 @@ class OutputLayer(Layer):
         y = pad(source=y, axis=0, target_axis_len=source_index.shape[0])
     if not copy_output:
       self.y = y
+      self.norm = numpy.float32(1)
     else:
+      self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       self.index = copy_output.index
-      self.y = copy_output.y_out
+      self.y = y = copy_output.y_out
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
@@ -126,7 +127,6 @@ class OutputLayer(Layer):
       assert out_arg.ndim == 2
       self.y_data_flat = out_arg.astype("int32")
 
-    self.norm = numpy.float32(1)
     self.target_index = self.index
     if time_limit == 'inf':
       num = T.cast(T.sum(self.index), 'float32')
@@ -444,10 +444,9 @@ class SequenceOutputLayer(OutputLayer):
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                fast_bw_opts=None,
                loss_like_ce=False, trained_softmax_prior=False,
-               sprint_opts=None, warp_ctc_lib=None, inv_opts=None,
+               sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
-    if inv_opts is None: inv_opts = {}
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing
@@ -460,14 +459,8 @@ class SequenceOutputLayer(OutputLayer):
         import json
         fast_bw_opts = json.loads(fast_bw_opts)
       self.set_attr("fast_bw_opts", fast_bw_opts)
-    if inv_opts:
-      if not isinstance(inv_opts, dict):
-        import json
-        inv_opts = json.loads(inv_opts)
-      self.set_attr("inv_opts", inv_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
-    self.inv_opts = CollectionReadCheckCovered(inv_opts or {})
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
@@ -497,35 +490,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc', 'inv'), 'invalid loss: ' + self.loss
-    if self.loss == 'inv':
-      src_index = self.sources[0].index
-      tdps = inv_opts.get('tdps', [1e10, 0., 3.])
-      n = inv_opts.get('nstates', 1)
-      nskips = inv_opts.get('nskips', 1)
-      if len(tdps) - 2 < nskips:
-        tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-      align = inv_opts.get('eval', 'align')
-      if self.eval_flag and align != 'time':
-        align = "search"
-      if self.eval_flag and align == 'time':
-        self.index = src_index
-        return
-      if not self.train_flag and align == 'search':
-        y, att, idx = InvDecodeOp(tdps, n, inv_opts.get('penalty', 0))(src_index, -T.log(self.p_y_given_x))
-        self.y_data_flat = y.flatten()
-        max_length_y = T.max(idx.sum(axis=0))
-        self.index = idx[:max_length_y]
-        att = att[:max_length_y]
-        self.y_data_flat = y[:max_length_y].flatten()
-      else:
-        self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
-        att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
-      self.i = (self.index.flatten() > 0).nonzero()
-      self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
-      self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
-      self.y_m = self.output.reshape((self.index.shape[0] * self.index.shape[1], self.y_m.shape[1]))
-      self.p_y_given_x = T.nnet.softmax(self.y_m)
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -666,6 +631,8 @@ class SequenceOutputLayer(OutputLayer):
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
+      #err = T.sum(err_inner.reshape((err_inner.shape[0] * err_inner.shape[1],
+      #                               err_inner.shape[2]))[(src_index.flatten() > 0).nonzero()])
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
@@ -738,9 +705,6 @@ class SequenceOutputLayer(OutputLayer):
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
-    elif self.loss == 'inv':
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
-      return T.sum(nll) * self.norm, known_grads
 
   def errors(self):
     if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
@@ -757,8 +721,6 @@ class SequenceOutputLayer(OutputLayer):
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
-    elif self.loss == 'inv':
-      return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i])) * self.norm
     else:
       return super(SequenceOutputLayer, self).errors()
 

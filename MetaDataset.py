@@ -4,6 +4,7 @@ from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
 from Log import log
 from random import Random
+import numpy
 
 
 class MetaDataset(CachedDataset2):
@@ -140,6 +141,70 @@ class MetaDataset(CachedDataset2):
     if self.added_data:
       assert super(MetaDataset, self).get_data_dtype(key) == dtype
     return dtype
+
+
+class ClusteringDataset(CachedDataset2):
+  """
+  This is a special case of MetaDataset,
+  with one main subdataset, and we add a cluster-idx for each seq.
+  We will read the cluster-map (seq-name -> cluster-idx) here directly.
+  """
+
+  def __init__(self, dataset, cluster_map_file, n_clusters, **kwargs):
+    super(CachedDataset2, self).__init__(**kwargs)
+    self.dataset = init_dataset(dataset)
+    self.n_clusters = n_clusters
+    self.cluster_map = self._load_cluster_map(cluster_map_file)
+    self.cluster_idx_dtype = "int32"
+    self.num_inputs = self.dataset.num_inputs
+    self.num_outputs = self.dataset.num_outputs.copy()
+    self.num_outputs["cluster_idx"] = [n_clusters, 1]  # will be a single int32
+
+  def _load_cluster_map(self, filename):
+    ls = open(filename).read().splitlines()
+    assert "<coprus-key-map>" in ls[:3], "We expect the Sprint XML format."
+    # It has lines like: <map-item key="CHiME3/dt05_bth/M03_22GC010M_BTH.CH5/1" value="0"/>
+    import re
+    pattern = re.compile('<map-item key="(.*)" value="(.*)"/>')
+    cluster_map = {}  # type: dict[str,int], seq-name -> cluster-idx
+    for l in ls:
+      if not l.startswith("<map-item"):
+        continue
+      seq_name, cluster_idx_s = pattern.match(l).groups()
+      cluster_idx = int(cluster_idx_s)
+      assert 0 <= cluster_idx < self.n_clusters
+      cluster_map[seq_name] = cluster_idx
+    return cluster_map
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    self.dataset.init_seq_order(epoch=epoch, seq_list=seq_list)
+
+  def get_data_keys(self):
+    return self.dataset.get_data_keys() + ["cluster_idx"]
+
+  def get_data_dtype(self, key):
+    if key == "cluster_idx": return self.cluster_idx_dtype
+    return self.dataset.get_data_dtype(key)
+
+  @property
+  def num_seqs(self):
+    return self.dataset.num_seqs
+
+  def is_less_than_num_seqs(self, n):
+    return self.dataset.is_less_than_num_seqs(n)
+
+  def _load_seqs(self, start, end):
+    self.dataset.load_seqs(start, end)
+    super(ClusteringDataset, self)._load_seqs(start=start, end=end)
+
+  def get_tag(self, seq_idx):
+    return self.dataset.get_tag(seq_idx)
+
+  def _collect_single_seq(self, seq_idx):
+    seq_name = self.get_tag(seq_idx)
+    data = {key: self.dataset.get_data(seq_idx=seq_idx, key=key) for key in self.get_data_keys()}
+    data["cluster_idx"] = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
+    return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data)
 
 
 class ConcatDataset(CachedDataset2):
