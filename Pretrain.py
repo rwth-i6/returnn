@@ -10,6 +10,7 @@ class WrapEpochValue:
   """
   Use this wrapper if you want to define some value in your network
   which depends on the pretrain epoch.
+  This is going to be part in your network description dict.
   """
   def __init__(self, func):
     self.func = func
@@ -20,14 +21,15 @@ class WrapEpochValue:
 
 def find_pretrain_wrap_values(net_json):
   assert isinstance(net_json, dict)
-  for ln, l in sorted(net_json.items()):  # layers
-    assert isinstance(ln, (str, unicode))
-    assert isinstance(l, dict)
-    for k, v in sorted(l.items()):  # layer attribs
-      assert isinstance(k, (str, unicode))
+  def _check_dict(d):
+    for k, v in sorted(d.items()):
+      if isinstance(v, dict):
+        if _check_dict(v):
+          return True
       if isinstance(v, WrapEpochValue):
         return True
-  return False
+    return False
+  return _check_dict(net_json)
 
 
 class Pretrain:
@@ -132,15 +134,16 @@ class Pretrain:
         self._step_net_jsons.append(deepcopy(net_json))
 
   def _resolve_wrapped_values(self):
+    def _check_dict(d, epoch):
+      for k, v in sorted(d.items()):
+        assert isinstance(k, str)
+        if isinstance(v, dict):
+          _check_dict(v, epoch=epoch)
+        if isinstance(v, WrapEpochValue):
+          d[k] = v.get_value(epoch=epoch)
     for i, net_json in enumerate(self._step_net_jsons):
       epoch = i + 1
-      for ln, l in sorted(net_json.items()):  # layers
-        assert isinstance(ln, str)
-        assert isinstance(l, dict)
-        for k, v in sorted(l.items()):  # layer attribs
-          assert isinstance(k, str)
-          if isinstance(v, WrapEpochValue):
-            l[k] = v.get_value(epoch=epoch)
+      _check_dict(net_json, epoch=epoch)
 
   def _find_layer_descendants(self, json, sources):
     l = []

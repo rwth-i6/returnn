@@ -55,6 +55,9 @@ class Container(object):
       self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
 
+  def __repr__(self):
+    return "<%s class:%s name:%s>" % (self.__class__, self.layer_class, self.name)
+
   def dot(self, vec, mat):
     if self.depth == 1:
       return T.dot(vec, mat)
@@ -563,10 +566,12 @@ class Layer(Container):
   def output_index(self):
     from theano.ifelse import ifelse
     index = self.index
-    if self.network:
+    if self.sources:
       # In some cases, e.g. forwarding, the target index (for "classes") might have shape[0]==0.
-      # Use data index in that case.
-      index = ifelse(T.gt(index.shape[0], 0), index, self.network.j["data"])
+      # Or shape[0]==1 with index[0]==0. See Dataset.shapes_for_batches().
+      # Use source index in that case.
+      have_zero = T.le(index.shape[0], 1) * T.eq(T.sum(index[0]), 0)
+      index = ifelse(have_zero, self.sources[0].index, index)
     return index
 
   def find_data_layer(self):

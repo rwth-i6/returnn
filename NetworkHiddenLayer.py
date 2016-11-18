@@ -6,6 +6,7 @@ import h5py
 import sys
 from theano import tensor as T
 from theano.tensor.nnet import conv
+from theano.ifelse import ifelse
 try:
   from theano.tensor.signal import pool
 except ImportError:  # old Theano or so...
@@ -64,6 +65,18 @@ class ForwardLayer(HiddenLayer):
     self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+class ClippingLayer(HiddenLayer):
+  layer_class = "clip"
+
+  def __init__(self, sparse_window = 1, **kwargs):
+    super(ClippingLayer, self).__init__(**kwargs)
+    z = self.get_linear_forward_output()
+    target = 'classes' if not 'target' in self.attrs else self.attrs['target']
+    i = (self.y_in[target].flatten() > 0).nonzero()
+    znew = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+    #self.make_output(z)
+    self.make_output(znew[i].reshape((T.sum(self.y_in[target]), z.shape[1], z.shape[2])))
+    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class EmbeddingLayer(ForwardLayer):
   layer_class = "embedding"
@@ -485,6 +498,7 @@ class SubnetworkLayer(_NoOpLayer):
     print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
+    self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
     assert self.subnetwork.output["output"].attrs['n_out'] == n_out
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
@@ -517,8 +531,130 @@ class SubnetworkLayer(_NoOpLayer):
   def make_constraints(self):
     if not self.trainable:
       return super(SubnetworkLayer, self).make_constraints()
-    return self.subnetwork.constraints
+    return self.subnetwork.total_constraints
 
+
+class ClusterDependentSubnetworkLayer(_NoOpLayer):
+  layer_class = "clustersubnet"
+  recurrent = True  # we don't know. depends on the subnetwork.
+
+  def __init__(self, n_out, subnetwork, n_clusters, load="<random>", data_map=None, trainable=True,
+               concat_sources=True,
+               **kwargs):
+    """
+    :param int n_out: output dimension of output layer
+    :param dict[str,dict] network: subnetwork as dict (JSON content)
+    :param list[str] data_map: maps the sources (from) of the layer to data input.
+      the list should be as long as the sources.
+      default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
+    :param bool trainable: if we take over all params from the subnetwork
+    """
+    super(ClusterDependentSubnetworkLayer, self).__init__(**kwargs)
+    self.set_attr("n_out", n_out)
+    if isinstance(subnetwork, (str, unicode)):
+      subnetwork = json.loads(subnetwork)
+    self.set_attr("subnetwork", subnetwork)
+    self.set_attr("load", load)
+    if isinstance(data_map, (str, unicode)):
+      data_map = json.loads(data_map)
+    if data_map:
+      self.set_attr("data_map", data_map)
+    self.set_attr('concat_sources', concat_sources)
+    self.set_attr("trainable", trainable)
+    # self.trainable = trainable
+    self.set_attr("n_clusters", n_clusters)
+    self.n_clusters = n_clusters
+    print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
+    assert len(self.sources) >= 2, "need input, ..., cluster_map"
+    sources, cluster_map_source = self.sources[:-1], self.sources[-1]
+    if concat_sources:
+      assert not data_map, "We expect the implicit canonical data_map with concat_sources."
+      assert self.sources
+      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass[:-1])
+      s0 = sources[0]
+      sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
+                   "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {"data": data}
+      data_map_di = {"data": s0.index, "classes": self.index}
+      data_map = []
+    else:  # not concat_sources
+      if not data_map:
+        data_map = ["data"]
+      assert isinstance(data_map, list)
+      assert len(data_map) == len(sources)
+      sub_n_out = {"classes": [n_out, 1 if self.attrs['sparse'] else 2]}
+      data_map_d = {}
+      data_map_di = {"classes": self.index}
+      for k, s in zip(data_map, sources):
+        sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
+        data_map_d[k] = s.output
+        data_map_di[k] = s.index
+    self.subnetworks = []
+    for idx in range(0, len(self.n_clusters)):
+      print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
+      self.subnetworks.append(self.network.new_subnetwork(
+        json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
+      assert self.subnetworks[idx].output["output"].attrs['n_out'] == n_out
+      if trainable:
+        self.params.update(self.subnetworks[idx].get_params_shared_flat_dict())
+      if load == "<random>":
+        print >>log.v2, "subnetwork with random initialization"
+      else:
+        from Config import get_global_config
+        config = get_global_config()  # this is a bit hacky but works fine in all my cases...
+        model_filename = load % {"self": self,
+                                 "global_config_load": config.value("load", None),
+                                 "global_config_epoch": config.int("epoch", 0)}
+        print >>log.v2, "loading subnetwork weights from", model_filename
+        import h5py
+        model_hdf = h5py.File(model_filename, "r")
+        self.subnetworks[idx].load_hdf(model_hdf)
+        print >>log.v2, "done loading subnetwork weights for", self.name
+    #self.ref = theano.shared(0, 'ref') #ref needs to be updated to correspond to the cluster of the current sequence
+    self.ref = cluster_map_source.output[0]
+
+    ## generate output lists and sums with ifelse to only compute specified paths
+
+    # output
+    self.zero_output = T.zeros_like(self.subnetworks[0].output["output"].output)
+    self.y = [ifelse(T.neq(idx, self.ref), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, len(self.n_clusters))]
+    self.z = self.y[0]
+    for idx in range(1, len(self.n_clusters)):
+      self.z += self.y[idx]
+    self.output = self.z
+
+    # costs
+    self.costs = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_cost) for idx in
+                  range(0, len(self.n_clusters))]
+    self.total_cost = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+
+    # grads
+    self.output_grads = self.subnetworks[self.ref.get_value()].known_grads
+
+    # constraints
+    self.constraints = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
+                        range(0, len(self.n_clusters))]
+    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+
+  def cost(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).cost()
+    try:
+      const_cost = T.get_scalar_constant_value(self.total_cost)
+      if const_cost == 0:
+        return None, None
+    except T.NotScalarConstantError:
+      pass
+    return self.total_cost, self.output_grads
+
+  def make_constraints(self):
+    if not self.trainable:
+      return super(SubnetworkLayer, self).make_constraints()
+    return self.total_constraints
+
+  def update_cluster_target(self, seq_tag):
+    self.ref.set_value(self.cluster_dict(seq_tag))
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
