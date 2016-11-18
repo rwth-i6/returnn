@@ -743,7 +743,7 @@ class Device(object):
     collected_info = {"info_str": str(info)}
     try:
       collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
-      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value())
+      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value()) #TODO fix for multiple targets with other labels
       collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
     except Exception as e:
       print >> log.v3, "Exception when getting device data. %s" % e
