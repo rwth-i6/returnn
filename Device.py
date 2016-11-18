@@ -445,6 +445,7 @@ class Device(object):
         outputs += [self.trainnet.constraints[out] for out in sorted(self.trainnet.constraints.keys())]
 
       if self.updater:
+        mode_with_gpu = theano.compile.mode.get_default_mode().including('gpuarray').excluding('gpu')
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
@@ -453,6 +454,7 @@ class Device(object):
                                        updates=self.updater.getUpdateList(),
                                        on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                        no_default_updates=exclude,
+                                       mode = mode_with_gpu,
                                        name="train_and_updater")
       else:
         gparams_outputs_format = []

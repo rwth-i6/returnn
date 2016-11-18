@@ -3564,45 +3564,62 @@ class RNNBlock(ForwardLayer):
   layer_class = 'rnnblock'
 
   def __init__(self, num_layers=1, direction=0, **kwargs):
-    #kwargs['n_out'] *= 4
+    # this has to be provided in THEANO_FLAGS as e.g. contexts=gpu0->cuda0
+    context_name = kwargs.get('device', str(theano.config.device))
+    if context_name == 'cpu':
+      context_name = 'gpu0'
+    kwargs['device'] = context_name
+    #kwargs['n_out'] *= 2
     super(RNNBlock, self).__init__(**kwargs)
+    self.params = {}
+    #self.attrs['n_out'] /= 2
     #self.set_attr('nout', self.attrs['n_out'] / 4)
     from theano.gpuarray import dnn
     from theano.gpuarray.type import gpuarray_shared_constructor
-    context_name = str(theano.config.device) # has to be provided in THEANO_FLAGS as e.g. contexts=gpu3->cuda3
-    if context_name == 'cpu':
-      context_name = 'gpu0'
 
     rnnb = dnn.RNNBlock(
-      theano.config.floatX,
-      self.attrs['n_out'],
-      num_layers,
+      dtype=theano.config.floatX,
+      hidden_size=self.attrs['n_out'],
+      num_layers=num_layers,
       rnn_mode='lstm',
       input_mode='linear',
       direction_mode='unidirectional' if direction != 0 else 'bidirectional',
       context_name=context_name
       )
-    psize = rnnb.get_param_size([25, self.attrs['n_out']])
-    params_cudnn = gpuarray_shared_constructor(
-      numpy.zeros((psize,), dtype=theano.config.floatX),
-      target=context_name
-    )
-    X = self.sources[0].output #self.get_linear_forward_output()
-    #c_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
-    #h_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
-    #c_init = T.zeros((num_layers, X.shape[1], self.attrs['n_out']), theano.config.floatX)
-    #h_init = T.zeros((num_layers, X.shape[1], self.attrs['n_out']), theano.config.floatX)
+    #X = self.get_linear_forward_output()
+    X = T.concatenate([s.output for s in self.sources])
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    psize = rnnb.get_param_size([25, n_in])
+    l = numpy.sqrt(6.) / numpy.sqrt(4*self.attrs['n_out'])
+    pvalue = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(psize,)), dtype=theano.config.floatX)
+    params_cudnn = self.add_param(gpuarray_shared_constructor(pvalue, target=context_name,name='cudnn_%s' % self.name))
+    c_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
+    h_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
 
-    c_init = gpuarray_shared_constructor(
-      numpy.zeros((num_layers, 25, self.attrs['n_out']), dtype=theano.config.floatX),
-      target=context_name
-    )
-    h_init = gpuarray_shared_constructor(
-      numpy.zeros((num_layers, 25, self.attrs['n_out']), dtype=theano.config.floatX),
-      target=context_name
-    )
-    self.output = rnnb.apply(params_cudnn, X[::direction or 1], h_init, c_init)[0]
+    out = rnnb.apply(params_cudnn, X[::direction or 1], h_init, c_init)[0][::direction or 1]
 
+    W_out = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'],self.y_in[self.attrs['target']].n_out))
+    b_out = self.add_param(self.create_bias(self.y_in[self.attrs['target']].n_out))
+    out = T.dot(out,W_out) + b_out
+    self.y_m = out.reshape((out.shape[0] * out.shape[1],out.shape[2]))
+
+    self.i = (self.index.flatten()>0).nonzero()
+    self.y_data_flat = self.y_in[self.attrs['target']].flatten()
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+    self.cost_val = T.sum(nll)
+
+    #self.cost_val = -T.sum(T.log(out[:,self.y_in[self.attrs['target']].flatten()][(self.index.flatten()>0).nonzero()]))
+    self.known_grads = { params_cudnn : T.grad(self.cost_val, params_cudnn) }
+    self.output = out
+    self.index = self.sources[0].index
+
+    self.error_val = T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  def errors(self):
+    return self.error_val
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
