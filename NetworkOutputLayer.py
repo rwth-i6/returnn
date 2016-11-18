@@ -8,7 +8,6 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from OpInvAlign import InvAlignOp, InvDecodeOp, InvBacktrackOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
