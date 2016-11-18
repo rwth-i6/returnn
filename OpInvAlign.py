@@ -22,7 +22,7 @@ class InvAlignOp(theano.Op):
       index[:length_y, b] = np.int8(1)
       orth = transcriptions[:length_y / self.nstates, b]
       attention[:length_y, b], labelling[:length_y, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
-      attention[:,b] += b * index_in.shape[0]
+      attention[:length_y, b] += b * index_in.shape[0]
     output_storage[0][0] = labelling
     output_storage[1][0] = attention
     output_storage[2][0] = index
@@ -32,7 +32,7 @@ class InvAlignOp(theano.Op):
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0],output_grads[1],output_grads[2]]
+    return [output_grads[0],output_grads[1],output_grads[2],output_grads[1]]
 
   def infer_shape(self, node, input_shapes):
     shape = (input_shapes[1][0] * self.nstates, input_shapes[1][1])
