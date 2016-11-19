@@ -3559,23 +3559,25 @@ class AlignmentLayer(ForwardLayer):
   def errors(self):
     return self.error_val
 
-class RNNBlock(ForwardLayer):
+class RNNBlockLayer(ForwardLayer):
   recurrent = True
   layer_class = 'rnnblock'
 
   def __init__(self, num_layers=1, direction=0, **kwargs):
     # this has to be provided in THEANO_FLAGS as e.g. contexts=gpu0->cuda0
     context_name = kwargs.get('device', str(theano.config.device))
-    if context_name == 'cpu':
-      context_name = 'gpu0'
+    #if context_name == 'cpu':
+    #  context_name = 'gpu0'
     kwargs['device'] = context_name
     #kwargs['n_out'] *= 2
-    super(RNNBlock, self).__init__(**kwargs)
+    super(RNNBlockLayer, self).__init__(**kwargs)
     self.params = {}
     #self.attrs['n_out'] /= 2
     #self.set_attr('nout', self.attrs['n_out'] / 4)
     from theano.gpuarray import dnn
     from theano.gpuarray.type import gpuarray_shared_constructor
+    from theano.tensor.extra_ops import cpu_contiguous
+    #from theano.sandbox.cuda.basic_ops import gpu_contiguous
 
     rnnb = dnn.RNNBlock(
       dtype=theano.config.floatX,
@@ -3584,22 +3586,37 @@ class RNNBlock(ForwardLayer):
       rnn_mode='lstm',
       input_mode='linear',
       direction_mode='unidirectional' if direction != 0 else 'bidirectional',
-      context_name=context_name
+      context_name=context_name if context_name != 'cpu' else 'gpu0'
       )
+
+    buffer_size = 512 # self.attrs['n_out'] * num_layers
     #X = self.get_linear_forward_output()
-    X = T.concatenate([s.output for s in self.sources])
+    #X = T.concatenate([s.output for s in self.sources],axis=2)[::direction or 1]
+    X = cpu_contiguous(T.concatenate([s.output for s in self.sources], axis=2)[::direction or 1])
+    #X = cpu_contiguous(self.sources[0].output[::direction or 1])
+    #X = T.concatenate([X,T.zeros((X.shape[0],batch_size - X.shape[1] + 1,X.shape[2]),X.dtype)],axis=1)[:,:-1]
     n_in = sum([s.attrs['n_out'] for s in self.sources])
-    psize = rnnb.get_param_size([25, n_in])
+    psize = rnnb.get_param_size([buffer_size, n_in])
     l = numpy.sqrt(6.) / numpy.sqrt(4*self.attrs['n_out'])
     pvalue = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(psize,)), dtype=theano.config.floatX)
-    params_cudnn = self.add_param(gpuarray_shared_constructor(pvalue, target=context_name,name='cudnn_%s' % self.name))
-    c_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
-    h_init = T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out'])
+    if context_name == 'cpu':
+      params_cudnn = self.add_param(self.create_bias(psize,name='cudnn_%s' % self.name))
+    else:
+      params_cudnn = self.add_param(gpuarray_shared_constructor(pvalue, target=context_name,name='cudnn_%s' % self.name))
+    c_init = cpu_contiguous(T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out']))
+    h_init = cpu_contiguous(T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out']))
 
-    out = rnnb.apply(params_cudnn, X[::direction or 1], h_init, c_init)[0][::direction or 1]
-
-    W_out = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'],self.y_in[self.attrs['target']].n_out))
+    W_out = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.y_in[self.attrs['target']].n_out))
     b_out = self.add_param(self.create_bias(self.y_in[self.attrs['target']].n_out))
+
+    if context_name == 'cpu':
+      self.cost_val = T.constant(0)
+      self.error_val = T.constant(0)
+      self.known_grads = {}
+      return
+
+    out = rnnb.apply(params_cudnn, X, h_init, c_init)[0]
+    out = out[::-1]
     out = T.dot(out,W_out) + b_out
     self.y_m = out.reshape((out.shape[0] * out.shape[1],out.shape[2]))
 
