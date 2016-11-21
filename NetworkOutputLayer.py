@@ -247,7 +247,7 @@ class OutputLayer(Layer):
         self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
-      custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
+      custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch
         self.set_attr("use_label_priors", use_label_priors)
