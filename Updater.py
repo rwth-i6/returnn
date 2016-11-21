@@ -938,5 +938,6 @@ class Updater:
   def update(self):
     assert self.pid == os.getpid()
     updates = self.getUpdateList()
-    updater = theano.function(inputs=[], updates=updates, name="updater")
+    mode_with_gpu = theano.compile.mode.get_default_mode().including('gpuarray').excluding('gpu')
+    updater = theano.function(inputs=[], updates=updates, name="updater", mode=mode_with_gpu)
     return updater()

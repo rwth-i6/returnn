@@ -445,6 +445,7 @@ class Device(object):
         outputs += [self.trainnet.constraints[out] for out in sorted(self.trainnet.constraints.keys())]
 
       if self.updater:
+        #mode_with_gpu = theano.compile.mode.get_default_mode().including('gpuarray').excluding('gpu')
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
@@ -741,7 +742,7 @@ class Device(object):
     collected_info = {"info_str": str(info)}
     try:
       collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
-      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value())
+      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value()) #TODO fix for multiple targets with other labels
       collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
     except Exception as e:
       print >> log.v3, "Exception when getting device data. %s" % e
