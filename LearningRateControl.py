@@ -380,6 +380,23 @@ class NewbobMultiEpoch(LearningRateControl):
       return None
     return numpy.mean(errors)
 
+  def _lastEpochsForEpoch(self, epoch):
+    lastEpochs = sorted([e for e in self.epochData.keys() if e < epoch])
+    if not lastEpochs:
+      return []
+    # We could also use the self.numEpochs limit here. But maybe this is better.
+    if len(lastEpochs) <= 1:
+      return []
+    # Take one more than self.numEpochs because we are looking at the diffs.
+    lastEpochs = lastEpochs[-self.numEpochs - 1:]
+    return lastEpochs
+
+  def _calcRecentMeanRelativeError(self, epoch):
+    lastEpochs = self._lastEpochsForEpoch(epoch)
+    if not lastEpochs:
+      return None
+    return self._calcMeanRelativeError(lastEpochs)
+
   def calcLearningRateForEpoch(self, epoch):
     """
     Newbob+ on train data.
@@ -388,18 +405,12 @@ class NewbobMultiEpoch(LearningRateControl):
     :rtype: float
     """
     learningRate = self.getMostRecentLearningRate(epoch)
-    lastEpochs = sorted([e for e in self.epochData.keys() if e < epoch])
-    if not lastEpochs:
-      return learningRate
-    # We could also use the self.numEpochs limit here. But maybe this is better.
-    if len(lastEpochs) <= 1:
-      return learningRate
     # We start counting epochs at 1.
     if self.updateInterval > 1 and epoch % self.updateInterval != 1:
       return learningRate
-    # Take one more than self.numEpochs because we are looking at the diffs.
-    lastEpochs = lastEpochs[-self.numEpochs - 1:]
-    meanRelativeError = self._calcMeanRelativeError(lastEpochs)
+    meanRelativeError = self._calcRecentMeanRelativeError(epoch)
+    if meanRelativeError is None:
+      return learningRate
     if meanRelativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor
     return learningRate
@@ -437,13 +448,13 @@ def demo():
     print("usage: python %s [config] [other options]" % __file__)
     print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
   rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.config._hack_value_reading_debug()
   from Pretrain import pretrainFromConfig
   pretrain = pretrainFromConfig(rnn.config)
   first_non_pretrain_epoch = 1
   pretrain_learning_rate = None
   if pretrain:
     first_non_pretrain_epoch = pretrain.get_train_num_epochs() + 1
-  rnn.config._hack_value_reading_debug()
   log.initialize(verbosity=[5])
   control = loadLearningRateControlFromConfig(rnn.config)
   print("LearningRateControl: %r" % control)
@@ -470,6 +481,8 @@ def demo():
       learningRate = control.minLearningRate
       s += ", clipped to %s" % learningRate
     s += ", previous relative error: %s" % control.calcRelativeError(epoch - 2, epoch - 1)
+    if hasattr(control, "_calcRecentMeanRelativeError"):
+      s += ", previous mean relative error: %s" % control._calcRecentMeanRelativeError(epoch)
     print(s)
     # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
     if epoch in control.epochData:
