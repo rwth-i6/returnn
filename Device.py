@@ -543,6 +543,13 @@ class Device(object):
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
+        elif extract == "ctc":
+          pl = self.testnet.output['output'].p_y_given_x[:, :, 0::2]
+          pb = T.sum(self.testnet.output['output'].p_y_given_x[:, :, 1::2], axis=2).dimshuffle(0, 1, 'x')
+          pcx = T.concatenate([pl, pb], axis=2)
+          #just ignore the index, is only safe with max_seqs 1
+          #but makes the index handling with mdlstm work for now
+          source.append(T.log(pcx))
         elif extract == "posteriors":
           layer = self.testnet.get_layer('output')
           p_y_given_x = layer.p_y_given_x
