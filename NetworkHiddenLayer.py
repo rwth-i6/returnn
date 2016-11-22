@@ -3589,7 +3589,7 @@ class RNNBlockLayer(ForwardLayer):
       context_name=context_name if context_name != 'cpu' else 'gpu0'
       )
 
-    buffer_size = 512 # self.attrs['n_out'] * num_layers
+    buffer_size = 1 # self.attrs['n_out'] * num_layers
     #X = self.get_linear_forward_output()
     #X = T.concatenate([s.output for s in self.sources],axis=2)[::direction or 1]
     X = cpu_contiguous(T.concatenate([s.output for s in self.sources], axis=2)[::direction or 1])
