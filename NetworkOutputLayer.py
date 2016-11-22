@@ -631,8 +631,6 @@ class SequenceOutputLayer(OutputLayer):
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
-      #err = T.sum(err_inner.reshape((err_inner.shape[0] * err_inner.shape[1],
-      #                               err_inner.shape[2]))[(src_index.flatten() > 0).nonzero()])
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
@@ -707,7 +705,7 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):

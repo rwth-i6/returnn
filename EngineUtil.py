@@ -35,7 +35,6 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
           if "[sparse:" in k:
             assert o[k] == 0, "sparse non-recurrent batching + chunking not implemented"
             _device_maybe_enlarge_data(device, k, ls)
-          elif data.shape == (0,): continue # Willi hack
           else:
             assert ls == l[k]
           device.output_index[k][o[k]:o[k] + ls, q] = numpy.ones((ls,), dtype='int8')
