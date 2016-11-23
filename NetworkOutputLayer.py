@@ -490,7 +490,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'ctc_rasr'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -557,6 +557,13 @@ class SequenceOutputLayer(OutputLayer):
         grad += T.grad(ce, self.z)
       known_grads = {self.z: grad}
       return err, known_grads
+    elif self.loss == 'ctc_rasr':
+      idx = (src_index.flatten() > 0).nonzero()
+      scores = -T.log(self.p_y_given_x.reshape(self.z.shape))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      err = T.exp(-fwdbwd) * scores
+      return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.fast_bw_opts.get("bw_from"):
@@ -707,7 +714,7 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'ctc_rasr') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
