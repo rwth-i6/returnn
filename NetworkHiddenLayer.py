@@ -3552,12 +3552,12 @@ class AlignmentLayer(ForwardLayer):
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
-
   def cost(self):
     return self.cost_val, None
 
   def errors(self):
     return self.error_val
+
 
 class RNNBlockLayer(ForwardLayer):
   recurrent = True
@@ -3641,11 +3641,11 @@ class RNNBlockLayer(ForwardLayer):
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
-class FastAlignmentLayer(ForwardLayer):
-  layer_class = "fast_align"
+class InvAlignmentLayer(ForwardLayer):
+  layer_class = "inv_align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
-    assert direction == 'inv'
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1,
+               train_skips=False, search='align', output_attention=False, **kwargs):
     target = kwargs['target']
     if tdps is None:
       tdps = [1e10, 0., 3.]
@@ -3658,11 +3658,12 @@ class FastAlignmentLayer(ForwardLayer):
       kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
     else:
       kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(FastAlignmentLayer, self).__init__(**kwargs)
-    self.set_attr('search', search)
+    super(InvAlignmentLayer, self).__init__(**kwargs)
+
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
     self.set_attr('n_out', n_out)
+
     if tdps is None:
       tdps = [1e10, 0., 3.]
     if len(tdps) - 2 < nskips:
@@ -3680,7 +3681,7 @@ class FastAlignmentLayer(ForwardLayer):
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
 
     if self.train_flag:
-      scores = -T.log(T.clip(p_in, numpy.float32(1.e-20), numpy.float(1.e20)))
+      scores = -T.log(p_in) #T.clip(p_in, numpy.float32(1.e-20), numpy.float(1.e20)))
       scores = scores.reshape((scores.shape[0] * scores.shape[1], scores.shape[2]))
       scores = scores[:, self.y_data_flat].dimshuffle(1, 0).reshape((self.y_in.shape[0], scores.shape[1], scores.shape[0]))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
