@@ -466,7 +466,7 @@ class Dataset(object):
       else:
         t = 0
         while t < length["data"]:
-          l = min(t + chunk_size, length["data"])
+          l = NumbersDict.bin_op(NumbersDict.bin_op(length,t+chunk_size,op=min,zero=0), t, op=max, zero=0)
           yield (s, NumbersDict(t), NumbersDict(l))
           t += chunk_step
       s += 1

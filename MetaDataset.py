@@ -505,7 +505,7 @@ class CombinedDataset(CachedDataset2):
     if not self.know_num_seqs_beforehand and end > len(self.dataset_seq_idxs):
       self._expand_dataset_sec_idxs(end-len(self.dataset_seq_idxs))
 
-    print self.dataset_seq_idxs,start,end
+#    print self.dataset_seq_idxs,start,end
     requested_seqs = self.dataset_seq_idxs[start:end]
 
     for i in range(len(self.datasets)):
