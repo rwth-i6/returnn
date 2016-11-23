@@ -631,10 +631,10 @@ class SequenceOutputLayer(OutputLayer):
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
-      idx = (src_index.flatten() > 0).nonzero()
-      err = T.sum(err_inner.reshape((err_inner.shape[0]*err_inner.shape[1],err_inner.shape[2]))[idx])
-      #err = (err_inner * float_idx_bc).sum()
-      #known_grads = {self.z: (y - bw) * float_idx_bc}
+      #idx = (src_index.flatten() > 0).nonzero()
+      #err = T.sum(err_inner.reshape((err_inner.shape[0]*err_inner.shape[1],err_inner.shape[2]))[idx])
+      err = (err_inner * float_idx_bc).sum()
+      known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
         known_grads[self.z] *= -2 * self.z
       if self.fast_bw_opts.get("generic_act_grad"):  # maybe use together with loss_with_out_norm
