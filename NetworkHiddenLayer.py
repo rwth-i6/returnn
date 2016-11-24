@@ -561,7 +561,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
       self.set_attr("data_map", data_map)
     self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
-    # self.trainable = trainable
+    self.trainable = trainable
     self.set_attr("n_clusters", n_clusters)
     self.n_clusters = n_clusters
     print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
@@ -570,7 +570,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     if concat_sources:
       assert not data_map, "We expect the implicit canonical data_map with concat_sources."
       assert self.sources
-      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass[:-1])
+      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass)
       s0 = sources[0]
       sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
                    "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
@@ -590,7 +590,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         data_map_d[k] = s.output
         data_map_di[k] = s.index
     self.subnetworks = []
-    for idx in range(0, len(self.n_clusters)):
+    for idx in range(0, self.n_clusters):
       print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
       self.subnetworks.append(self.network.new_subnetwork(
         json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
@@ -617,24 +617,25 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
 
     # output
     self.zero_output = T.zeros_like(self.subnetworks[0].output["output"].output)
-    self.y = [ifelse(T.neq(idx, self.ref), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, len(self.n_clusters))]
+    self.y = [ifelse(T.prod(T.neq(idx, self.ref)), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, self.n_clusters)]
     self.z = self.y[0]
-    for idx in range(1, len(self.n_clusters)):
+    for idx in range(1, self.n_clusters):
       self.z += self.y[idx]
     self.output = self.z
 
     # costs
-    self.costs = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_cost) for idx in
-                  range(0, len(self.n_clusters))]
-    self.total_cost = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+    self.costs = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_cost) for idx in
+                  range(0, self.n_clusters)]
+    self.total_cost = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
     # grads
-    self.output_grads = self.subnetworks[self.ref.get_value()].known_grads
+    ## TODO make dynamic
+    self.output_grads = self.subnetworks[0].known_grads
 
     # constraints
-    self.constraints = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
-                        range(0, len(self.n_clusters))]
-    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+    self.constraints = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
+                        range(0, self.n_clusters)]
+    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
   def cost(self):
     if not self.trainable:

@@ -159,6 +159,7 @@ class ClusteringDataset(CachedDataset2):
     self.num_inputs = self.dataset.num_inputs
     self.num_outputs = self.dataset.num_outputs.copy()
     self.num_outputs["cluster_idx"] = [n_clusters, 1]  # will be a single int32
+    self.expected_load_seq_start = 0
 
   def _load_cluster_map(self, filename):
     ls = open(filename).read().splitlines()
@@ -178,6 +179,7 @@ class ClusteringDataset(CachedDataset2):
 
   def init_seq_order(self, epoch=None, seq_list=None):
     self.dataset.init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(ClusteringDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
 
   def get_data_keys(self):
     return self.dataset.get_data_keys() + ["cluster_idx"]
@@ -202,9 +204,53 @@ class ClusteringDataset(CachedDataset2):
 
   def _collect_single_seq(self, seq_idx):
     seq_name = self.get_tag(seq_idx)
-    data = {key: self.dataset.get_data(seq_idx=seq_idx, key=key) for key in self.get_data_keys()}
-    data["cluster_idx"] = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
+    #print >> log.v5, "ClusteringDataset: _collect_single_seq: seq_name", seq_name
+    data = {key: self.dataset.get_data(seq_idx=seq_idx, key=key) for key in self.dataset.get_data_keys()}
+    cluster_idx = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
+    # TODO Albert macht das so sinn es hier zu verlaengern?
+    data["cluster_idx"] = numpy.repeat(cluster_idx,data["data"].shape[0])
     return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data)
+
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=None):
+    import sys
+    if max_seq_length is None: max_seq_length = sys.maxsize
+    if batch_size == 0: batch_size = sys.maxsize
+    assert batch_size > 0
+    if max_seqs == -1: max_seqs = float('inf')
+    assert max_seqs > 0
+    assert seq_drop <= 1.0
+    chunk_size = self.chunk_size
+    chunk_step = self.chunk_step
+    from EngineBatch import Batch
+    batch = Batch()
+    last_seq_idx = None
+    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
+      if last_seq_idx is not None and last_seq_idx != seq_idx:
+        last_seq_name = self.get_tag(last_seq_idx)
+        seq_name = self.get_tag(seq_idx)
+        if self.cluster_map[last_seq_name] != self.cluster_map[seq_name]:
+          print >> log.v5, "ClusteringDataset::_generate_batches", last_seq_idx, "is not", seq_idx
+          yield batch
+          batch = Batch()
+      length = t_end - t_start
+      if max_seq_length < 0 and length['classes'] > -max_seq_length:
+        continue
+      elif max_seq_length > 0 and length.max_value() > max_seq_length:
+        continue
+      if length.max_value() > batch_size:
+        print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
+      if self.rnd_seq_drop.random() < seq_drop:
+        continue
+      dt, ds = batch.try_sequence_as_slice(length)
+      if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
+        yield batch
+        batch = Batch()
+      print >> log.v5, "batch add slice length", length
+      batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
+      last_seq_idx = seq_idx
+
+    if batch.get_all_slices_num_frames() > 0:
+      yield batch
 
 
 class ConcatDataset(CachedDataset2):
