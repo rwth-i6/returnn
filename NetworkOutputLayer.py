@@ -8,7 +8,6 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from OpInvAlign import InvAlignOp, InvDecodeOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
@@ -104,9 +103,11 @@ class OutputLayer(Layer):
         y = pad(source=y, axis=0, target_axis_len=source_index.shape[0])
     if not copy_output:
       self.y = y
+      self.norm = numpy.float32(1)
     else:
+      self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       self.index = copy_output.index
-      self.y = copy_output.y_out
+      self.y = y = copy_output.y_out
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
@@ -126,7 +127,6 @@ class OutputLayer(Layer):
       assert out_arg.ndim == 2
       self.y_data_flat = out_arg.astype("int32")
 
-    self.norm = numpy.float32(1)
     self.target_index = self.index
     if time_limit == 'inf':
       num = T.cast(T.sum(self.index), 'float32')
@@ -247,7 +247,7 @@ class OutputLayer(Layer):
         self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
-      custom = T.mean(self.p_y_given_x_flat[self.i], axis=0)
+      custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch
         self.set_attr("use_label_priors", use_label_priors)
@@ -444,10 +444,9 @@ class SequenceOutputLayer(OutputLayer):
                am_scale=1, gamma=1, bw_norm_class_avg=False,
                fast_bw_opts=None,
                loss_like_ce=False, trained_softmax_prior=False,
-               sprint_opts=None, warp_ctc_lib=None, inv_opts=None,
+               sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
-    if inv_opts is None: inv_opts = {}
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
     self.ce_smoothing = ce_smoothing
@@ -460,14 +459,8 @@ class SequenceOutputLayer(OutputLayer):
         import json
         fast_bw_opts = json.loads(fast_bw_opts)
       self.set_attr("fast_bw_opts", fast_bw_opts)
-    if inv_opts:
-      if not isinstance(inv_opts, dict):
-        import json
-        inv_opts = json.loads(inv_opts)
-      self.set_attr("inv_opts", inv_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
-    self.inv_opts = CollectionReadCheckCovered(inv_opts or {})
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
@@ -497,35 +490,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'warp_ctc', 'inv'), 'invalid loss: ' + self.loss
-    if self.loss == 'inv':
-      src_index = self.sources[0].index
-      tdps = inv_opts.get('tdps', [1e10, 0., 3.])
-      n = inv_opts.get('nstates', 1)
-      nskips = inv_opts.get('nskips', 1)
-      if len(tdps) - 2 < nskips:
-        tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-      align = inv_opts.get('eval', 'align')
-      if self.eval_flag and align != 'time':
-        align = "search"
-      if self.eval_flag and align == 'time':
-        self.index = src_index
-        return
-      if not self.train_flag and align == 'search':
-        y, att, idx = InvDecodeOp(tdps, n, inv_opts.get('penalty', 0))(src_index, -T.log(self.p_y_given_x))
-        self.y_data_flat = y.flatten()
-        max_length_y = T.max(idx.sum(axis=0))
-        self.index = idx[:max_length_y]
-        att = att[:max_length_y]
-        self.y_data_flat = y[:max_length_y].flatten()
-      else:
-        self.index = self.index if n == 1 else self.index.repeat(n, axis=0)
-        att = InvAlignOp(tdps, n)(src_index, self.index, -T.log(self.p_y_given_x), self.y)
-      self.i = (self.index.flatten() > 0).nonzero()
-      self.y_m = self.z.dimshuffle(1,0,2).reshape(self.y_m.shape)[att.flatten()]
-      self.output = self.y_m.reshape((self.index.shape[0], self.index.shape[1], self.y_m.shape[1]))
-      self.y_m = self.output.reshape((self.index.shape[0] * self.index.shape[1], self.y_m.shape[1]))
-      self.p_y_given_x = T.nnet.softmax(self.y_m)
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -592,6 +557,30 @@ class SequenceOutputLayer(OutputLayer):
         grad += T.grad(ce, self.z)
       known_grads = {self.z: grad}
       return err, known_grads
+    elif self.loss == 'inv':
+      nstates = 6
+      ldx = self.y.dimshuffle('x', 0, 1).repeat(nstates, axis=0).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1])).flatten()
+      scores = -T.log(self.p_y_given_x) # TBC
+      scores = scores.reshape((scores.shape[0]*scores.shape[1],scores.shape[2])).dimshuffle(1,0)[ldx] # (NB)T
+      scores = scores.reshape((self.index.shape[0]*nstates,self.index.shape[1],scores.shape[1]))
+      index = self.index.dimshuffle('x', 0, 1).repeat(nstates, axis=0).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1]))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      idx = (index.flatten() > 0).nonzero()
+      err = T.exp(-fwdbwd) * scores
+      return T.constant(1./nstates,dtype='float32') * T.sum(err.reshape((err.shape[0] * err.shape[1], err.shape[2]))[idx]), None
+    elif self.loss == 'ctc_rasr':
+      idx = (src_index.flatten() > 0).nonzero()
+      emissions = self.p_y_given_x
+      #if self.attrs.get('compute_priors', False):
+      #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
+      scores = -T.log(emissions.reshape(self.z.shape))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      err = T.exp(-fwdbwd) * scores
+      return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
       assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.fast_bw_opts.get("bw_from"):
@@ -666,6 +655,8 @@ class SequenceOutputLayer(OutputLayer):
       err_inner = bw * nlog_scores
       if self.fast_bw_opts.get("log_score_penalty"):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
+      #idx = (src_index.flatten() > 0).nonzero()
+      #err = T.sum(err_inner.reshape((err_inner.shape[0]*err_inner.shape[1],err_inner.shape[2]))[idx])
       err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
@@ -738,27 +729,28 @@ class SequenceOutputLayer(OutputLayer):
       self.y_data_flat = y.flatten()
       nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m[self.i], y_idx=self.y_data_flat[self.i])
       return T.sum(nll), known_grads
-    elif self.loss == 'inv':
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
-      return T.sum(nll) * self.norm, known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp'):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'ctc_rasr', 'inv') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
       from theano.tensor.extra_ops import cpu_contiguous
+      emissions = self.p_y_given_x
+      if self.attrs.get('compute_priors', False):
+        emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+      #return T.sum(TwoStateBestPathDecodeOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
       emissions = self.p_y_given_x
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(TwoStateBestPathDecodeOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+    elif self.loss == 'inv':
+      return 0
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
-    elif self.loss == 'inv':
-      return T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i])) * self.norm
     else:
       return super(SequenceOutputLayer, self).errors()
 

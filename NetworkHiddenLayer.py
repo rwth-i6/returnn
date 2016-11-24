@@ -19,7 +19,8 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
+from OpInvAlign import InvAlignOp, InvDecodeOp, InvBacktrackOp
+from TheanoUtil import print_to_file
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -3444,3 +3445,254 @@ class DumpLayer(_NoOpLayer):
       from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
+
+
+class AlignmentLayer(ForwardLayer):
+  layer_class = "align"
+
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    if train_skips:
+      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    else:
+      kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(AlignmentLayer, self).__init__(**kwargs)
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search != 'time':
+        search = "search"
+      else:
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+    else:
+      if search == 'time':
+        search = 'align'
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    y_in = self.y_in[target].reshape(self.index.shape)
+
+    if self.train_flag or search == 'align':
+      y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      max_length_y = y_out.shape[0]
+      norm = numpy.float32(1)
+      ratt = att
+      self.index = theano.gradient.disconnected_grad(rindex)
+      self.y_out = y_out
+    elif search == 'search':
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      if not self.eval_flag:
+        rindex = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
+        aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
+      norm = numpy.float32(1) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    elif search == 'decode':
+      y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
+      self.index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    else:
+      assert search == 'time'
+
+    if output_attention:
+      self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      self.attrs['n_out'] = 1
+      return
+    else:
+      x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+      self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+
+    if self.attrs['search'] == 'time' or self.eval_flag:
+      return
+
+    if search in ['align', 'decode']:
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
+      idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    elif search == 'search':
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
+      if train_skips:
+        y_out = self.y_out * len(m_skip)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
+      idx = (rindex.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+
+class RNNBlockLayer(ForwardLayer):
+  recurrent = True
+  layer_class = 'rnnblock'
+
+  def __init__(self, num_layers=1, direction=0, **kwargs):
+    # this has to be provided in THEANO_FLAGS as e.g. contexts=gpu0->cuda0
+    context_name = kwargs.get('device', str(theano.config.device))
+    #if context_name == 'cpu':
+    #  context_name = 'gpu0'
+    kwargs['device'] = context_name
+    #kwargs['n_out'] *= 2
+    super(RNNBlockLayer, self).__init__(**kwargs)
+    self.params = {}
+    #self.attrs['n_out'] /= 2
+    #self.set_attr('nout', self.attrs['n_out'] / 4)
+    from theano.gpuarray import dnn
+    from theano.gpuarray.type import gpuarray_shared_constructor
+    from theano.tensor.extra_ops import cpu_contiguous
+    #from theano.sandbox.cuda.basic_ops import gpu_contiguous
+
+    rnnb = dnn.RNNBlock(
+      dtype=theano.config.floatX,
+      hidden_size=self.attrs['n_out'],
+      num_layers=num_layers,
+      rnn_mode='lstm',
+      input_mode='linear',
+      direction_mode='unidirectional' if direction != 0 else 'bidirectional',
+      context_name=context_name if context_name != 'cpu' else 'gpu0'
+      )
+
+    buffer_size = 1 # self.attrs['n_out'] * num_layers
+    #X = self.get_linear_forward_output()
+    #X = T.concatenate([s.output for s in self.sources],axis=2)[::direction or 1]
+    X = cpu_contiguous(T.concatenate([s.output for s in self.sources], axis=2)[::direction or 1])
+    #X = cpu_contiguous(self.sources[0].output[::direction or 1])
+    #X = T.concatenate([X,T.zeros((X.shape[0],batch_size - X.shape[1] + 1,X.shape[2]),X.dtype)],axis=1)[:,:-1]
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    psize = rnnb.get_param_size([buffer_size, n_in])
+    l = numpy.sqrt(6.) / numpy.sqrt(4*self.attrs['n_out'])
+    pvalue = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(psize,)), dtype=theano.config.floatX)
+    if context_name == 'cpu':
+      params_cudnn = self.add_param(self.create_bias(psize,name='cudnn_%s' % self.name))
+    else:
+      params_cudnn = self.add_param(gpuarray_shared_constructor(pvalue, target=context_name,name='cudnn_%s' % self.name))
+    c_init = cpu_contiguous(T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out']))
+    h_init = cpu_contiguous(T.alloc(numpy.cast[theano.config.floatX](0), num_layers, X.shape[1], self.attrs['n_out']))
+
+    W_out = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], self.y_in[self.attrs['target']].n_out))
+    b_out = self.add_param(self.create_bias(self.y_in[self.attrs['target']].n_out))
+
+    if context_name == 'cpu':
+      self.cost_val = T.constant(0)
+      self.error_val = T.constant(0)
+      self.known_grads = {}
+      return
+
+    out = rnnb.apply(params_cudnn, X, h_init, c_init)[0]
+    out = out[::-1]
+    out = T.dot(out,W_out) + b_out
+    self.y_m = out.reshape((out.shape[0] * out.shape[1],out.shape[2]))
+
+    self.i = (self.index.flatten()>0).nonzero()
+    self.y_data_flat = self.y_in[self.attrs['target']].flatten()
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+    self.cost_val = T.sum(nll)
+
+    #self.cost_val = -T.sum(T.log(out[:,self.y_in[self.attrs['target']].flatten()][(self.index.flatten()>0).nonzero()]))
+    self.known_grads = { params_cudnn : T.grad(self.cost_val, params_cudnn) }
+    self.output = out
+    self.index = self.sources[0].index
+
+    self.error_val = T.sum(T.neq(T.argmax(self.y_m[self.i], axis=-1), self.y_data_flat[self.i]))
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  def errors(self):
+    return self.error_val
+
+from NativeOp import FastBaumWelchOp
+from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+class InvAlignmentLayer(ForwardLayer):
+  layer_class = "inv_align"
+
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1,
+               train_skips=False, search='align', output_attention=False, **kwargs):
+    target = kwargs['target']
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    else:
+      nskips = len(tdps) - 2
+    if train_skips:
+      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+    else:
+      kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(InvAlignmentLayer, self).__init__(**kwargs)
+
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < nskips:
+      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search == 'time':
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+
+    if self.train_flag:
+      scores = -T.log(p_in) #T.clip(p_in, numpy.float32(1.e-20), numpy.float(1.e20)))
+      scores = scores.reshape((scores.shape[0] * scores.shape[1], scores.shape[2]))
+      scores = scores[:, self.y_data_flat].dimshuffle(1, 0).reshape((self.y_in.shape[0], scores.shape[1], scores.shape[0]))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      float_idx = T.cast(self.sources[0].index, "float32")
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      att = T.argmin(fwdbwd, axis=2).flatten()  # NB
+      x_out = x_in.reshape((x_in.shape[0], x_in.shape[1] * x_in.shape[2]))[att]
+      self.output = x_out.reshape((fwdbwd.shape[0], fwdbwd.shape[1], x_in.shape[2]))
+      self.y_out = self.y_in[target].reshape(self.index.shape)
+    else:
+      self.index = self.sources[0].index
+      self.output = x_in
+      self.y_out = self.y_in[target].reshape(self.index.shape)

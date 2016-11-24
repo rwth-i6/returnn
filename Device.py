@@ -445,6 +445,7 @@ class Device(object):
         outputs += [self.trainnet.constraints[out] for out in sorted(self.trainnet.constraints.keys())]
 
       if self.updater:
+        #mode_with_gpu = theano.compile.mode.get_default_mode().including('gpuarray').excluding('gpu')
         self.updater.initVars(self.trainnet, self.gradients)
         #print self.updater.getUpdateList()
         self.trainer = theano.function(inputs=[self.block_start, self.block_end],
@@ -542,6 +543,13 @@ class Device(object):
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
           source.append(T.log(self.testnet.output['output'].p_y_given_x))
+        elif extract == "ctc":
+          pl = self.testnet.output['output'].p_y_given_x[:, :, 0::2]
+          pb = T.sum(self.testnet.output['output'].p_y_given_x[:, :, 1::2], axis=2).dimshuffle(0, 1, 'x')
+          pcx = T.concatenate([pl, pb], axis=2)
+          #just ignore the index, is only safe with max_seqs 1
+          #but makes the index handling with mdlstm work for now
+          source.append(T.log(pcx))
         elif extract == "posteriors":
           layer = self.testnet.get_layer('output')
           p_y_given_x = layer.p_y_given_x
@@ -614,7 +622,7 @@ class Device(object):
             param = int(param)
           hidden = self.testnet.output[extract]
           signal = hidden.output[param].dimshuffle('x', 0, 1) if param is not None else hidden.output
-          source.append(signal.dimshuffle(0, 1, 'x').repeat(signal.shape[2], axis=2))
+          source.append(signal)
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         elif extract == 'attention':
@@ -741,7 +749,7 @@ class Device(object):
     collected_info = {"info_str": str(info)}
     try:
       collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
-      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value())
+      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value()) #TODO fix for multiple targets with other labels
       collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
     except Exception as e:
       print >> log.v3, "Exception when getting device data. %s" % e
