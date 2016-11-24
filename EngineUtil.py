@@ -36,7 +36,7 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
             assert o[k] == 0, "sparse non-recurrent batching + chunking not implemented"
             _device_maybe_enlarge_data(device, k, ls)
           else:
-            assert ls == l[k]
+            assert ls == l[k], "start/end: %r/%r" % (seq.seq_start_frame, seq.seq_end_frame)
           device.output_index[k][o[k]:o[k] + ls, q] = numpy.ones((ls,), dtype='int8')
           device.targets[k][o[k]:o[k] + ls, q] = data
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
