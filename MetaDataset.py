@@ -179,7 +179,7 @@ class ClusteringDataset(CachedDataset2):
 
   def init_seq_order(self, epoch=None, seq_list=None):
     self.dataset.init_seq_order(epoch=epoch, seq_list=seq_list)
-    super(ClusteringDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    return super(ClusteringDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
 
   def get_data_keys(self):
     return self.dataset.get_data_keys() + ["cluster_idx"]
