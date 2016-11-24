@@ -465,9 +465,27 @@ class Dataset(object):
         yield (s, NumbersDict(0), length)
       else:
         t = 0
-        while t < length["data"]:
-          l = NumbersDict.bin_op(NumbersDict.bin_op(length,t+chunk_size,op=min,zero=0), t, op=max, zero=0)
-          yield (s, NumbersDict(t), NumbersDict(l))
+        default_key = "data"
+        # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
+        # We expect them all of the same length so that we can do chunking.
+        # In case that some length is 0 or 1,
+        # we treat it special and always return the full seq repeated for every chunk.
+        keys_with_full_seqs = []
+        for key in length.keys():
+          if length[key] == length[default_key]:
+            continue  # ok
+          if length[key] <= 1:
+            keys_with_full_seqs.append(key)
+            continue
+          raise Exception("Chunking with multiple data-keys of different length: %r" % length)
+        while t < length[default_key]:
+          l = min(t + chunk_size, length[default_key])
+          chunk_start = NumbersDict(t)
+          chunk_len = NumbersDict(l)
+          for key in keys_with_full_seqs:
+            chunk_start[key] = 0
+            chunk_len[key] = length[key]
+          yield (s, chunk_start, chunk_len)
           t += chunk_step
       s += 1
 
