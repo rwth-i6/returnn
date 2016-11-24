@@ -630,8 +630,11 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.total_cost = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
     # grads
-    ## TODO make dynamic
+    # TODO most likely broken, make a new dict with new thenao variables
     self.output_grads = self.subnetworks[0].known_grads
+    for idx in range(1, self.n_clusters):
+      self.output_grads.update(self.subnetworks[idx].known_grads)
+    #self.output_grads = self.subnetworks[0].known_grads
 
     # constraints
     self.constraints = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
@@ -656,6 +659,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
 
   def update_cluster_target(self, seq_tag):
     self.ref.set_value(self.cluster_dict(seq_tag))
+
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"

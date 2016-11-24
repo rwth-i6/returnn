@@ -207,8 +207,8 @@ class ClusteringDataset(CachedDataset2):
     #print >> log.v5, "ClusteringDataset: _collect_single_seq: seq_name", seq_name
     data = {key: self.dataset.get_data(seq_idx=seq_idx, key=key) for key in self.dataset.get_data_keys()}
     cluster_idx = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
-    # TODO Albert macht das so sinn es hier zu verlaengern?
-    data["cluster_idx"] = numpy.repeat(cluster_idx,data["data"].shape[0])
+    data["cluster_idx"] = cluster_idx
+    #data["cluster_idx"] = numpy.repeat(cluster_idx,data["data"].shape[0])
     return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data)
 
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=None):
