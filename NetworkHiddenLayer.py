@@ -3505,7 +3505,10 @@ class AlignmentLayer(ForwardLayer):
     elif search == 'search':
       y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       if not self.eval_flag:
-        rindex = self.index if nstates == 1 else self.index.repeat(nstates, axis=0)
+        if nstates == 1:
+          rindex = self.index
+        else:
+          rindex = self.index.dimshuffle('x',0,1).repeat(nstates,axis=0).reshape((self.index.shape[0]*nstates,self.index.shape[1]))
         aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
       norm = numpy.float32(1) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
       max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
