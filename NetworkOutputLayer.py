@@ -490,7 +490,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'ctc_rasr'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -557,9 +557,35 @@ class SequenceOutputLayer(OutputLayer):
         grad += T.grad(ce, self.z)
       known_grads = {self.z: grad}
       return err, known_grads
+    elif self.loss == 'inv':
+      S = 5
+      N = self.index.shape[0]
+      B = self.index.shape[1]
+      ldx = self.y.dimshuffle('x', 0, 1).repeat(S, axis=0).reshape((N * S, B))
+      scores = -T.log(self.p_y_given_x) # TBC
+      #scores = theano.printing.Print("before", attrs=['shape'])(scores)
+      scores, _ = theano.scan(lambda y,x: x[:,T.arange(B),y],[ldx],non_sequences=[scores])
+      scores = scores.dimshuffle(0,2,1)
+      #scores = theano.printing.Print("after", attrs=['shape'])(scores)
+      index = self.index.dimshuffle('x', 0, 1).repeat(S, axis=0).reshape((N * S, B))
+      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      #from TheanoUtil import print_to_file
+      #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
+      #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
+      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      def viterbi(op,x):
+        print x.argmin(axis=-1)
+      #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
+      #fwdbwd.argmin(axis=-1).flatten()
+      idx = (index.flatten() > 0).nonzero()
+      err = T.exp(-fwdbwd) * scores
+      return T.constant(1./S,dtype='float32') * T.sum(err.reshape((err.shape[0] * err.shape[1], err.shape[2]))[idx]), None
     elif self.loss == 'ctc_rasr':
       idx = (src_index.flatten() > 0).nonzero()
-      scores = -T.log(self.p_y_given_x.reshape(self.z.shape))
+      emissions = self.p_y_given_x
+      #if self.attrs.get('compute_priors', False):
+      #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
+      scores = -T.log(emissions.reshape(self.z.shape))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
       fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = T.exp(-fwdbwd) * scores
@@ -714,15 +740,21 @@ class SequenceOutputLayer(OutputLayer):
       return T.sum(nll), known_grads
 
   def errors(self):
-    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'ctc_rasr') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
+    if self.loss in ('ctc', 'ce_ctc', 'ctc_warp', 'ctc_rasr', 'inv') or (self.loss == 'fast_bw' and self.fast_bw_opts.get('ctc',False)):
       from theano.tensor.extra_ops import cpu_contiguous
+      emissions = self.p_y_given_x
+      if self.attrs.get('compute_priors', False):
+        emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       return T.sum(BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+      #return T.sum(TwoStateBestPathDecodeOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
     elif self.loss == 'hmm' or (self.loss == 'fast_bw' and self.fast_bw_opts.get('decode',False)):
       emissions = self.p_y_given_x
       if self.attrs.get('compute_priors', False):
         emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(TwoStateBestPathDecodeOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+    elif self.loss == 'inv':
+      return 0
     elif self.loss == 'viterbi':
       scores = T.log(self.p_y_given_x) - self.prior_scale * T.log(self.priors)
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)

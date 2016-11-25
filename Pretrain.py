@@ -136,7 +136,7 @@ class Pretrain:
   def _resolve_wrapped_values(self):
     def _check_dict(d, epoch):
       for k, v in sorted(d.items()):
-        assert isinstance(k, str)
+        assert isinstance(k, (str, unicode))
         if isinstance(v, dict):
           _check_dict(v, epoch=epoch)
         if isinstance(v, WrapEpochValue):

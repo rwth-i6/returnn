@@ -562,7 +562,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
       self.set_attr("data_map", data_map)
     self.set_attr('concat_sources', concat_sources)
     self.set_attr("trainable", trainable)
-    # self.trainable = trainable
+    self.trainable = trainable
     self.set_attr("n_clusters", n_clusters)
     self.n_clusters = n_clusters
     print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
@@ -571,7 +571,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     if concat_sources:
       assert not data_map, "We expect the implicit canonical data_map with concat_sources."
       assert self.sources
-      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass[:-1])
+      data, n_in = _concat_sources(sources, masks=self.masks[:-1], mass=self.mass)
       s0 = sources[0]
       sub_n_out = {"data": [n_in, 1 if s0.attrs['sparse'] else 2],
                    "classes": [n_out, 1 if self.attrs['sparse'] else 2]}
@@ -591,7 +591,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         data_map_d[k] = s.output
         data_map_di[k] = s.index
     self.subnetworks = []
-    for idx in range(0, len(self.n_clusters)):
+    for idx in range(0, self.n_clusters):
       print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
       self.subnetworks.append(self.network.new_subnetwork(
         json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
@@ -611,31 +611,35 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         model_hdf = h5py.File(model_filename, "r")
         self.subnetworks[idx].load_hdf(model_hdf)
         print >>log.v2, "done loading subnetwork weights for", self.name
-    #self.ref = theano.shared(0, 'ref') #ref needs to be updated to correspond to the cluster of the current sequence
     self.ref = cluster_map_source.output[0]
 
     ## generate output lists and sums with ifelse to only compute specified paths
 
     # output
     self.zero_output = T.zeros_like(self.subnetworks[0].output["output"].output)
-    self.y = [ifelse(T.neq(idx, self.ref), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, len(self.n_clusters))]
+    self.y = [ifelse(T.prod(T.neq(idx, self.ref)), self.zero_output, self.subnetworks[idx].output["output"].output) for idx in range(0, self.n_clusters)]
     self.z = self.y[0]
-    for idx in range(1, len(self.n_clusters)):
+    for idx in range(1, self.n_clusters):
       self.z += self.y[idx]
     self.output = self.z
 
     # costs
-    self.costs = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_cost) for idx in
-                  range(0, len(self.n_clusters))]
-    self.total_cost = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+    self.costs = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_cost) for idx in
+                  range(0, self.n_clusters)]
+    self.total_cost = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
     # grads
-    self.output_grads = self.subnetworks[self.ref.get_value()].known_grads
+    # TODO for each TheanoVar in dict do the ifelse thing
+    self.output_grads = {}
+    if not self.subnetworks[0].known_grads:
+      print >> log.v5, "known grads is empty"
+    else:
+      raise NotImplementedError
 
     # constraints
-    self.constraints = [ifelse(T.neq(idx, self.ref), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
-                        range(0, len(self.n_clusters))]
-    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, len(self.n_clusters))])
+    self.constraints = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
+                        range(0, self.n_clusters)]
+    self.total_constraints = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
   def cost(self):
     if not self.trainable:
@@ -655,6 +659,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
 
   def update_cluster_target(self, seq_tag):
     self.ref.set_value(self.cluster_dict(seq_tag))
+
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
@@ -3449,7 +3454,8 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False,
+               output_attention=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -3523,8 +3529,11 @@ class AlignmentLayer(ForwardLayer):
       self.attrs['n_out'] = 1
       return
     else:
-      x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
-      self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+      if reduce_output:
+        x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+        self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+      else:
+        self.output = self.z
 
     if self.attrs['search'] == 'time' or self.eval_flag:
       return
@@ -3535,7 +3544,7 @@ class AlignmentLayer(ForwardLayer):
         y_out = self.y_out * len(m_skip)
         y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       else:
-        y_out = self.y_out
+        y_out = self.y_out.flatten()
       idx = (self.index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
