@@ -3551,6 +3551,10 @@ class AlignmentLayer(ForwardLayer):
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    elif search == 'ctc':
+      from BestPathDecoder import BestPathDecodeOp
+      from theano.tensor.extra_ops import cpu_contiguous
+      return T.sum(BestPathDecodeOp()(p_in, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
 
   def cost(self):
     return self.cost_val, None
