@@ -3454,7 +3454,8 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False, output_attention=False, **kwargs):
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False,
+               output_attention=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -3528,8 +3529,11 @@ class AlignmentLayer(ForwardLayer):
       self.attrs['n_out'] = 1
       return
     else:
-      x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
-      self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+      if reduce_output:
+        x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+        self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+      else:
+        self.output = self.z
 
     if self.attrs['search'] == 'time' or self.eval_flag:
       return
@@ -3540,7 +3544,7 @@ class AlignmentLayer(ForwardLayer):
         y_out = self.y_out * len(m_skip)
         y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       else:
-        y_out = self.y_out
+        y_out = self.y_out.flatten()
       idx = (self.index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
