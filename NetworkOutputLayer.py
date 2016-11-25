@@ -558,19 +558,28 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = {self.z: grad}
       return err, known_grads
     elif self.loss == 'inv':
-      nstates = 6
-      ldx = self.y.dimshuffle('x', 0, 1).repeat(nstates, axis=0).reshape(
-        (self.index.shape[0] * nstates, self.index.shape[1])).flatten()
+      S = 5
+      N = self.index.shape[0]
+      B = self.index.shape[1]
+      ldx = self.y.dimshuffle('x', 0, 1).repeat(S, axis=0).reshape((N * S, B))
       scores = -T.log(self.p_y_given_x) # TBC
-      scores = scores.reshape((scores.shape[0]*scores.shape[1],scores.shape[2])).dimshuffle(1,0)[ldx] # (NB)T
-      scores = scores.reshape((self.index.shape[0]*nstates,self.index.shape[1],scores.shape[1]))
-      index = self.index.dimshuffle('x', 0, 1).repeat(nstates, axis=0).reshape(
-        (self.index.shape[0] * nstates, self.index.shape[1]))
+      #scores = theano.printing.Print("before", attrs=['shape'])(scores)
+      scores, _ = theano.scan(lambda y,x: x[:,T.arange(B),y],[ldx],non_sequences=[scores])
+      scores = scores.dimshuffle(0,2,1)
+      #scores = theano.printing.Print("after", attrs=['shape'])(scores)
+      index = self.index.dimshuffle('x', 0, 1).repeat(S, axis=0).reshape((N * S, B))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      #from TheanoUtil import print_to_file
+      #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
+      #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
       fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      def viterbi(op,x):
+        print x.argmin(axis=-1)
+      #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
+      #fwdbwd.argmin(axis=-1).flatten()
       idx = (index.flatten() > 0).nonzero()
       err = T.exp(-fwdbwd) * scores
-      return T.constant(1./nstates,dtype='float32') * T.sum(err.reshape((err.shape[0] * err.shape[1], err.shape[2]))[idx]), None
+      return T.constant(1./S,dtype='float32') * T.sum(err.reshape((err.shape[0] * err.shape[1], err.shape[2]))[idx]), None
     elif self.loss == 'ctc_rasr':
       idx = (src_index.flatten() > 0).nonzero()
       emissions = self.p_y_given_x
