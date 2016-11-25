@@ -611,7 +611,6 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         model_hdf = h5py.File(model_filename, "r")
         self.subnetworks[idx].load_hdf(model_hdf)
         print >>log.v2, "done loading subnetwork weights for", self.name
-    #self.ref = theano.shared(0, 'ref') #ref needs to be updated to correspond to the cluster of the current sequence
     self.ref = cluster_map_source.output[0]
 
     ## generate output lists and sums with ifelse to only compute specified paths
@@ -630,11 +629,12 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.total_cost = T.sum([self.costs[idx] for idx in range(0, self.n_clusters)])
 
     # grads
-    # TODO most likely broken, make a new dict with new thenao variables
-    self.output_grads = self.subnetworks[0].known_grads
-    for idx in range(1, self.n_clusters):
-      self.output_grads.update(self.subnetworks[idx].known_grads)
-    #self.output_grads = self.subnetworks[0].known_grads
+    # TODO for each TheanoVar in dict do the ifelse thing
+    self.output_grads = {}
+    if not self.subnetworks[0].known_grads:
+      print >> log.v5, "known grads is empty"
+    else:
+      raise NotImplementedError
 
     # constraints
     self.constraints = [ifelse(T.prod(T.neq(idx, self.ref)), T.constant(0), self.subnetworks[idx].total_constraints) for idx in
