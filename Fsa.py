@@ -143,6 +143,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file=None,
   print("Silence: sil")
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+  __find_allo_in_lex(word_seq)
 
   return num_states, edges
 
@@ -183,6 +184,28 @@ def __hmm_loops_for_hmm_fsa():
 
 def __state_tying_for_hmm_fsa():
   pass
+
+
+def __load_lexicon():
+  import gzip
+
+  file = gzip.open("recog.150k.final.lex.gz", 'rb')
+
+  return file
+
+
+def __find_allo_in_lex(allo):
+  from xml.etree import cElementTree as ET
+
+  lex = __load_lexicon()
+
+  tree = ET.parse(lex)
+
+  root = tree.getroot()
+
+  for i in range(len(root)):
+    if (root[i][0].text.strip() == allo):
+      print(i, root[i][0].text.strip())
 
 
 def fsa_to_dot_format(file, num_states, edges):
