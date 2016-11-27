@@ -3498,9 +3498,9 @@ class AlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
-      norm = numpy.float32(1)
+      norm = numpy.float32(1./nstates)
       ratt = att
-      self.index = theano.gradient.disconnected_grad(rindex)
+      index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':
       y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
@@ -3510,9 +3510,9 @@ class AlignmentLayer(ForwardLayer):
         else:
           rindex = self.index.dimshuffle('x',0,1).repeat(nstates,axis=0).reshape((self.index.shape[0]*nstates,self.index.shape[1]))
         aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
-      norm = numpy.float32(1) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      norm = numpy.float32(1.) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
       max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
-      self.index = idx[:max_length_y]
+      index = idx[:max_length_y]
       att = att[:max_length_y]
       y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
       self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
@@ -3520,7 +3520,7 @@ class AlignmentLayer(ForwardLayer):
       y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
       max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
-      self.index = idx[:max_length_y]
+      index = idx[:max_length_y]
       att = att[:max_length_y]
       y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
       self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
@@ -3535,8 +3535,11 @@ class AlignmentLayer(ForwardLayer):
       if reduce_output:
         x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
         self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+        self.index = index
       else:
         self.output = self.z
+        self.p_y_given_x = p_in
+        self.index = self.sources[0].index
 
     if self.attrs['search'] == 'time' or self.eval_flag:
       return
@@ -3548,7 +3551,7 @@ class AlignmentLayer(ForwardLayer):
         y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       else:
         y_out = self.y_out.flatten()
-      idx = (self.index.flatten() > 0).nonzero()
+      idx = (index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))

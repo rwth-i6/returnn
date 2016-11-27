@@ -16,13 +16,13 @@ class InvAlignOp(theano.Op):
     attention = np.zeros(shape, 'int32')
     index = np.zeros(shape, 'int8')
     labelling = np.zeros(shape, 'int32')
+    length_x = index_in.sum(axis=0)
+    length_y = index_out.sum(axis=0) * self.nstates
     for b in range(scores.shape[1]):
-      length_x = index_in[:,b].sum()
-      length_y = index_out[:,b].sum() * self.nstates
-      index[:length_y, b] = np.int8(1)
-      orth = transcriptions[:length_y / self.nstates, b]
-      attention[:length_y, b], labelling[:length_y, b] = self._viterbi(0, length_x, scores[:length_x, b], orth)
-      attention[:length_y, b] += b * index_in.shape[0]
+      index[:length_y[b], b] = np.int8(1)
+      orth = transcriptions[:length_y[b] / self.nstates, b]
+      attention[:length_y[b], b], labelling[:length_y[b], b] = self._viterbi(0, length_x[b], scores[:length_x[b], b], orth)
+      attention[:length_y[b], b] += b * index_in.shape[0]
     output_storage[0][0] = labelling
     output_storage[1][0] = attention
     output_storage[2][0] = index
@@ -39,16 +39,9 @@ class InvAlignOp(theano.Op):
     return [shape,shape,shape]
 
   def _buildHmm(self, transcription):
-    """Builds list of hmm states for transcription"""
-    transcriptionLength = transcription.shape[0]
-    hmm = np.zeros(transcriptionLength * self.nstates, dtype=np.int32)
-
-    for i in range(0, transcriptionLength):
-      startState = transcription[i] * self.nstates + 1
-      for s in range(0, self.nstates):
-        hmm[i * self.nstates + s] = startState + s - 1
-
-    return hmm
+    start = transcription * self.nstates + 1
+    hmm = np.expand_dims(start,axis=1).repeat(self.nstates,axis=1) + np.arange(self.nstates) - 1
+    return hmm.astype('int32').flatten()
 
   def _viterbi(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end but in inverse manner"""
@@ -72,18 +65,14 @@ class InvAlignOp(theano.Op):
         score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
 
     # forward
-    # initialize first column
-    # assume virtual start at t = -1
     scores = score[0, 0 + skip - 1:skip + skip - 2]
-    # if allFeatures:
-    #  scores = np.cumsum(scores)
     scores = np.add(scores, tdps[1:])
     fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
     bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
 
     # remaining columns
     for s in range(1, lengthS):
-      for t in range(0, lengthT):
+      for t in range(max(lengthT - (lengthS - s) * skip,0), lengthT - (lengthS - s - 1)):
         previous = fwdScore[s - 1, t:t + skip]
         scores = score[s, t + skip - 1]
         scores = np.add(scores, np.add(previous, tdps[::-1]))
