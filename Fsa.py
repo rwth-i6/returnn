@@ -187,9 +187,9 @@ def __state_tying_for_hmm_fsa():
 
 
 def __load_lexicon():
-  import gzip
+  from LmDataset import Lexicon
 
-  file = gzip.open("recog.150k.final.lex.gz", 'rb')
+  file = Lexicon("recog.150k.final.lex.gz")
 
   return file
 
