@@ -96,6 +96,103 @@ class InvAlignOp(theano.Op):
     return attention, labelling
 
 
+class InvFullAlignOp(theano.Op):
+  __props__ = ('tdps','nstates')
+
+  # index_in, index_out, scores, transcriptions
+  itypes = [theano.tensor.bmatrix,theano.tensor.bmatrix,theano.tensor.ftensor3,theano.tensor.imatrix]
+  otypes = [theano.tensor.ftensor3,theano.tensor.bmatrix]
+
+  # Python implementation:
+  def perform(self, node, inputs_storage, output_storage):
+    index_in, index_out, scores, transcriptions = inputs_storage[:4]
+    index = np.zeros((index_out.shape[0] * self.nstates, index_out.shape[1]), 'int8')
+    err = np.zeros(scores.shape, 'float32')
+
+    labelling = np.zeros(shape, 'int32')
+    length_x = index_in.sum(axis=0)
+    length_y = index_out.sum(axis=0) * self.nstates
+    for b in range(scores.shape[1]):
+      orth = transcriptions[:length_y[b] / self.nstates, b]
+      index[:length_y[b], b] = np.int8(1)
+      err[:length_x[b],b] = self._baumwelch(0, length_x[b], scores[:length_x[b], b], orth)
+    output_storage[0][0] = err
+    output_storage[1][0] = index
+
+  def __init__(self, tdps, nstates):
+    self.nstates = nstates
+    self.tdps = tuple(tdps)
+
+  def grad(self, inputs, output_grads):
+    return [output_grads[0],output_grads[1],output_grads[2],output_grads[1]]
+
+  def infer_shape(self, node, input_shapes):
+    shape = (input_shapes[1][0] * self.nstates, input_shapes[1][1])
+    return [input_shapes[2],(input_shapes[1][0] * self.nstates, input_shapes[1][1])]
+
+  def _buildHmm(self, transcription):
+    start = transcription * self.nstates + 1
+    hmm = np.expand_dims(start,axis=1).repeat(self.nstates,axis=1) + np.arange(self.nstates) - 1
+    return hmm.astype('int32').flatten()
+
+  def _baumwelch(self, start, end, scores, transcription):
+    from scipy.misc import logsumexp
+
+    """Fully aligns sequence from start to end but in inverse manner"""
+    inf = 1e30
+    # max skip transitions derived from tdps
+
+    hmm = self._buildHmm(transcription)
+    lengthT = end - start
+    skip = min(len(self.tdps), lengthT - self.nstates)
+    tdps = self.tdps[:skip]
+    lengthS = transcription.shape[0] * self.nstates
+
+    # with margins of skip at the bottom or top
+    fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
+    bwdScore = np.full((lengthS, lengthT + skip - 1), inf)
+    bt = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int32)
+
+    # precompute all scores and densities
+    score = np.full((lengthS, lengthT + skip - 1), inf)
+    for t in range(0, lengthT):
+      for s in range(0, lengthS):
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
+
+    # forward
+    scores = score[0, 0 + skip - 1:skip + skip - 2]
+    scores = np.add(scores, tdps[1:])
+    fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
+    bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
+
+    # remaining columns
+    for s in range(1, lengthS):
+      for t in range(max(lengthT - (lengthS - s) * skip,0), lengthT - (lengthS - s - 1)):
+        previous = fwdScore[s - 1, t:t + skip]
+        scores = score[s, t + skip - 1]
+        scores = np.add(scores, np.add(previous, tdps[::-1]))
+        fwdScore[s, t + skip - 1] = -logsumexp(-scores)
+
+    score = score[:, skip - 1:lengthT + skip - 1]
+    score = np.pad(score, pad_width=((0, 0), (0, skip - 1)), mode='constant',
+                   constant_values=inf)
+
+    # backward
+    # initalize last columns, use lm of last character
+    bwdScore[lengthS - 1][lengthT - 1] = score[lengthS - 1][lengthT - 1]
+    # remaining columns
+    for s in range(lengthS - 2, -1, -1):
+      for t in range(0, lengthT):
+        previous = bwdScore[s + 1, t:t + skip]
+        scores = np.add(score[s, t], previous)
+        bwdScore[s, t] = -logsumexp(-np.add(scores, np.asarray(self.tdps)))
+
+    errScore = np.add(fwdScore, bwdScore)
+    errScore = -np.logaddexp(-errScore, logsumexp(-errScore,axis=0))
+
+    return errScore
+
+
 class InvBacktrackOp(theano.Op):
   # Properties attribute
   __props__ = ('tdps', 'nstates', "penalty")
