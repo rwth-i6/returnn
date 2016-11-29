@@ -3465,8 +3465,7 @@ class AlignmentLayer(ForwardLayer):
     else:
       nskips = len(tdps) - 2
     if train_skips:
-      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
-      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
+      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(tdps)
     else:
       kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
@@ -3547,7 +3546,7 @@ class AlignmentLayer(ForwardLayer):
     if search in ['align', 'decode']:
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
       if train_skips:
-        y_out = self.y_out * len(m_skip)
+        y_out = self.y_out * len(tdps)
         y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       else:
         y_out = self.y_out.flatten()
@@ -3558,7 +3557,7 @@ class AlignmentLayer(ForwardLayer):
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
-        y_out = self.y_out * len(m_skip)
+        y_out = self.y_out * len(tdps)
         y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
       else:
         y_out = self.y_out
