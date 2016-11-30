@@ -3455,7 +3455,7 @@ class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
   def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False,
-               output_attention=False, reduce_output=True, **kwargs):
+               output_attention=False, output_z=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -3494,7 +3494,6 @@ class AlignmentLayer(ForwardLayer):
       W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
       b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
       t_in = T.dot(x_in,W_skip) + b_skip
-      #q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2])))
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
@@ -3533,8 +3532,13 @@ class AlignmentLayer(ForwardLayer):
       return
     else:
       if reduce_output:
-        x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
-        self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+        if output_z:
+          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[
+            ratt.flatten()]
+          self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
+        else:
+          x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+          self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
         self.index = index
       else:
         self.output = self.z
@@ -3554,9 +3558,9 @@ class AlignmentLayer(ForwardLayer):
       if train_skips:
         t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[att.flatten()]
         q_out = T.concatenate([T.zeros_like(att[:1]),att[1:] - att[:-1]],axis=0).flatten()
-        #idx = T.set_subtensor(index[0],numpy.int8(0))
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
-        self.cost_val += norm * T.sum(nll)
+        self.cost_val = norm * T.sum(nll)
+        self.error_val = norm * T.sum(T.neq(T.argmax(t_out[idx], axis=1), q_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
