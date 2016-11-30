@@ -81,7 +81,7 @@ class InvAlignOp(theano.Op):
         fwdScore[s, t + skip - 1] = scores[best]
         bt[s, t + skip - 1] = skip - 1 - best
 
-    attention = np.full((lengthS), -1, dtype=np.int32)
+    attention = np.full((lengthS), 0, dtype=np.int32)
     labelling = np.full((lengthS), 0, dtype=np.int32)
 
     # backtrack

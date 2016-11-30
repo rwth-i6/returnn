@@ -3464,10 +3464,7 @@ class AlignmentLayer(ForwardLayer):
       tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
     else:
       nskips = len(tdps) - 2
-    if train_skips:
-      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(tdps)
-    else:
-      kwargs['n_out'] = kwargs['y_in'][target].n_out
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
@@ -3493,7 +3490,11 @@ class AlignmentLayer(ForwardLayer):
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
     y_in = self.y_in[target].reshape(self.index.shape)
-
+    if train_skips:
+      W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
+      t_in = T.dot(x_in,W_skip) + b_skip
+      #q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2])))
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
@@ -3545,15 +3546,17 @@ class AlignmentLayer(ForwardLayer):
 
     if search in ['align', 'decode']:
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
-      if train_skips:
-        y_out = self.y_out * len(tdps)
-        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
-      else:
-        y_out = self.y_out.flatten()
+      y_out = self.y_out.flatten()
       idx = (index.flatten() > 0).nonzero()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+      if train_skips:
+        t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[att.flatten()]
+        q_out = T.concatenate([T.zeros_like(att[:1]),att[1:] - att[:-1]],axis=0).flatten()
+        #idx = T.set_subtensor(index[0],numpy.int8(0))
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
+        self.cost_val += norm * T.sum(nll)
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
@@ -3658,58 +3661,3 @@ class RNNBlockLayer(ForwardLayer):
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
-
-class InvAlignmentLayer(ForwardLayer):
-  layer_class = "inv_align"
-
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1,
-               train_skips=False, search='align', output_attention=False, **kwargs):
-    target = kwargs['target']
-    if tdps is None:
-      tdps = [1e10, 0., 3.]
-    if len(tdps) - 2 < nskips:
-      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-    else:
-      nskips = len(tdps) - 2
-    if train_skips:
-      m_skip = [ i for i,t in enumerate(tdps) if t < 1e10 ]
-      kwargs['n_out'] = kwargs['y_in'][target].n_out * len(m_skip)
-    else:
-      kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(InvAlignmentLayer, self).__init__(**kwargs)
-
-    n_out = sum([s.attrs['n_out'] for s in self.sources])
-    x_in = T.concatenate([s.output for s in self.sources],axis=2)
-    self.set_attr('n_out', n_out)
-
-    if tdps is None:
-      tdps = [1e10, 0., 3.]
-    if len(tdps) - 2 < nskips:
-      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
-    self.cost_val = T.constant(0)
-    self.error_val = T.constant(0)
-    if self.eval_flag:
-      if search == 'time':
-        self.index = self.sources[0].index
-        self.output = x_in
-        self.y_out = self.y_in[target].reshape(self.index.shape)
-        return
-
-    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
-    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
-
-    if self.train_flag:
-      scores = -T.log(p_in) #T.clip(p_in, numpy.float32(1.e-20), numpy.float(1.e20)))
-      scores = scores.reshape((scores.shape[0] * scores.shape[1], scores.shape[2]))
-      scores = scores[:, self.y_data_flat].dimshuffle(1, 0).reshape((self.y_in.shape[0], scores.shape[1], scores.shape[0]))
-      edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      float_idx = T.cast(self.sources[0].index, "float32")
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
-      att = T.argmin(fwdbwd, axis=2).flatten()  # NB
-      x_out = x_in.reshape((x_in.shape[0], x_in.shape[1] * x_in.shape[2]))[att]
-      self.output = x_out.reshape((fwdbwd.shape[0], fwdbwd.shape[1], x_in.shape[2]))
-      self.y_out = self.y_in[target].reshape(self.index.shape)
-    else:
-      self.index = self.sources[0].index
-      self.output = x_in
-      self.y_out = self.y_in[target].reshape(self.index.shape)
