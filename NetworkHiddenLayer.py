@@ -173,7 +173,6 @@ class CopyLayer(_NoOpLayer):
     self.z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     self.set_attr('n_out', n_out)
     self.make_output(act_f(self.z))
-    self.make_output(act_f(self.z))
 
 
 class WindowLayer(_NoOpLayer):
