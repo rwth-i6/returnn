@@ -306,6 +306,9 @@ class Pretrain:
     while self._construct_new_epoch_from_output():
       pass
 
+  def _construct_epochs_no_network_modifications(self):
+    self._step_net_jsons = [self._original_network_json]
+
   # -------------- Public interface
 
   def __str__(self):
