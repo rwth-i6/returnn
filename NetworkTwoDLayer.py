@@ -344,7 +344,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
       pooled_out = pool.pool_2d(
         input=crop_out,
         #max_pool_2d wants the sizes in the other order
-        ds=poolsize[::-1],
+        ws=poolsize[::-1],
         ignore_border=True
       )
       #unshuffle it

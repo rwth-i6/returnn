@@ -242,7 +242,7 @@ class CuDNNConvHWBCOp(theano.sandbox.cuda.GpuOp):
     fail = sub['fail']
     return """
     %(cudnn_version_macro)s
-    
+
     if(cudnnHandle == 0)
     {
       checkCUDNN(cudnnCreate(&cudnnHandle));
