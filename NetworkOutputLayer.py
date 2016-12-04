@@ -86,6 +86,7 @@ class OutputLayer(Layer):
         else:
           self.z += self.dot(self.mass * m * source_output, W)
     else:
+      self.params = {}
       self.z = copy_input.output
     assert self.z.ndim == 3
     if grad_clip_z is not None:
