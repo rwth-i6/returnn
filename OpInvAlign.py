@@ -198,18 +198,18 @@ class InvBacktrackOp(theano.Op):
   __props__ = ('tdps', 'nstates', "penalty")
 
   # index_in, scores
-  itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3]
+  itypes = [theano.tensor.bmatrix, theano.tensor.ftensor3, theano.tensor.ftensor3]
   otypes = [theano.tensor.imatrix, theano.tensor.imatrix, theano.tensor.bmatrix]
 
   # Python implementation:
   def perform(self, node, inputs_storage, output_storage):
-    index_in, scores = inputs_storage[:2]
+    index_in, scores, skips = inputs_storage[:3]
     transcript = np.zeros(index_in.shape,'int32')
     attention = np.zeros(index_in.shape, 'int32')
     index = np.zeros(index_in.shape, 'int8')
     for b in range(scores.shape[1]):
       length_x = index_in[:,b].sum()
-      t, a = self._recognize(scores[:length_x, b])
+      t, a = self._recognize(scores[:length_x, b], skips[:length_x, b])
       #if b == 0:
       #  print np.exp(-transitions[:length_x, b])
       length_y = len(a)
@@ -227,7 +227,7 @@ class InvBacktrackOp(theano.Op):
     self.tdps = tuple(tdps)
 
   def grad(self, inputs, output_grads):
-    return [output_grads[0], output_grads[1]]
+    return [output_grads[0], output_grads[1], output_grads[2]]
 
   def infer_shape(self, node, input_shapes):
     return [input_shapes[0], input_shapes[0], input_shapes[0]]
@@ -257,19 +257,20 @@ class InvBacktrackOp(theano.Op):
       t -= transitions[t].argmin() + 1
     return transcript[::-1], attention[::-1]
 
-  def _recognize(self, scores):
-    m_skip = [ i for i, t in enumerate(self.tdps) if t < 1e10 ]
+  def _recognize(self, scores, skips):
     lengthT = scores.shape[0]
     transcript = []
     attention = []
     t = lengthT - 1
+    n = 0
+    #print skips.argmin(axis=1)
     while t >= 0:
-      label = scores[t].argmin() / len(m_skip)
-      skip = m_skip[scores[t].argmin() % len(m_skip)]
-      if label % self.nstates == self.nstates - 1:
+      label = scores[t].argmin()
+      if self.nstates - (n % self.nstates) == 1:
         attention.append(t)
         transcript.append(label)
-      t -= skip
+      t -= (skips[t,1:].argmin() + 1) #* 3 + 1
+      n += 1
     return transcript[::-1], attention[::-1]
 
   def _recognize3(self, scores, transitions):

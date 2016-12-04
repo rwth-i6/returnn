@@ -3493,6 +3493,7 @@ class AlignmentLayer(ForwardLayer):
       W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
       b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
       t_in = T.dot(x_in,W_skip) + b_skip
+      q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
@@ -3501,14 +3502,10 @@ class AlignmentLayer(ForwardLayer):
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':
-      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(q_in))
       if not self.eval_flag:
-        if nstates == 1:
-          rindex = self.index
-        else:
-          rindex = self.index.dimshuffle('x',0,1).repeat(nstates,axis=0).reshape((self.index.shape[0]*nstates,self.index.shape[1]))
-        aln, ratt = InvAlignOp(tdps, nstates)(self.sources[0].index, rindex, -T.log(p_in), y_in)
-      norm = numpy.float32(1.) #T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+        y_out, ratt, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      norm = numpy.float32(1./nstates)
       max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
       index = idx[:max_length_y]
       att = att[:max_length_y]
@@ -3532,8 +3529,7 @@ class AlignmentLayer(ForwardLayer):
     else:
       if reduce_output:
         if output_z:
-          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[
-            ratt.flatten()]
+          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
           self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
         else:
           x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
@@ -3547,19 +3543,23 @@ class AlignmentLayer(ForwardLayer):
     if self.attrs['search'] == 'time' or self.eval_flag:
       return
 
-    if search in ['align', 'decode']:
-      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
-      y_out = self.y_out.flatten()
-      idx = (index.flatten() > 0).nonzero()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      self.cost_val = norm * T.sum(nll)
-      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    if search in ['align', 'decode', 'search']:
+      idx = (rindex.flatten() > 0).nonzero()
       if train_skips:
-        t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[att.flatten()]
-        q_out = T.concatenate([T.zeros_like(att[:1]),att[1:] - att[:-1]],axis=0).flatten()
+        t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[ratt.flatten()]
+        q_out = T.concatenate([T.zeros_like(ratt[:1]),ratt[1:] - ratt[:-1]],axis=0).flatten() #/ numpy.int32(3) #+ numpy.int32(1)
+
+        #e_out = T.dot(T.nnet.softmax(t_out), T.arange(t_out.shape[1], dtype='float32')) #.dimshuffle('x', 0).repeat(t_out.shape[0],axis=0) * t_out
+        #nll = ((e_out - q_out)/T.constant(len(tdps), 'float32'))**2
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(t_out[idx], axis=1), q_out[idx]))
+      else:
+        z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+        y_out = self.y_out.flatten()
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+        self.cost_val = norm * T.sum(nll)
+        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
