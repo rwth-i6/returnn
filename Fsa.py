@@ -125,7 +125,7 @@ def __create_states_from_label_for_asg(label, num_labels, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file=None,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file,
                          allo_num_states=3, allo_context_len=1,
                          state_tying_file=None,
                          tdps=None  # ...
@@ -143,7 +143,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file=None,
   print("Silence: sil")
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
-  __find_allo_in_lex(word_seq)
+  __find_allo_in_lex(word_seq, lexicon_file)
 
   return num_states, edges
 
@@ -186,18 +186,18 @@ def __state_tying_for_hmm_fsa():
   pass
 
 
-def __load_lexicon():
+def __load_lexicon(file):
   from LmDataset import Lexicon
 
-  file = Lexicon("recog.150k.final.lex.gz")
+  lex = Lexicon("recog.150k.final.lex.gz")
 
-  return file
+  return lex
 
 
-def __find_allo_in_lex(allo):
+def __find_allo_in_lex(allo, lexi):
   from xml.etree import cElementTree as ET
 
-  lex = __load_lexicon()
+  lex = __load_lexicon(lexi)
 
   tree = ET.parse(lex)
 
@@ -258,6 +258,7 @@ def main():
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
+  arg_parser.add_argument("--lexicon", required=True)
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
@@ -265,7 +266,7 @@ def main():
   elif (args.fsa.lower() == 'asg'):
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   elif (args.fsa.lower() == 'hmm'):
-    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq)
+    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
