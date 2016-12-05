@@ -3453,7 +3453,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, search='search', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nskips=18, nstates=1, nstep=1, search='search', train_skips=False,
                output_attention=False, output_z=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
@@ -3473,6 +3473,9 @@ class AlignmentLayer(ForwardLayer):
       tdps = [1e10, 0., 3.]
     if len(tdps) - 2 < nskips:
       tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    for i in range(len(tdps)):
+      if i % nstep != 0:
+        tdps[i] = 1e30
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
