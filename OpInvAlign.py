@@ -263,12 +263,18 @@ class InvBacktrackOp(theano.Op):
     attention = []
     t = lengthT - 1
     n = 0
+    m = lengthT
+    lsc = 0
     #print skips.argmin(axis=1)
     while t >= 0:
       label = scores[t].argmin()
-      if self.nstates - (n % self.nstates) == 1:
+      lsc += scores[t]
+      if n % self.nstates == 0:
         attention.append(t)
-        transcript.append(label)
+        #transcript.append(np.sum(scores[t:m]).argmin())
+        #m = t
+        transcript.append(lsc.argmin())
+        lsc = 0
       t -= (skips[t,1:].argmin() + 1) #* 3 + 1
       n += 1
     return transcript[::-1], attention[::-1]
