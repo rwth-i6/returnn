@@ -16,8 +16,8 @@
 "log_verbosity": 5,
 "train": "test.h5",
 "eval": "test.h5",
-"num_inputs": 1,
-"num_outputs": {"data": [1,2], "classes": [4,1], "sizes": [2,1]},
+"num_inputs": 3,
+"num_outputs": {"data": [3,2], "classes": [4,1], "sizes": [2,1]},
 "network": {
 "classes_source": {"class": "source", "data_key": "sizes", "from": [], "n_out": 2, "dtype":"int32"},
 "1Dto2D":  {"class": "1Dto2D", "from" : ["data", "classes_source"] },
