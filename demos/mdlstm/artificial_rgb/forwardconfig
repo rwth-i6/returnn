@@ -1,0 +1,33 @@
+{
+"task": "forward",
+"extract": "log-posteriors",
+"output_file": "log-posteriors.h5",
+"device": "gpuX",
+"multiprocessing": true,
+"batching": "default",
+"max_seqs": 2,
+"batch_size": 600000,
+"nadam": 1,
+"learning_rate": 0.0005,
+"learning_rates": "{1: 0.0005, 25: 0.0003, 35: 0.0001}",
+"num_epochs": 5,
+"update_batch_size": 2000000,
+"reinit": 0,
+"log_verbosity": 5,
+"train": "test.h5",
+"eval": "test.h5",
+"num_inputs": 1,
+"num_outputs": {"data": [1,2], "classes": [4,1], "sizes": [2,1]},
+"network": {
+"classes_source": {"class": "source", "data_key": "sizes", "from": [], "n_out": 2, "dtype":"int32"},
+"1Dto2D":  {"class": "1Dto2D", "from" : ["data", "classes_source"] },
+"conv0":   { "class" : "conv2", "n_features" : 5, "filter" : [3, 3], "pool_size" : [2, 2],  "from" : ["1Dto2D"] },
+"mdlstm0": { "class" : "mdlstm", "n_out" : 5,"from" : ["conv0"] },
+"output":  { "class" : "softmax", "loss": "ctc", "from" : ["mdlstm0"] }
+},
+
+"load": "models/testmodel.005",
+"ctc_prior_file": "priors/testmodel",
+"model": "models/testmodel",
+"log": "log/testmodel_fwd"
+}

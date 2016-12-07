@@ -30,7 +30,7 @@ class OneDToTwoDOp(theano.Op):
       width = int(width)
       size = height * width
       im = X[:size, b]
-      Y[:height, :width, b] = im.reshape((height, width, 1))
+      Y[:height, :width, b, :] = im.reshape((height, width, feat))
 
     out[0] = Y
 
