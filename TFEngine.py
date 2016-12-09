@@ -2,34 +2,20 @@
 import tensorflow as tf
 import sys
 from Log import log
-from Engine import Engine
+from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 from Network import LayerNetwork
 from TFNetwork import TFNetwork
 
 
-class TFEngine(object):
+class Engine(object):
   def __init__(self):
     pass
 
-  @classmethod
-  def get_train_start_epoch_batch(cls, config):
-    """
-    :type config: Config.Config
-    :returns (epoch,batch)
-    :rtype (int,int)
-    """
-    return Engine.get_train_start_epoch_batch(config)
-
-  @classmethod
-  def config_get_final_epoch(cls, config):
-    """
-    :type config: Config.Config
-    :returns num_epochs, 5 by default
-    :rtype: int
-    """
-    return Engine.config_get_final_epoch(config)
+  get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
+  config_get_final_epoch = TheanoEngine.config_get_final_epoch
+  get_epoch_model = TheanoEngine.get_epoch_model
 
   def init_train_from_config(self, config, train_data, dev_data, eval_data):
     """
@@ -77,12 +63,12 @@ class TFEngine(object):
     if self.pretrain:
       # This would be obsolete if we don't want to load an existing model.
       # In self.init_train_epoch(), we initialize a new model.
-      net_json = self.pretrain.get_network_json_for_epoch(epoch or self.start_epoch)
+      net_dict = self.pretrain.get_network_json_for_epoch(epoch or self.start_epoch)
     else:
-      net_json = LayerNetwork.json_from_config(config)
+      net_dict = LayerNetwork.json_from_config(config)
 
     network = TFNetwork(rnd_seed=epoch or self.start_batch)
-    network.construct_from_dict(net_json)
+    network.construct_from_dict(net_dict)
     network.print_network_info()
 
     if model_epoch_filename:
@@ -90,9 +76,6 @@ class TFEngine(object):
       network.load_params_from_file(model_epoch_filename)
 
     self.network = network
-
-  def get_epoch_model(self, config):
-    pass
 
   def train(self):
     if self.start_epoch:

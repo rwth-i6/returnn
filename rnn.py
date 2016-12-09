@@ -33,7 +33,7 @@ from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describ
 TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
 
 config = None; """ :type: Config """
-engine = None; """ :type: Engine """
+engine = None; """ :type: Engine | TFEngine.Engine """
 train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
@@ -339,7 +339,7 @@ def initEngine(devices):
     engine = Engine(devices)
   elif BackendEngine.is_tensorflow_selected():
     import TFEngine
-    engine = TFEngine.TFEngine()
+    engine = TFEngine.Engine()
   else:
     raise NotImplementedError
 
