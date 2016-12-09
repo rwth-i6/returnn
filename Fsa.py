@@ -190,8 +190,11 @@ def __state_tying_for_hmm_fsa():
 
 def __load_lexicon(file):
   '''
+  loads a lexicon from a file, loads the xml and returns its conent
   :param file: lexicon file with xml structure
-  :return lex: variable with xml structure lex.lemmas and lex.phonemes important
+  :return lex: variable with xml structure
+  where:
+    lex.lemmas and lex.phonemes important
   '''
   import os.path
   from Log import log
