@@ -144,8 +144,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
   allo, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-  print(allo)
-  print(phon)
+
 
   return num_states, edges
 
@@ -188,22 +187,22 @@ def __state_tying_for_hmm_fsa():
   pass
 
 
-def __load_lexicon(file):
+def __load_lexicon(lexFile):
   '''
   loads a lexicon from a file, loads the xml and returns its conent
-  :param file: lexicon file with xml structure
+  :param lexFile: lexicon file with xml structure
   :return lex: variable with xml structure
   where:
     lex.lemmas and lex.phonemes important
   '''
-  import os.path
+  from os.path import isfile
   from Log import log
   from LmDataset import Lexicon
 
-  assert os.path.isfile(file), "Lexicon does not exists"
+  assert isfile(lexFile), "Lexicon does not exists"
 
   log.initialize(verbosity=[5])
-  lex = Lexicon(file)
+  lex = Lexicon(lexFile)
 
   return lex
 
