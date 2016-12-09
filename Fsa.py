@@ -143,7 +143,9 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   print("Silence: sil")
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
-  __find_allo_in_lex(word_seq, lexicon_file)
+  allo, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+  print(allo)
+  print(phon)
 
   return num_states, edges
 
@@ -203,18 +205,26 @@ def __load_lexicon(file):
   return lex
 
 
-def __find_allo_in_lex(allo, lexi):
-  from xml.etree import cElementTree as ET
-
+def __find_allo_seq_in_lex(lemma, lexi):
+  '''
+  searches a lexicon xml structure for a watching word and
+  returns the matching allophone sequence as a list
+  :param lemma: the word to search for in the lexicon
+  :param lexi: the lexicon
+  :return allo_seq: allophone sequence with the highest score as a list
+  :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
+  '''
   lex = __load_lexicon(lexi)
 
-  tree = ET.parse(lex)
+  assert lex.lemmas[lemma], "Lemma not in lexicon"
 
-  root = tree.getroot()
+  phons = lex.lemmas[lemma]['phons']
 
-  for i in range(len(root)):
-    if (root[i][0].text.strip() == allo):
-      print(i, root[i][0].text.strip())
+  phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
+
+  allo_seq = phons_sorted[0]['phon'].split(' ')
+
+  return allo_seq, phons
 
 
 def fsa_to_dot_format(file, num_states, edges):
