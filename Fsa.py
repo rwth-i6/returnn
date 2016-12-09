@@ -187,9 +187,14 @@ def __state_tying_for_hmm_fsa():
 
 
 def __load_lexicon(file):
+  import os.path
+  from Log import log
   from LmDataset import Lexicon
 
-  lex = Lexicon("recog.150k.final.lex.gz")
+  assert os.path.isfile(file), "Lexicon does not exists"
+
+  log.initialize(verbosity=[5])
+  lex = Lexicon(file)
 
   return lex
 
