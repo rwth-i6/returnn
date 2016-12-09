@@ -49,13 +49,14 @@ class Data(object):
     self.dtype = dtype
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
-        placeholder = tf.placeholder(name=name, dtype=dtype, shape=(None,) + shape)
+        placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
     self.placeholder = placeholder
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         for i, dim in enumerate(shape):
           if dim is None:
+            # For each batch a separate size.
             size_placeholder[i] = tf.placeholder(
               name="%s_dim%i_size" % (name, i), dtype="int64", shape=(None,))
     self.size_placeholder = size_placeholder
@@ -67,6 +68,10 @@ class Data(object):
     if with_placeholder:
       keys.append("placeholder")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  @property
+  def batch_shape(self):
+      return (None,) + self.shape
 
 
 class LayerBase(object):
@@ -94,6 +99,20 @@ class LayerBase(object):
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
 
+  def __repr__(self):
+    return "%s{class=%s, out_type=%s}" % (
+      self.name, self.layer_class, self.output.get_description(with_name=False))
+
+  def add_param(self, param):
+    """
+    :param tf.Variable param:
+    :return: param
+    :rtype tf.Variable
+    """
+    assert param.name
+    self.params[param.name] = param
+    return param
+
 
 class SourceLayer(LayerBase):
   layer_class = "source"
@@ -106,7 +125,103 @@ class SourceLayer(LayerBase):
     self.output = self.network.extern_data.get_data(data_key)
 
 
+def concat_sources(src_layers):
+  """
+  :param list[LayerBase] src_layers:
+  :return: data with placeholders set
+  :rtype: Data
+  """
+  assert src_layers, "need source layers"
+  if len(src_layers) == 1:
+    return src_layers[0].output
+  assert not src_layers[0].output.sparse, "sparse concat not supported"
+  shape = src_layers[0].output.shape
+  assert shape, "source must not be a scalar of layer %r" % src_layers[0]
+  prefix_shape = shape[:-1]
+  dim = 0
+  dtype = src_layers[0].output.dtype
+  for layer in src_layers:
+    assert layer.output.dtype == dtype, "incompatible dtype with layer %r" % layer
+    shape = layer.output.shape
+    assert shape, "source must not be a scalar of layer %r" % layer
+    assert shape[:-1] == prefix_shape, "incompatible concat with layer %r" % layer
+    assert shape[-1], "source last-dim must be specified of layer %r" % layer
+    dim += shape[-1]
+  data = Data(
+    name="concat_sources",
+    shape=prefix_shape + (dim,),
+    dim=dim,
+    sparse=False,
+    dtype=dtype,
+    auto_create_placeholders=False)
+  data.placeholder = tf.concat(
+    concat_dim=len(prefix_shape),
+    values=[layer.output.placeholder for layer in src_layers])
+  data.size_placeholder = src_layers[0].output.size_placeholder
+  return data
+
+
+class _ConcatInputLayer(LayerBase):
+  def __init__(self, dropout=0, mask=None, **kwargs):
+    super(_ConcatInputLayer, self).__init__(**kwargs)
+    input_data = concat_sources(self.sources)
+
+    if self.network.train_flag:
+      assert mask in ['dropout', 'unity', None], "invalid mask: %r" % mask
+      if mask == "dropout" or (mask is None and dropout > 0):
+        assert 0.0 < dropout < 1.0
+        input_data.placeholder = tf.nn.dropout(
+          input_data.placeholder,
+          keep_prob=1 - dropout,
+          # noise_shape is like old behavior for now:
+          # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
+          noise_shape=[1 if dim is None else dim
+                       for dim in input_data.batch_shape],
+          seed=self.network.random.randint(2**31))
+
+    self.input_data = input_data
+
+
+class LinearLayer(_ConcatInputLayer):
+  layer_class = "linear"
+
+  def __init__(self, activation, with_bias=True, **kwargs):
+    super(LinearLayer, self).__init__(**kwargs)
+
+    self.activation = activation
+    self.with_bias = with_bias
+
+    input_data = self.input_data
+    n_in = input_data.shape[-1]
+    n_out = self.output.shape[-1]
+    assert n_in and n_out
+
+    W = self.add_param(
+      tf.Variable(
+        name="W",
+        initial_value=tf.contrib.layers.xavier_initializer()(
+          shape=(n_in, n_out))))
+
+    with tf.name_scope("linear"):
+      x = tf.reshape(input_data.placeholder, (-1, n_in))
+      x = tf.matmul(x, W, name="op_linear")
+      input_batch = tf.reshape(x, self.output.shape)  # TODO...
+
+      if self.with_bias:
+        b = self.add_param(tf.Variable(
+          name="b",
+          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+            shape=(n_out,))))
+        input_batch = tf.add(input_batch, b, name="op_bias")
+
+    if self.activation:
+      act_func = getattr(tf.nn, self.activation)  # e.g. relu, elu, sigmoid, softmax, ...
+      input_batch = act_func(input_batch, name="op_activation")
+
+
 class SoftmaxLayer(LayerBase):
+  layer_class = "softmax"
+
   def __init__(self, **kwargs):
     super(SoftmaxLayer, self).__init__(**kwargs)
 
@@ -115,10 +230,12 @@ _layer_class_dict = {}  # type: dict[str,type(LayerBase)]
 
 def _init_layer_class_dict():
   for v in globals().values():
-    layer_class = getattr(v, "layer_class", None)
-    if layer_class:
-      assert layer_class not in _layer_class_dict
-      _layer_class_dict[layer_class] = v
+    if issubclass(v, LayerBase) and v.layer_class:
+      assert v.layer_class not in _layer_class_dict
+      _layer_class_dict[v.layer_class] = v
+  for alias, v in {"forward": LinearLayer}.items():
+    assert alias not in _layer_class_dict
+    _layer_class_dict[alias] = v
 
 
 def get_layer_class(name):

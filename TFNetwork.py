@@ -72,11 +72,13 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):
     """
     :param Config.Config config:
     :param ExternData|None extern_data:
     :param int rnd_seed:
+    :param bool train_flag: True if we want to use this model in training
+    :param bool eval_flag: True if we want to use this model in evaluation
     """
     self.config = config
     if extern_data is None:
@@ -87,6 +89,9 @@ class TFNetwork(object):
       extern_data.init_from_config(config)
     self.extern_data = extern_data
     self.rnd_seed = rnd_seed
+    self.random = numpy.random.RandomState(rnd_seed)
+    self.train_flag = train_flag
+    self.eval_flag = eval_flag
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
 
