@@ -23,6 +23,46 @@ else:
   long = builtins.long
 
 
+class BackendEngine:
+  Theano = 0
+  Default = Theano
+  TensorFlow = 1
+  selectedEngine = None
+
+  @classmethod
+  def select_engine(cls, engine=None, config=None):
+    """
+    :param int engine:
+    :param Config.Config config:
+    """
+    assert cls.selectedEngine is None, "already set"
+    if engine is None:
+      if config is None:
+        from Config import get_global_config
+        config = get_global_config()
+      engine = cls.Default
+      if config.bool("use_theano", False):
+        engine = cls.Theano
+      if config.bool("use_tensorflow", False):
+        engine = cls.TensorFlow
+    cls.selectedEngine = engine
+
+  @classmethod
+  def get_selected_engine(cls):
+    if cls.selectedEngine is not None:
+      return cls.selectedEngine
+    else:
+      return cls.Default
+
+  @classmethod
+  def is_theano_selected(cls):
+    return cls.get_selected_engine() == cls.Theano
+
+  @classmethod
+  def is_tensorflow_selected(cls):
+    return cls.get_selected_engine() == cls.Theano
+
+
 def cmd(s):
   """
   :type s: str
@@ -94,6 +134,32 @@ def describe_theano_version():
       version = version[:20] + "..."
   except Exception as e:
     version = "<unknown(exception: %r)>" % e
+  try:
+    if tdir.startswith("<"):
+      git_info = "<unknown-dir>"
+    elif os.path.exists(tdir + "/../.git"):
+      git_info = "git:" + git_describeHeadVersion(gitdir=tdir)
+    elif "/site-packages/" in tdir:
+      git_info = "<site-package>"
+    else:
+      git_info = "<not-under-git>"
+  except Exception as e:
+    git_info = "<unknown(git exception: %r)>" % e
+  return "%s (%s in %s)" % (version, git_info, tdir)
+
+def describe_tensorflow_version():
+  import tensorflow as tf
+  try:
+    tdir = os.path.dirname(tf.__file__)
+  except Exception as e:
+    tdir = "<unknown(exception: %r)>" % e
+  try:
+    version = tf.__git_version__
+  except Exception:
+    try:
+      version = tf.__version__
+    except Exception as e:
+      version = "<unknown(exception: %r)>" % e
   try:
     if tdir.startswith("<"):
       git_info = "<unknown-dir>"

@@ -575,7 +575,7 @@ class SequenceOutputLayer(OutputLayer):
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
       fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
       def viterbi(op,x):
-        print x.argmin(axis=-1)
+        print(x.argmin(axis=-1))
       #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
       #fwdbwd.argmin(axis=-1).flatten()
       idx = (index.flatten() > 0).nonzero()

@@ -26,13 +26,14 @@ from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version
+from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
+  describe_tensorflow_version, BackendEngine
 
 
 TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
 
 config = None; """ :type: Config """
-engine = None; """ :type: Engine """
+engine = None; """ :type: Engine | TFEngine.Engine """
 train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
@@ -198,6 +199,8 @@ def initDevices():
   """
   :rtype: list[Device]
   """
+  if not BackendEngine.is_theano_selected():
+    return None
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
     oldDeviceConfig = ",".join(config.list('device', ['default']))
@@ -332,7 +335,13 @@ def initEngine(devices):
   Initializes global engine.
   """
   global engine
-  engine = Engine(devices)
+  if BackendEngine.is_theano_selected():
+    engine = Engine(devices)
+  elif BackendEngine.is_tensorflow_selected():
+    import TFEngine
+    engine = TFEngine.Engine()
+  else:
+    raise NotImplementedError
 
 
 def init(configFilename=None, commandLineOptions=()):
@@ -341,12 +350,19 @@ def init(configFilename=None, commandLineOptions=()):
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initLog()
   print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
-  print >> log.v3, "Theano:", describe_theano_version()
+  BackendEngine.select_engine(config=config)
+  if BackendEngine.is_theano_selected():
+    print >> log.v3, "Theano:", describe_theano_version()
+  elif BackendEngine.is_tensorflow_selected():
+    print >> log.v3, "TensorFlow:", describe_tensorflow_version()
+  else:
+    raise NotImplementedError
   initFaulthandler()
-  if config.value('task', 'train') == "theano_graph":
-    config.set("multiprocessing", False)
-  if config.bool('multiprocessing', True):
-    initCudaNotInMainProcCheck()
+  if BackendEngine.is_theano_selected():
+    if config.value('task', 'train') == "theano_graph":
+      config.set("multiprocessing", False)
+    if config.bool('multiprocessing', True):
+      initCudaNotInMainProcCheck()
   if config.bool('ipython', False):
     initIPythonKernel()
   initConfigJsonNetwork()

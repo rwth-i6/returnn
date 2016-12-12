@@ -161,13 +161,13 @@ class CachedDataset2(Dataset):
     if key in self.num_outputs:
       d = self.num_outputs[key][0]
       if self.added_data and not self.is_data_sparse(key):
-        assert self.added_data[0].features.shape[1] == d
+        assert self.added_data[0].get_data(key).shape[1] == d
       return d
     self._load_something()
-    if len(self.added_data[0].features.shape) == 1:
+    if len(self.added_data[0].get_data(key).shape) == 1:
       return super(CachedDataset2, self).get_data_dim(key)  # unknown
-    assert len(self.added_data[0].features.shape) == 2
-    return self.added_data[0].features.shape[1]
+    assert len(self.added_data[0].get_data(key).shape) == 2
+    return self.added_data[0].get_data(key).shape[1]
 
   def get_data_dtype(self, key):
     self._load_something()
