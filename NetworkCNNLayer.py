@@ -223,10 +223,10 @@ class CNN(_NoOpLayer):
 
     pool_out = pool.pool_2d(
       input=inputs,
-      ds=pool_size,
+      ds=pool_size, # TODO(theano 0.9): change to ws
       ignore_border=ignore_border,
-      st=stride,
-      padding=pad,
+      st=stride, # TODO(theano 0.9): change to stride
+      padding=pad, # TODO(theano 0.9): change to pad
       mode=mode
     )
     pool_out.name = "pool_out_"+self.name
@@ -252,7 +252,7 @@ class CNN(_NoOpLayer):
     if others[0] > 0.0:
       inputs = self.calculate_dropout(others[0], inputs)
 
-    conv_out = self.convolution(inputs, filter_shape, params[3], modes[0], others[1], params[0])
+    conv_out = self.convolution(inputs, filter_shape, params[3], modes[0], others[1], params[0], filter_dilation)
     pool_out = self.pooling(conv_out, params[0], modes[1], params[1], params[2], modes[2])
 
     if self.is_1d:
