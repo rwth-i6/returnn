@@ -201,7 +201,11 @@ class TFNetwork(object):
     return l
 
   def get_trainable_params(self):
+    # TODO...
     return self.get_params()  # at the moment just the same
+
+  def declare_train_params(self, hidden_layer_selection=None, with_output=None):
+    pass  # TODO...
 
   def get_num_params(self):
     num_params = 0
@@ -212,7 +216,8 @@ class TFNetwork(object):
     return num_params
 
   def load_params_from_file(self, filename):
-    pass  # TODO...
+    # TODO...
+    raise NotImplementedError
 
   def print_network_info(self, name="Network"):
     print >> log.v2, "%s layer topology:" % name
