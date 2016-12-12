@@ -3,19 +3,26 @@ import tensorflow as tf
 
 
 class Data(object):
+  """
+  This class is to describe a tensor,
+  i.e. it's shape and properties like
+  whether we should consider it as sparse data (i.e. it represents indices).
+  This is used in TFNetwork to describe the dataset external data
+  as well as for every layer output.
+  """
   def __init__(self, name,
                shape=None, dtype=None,
                placeholder=None,
                sparse=None,
                dim=None,
                size_placeholder=None,
-               auto_create_placeholders=True):
+               auto_create_placeholders=False):
     """
     :param str name:
     :param tuple[int|None] shape: including time-dim, which can be None. excluding batch-dim
     :param str dtype: e.g. "float32" or "int64"
     :param tf.Tensor|None placeholder: with added batch-dim
-    :param bool sparse: whether to treat the value as an index
+    :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
     :param None|int dim: shape[-1] if not sparse, otherwise like num_classes
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size
     """
@@ -77,13 +84,16 @@ class Data(object):
 class LayerBase(object):
   layer_class = None
 
-  def __init__(self, name, network, n_out=None, out_type=None, sources=()):
+  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
     :param None|int n_out: output dim
     :param dict[str] out_type:
     :param list[LayerBase] sources:
+    :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
+    :param str|None loss: if set, via get_loss
+    :param float|None L2: for constraints
     """
     self.name = name
     self.network = network
@@ -95,9 +105,15 @@ class LayerBase(object):
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
-    self.output = Data(auto_create_placeholders=False, **out_type)
+    self.output = Data(**out_type)
+    self.output_before_softmax = None  # type: None|tf.Tensor
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
+    if loss and not target:
+      target = self.network.extern_data.default_target
+    self.target = target
+    self.loss = loss
+    self.L2 = L2
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -112,6 +128,31 @@ class LayerBase(object):
     assert param.name
     self.params[param.name] = param
     return param
+
+  def get_loss_value(self):
+    """
+    :return: the loss, a scalar value, or None if not set
+    :rtype: tf.Tensor | None
+    """
+    if not self.loss:
+      return None
+    target = self.network.extern_data.get_data(self.target)
+    return get_loss(
+      loss=self.loss,
+      output=self.output,
+      output_before_softmax=self.output_before_softmax,
+      target=target)
+
+  def get_params_l2_norm(self):
+    return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
+
+  def get_constraints_value(self):
+    c = 0
+    if self.L2:
+      c += self.L2 * self.get_params_l2_norm()
+    if c is 0:
+      return None
+    return c
 
 
 class SourceLayer(LayerBase):
@@ -152,8 +193,7 @@ def concat_sources(src_layers):
     shape=prefix_shape + (dim,),
     dim=dim,
     sparse=False,
-    dtype=dtype,
-    auto_create_placeholders=False)
+    dtype=dtype)
   data.placeholder = tf.concat(
     concat_dim=len(prefix_shape),
     values=[layer.output.placeholder for layer in src_layers])
@@ -202,28 +242,75 @@ class LinearLayer(_ConcatInputLayer):
         initial_value=tf.contrib.layers.xavier_initializer()(
           shape=(n_in, n_out))))
 
+    if self.with_bias:
+      b = self.add_param(tf.Variable(
+        name="b",
+        initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+          shape=(n_out,))))
+    else:
+      b = None
+
     with tf.name_scope("linear"):
-      x = tf.reshape(input_data.placeholder, (-1, n_in))
-      x = tf.matmul(x, W, name="op_linear")
-      input_batch = tf.reshape(x, self.output.shape)  # TODO...
+      from TFUtil import dot
+      x = dot(input_data.placeholder, W)
 
       if self.with_bias:
-        b = self.add_param(tf.Variable(
-          name="b",
-          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
-            shape=(n_out,))))
-        input_batch = tf.add(input_batch, b, name="op_bias")
+        x = tf.add(x, b, name="add_bias")
 
     if self.activation:
-      act_func = getattr(tf.nn, self.activation)  # e.g. relu, elu, sigmoid, softmax, ...
-      input_batch = act_func(input_batch, name="op_activation")
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(self.activation)
+      if act_func is tf.nn.softmax:
+        self.output_before_softmax = x
+      with tf.name_scope("activation"):
+        x = act_func(x)
+
+    self.output.placeholder = x
 
 
-class SoftmaxLayer(LayerBase):
+class SoftmaxLayer(LinearLayer):
   layer_class = "softmax"
 
-  def __init__(self, **kwargs):
-    super(SoftmaxLayer, self).__init__(**kwargs)
+  def __init__(self, activation="softmax", **kwargs):
+    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
+
+
+def get_loss(loss, output, output_before_softmax=None, target=None):
+  """
+  :param str loss: loss type such as "ce"
+  :param Data output: generated output
+  :param tf.Tensor|None output_before_softmax: if output is softmax(x), this will be x
+  :param Data target: reference target from dataset
+  :return: loss as a scalar value
+  :rtype: tf.Tensor
+  """
+  from TFUtil import flatten_with_seq_len_mask
+  with tf.name_scope("loss"):
+    seq_lens = target.size_placeholder[0]
+    if output_before_softmax is not None:
+      output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, seq_lens)
+      output_flat = None
+    else:
+      output_before_softmax_flat = None
+      output_flat = flatten_with_seq_len_mask(output.placeholder, seq_lens)
+    target_flat = flatten_with_seq_len_mask(target.placeholder, seq_lens)
+    if loss == "ce":
+      if target.sparse:
+        if output_before_softmax_flat is not None:
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+          return tf.reduce_mean(out)
+        else:
+          out = tf.log(tf.gather(output_flat, target_flat))
+          return -tf.reduce_mean(out)
+      else:  # not sparse
+        if output_before_softmax_flat is not None:
+          out = tf.nn.softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+          return tf.reduce_mean(out)
+        else:
+          out = target_flat * tf.log(output_flat)
+          return -tf.reduce_mean(out)
+    else:
+      raise Exception("unknown loss %r" % loss)
 
 
 _layer_class_dict = {}  # type: dict[str,type(LayerBase)]

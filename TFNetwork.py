@@ -6,6 +6,10 @@ from TFNetworkLayer import Data, LayerBase, get_layer_class
 
 
 class ExternData(object):
+  """
+  This holds `Data` instances for every data-key of external data from the dataset,
+  i.e. the description such as shape and sparsity, etc.
+  """
 
   def __init__(self, data=None, default_input="data", default_target="classes"):
     """
@@ -27,7 +31,7 @@ class ExternData(object):
     data_dims.setdefault("data", (num_inputs, 2))
     sparse_input = config.bool("sparse_input", False)
     for key, (dim, ndim) in data_dims.items():
-      init_args = {"name": key, "dim": dim}
+      init_args = {"dim": dim}
       if ndim == 1:
         init_args["shape"] = (None,)
         init_args["sparse"] = True
@@ -38,7 +42,7 @@ class ExternData(object):
         init_args["shape"] = (None,) * (ndim - 1) + (dim,)
       if key == "data":
         init_args["sparse"] = sparse_input
-      self.data[key] = Data(**init_args)
+      self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
   def register_data_from_dict(self, data):
@@ -46,9 +50,7 @@ class ExternData(object):
     :param dict[str,dict[str]] data: init kwargs for Data
     """
     for key, value in data.items():
-      init_args = value.copy()
-      init_args["name"] = key
-      self.data[key] = Data(**init_args)
+      self.data[key] = Data(name=key, auto_create_placeholders=True, **value)
 
   def register_data(self, data):
     """
@@ -94,6 +96,9 @@ class TFNetwork(object):
     self.eval_flag = eval_flag
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
+    self.loss = None
+    self.constraints = None
+    self.objective = None
 
   def construct_from(self, list_or_dict):
     """
@@ -163,6 +168,25 @@ class TFNetwork(object):
     for name, layer_desc in sorted(net_dict.items()):
       if name == "output" or "target" in layer_desc or layer_desc.get("class") == "softmax":
         _construct_layer(name)
+
+  def construct_objective(self):
+    with tf.name_scope("objective"):
+      self.loss = 0
+      self.constraints = 0
+      for name, layer in sorted(self.layers.items()):
+        assert isinstance(layer, LayerBase)
+        loss = layer.get_loss_value()
+        constraints = layer.get_constraints_value()
+        if loss is not None:
+          self.loss += loss
+        if constraints is not None:
+          self.constraints += constraints
+      self.objective = self.loss + self.constraints
+
+  def get_objective(self):
+    if self.objective is None:
+      self.construct_objective()
+    return self.objective
 
   def get_params(self):
     """
