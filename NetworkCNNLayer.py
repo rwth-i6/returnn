@@ -20,7 +20,7 @@ class CNN(_NoOpLayer):
   recurrent = True
 
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
-               conv_stride=(1,1), pool_size=(2,2), ignore_border=1,
+               conv_stride=(1,1), pool_size=(2,2), filter_dilation=(1,1), ignore_border=1,
                pool_stride=0, pool_padding=(0,0), mode="max",
                activation="tanh", dropout=0.0, factor=0.5,
                force_sample=False, **kwargs):
@@ -100,6 +100,7 @@ class CNN(_NoOpLayer):
 
     # filter shape is tuple/list of length 4 which is (nb filters, stack size, filter row, filter col)
     self.filter_shape = (n_features, stack_size, filter[0], filter[1])
+    self.filter_dilation = filter_dilation
     self.input_shape = [d_row, d_col]
     self.modes = [border_mode, ignore_border, mode, activation]
     self.pool_params = [pool_size, pool_stride, pool_padding, conv_stride]
@@ -171,7 +172,7 @@ class CNN(_NoOpLayer):
       inputs = inputs * mass
     return inputs
 
-  def convolution(self, inputs, filter_shape, stride, border_mode, factor, pool_size):
+  def convolution(self, inputs, filter_shape, stride, border_mode, factor, pool_size, filter_dilation):
     #W_bound = numpy.sqrt(2./filter_shape[0]*numpy.prod(filter_shape[2:]))*factor
     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
     fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))
@@ -193,6 +194,7 @@ class CNN(_NoOpLayer):
       input=inputs,
       filters=W,
       filter_shape=filter_shape,
+      filter_dilation=filter_dilation,
       subsample=stride,
       border_mode=border_mode
     )
@@ -245,7 +247,7 @@ class CNN(_NoOpLayer):
     output = self.calculate_index(output)
     return output
 
-  def run_cnn(self, inputs, filter_shape, params, modes, others):
+  def run_cnn(self, inputs, filter_shape, filter_dilation, params, modes, others):
     # dropout
     if others[0] > 0.0:
       inputs = self.calculate_dropout(others[0], inputs)
@@ -294,6 +296,7 @@ class NewConv(CNN):
     self.Output = self.run_cnn(
       inputs=self.input,
       filter_shape=self.filter_shape,
+      filter_dilation=self.filter_dilation,
       params=self.pool_params,
       modes=self.modes,
       others=self.other_params
@@ -359,6 +362,7 @@ class ConcatConv(CNN):
     self.Output = self.run_cnn(
       inputs=self.input,
       filter_shape=self.filter_shape,
+      filter_dilation=self.filter_dilation,
       params=self.pool_params,
       modes=self.modes,
       others=self.other_params
