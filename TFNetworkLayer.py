@@ -143,6 +143,13 @@ class LayerBase(object):
       output_before_softmax=self.output_before_softmax,
       target=target)
 
+  def get_error_value(self):
+    """
+    :return: usually the frame error rate, or None if not defined
+    :rtype: tf.Tensor | None
+    """
+    # TODO ...
+
   def get_params_l2_norm(self):
     return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
 
