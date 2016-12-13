@@ -74,7 +74,10 @@ class CNN(_NoOpLayer):
       stack_size = 1  # set stack_size of first convolution layer as channel of the image (gray scale image)
 
       if self.is_1d:
-        d_row = dimension
+        if d_row == -1:
+          d_row = dimension
+        else:
+          stack_size = dimension
       elif d_row == -1:
         d_row = int(sqrt(dimension))
 
@@ -369,7 +372,11 @@ class ConcatConv(CNN):
     if self.status[0]:
       self.input = T.concatenate([s.Output for s in self.sources], axis=3)  # (batch, stack_size, row, time)
     else:
-      inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.filter_shape[1]))  # (time, batch, row, stack)
+      d_row = kwargs['d_row'] if 'd_row' in kwargs else -1
+      if d_row == -1:
+        inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.filter_shape[1]))  # (time, batch, row, stack)
+      else:
+        inputs2 = inputs.reshape((time, batch, d_row, self.filter_shape[1]))  # (time, batch, row, stack)
       self.input = inputs2.dimshuffle(1, 3, 2, 0)  # (batch, stack_size, row, time)
     self.input.name = "conv_layer_input_final"
 
