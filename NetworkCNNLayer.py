@@ -1,20 +1,22 @@
-import theano
+# general library
 import numpy
-
 from math import ceil, sqrt
 
+# theano library
+import theano
 from theano import tensor as T
 from theano.tensor.nnet import conv2d
 try:
   from theano.tensor.signal import pool
 except ImportError:
   pool = None
-
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
+# others
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
 from cuda_implementation.FractionalMaxPoolingOp import fmp
+
 
 class CNN(_NoOpLayer):
   recurrent = True
@@ -24,6 +26,29 @@ class CNN(_NoOpLayer):
                pool_stride=0, pool_padding=(0,0), mode="max",
                activation="tanh", dropout=0.0, factor=0.5,
                force_sample=False, **kwargs):
+    """
+      :param n_features: integer
+        the number of feature map(s), e.g. 32, 64, or so on.
+
+      :param filter: integer or tupple
+        the number of row(s) and/or columns(s) from the filter shape
+        when this filter type is integer, it means the number of rows is the same as the number of columns.
+        e.g. 3, 5, (1,3), or so on.
+
+      :param d_row: integer
+        the number of row(s) from the input
+        the default value is -1, which the dimension comes from the n_out of the input.
+        otherwise, this has to be filled only for the first convolutional layer and
+        the rest layer will use the number of rows from the previous layer.
+
+      :param border_mode: string
+        "valid" --  only apply filter to complete patches of the image.
+                    Generates output of shape: (image_shape - filter_shape + 1).
+        "full"  --  zero-pads image to multiple of filter shape to generate output of shape: (image_shape + filter_shape - 1).
+        "same"  --  keep the dimension of convolutional layer output the same as the input dimension.
+        (default value is "valid")
+    """
+
     super(CNN, self).__init__(**kwargs)
 
     src = self.sources
@@ -49,7 +74,10 @@ class CNN(_NoOpLayer):
       stack_size = 1  # set stack_size of first convolution layer as channel of the image (gray scale image)
 
       if self.is_1d:
-        d_row = dimension
+        if d_row == -1:
+          d_row = dimension
+        else:
+          stack_size = dimension
       elif d_row == -1:
         d_row = int(sqrt(dimension))
 
@@ -344,7 +372,11 @@ class ConcatConv(CNN):
     if self.status[0]:
       self.input = T.concatenate([s.Output for s in self.sources], axis=3)  # (batch, stack_size, row, time)
     else:
-      inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.filter_shape[1]))  # (time, batch, row, stack)
+      d_row = kwargs['d_row'] if 'd_row' in kwargs else -1
+      if d_row == -1:
+        inputs2 = inputs.reshape((time, batch, inputs.shape[2], self.filter_shape[1]))  # (time, batch, row, stack)
+      else:
+        inputs2 = inputs.reshape((time, batch, d_row, self.filter_shape[1]))  # (time, batch, row, stack)
       self.input = inputs2.dimshuffle(1, 3, 2, 0)  # (batch, stack_size, row, time)
     self.input.name = "conv_layer_input_final"
 
