@@ -24,6 +24,7 @@ class DataProvider(object):
     :param int capacity:
     :param tf.Session tf_session:
     """
+    # TODO...
     self.tf_session = tf_session
     self.queue = tf.FIFOQueue(capacity=capacity, )
 
