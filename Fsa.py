@@ -19,10 +19,13 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states = 0
   edges = []
 
+  # go through the whole label sequence
   for m in range(0, len(label_seq)):
+    # create the state for each label
     num_states, edges = __create_states_from_label_for_ctc(label_seq, m, num_states, num_labels, edges)
     print("label:", label_seq[m], "=", m)
 
+  # create the final states for last label
   num_states, edges = __create_last_state_for_ctc(label_seq, m, num_states, num_labels, edges)
   print("label: blank =", m+1)
 
@@ -31,7 +34,9 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
 
 def __create_states_from_label_for_ctc(label_seq, label, num_states, num_labels, edges):
   """
+  :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
+  :param int num_states: number of states
   :param int num_labels: number of labels
   :param list edges: list of edges
   :returns (num_states, edges)
@@ -57,6 +62,7 @@ def __create_states_from_label_for_ctc(label_seq, label, num_states, num_labels,
 
 def __create_last_state_for_ctc(label_seq, label, num_states, num_labels, edges):
   """
+  :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
   :param int num_states: number of states
   :param int num_labels: number of labels
