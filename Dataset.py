@@ -527,7 +527,7 @@ class Dataset(object):
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():
           length = t_end - t_start
-          num_frames = NumbersDict.bin_op(length, batch_size - batch.get_all_slices_num_frames(), op=min, zero=0)
+          num_frames = NumbersDict.min([length, batch_size - batch.get_all_slices_num_frames()])
           assert num_frames.max_value() > 0
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
