@@ -143,8 +143,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   print("Silence: sil")
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
-  allo, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-
+  allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
 
   return num_states, edges
 
@@ -240,8 +239,9 @@ def __find_allo_seq_in_lex(lemma, lexi):
   phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
 
   allo_seq = phons_sorted[0]['phon'].split(' ')
+  allo_seq_score = phons_sorted[0]['score']
 
-  return allo_seq, phons
+  return allo_seq, allo_seq_score, phons
 
 
 def fsa_to_dot_format(file, num_states, edges):
