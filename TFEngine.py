@@ -19,8 +19,28 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self):
-    self.queue = tf.FIFOQueue()
+  def __init__(self, capacity, tf_session, placeholders):
+    """
+    :param int capacity:
+    :param tf.Session tf_session:
+    """
+    self.tf_session = tf_session
+    self.queue = tf.FIFOQueue(capacity=capacity, )
+
+  def start_thread(self):
+    import threading
+    thread = threading.Thread(target=self.thread_main, name="DataProvider thread")
+    thread.daemon = True  # Thread will close when parent quits.
+    thread.start()
+
+  def thread_main(self):
+    try:
+      import better_exchook
+      better_exchook.install()
+
+    except Exception as exc:
+      print("Exception in DataProvider thread: %r" % exc)
+      sys.excepthook(*sys.exc_info())
 
   def is_data_finished(self):
     """
