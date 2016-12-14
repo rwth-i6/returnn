@@ -21,18 +21,24 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states = 2 * (len(label_seq) + 1) - 1
 
   # create edges from the label sequence without loops and no empty labels
-  num_states, edges = __create_states_from_label_seq_no_loops_no_empty(label_seq, num_states, num_labels, edges)
+  num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges)
 
-  # adds empty labels to fsa
-  num_states, edges = __adds_empty_states(label_seq, num_states, num_labels, edges)
+  # adds blank labels to fsa
+  num_states, edges = __adds_empty_states_for_ctc(label_seq, num_states, num_labels, edges)
 
   # adds loops to fsa
-  num_states, edges = __adds_loop_edges(label_seq, num_states, num_labels, edges)
+  num_states, edges = __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges)
+
+  # creates end state
+  num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
+
+  # removes states to create skips
+  num_states, edges = __removes_edges_nodes_for_skip_for_ctc(label_seq, num_states, num_labels, edges)
 
   return num_states, edges
 
 
-def __create_states_from_label_seq_no_loops_no_empty(label_seq, num_states, num_labels, edges):
+def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
   :param int num_states: number of states
@@ -56,7 +62,7 @@ def __create_states_from_label_seq_no_loops_no_empty(label_seq, num_states, num_
   return num_states, edges
 
 
-def __adds_empty_states(label_seq, num_states, num_labels, edges):
+def __adds_empty_states_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
@@ -73,7 +79,7 @@ def __adds_empty_states(label_seq, num_states, num_labels, edges):
       weight is a float, in -log space
   """
 
-  # adds empty labels to fsa
+  # adds blank labels to fsa
   for m in range(0, len(label_seq)):
     n = 2 * m + 1
     edges.append((str(n-1), str(n), 'blank', 1.))
@@ -82,7 +88,7 @@ def __adds_empty_states(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def __adds_loop_edges(label_seq, num_states, num_labels, edges):
+def __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
@@ -107,35 +113,7 @@ def __adds_loop_edges(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def __create_states_from_label_for_ctc(label_seq, label, num_states, num_labels, edges):
-  """
-  :param str label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
-  :param int num_states: number of states
-  :param int num_labels: number of labels
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  i = 2 * (label + 1) - 2
-  edges.append((str(i), str(i+1), num_labels, 1.))
-  edges.append((str(i + 1), str(i + 1), num_labels, 1.))
-  edges.append((str(i + 1), str(i + 2), label, 1.))
-  edges.append((str(i + 2), str(i + 2), label, 1.))
-  if (label_seq[label] != label_seq[label-1]):
-    edges.append((str(i), str(i + 2), label, 1.))
-  num_states = 2 * (label + 2) - 1
-
-  return num_states, edges
-
-
-def __create_last_state_for_ctc(label_seq, label, num_states, num_labels, edges):
+def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
@@ -152,11 +130,34 @@ def __create_last_state_for_ctc(label_seq, label, num_states, num_labels, edges)
       weight is a float, in -log space
   """
   i = num_states
-  edges.append((str(i - 1), str(i), num_labels, 1.))
-  edges.append((str(i), str(i), num_labels, 1.))
-  edges.append((str(i - 2), str(i), label, 1.))
-  edges.append((str(i - 3), str(i), label, 1.))
+  edges.append((str(i - 1), str(i), 'blank', 1.))
+  edges.append((str(i), str(i), 'blank', 1.))
+  edges.append((str(i - 2), str(i), label_seq[-1], 1.))
+  edges.append((str(i - 3), str(i), label_seq[-1], 1.))
   num_states += 1
+
+  return num_states, edges
+
+
+def __removes_edges_nodes_for_skip_for_ctc(label_seq, num_states, num_labels, edges):
+  """
+  :param str label_seq: sequence of labels (normally some kind of word)
+  :param int label: label number
+  :param int num_states: number of states
+  :param int num_labels: number of labels
+  :param list edges: list of edges
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
+  # compare label_seq positions to each other
+  # calculate position of state to delete
+  # remove from graph
 
   return num_states, edges
 
