@@ -694,25 +694,40 @@ class HDFForwardTaskThread(TaskThread):
       self.cache.attrs['numSeqs'] = self.num_seqs
 
     def evaluate(self, batchess, results, result_format, num_frames):
-      features = numpy.concatenate(results, axis=1)[0]
-      if not "inputs" in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None))
+      """
+      :param list[list[Batch]] batchess: batches per device
+      :param list[list[numpy.ndarray]] results: results per device
+      :param list[str]|None result_format: describes what we have in a result list
+      :type num_frames: NumbersDict
+      :returns some score or None
+      :rtype: dict[str] | None
+      """
       # Currently we support just a single dev with a single batch.
       assert len(batchess) == 1
       assert len(batchess[0]) == 1
+      assert len(results) == 1
+      assert len(results[0]) == 1
+      features = results[0][0]
       batch = batchess[0][0]
+      from EngineBatch import Batch
+      assert isinstance(batch, Batch)
+      if "inputs" not in self.cache:
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None))
       tt = 0
       feats = []
       self.num_seqs += batch.get_num_seqs()
-      for seq_idx in range(batch.start_seq,batch.end_seq):
+      for seq_idx in range(batch.start_seq, batch.end_seq):
         if self.network.recurrent:
-          seqfeats = features[:,seq_idx - batch.start_seq,:]
+          seqfeats = features[:, seq_idx - batch.start_seq]
           if batch.end_seq - batch.start_seq > 1:
             seqfeats = seqfeats[~numpy.all(seqfeats == 0,axis=1)]
           if seqfeats.shape[0] == 0:
-            seqfeats = features[:,seq_idx - batch.start_seq,:]
+            seqfeats = features[:, seq_idx - batch.start_seq]
         else:
-          seqfeats = features[seq_idx - batch.start_seq]
+          seq = batch.seqs[seq_idx - batch.start_seq]
+          seqfeats = features[
+                       seq.batch_frame_offset["data"]:seq.batch_frame_offset["data"] + seq.frame_length["data"],
+                       seq.batch_slice]
         print >> log.v5, "extracting", seqfeats.shape[-1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         tt += seqfeats.shape[0]
