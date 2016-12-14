@@ -1,6 +1,9 @@
 
 import tensorflow as tf
+from tensorflow.python.client import timeline
 import sys
+import os
+import time
 from Log import log
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
@@ -9,8 +12,131 @@ from Network import LayerNetwork
 from TFNetwork import TFNetwork
 
 
+class DataProvider(object):
+  """
+  This class will fill all the placeholders used for training or forwarding or evaluation etc.
+  of a `TFNetwork.Network`.
+  It will run a background thread which reads the data from a dataset and puts it into a queue.
+  """
+
+  def __init__(self):
+    self.queue = tf.FIFOQueue()
+
+  def is_data_finished(self):
+    """
+    :return: when we go through an epoch and finished reading, this will return True
+    """
+    return self.queue  # TODO...
+
+  def get_feed_dict(self):
+    return {}  # TODO...
+
+  def get_fetches_dict(self):
+    # TODO...
+    return {
+      "summary": None,
+      "loss": None,
+      "optim": None,
+      "queue_size": self.queue.size()
+    }
+
+
+class Runner(object):
+  def __init__(self, engine, data_provider):
+    """
+    :param Engine engine:
+    :param DataProvider data_provider:
+    """
+    self.engine = engine
+    self.data_provider = data_provider
+
+  def run(self):
+    sess = self.engine.tf_session
+    logdir = self.logdir
+    writer = tf.train.SummaryWriter(logdir)
+    writer.add_graph(tf.get_default_graph())
+    run_metadata = tf.RunMetadata()
+
+    # Saver for storing checkpoints of the model.
+    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=100)
+
+    try:
+      saved_global_step = load(saver, sess, restore_from)
+      if self.is_overwritten_training or saved_global_step is None:
+        # The first training step will be saved_global_step + 1,
+        # therefore we put -1 here for new or overwritten trainings.
+        saved_global_step = -1
+
+    except:
+      print("Something went wrong while restoring checkpoint. "
+            "We will terminate training to avoid accidentally overwriting "
+            "the previous model.")
+      raise
+
+    # Create coordinator.
+    coord = tf.train.Coordinator()
+
+    tf.set_random_seed(42)
+
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+    #reader.start_threads(sess)
+
+    step = None
+    try:
+      # step is like mini-batch in our usual terminology
+      step = 0
+      while True:
+        start_time = time.time()
+        fetches_dict = self.data_provider.get_fetches_dict()
+        feed_dict = self.data_provider.get_feed_dict()
+        if self.store_metadata and step % 500 == 0:
+          # Slow run that stores extra information for debugging.
+          print('Storing metadata')
+          run_options = tf.RunOptions(
+            trace_level=tf.RunOptions.FULL_TRACE)
+          fetches_results = sess.run(
+            fetches_dict,
+            feed_dict=feed_dict,
+            options=run_options,
+            run_metadata=run_metadata)
+          writer.add_summary(fetches_results["summary"], step)
+          writer.add_run_metadata(run_metadata,
+                                  'step_{:04d}'.format(step))
+          tl = timeline.Timeline(run_metadata.step_stats)
+          timeline_path = os.path.join(logdir, 'timeline.trace')
+          with open(timeline_path, 'w') as f:
+            f.write(tl.generate_chrome_trace_format(show_memory=True))
+        else:
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)
+          writer.add_summary(fetches_results["summary"], step)
+
+        duration = time.time() - start_time
+        print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
+              .format(step, fetches_results["loss"], duration))
+
+        if step % self.checkpoint_every == 0:
+          save(saver, sess, logdir, step)
+          last_saved_step = step
+
+        step += 1
+
+
+    except KeyboardInterrupt:
+      # Introduce a line break after ^C is displayed so save message
+      # is on its own line.
+      print()
+      sys.exit(1)
+    finally:
+      if step > last_saved_step and step > saved_global_step + 1:
+        save(saver, sess, logdir, step)
+      coord.request_stop()
+      coord.join(threads)
+
+
 class Engine(object):
   def __init__(self):
+    # TODO...
+    self.tf_session = tf.get_default_session()  # type: tf.Session
     self.dataset_batches = {}
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
@@ -292,6 +418,14 @@ class Engine(object):
       return str(list(score.values())[0])
     return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                      for key in sorted(score.keys())])
+
+  def _run_data_provider(self):
+    pass
+
+  def _eval_model(self, dataset_name):
+    batches = self.dataset_batches[dataset_name]
+    report_prefix = self.get_epoch_str() + " eval"
+    epoch = self.epoch
 
   def eval_model(self):
     eval_dump_str = []
