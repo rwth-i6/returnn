@@ -24,7 +24,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges)
 
   # adds blank labels to fsa
-  num_states, edges = __adds_empty_states_for_ctc(label_seq, num_states, num_labels, edges)
+  num_states, edges = __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges)
 
   # adds loops to fsa
   num_states, edges = __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges)
@@ -62,7 +62,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
   return num_states, edges
 
 
-def __adds_empty_states_for_ctc(label_seq, num_states, num_labels, edges):
+def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
