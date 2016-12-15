@@ -203,6 +203,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   print("Place holder: epsilon")
   num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
   allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+  __triphone_from_allo(allo_seq)
 
   return num_states, edges
 
@@ -301,6 +302,32 @@ def __find_allo_seq_in_lex(lemma, lexi):
   allo_seq_score = phons_sorted[0]['score']
 
   return allo_seq, allo_seq_score, phons
+
+
+def __triphone_from_allo(allo_seq):
+  '''
+  :param allo_seq: sequence of allophones
+  :return tri_seq: list of three phonemes
+  uses the sequence of allophones and splits into a list of triphones.
+  triphones are composed of the current phon and the left and right phons
+  '''
+  tri_seq = []
+
+  for allo_index in range(0, len(allo_seq)):
+    if allo_index <= 0:
+      tri_l = ''
+    else:
+      tri_l = allo_seq[allo_index - 1]
+    if allo_index >= len(allo_seq) - 1:
+      tri_r = ''
+    else:
+      tri_r = allo_seq[allo_index + 1]
+    tri_c = allo_seq[allo_index]
+    tri_seq.append((tri_l, tri_c, tri_r))
+
+  print(tri_seq)
+
+  return tri_seq
 
 
 def fsa_to_dot_format(file, num_states, edges):
