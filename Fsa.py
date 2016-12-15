@@ -26,11 +26,11 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   # adds blank labels to fsa
   num_states, edges = __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges)
 
-  # adds loops to fsa
-  num_states, edges = __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges)
-
   # creates end state
   num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
+
+  # adds loops to fsa
+  num_states, edges = __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges)
 
   return num_states, edges
 
@@ -57,8 +57,6 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
     if label_seq[label_index] != label_seq[label_index - 1]:
       n = 2 * label_index
       edges.append((str(n), str(n+2), label_seq[label_index], 1.))
-    else:
-      num_states -= 1
 
   return num_states, edges
 
@@ -130,9 +128,9 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
+
   i = num_states
   edges.append((str(i - 1), str(i), 'blank', 1.))
-  edges.append((str(i), str(i), 'blank', 1.))
   edges.append((str(i - 2), str(i), label_seq[-1], 1.))
   edges.append((str(i - 3), str(i), label_seq[-1], 1.))
   num_states += 1
@@ -153,6 +151,7 @@ def asg_fsa_for_label_seq(num_labels, label_seq):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
+
   num_states = 0
   edges = []
 
