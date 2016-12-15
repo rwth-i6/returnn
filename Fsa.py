@@ -32,9 +32,6 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   # creates end state
   num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
 
-  # removes states to create skips
-  num_states, edges = __removes_edges_nodes_for_skip_for_ctc(label_seq, num_states, num_labels, edges)
-
   return num_states, edges
 
 
@@ -55,9 +52,13 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
   """
 
   # go through the whole label sequence and create the state for each label
-  for m in range(0, len(label_seq)):
-    n = 2 * m
-    edges.append((str(n), str(n+2), label_seq[m], 1.))
+  for label_index in range(0, len(label_seq)):
+    # if to remove skips if two equal labels follow each other
+    if label_seq[label_index] != label_seq[label_index - 1]:
+      n = 2 * label_index
+      edges.append((str(n), str(n+2), label_seq[label_index], 1.))
+    else:
+      num_states -= 1
 
   return num_states, edges
 
@@ -80,10 +81,10 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   # adds blank labels to fsa
-  for m in range(0, len(label_seq)):
-    n = 2 * m + 1
-    edges.append((str(n-1), str(n), 'blank', 1.))
-    edges.append((str(n), str(n+1), label_seq[m], 1.))
+  for label_index in range(0, len(label_seq)):
+    label_blank = 2 * label_index + 1
+    edges.append((str(label_blank-1), str(label_blank), 'blank', 1.))
+    edges.append((str(label_blank), str(label_blank+1), label_seq[label_index], 1.))
 
   return num_states, edges
 
@@ -135,29 +136,6 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   edges.append((str(i - 2), str(i), label_seq[-1], 1.))
   edges.append((str(i - 3), str(i), label_seq[-1], 1.))
   num_states += 1
-
-  return num_states, edges
-
-
-def __removes_edges_nodes_for_skip_for_ctc(label_seq, num_states, num_labels, edges):
-  """
-  :param str label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
-  :param int num_states: number of states
-  :param int num_labels: number of labels
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  # compare label_seq positions to each other
-  # calculate position of state to delete
-  # remove from graph
 
   return num_states, edges
 
