@@ -335,8 +335,9 @@ class FramewiseOutputLayer(OutputLayer):
       return None, None
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
+      assert self.p_y_given_x_flat.ndim == 2 \
+             and self.y_data_flat.ndim == 2  # flattened
       if self.loss == "ce":
-        assert self.p_y_given_x_flat.ndim == 2  # flattened
         index = T.cast(self.index, "float32").flatten()
         index_bc = index.dimshuffle(0, 'x')
         y_idx = self.y_data_flat
@@ -350,6 +351,16 @@ class FramewiseOutputLayer(OutputLayer):
         known_grads = {
           self.p_y_given_x_flat: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
         return self.norm * nll, known_grads
+      elif self.loss == "sse":
+        netOutput = self.p_y_given_x_flat
+        groundTruth = self.y_data_flat
+        sseLoss = T.sum(
+          T.mean(
+            T.sqr(netOutput - groundTruth),
+            axis=1
+          )
+        )
+        return sseLoss, known_grads
       else:
         raise NotImplementedError
     elif self.loss == 'ce' or self.loss == 'priori':
