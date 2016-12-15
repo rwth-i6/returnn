@@ -208,6 +208,8 @@ class OutputLayer(Layer):
     self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
     if self.loss == 'sse' or not self.attrs.get("apply_softmax", True):
       self.p_y_given_x = self.z
+    elif self.loss == 'sse_sigmoid':
+      self.p_y_given_x = T.nnet.sigmoid(self.z)
     elif exp_outputs:  # or not exp_normalize:
       self.p_y_given_x = T.exp(self.z)
     elif sigmoid_outputs:
@@ -387,6 +389,8 @@ class FramewiseOutputLayer(OutputLayer):
       else:
         return T.sum(
           T.mean(T.sqr(self.y_m[self.i] - self.y_data_flat.reshape(self.y_m.shape)[self.i]), axis=1)), known_grads
+    elif self.loss == 'sse_sigmoid':
+      return 1.0 / 2.0 * T.nnet.binary_crossentropy(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.0 - 1.e-5), self.y_data_flat[self.i]).mean(), known_grads
     elif self.loss == "generic_ce":
       # Should be generic for any activation function.
       # (Except when the labels are not independent, such as for softmax.)

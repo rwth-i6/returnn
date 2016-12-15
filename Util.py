@@ -873,6 +873,19 @@ class NumbersDict:
       return cls.bin_op(items[0], items[1], op=max, zero=None)
     return cls.max([items[0], cls.max(items[1:])])
 
+  @classmethod
+  def min(cls, items):
+    """
+    Element-wise minimum for item in items.
+    """
+    if not items:
+      return None
+    if len(items) == 1:
+      return items[0]
+    if len(items) == 2:
+      return cls.bin_op(items[0], items[1], op=min, zero=None)
+    return cls.min([items[0], cls.min(items[1:])])
+
   @staticmethod
   def __max_error():
     # Will replace self.max for each instance. To be sure that we don't confuse it with self.max_value.

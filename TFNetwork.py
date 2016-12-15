@@ -96,9 +96,11 @@ class TFNetwork(object):
     self.eval_flag = eval_flag
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
-    self.loss = None
-    self.constraints = None
-    self.objective = None
+    self.loss_by_layer = {}  # type: dict[str,tf.Tensor]
+    self.error_by_layer = {}  # type: dict[str,tf.Tensor]
+    self.total_loss = None  # type: tf.Tensor
+    self.total_constraints = None  # type: tf.Tensor
+    self.total_objective = None  # type: tf.Tensor
 
   def construct_from(self, list_or_dict):
     """
@@ -171,22 +173,38 @@ class TFNetwork(object):
 
   def construct_objective(self):
     with tf.name_scope("objective"):
-      self.loss = 0
-      self.constraints = 0
+      self.total_loss = 0
+      self.total_constraints = 0
+      self.loss_by_layer.clear()
+      self.error_by_layer.clear()
       for name, layer in sorted(self.layers.items()):
         assert isinstance(layer, LayerBase)
         loss = layer.get_loss_value()
+        error = layer.get_error_value()
         constraints = layer.get_constraints_value()
         if loss is not None:
-          self.loss += loss
+          self.loss_by_layer[name] = loss
+          self.total_loss += loss
+        if error is not None:
+          self.error_by_layer[name] = error
         if constraints is not None:
-          self.constraints += constraints
-      self.objective = self.loss + self.constraints
+          self.total_constraints += constraints
+      self.total_objective = self.total_loss + self.total_constraints
+
+  def get_all_losses(self):
+    if self.total_objective is None:
+      self.construct_objective()
+    return self.loss_by_layer
+
+  def get_all_errors(self):
+    if self.total_objective is None:
+      self.construct_objective()
+    return self.error_by_layer
 
   def get_objective(self):
-    if self.objective is None:
+    if self.total_objective is None:
       self.construct_objective()
-    return self.objective
+    return self.total_objective
 
   def get_params(self):
     """
@@ -201,7 +219,11 @@ class TFNetwork(object):
     return l
 
   def get_trainable_params(self):
+    # TODO...
     return self.get_params()  # at the moment just the same
+
+  def declare_train_params(self, hidden_layer_selection=None, with_output=None):
+    pass  # TODO...
 
   def get_num_params(self):
     num_params = 0
@@ -212,7 +234,8 @@ class TFNetwork(object):
     return num_params
 
   def load_params_from_file(self, filename):
-    pass  # TODO...
+    # TODO...
+    raise NotImplementedError
 
   def print_network_info(self, name="Network"):
     print >> log.v2, "%s layer topology:" % name

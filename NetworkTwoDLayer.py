@@ -311,7 +311,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
 printed_cudnn_warning = False
 
 
-def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, poolsize):
+def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, filter_dilation, poolsize):
   global printed_cudnn_warning
   import theano.sandbox.cuda as theano_cuda
   have_cudnn = theano_cuda.cuda_enabled and theano.sandbox.cuda.dnn.dnn_available()
@@ -333,7 +333,8 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     #it's not really useful for productive use and also not much tested
     filter_shape = (n_maps, n_in, filter_height, filter_width)
     X_shuffled = X.dimshuffle(2, 3, 0, 1)
-    conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W, filter_shape=filter_shape,
+    conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W,
+                           filter_shape=filter_shape, filter_dilation=filter_dilation,
                            image_shape=(None, n_in, None, None)) if filter_height * filter_width > 0 else X
     crop_out = CropToBatchImageSizeInstance(conv_out.dimshuffle(2, 3, 0, 1), sizes).dimshuffle(2, 3, 0, 1)
     if poolsize == (1, 1):
@@ -414,11 +415,13 @@ class ConvPoolLayer2(ConvBaseLayer):
   layer_class = "conv2"
   recurrent = True
 
-  def __init__(self, pool_size, padding=False, **kwargs):
+  def __init__(self, pool_size, filter_dilation = None, padding=False, **kwargs):
     super(ConvPoolLayer2, self).__init__(**kwargs)
     self.pool_size = pool_size
     self.set_attr('padding', padding)
     sizes_raw = self.source.output_sizes
+    if not filter_dilation:
+      filter_dilation = [1,1]
 
     #handle size problems
     self.output_sizes = self.output_size_from_input_size(sizes_raw)
@@ -440,7 +443,7 @@ class ConvPoolLayer2(ConvBaseLayer):
 
     self.output_sizes = self.output_size_from_input_size(sizes)
     Z = conv_crop_pool_op(self.X, sizes, self.output_sizes, self.W, self.b, self.n_in, self.n_features, self.filter_height,
-                          self.filter_width, pool_size)
+                          self.filter_width, filter_dilation, pool_size)
     Y = self.activation(Z)
     if self.attrs['batch_norm']:
       Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes, force_sample=False)

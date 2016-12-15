@@ -527,8 +527,8 @@ class Dataset(object):
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():
           length = t_end - t_start
-          num_frames = min(length.max_value(), batch_size - batch.get_all_slices_num_frames())
-          assert num_frames > 0
+          num_frames = NumbersDict.min([length, batch_size - batch.get_all_slices_num_frames()])
+          assert num_frames.max_value() > 0
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
           if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
             yield batch
@@ -631,7 +631,7 @@ def get_dataset_class(name):
   from importlib import import_module
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
-  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset"]
+  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset", "StereoDataset"]
   for mod_name in mod_names:
     mod = import_module(mod_name)
     if name in vars(mod):
