@@ -184,7 +184,7 @@ def __create_states_from_label_for_asg(label, num_labels, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
                          allo_num_states=3, allo_context_len=1,
                          state_tying_file=None,
                          tdps=None  # ...
@@ -201,9 +201,32 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file,
   print("Word sequence:", word_seq)
   print("Silence: sil")
   print("Place holder: epsilon")
-  num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
-  allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-  __triphone_from_allo(allo_seq)
+  depth = int(depth)
+  if depth == 1:
+    print("Lemma acceptor chosen.")
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+  elif depth == 2:
+    print("Phoneme acceptor chosen.")
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_seq)
+  elif depth == 3:
+    print("Triphone acceptor chosen.")
+    tri_seq = __triphone_from_phon(word_seq)
+    print(tri_seq)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa()
+  elif depth == 4:
+    print("Allophone state acceptor chosen.")
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa()
+  elif depth == 5:
+    print("HMM acceptor chosen.")
+    num_states, edges = __hmm_acceptor_for_hmm_fsa()
+  elif depth == 6:
+    print("State tying chosen.")
+    num_states, edges = __state_tying_for_hmm_fsa()
+  else:
+    print("No acceptor chosen! Try again!")
+    num_states = 0
+    edges = []
 
   return num_states, edges
 
@@ -242,23 +265,33 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   return num_states, edges
 
 def __phoneme_acceptor_for_hmm_fsa(allo_seq):
-  pass
+  num_states = 0
+  edges = []
+  return num_states, edges
 
 
 def __triphone_acceptor_for_hmm_fsa():
-  pass
+  num_states = 0
+  edges = []
+  return num_states, edges
 
 
 def __allophone_state_acceptor_for_hmm_fsa():
-  pass
+  num_states = 0
+  edges = []
+  return num_states, edges
 
 
-def __hmm_loops_for_hmm_fsa():
-  pass
+def __hmm_acceptor_for_hmm_fsa():
+  num_states = 0
+  edges = []
+  return num_states, edges
 
 
 def __state_tying_for_hmm_fsa():
-  pass
+  num_states = 0
+  edges = []
+  return num_states, edges
 
 
 def __load_lexicon(lexFile):
@@ -304,7 +337,7 @@ def __find_allo_seq_in_lex(lemma, lexi):
   return allo_seq, allo_seq_score, phons
 
 
-def __triphone_from_allo(allo_seq):
+def __triphone_from_phon(allo_seq):
   '''
   :param allo_seq: sequence of allophones
   :return tri_seq: list of three phonemes
@@ -324,8 +357,6 @@ def __triphone_from_allo(allo_seq):
       tri_r = allo_seq[allo_index + 1]
     tri_c = allo_seq[allo_index]
     tri_seq.append((tri_l, tri_c, tri_r))
-
-  print(tri_seq)
 
   return tri_seq
 
@@ -381,6 +412,7 @@ def main():
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
   arg_parser.add_argument("--lexicon", required=True)
+  arg_parser.add_argument("--depth", required=True)
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
@@ -388,7 +420,7 @@ def main():
   elif (args.fsa.lower() == 'asg'):
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   elif (args.fsa.lower() == 'hmm'):
-    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon)
+    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon, depth=args.depth)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
