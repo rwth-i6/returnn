@@ -18,7 +18,7 @@ class LSTMCustomOpGrad(theano.sandbox.cuda.GpuOp):
     """
     :type recurrent_transform: RecurrentTransform.RecurrentTransformBase
     """
-    super(LSTMCustomOpGrad, self).__init__(self)
+    super(LSTMCustomOpGrad, self).__init__()
     self.inplace = inplace
     self.fun_name = fun_name
     self.recurrent_transform = recurrent_transform
@@ -327,7 +327,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     """
     :type recurrent_transform: RecurrentTransform.RecurrentTransformBase
     """
-    super(LSTMCustomOp, self).__init__(self)
+    super(LSTMCustomOp, self).__init__()
     self.inplace = inplace
     self.fun_name = fun_name
     self.recurrent_transform = recurrent_transform

@@ -3539,7 +3539,7 @@ class AlignmentLayer(ForwardLayer):
           self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
         self.index = index
       else:
-        self.output = self.z
+        self.output = self.z if output_z else x_in
         self.p_y_given_x = p_in
         self.index = self.sources[0].index
 
@@ -3550,10 +3550,7 @@ class AlignmentLayer(ForwardLayer):
       idx = (rindex.flatten() > 0).nonzero()
       if train_skips:
         t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[ratt.flatten()]
-        q_out = T.concatenate([T.zeros_like(ratt[:1]),ratt[1:] - ratt[:-1]],axis=0).flatten() #/ numpy.int32(3) #+ numpy.int32(1)
-
-        #e_out = T.dot(T.nnet.softmax(t_out), T.arange(t_out.shape[1], dtype='float32')) #.dimshuffle('x', 0).repeat(t_out.shape[0],axis=0) * t_out
-        #nll = ((e_out - q_out)/T.constant(len(tdps), 'float32'))**2
+        q_out = T.concatenate([T.zeros_like(ratt[:1]),ratt[1:] - ratt[:-1]],axis=0).flatten()
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(t_out[idx], axis=1), q_out[idx]))
