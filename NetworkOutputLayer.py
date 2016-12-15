@@ -354,8 +354,8 @@ class FramewiseOutputLayer(OutputLayer):
       elif self.loss == "sse":
         netOutput = self.p_y_given_x_flat
         groundTruth = self.y_data_flat
-        sseLoss = T.sum(
-          T.mean(
+        sseLoss = T.mean(
+          T.sum(
             T.sqr(netOutput - groundTruth),
             axis=1
           )
