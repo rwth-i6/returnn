@@ -210,13 +210,11 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
     num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_seq)
   elif depth == 3:
     print("Triphone acceptor chosen.")
-    tri_seq = __triphone_from_phon(word_seq)
-    print(tri_seq)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa()
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(word_seq)
   elif depth == 4:
     print("Allophone state acceptor chosen.")
     allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa()
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq)
   elif depth == 5:
     print("HMM acceptor chosen.")
     num_states, edges = __hmm_acceptor_for_hmm_fsa()
@@ -264,19 +262,45 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
 
   return num_states, edges
 
-def __phoneme_acceptor_for_hmm_fsa(allo_seq):
+def __phoneme_acceptor_for_hmm_fsa(word_seq):
   num_states = 0
   edges = []
   return num_states, edges
 
 
-def __triphone_acceptor_for_hmm_fsa():
-  num_states = 0
+def __triphone_acceptor_for_hmm_fsa(word_seq):
+  tri_seq = __triphone_from_phon(word_seq)
+  for tri in tri_seq:
+    print(tri)
+  num_states = len(tri_seq)
   edges = []
+  num_states, edges = __create_states_from_tri_seq(tri_seq, num_states, edges)
   return num_states, edges
 
 
-def __allophone_state_acceptor_for_hmm_fsa():
+def __create_states_from_tri_seq(tri_seq, num_states, edges):
+  """
+    :param list of tuples tri_seq: list of tuples containing triphones
+    :param int num_states: number of states
+    :param list edges: list of edges
+    :returns (num_states, edges)
+    where:
+      num_states: int, number of states.
+        per convention, state 0 is start state, state (num_states - 1) is single final state
+      edges: list[(from,to,label_idx,weight)]
+        from and to are state_idx >= 0 and < num_states,
+        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+        weight is a float, in -log space
+    """
+
+  # go through the list and create the edge for each triphone
+  for tri_index in range(0, len(tri_seq)):
+    edges.append((str(tri_index), str(tri_index + 1), tri_seq[tri_index], 1.))
+
+  return num_states, edges
+
+
+def __allophone_state_acceptor_for_hmm_fsa(allo_seq):
   num_states = 0
   edges = []
   return num_states, edges
@@ -337,25 +361,25 @@ def __find_allo_seq_in_lex(lemma, lexi):
   return allo_seq, allo_seq_score, phons
 
 
-def __triphone_from_phon(allo_seq):
+def __triphone_from_phon(word_seq):
   '''
-  :param allo_seq: sequence of allophones
+  :param word_seq: sequence of allophones
   :return tri_seq: list of three phonemes
   uses the sequence of allophones and splits into a list of triphones.
   triphones are composed of the current phon and the left and right phons
   '''
   tri_seq = []
 
-  for allo_index in range(0, len(allo_seq)):
+  for allo_index in range(0, len(word_seq)):
     if allo_index <= 0:
       tri_l = ''
     else:
-      tri_l = allo_seq[allo_index - 1]
-    if allo_index >= len(allo_seq) - 1:
+      tri_l = word_seq[allo_index - 1]
+    if allo_index >= len(word_seq) - 1:
       tri_r = ''
     else:
-      tri_r = allo_seq[allo_index + 1]
-    tri_c = allo_seq[allo_index]
+      tri_r = word_seq[allo_index + 1]
+    tri_c = word_seq[allo_index]
     tri_seq.append((tri_l, tri_c, tri_r))
 
   return tri_seq
