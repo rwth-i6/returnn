@@ -155,16 +155,15 @@ def asg_fsa_for_label_seq(num_labels, label_seq):
   num_states = 0
   edges = []
 
-  for m in range(0, len(label_seq)):
-    num_states, edges = __create_states_from_label_for_asg(m, num_labels, edges)
-    print("label:", label_seq[m], "=", m)
+  for label_index in range(0, len(label_seq)):
+    num_states, edges = __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges)
 
   return num_states, edges
 
 
-def __create_states_from_label_for_asg(label, num_labels, edges):
+def __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges):
   """
-  :param int label: label number
+  :param int label_index: label number
   :param int num_labels: number of labels
   :param list edges: list of edges
   :returns (num_states, edges)
@@ -176,10 +175,10 @@ def __create_states_from_label_for_asg(label, num_labels, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  i = label
-  edges.append((str(i), str(i + 1), label, 1.))
-  edges.append((str(i + 1), str(i + 1), label, 1.))
-  num_states = num_labels
+  i = label_index
+  edges.append((str(i), str(i + 1), label_seq[label_index], 1.))
+  edges.append((str(i + 1), str(i + 1), label_seq[label_index], 1.))
+  num_states = len(label_seq)
 
   return num_states, edges
 
