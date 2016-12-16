@@ -269,11 +269,10 @@ def __phoneme_acceptor_for_hmm_fsa(word_seq):
 
 def __triphone_acceptor_for_hmm_fsa(word_seq):
   tri_seq = __triphone_from_phon(word_seq)
-  for tri in tri_seq:
-    print(tri)
   num_states = len(tri_seq)
   edges = []
   num_states, edges = __create_states_from_tri_seq(tri_seq, num_states, edges)
+  num_states, edges = __adds_loop_edges_for_tri_seq(num_states, edges)
   return num_states, edges
 
 
@@ -295,6 +294,29 @@ def __create_states_from_tri_seq(tri_seq, num_states, edges):
   # go through the list and create the edge for each triphone
   for tri_index in range(0, len(tri_seq)):
     edges.append((str(tri_index), str(tri_index + 1), tri_seq[tri_index], 1.))
+
+  return num_states, edges
+
+
+def __adds_loop_edges_for_tri_seq(num_states, edges):
+  """
+    :param int num_states: number of states
+    :param list edges: list of edges
+    :returns (num_states, edges)
+    where:
+      num_states: int, number of states.
+        per convention, state 0 is start state, state (num_states - 1) is single final state
+      edges: list[(from,to,label_idx,weight)]
+        from and to are state_idx >= 0 and < num_states,
+        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+        weight is a float, in -log space
+    """
+
+  # adds loops to fsa
+  for state in range(1, num_states):
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if
+                      (edge[1] == str(state))]
+    edges.append((str(state), str(state), edges[edges_included[0]][2], 1.))
 
   return num_states, edges
 
