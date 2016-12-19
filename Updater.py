@@ -4,7 +4,6 @@ import numpy
 import os
 from Log import log
 from math import sqrt
-from theano.compat.python2x import OrderedDict
 import theano.tensor.shared_randomstreams
 import theano.tensor as T
 import theano.ifelse
