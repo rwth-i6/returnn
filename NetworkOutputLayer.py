@@ -674,6 +674,30 @@ class SequenceOutputLayer(OutputLayer):
             # TODO...
           edges, weights, start_end_states = fsa_op(self.y, self.target_index)
           state_buffer = T.zeros()  # TODO...
+        elif self.fast_bw_opts.get("fsa_source") == "ctc_from_chars":
+          from Fsa import ctc_fsa_for_label_seq
+          num_lables = self.network.n_out[self.attrs["target"]][0]
+          assert self.attrs["n_out"] == num_lables + 1  # one added for blank
+          from Util import uniq
+          def get_seq_labels(seq_name):
+            pass  # TODO... maybe from file? or corpus? or sprint?
+          from theano.compile.ops import \
+            as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
+          @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
+                 otypes=[theano.tensor.fmatrix])  # TODO...
+          def fsa_op(tags):
+            """
+            :param numpy.ndarray tags: seq names (frame,batch) ... TODO...
+            :return: (edges, weights, start_end_states)  # TODO of shape...?
+            :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+            """
+            assert tags.ndim == 2
+            for batch in range(tags.shape[1]):
+              labels = get_seq_labels(seq_name=tags[:, batch])  # TODO...?
+              num_states, edges = ctc_fsa_for_label_seq(num_labels=num_lables, label_seq=labels)
+              # TODO...
+          edges, weights, start_end_states = fsa_op(self.y, self.target_index)
+          state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
         fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
@@ -811,6 +835,9 @@ class SequenceOutputLayer(OutputLayer):
         from theano.tensor.extra_ops import cpu_contiguous
         return T.sum(
           BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+      elif self.fast_bw_opts.get("fsa_source") == "ctc_from_chars":
+        # TODO... maybe share code with cost(). we need the same target label seq anyway.
+        pass
       else:
         return super(SequenceOutputLayer, self).errors()
     else:
