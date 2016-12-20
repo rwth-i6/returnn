@@ -368,7 +368,7 @@ class CachedDataset(Dataset):
     while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
       if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
-        s = max(ai[0], self.num_seqs_cached_at_start)
+        s = ai[0]
         deleted += sum([self._seq_lengths[self._seq_index[i]][0]
                         for i in self.remove_alloc_interval(s, ai[1])])
       i += 1
