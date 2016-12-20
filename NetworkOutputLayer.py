@@ -609,7 +609,6 @@ class SequenceOutputLayer(OutputLayer):
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
-      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.fast_bw_opts.get("bw_from"):
         out2 = self.fast_bw_opts.get("bw_from")
         bw = self.network.output[out2].baumwelch_alignment
@@ -649,6 +648,7 @@ class SequenceOutputLayer(OutputLayer):
           am2 = get_am_scores(self.network.output[out2])
           am_scores = numpy.float32(factor) * am2 + numpy.float32(1.0 - factor) * am_scores
         if self.fast_bw_opts.get("fsa_source", "sprint") == "sprint":
+          assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
           edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
         elif self.fast_bw_opts.get("fsa_source") == "ctc_from_uniq_y":
           from Fsa import ctc_fsa_for_label_seq
