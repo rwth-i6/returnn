@@ -650,7 +650,7 @@ class SequenceOutputLayer(OutputLayer):
           am_scores = numpy.float32(factor) * am2 + numpy.float32(1.0 - factor) * am_scores
         if self.fast_bw_opts.get("fsa_source", "sprint") == "sprint":
           edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-        elif self.fast_bw_opts.get("fsa_source") == "ctc_from_y":
+        elif self.fast_bw_opts.get("fsa_source") == "ctc_from_uniq_y":
           from Fsa import ctc_fsa_for_label_seq
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
@@ -673,7 +673,7 @@ class SequenceOutputLayer(OutputLayer):
               num_states, edges = ctc_fsa_for_label_seq(num_labels=num_lables, label_seq=sub_labels)
             # TODO...
           edges, weights, start_end_states = fsa_op(self.y, self.target_index)
-          state_buffer = None  # TODO...
+          state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
         fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
