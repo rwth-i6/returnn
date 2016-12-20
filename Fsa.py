@@ -5,7 +5,7 @@ from __future__ import print_function
 
 def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
-  :param int num_labels: number of labels
+  :param int num_labels: number of labels without blank
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
   :returns (num_states, edges)
   where:
