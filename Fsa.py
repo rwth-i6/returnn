@@ -56,7 +56,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
     # if to remove skips if two equal labels follow each other
     if label_seq[label_index] != label_seq[label_index - 1]:
       n = 2 * label_index
-      edges.append((str(n), str(n+2), label_seq[label_index], 1.))
+      edges.append((n, n+2, label_seq[label_index], 1.))
 
   return num_states, edges
 
@@ -81,8 +81,8 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   # adds blank labels to fsa
   for label_index in range(0, len(label_seq)):
     label_blank = 2 * label_index + 1
-    edges.append((str(label_blank-1), str(label_blank), 'blank', 1.))
-    edges.append((str(label_blank), str(label_blank+1), label_seq[label_index], 1.))
+    edges.append((label_blank-1, label_blank, 'blank', 1.))
+    edges.append((label_blank, label_blank+1, label_seq[label_index], 1.))
 
   return num_states, edges
 
@@ -106,8 +106,8 @@ def __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges):
 
   # adds loops to fsa
   for state in range(1, num_states):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == str(state))]
-    edges.append((str(state), str(state), edges[edges_included[0]][2], 1.))
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
+    edges.append((state, state, edges[edges_included[0]][2], 1.))
 
   return num_states, edges
 
@@ -130,9 +130,9 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   i = num_states
-  edges.append((str(i - 1), str(i), 'blank', 1.))
-  edges.append((str(i - 2), str(i), label_seq[-1], 1.))
-  edges.append((str(i - 3), str(i), label_seq[-1], 1.))
+  edges.append((i-1, i, 'blank', 1.))
+  edges.append((i-2, i, label_seq[-1], 1.))
+  edges.append((i-3, i, label_seq[-1], 1.))
   num_states += 1
 
   return num_states, edges
@@ -176,8 +176,8 @@ def __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges
       weight is a float, in -log space
   """
   i = label_index
-  edges.append((str(i), str(i + 1), label_seq[label_index], 1.))
-  edges.append((str(i + 1), str(i + 1), label_seq[label_index], 1.))
+  edges.append((i, i+1, label_seq[label_index], 1.))
+  edges.append((i+1, i+1, label_seq[label_index], 1.))
   num_states = len(label_seq)
 
   return num_states, edges
@@ -246,14 +246,14 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
     num_states_start = 0
     num_states_end = num_states - 1
 
-  edges.append((str(num_states_start), str(num_states_start+1), sil, 1.))
-  edges.append((str(num_states_end-1), str(num_states_end), sil, 1.))
+  edges.append((num_states_start, num_states_start+1, sil, 1.))
+  edges.append((num_states_end-1, num_states_end, sil, 1.))
   if type(word_seq) is str:
     for i in range(num_states_start, num_states):
       for j in range(i, num_states):
-        edges_included = [m for m, n in enumerate(edges) if (n[0] == str(i) and n[1] == str(j) and n[2] == sil)]
+        edges_included = [m for m, n in enumerate(edges) if (n[0] == i and n[1] == j and n[2] == sil)]
         if len(edges_included) == 0 and not (i == j):
-          edges.append((str(i), str(j), word_seq, 1.))
+          edges.append((i, j, word_seq, 1.))
   else:
     for i in range(num_states_start, num_states_end):
       for char in word_seq:
@@ -293,7 +293,7 @@ def __create_states_from_tri_seq(tri_seq, num_states, edges):
 
   # go through the list and create the edge for each triphone
   for tri_index in range(0, len(tri_seq)):
-    edges.append((str(tri_index), str(tri_index + 1), tri_seq[tri_index], 1.))
+    edges.append((tri_index, tri_index+1, tri_seq[tri_index], 1.))
 
   return num_states, edges
 
@@ -315,8 +315,8 @@ def __adds_loop_edges_for_tri_seq(num_states, edges):
   # adds loops to fsa
   for state in range(1, num_states):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if
-                      (edge[1] == str(state))]
-    edges.append((str(state), str(state), edges[edges_included[0]][2], 1.))
+                      (edge[1] == state)]
+    edges.append((state, state, edges[edges_included[0]][2], 1.))
 
   return num_states, edges
 
@@ -441,7 +441,7 @@ def __add_nodes(graph, nodes):
 
 def __add_edges(graph, edges):
   for e in edges:
-    e = ((e[0], e[1]), {'label': str(e[2])})
+    e = ((str(e[0]), str(e[1])), {'label': e[2]})
     if isinstance(e[0], tuple):
       graph.edge(*e[0], **e[1])
     else:
