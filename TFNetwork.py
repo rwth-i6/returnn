@@ -100,6 +100,7 @@ class TFNetwork(object):
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
+    self.recurrent = False
 
   def construct_from(self, list_or_dict):
     """
@@ -163,12 +164,21 @@ class TFNetwork(object):
         for src_name in src_names
         if not src_name == "none"]
       layer = layer_class(**layer_desc)
-      self.layers[name] = layer
+      self._add_layer(name, layer)
       return layer
 
     for name, layer_desc in sorted(net_dict.items()):
       if name == "output" or "target" in layer_desc or layer_desc.get("class") == "softmax":
         _construct_layer(name)
+
+  def _add_layer(self, name, layer):
+    """
+    :param str name:
+    :param LayerBase layer:
+    """
+    self.layers[name] = layer
+    if layer.recurrent:
+      self.recurrent = True
 
   def construct_objective(self):
     with tf.name_scope("objective"):

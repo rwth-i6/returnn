@@ -140,7 +140,36 @@ def check_dim_equal(x, x_axis, y, y_axis):
         tf.shape(x)[x_axis], tf.shape(y)[y_axis],
         data=["x.shape[%i] not y.shape[%i]" % (x_axis, y_axis),
               tf.shape(x), tf.shape(y)])]):
-      return tf.identity(x, "identity_with_dim_check")
+      return tf.identity(x, "identity_with_dim_equal_check")
+
+
+def check_shape_equal(x, y):
+  """
+  :param tf.Tensor x:
+  :param tf.Tensor y:
+  :return: x with check added that shape(x) == shape(y)
+  :rtype: tf.Tensor
+  """
+  x_dyn_shape = x.get_shape()
+  y_dyn_shape = y.get_shape()
+  if x_dyn_shape.ndims is not None and y_dyn_shape.ndims is not None:
+    assert x_dyn_shape.ndims == y_dyn_shape.ndims
+    have_unknown = False
+    for axis in range(x_dyn_shape.ndims):
+      if x_dyn_shape.dims[axis] is not None and y_dyn_shape.dims[axis] is not None:
+        assert x_dyn_shape.dims[axis] == y_dyn_shape.dims[axis]
+      else:
+        have_unknown = True
+    if not have_unknown:
+      return x  # all dims are checked, we can return
+  # We need to fall-back to runtime check.
+  with reuse_name_scope("checks"):
+    with tf.control_dependencies(
+      [tf.assert_equal(
+        tf.shape(x), tf.shape(y),
+        data=["x.shape not y.shape",
+              tf.shape(x), tf.shape(y)])]):
+      return tf.identity(x, "identity_with_shape_equal_check")
 
 
 def get_shape_dim(x, axis):
