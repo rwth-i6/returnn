@@ -14,7 +14,7 @@ def convert_label_seq_to_indices(num_labels, label_seq):
 
   for label in label_seq:
     label_index = ord(label)-97
-    assert label_index <= num_labels, "Index of label exceeds number of labels"
+    assert label_index < num_labels, "Index of label exceeds number of labels"
     label_indices.append(label_index)
 
   return label_indices
@@ -173,19 +173,19 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   num_states = 0
   edges = []
 
-  label_indices = convert_label_seq_to_indices(label_seq)
-  reps = __check_for_repetitions(label_indices)
+  label_indices = convert_label_seq_to_indices(num_labels, label_seq)
+  reps = __check_for_repetitions(label_indices, repetitions)
 
   for label_index in range(0, len(label_seq)):
-    print(label_index)
+    #print(label_index)
     edges_included = [(m, n) for m, n in enumerate(edges) if (n[2] == label_index)]
-    print(edges_included)
+    #print(edges_included)
     num_states, edges = __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges)
 
   return num_states, edges
 
 
-def __check_for_repetitions(label_indices):
+def __check_for_repetitions(label_indices, repetitions):
   """
   checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
   :param list[int] label_indices: sequence of label indices
@@ -193,11 +193,22 @@ def __check_for_repetitions(label_indices):
   """
 
   reps = []
+  rep_count = 0
   index_old = None
 
   for index in label_indices:
     index_t = index
-    reps.append(1 if index_t == index_old else 0)
+    if index_t == index_old and rep_count < repetitions:
+      rep_count += 1
+    elif index_t != index_old and rep_count == 0:
+      reps.append(index)
+    elif index_t != index_old and rep_count != 0:
+      reps.append('rep'+str(rep_count))
+      rep_count = 0
+      reps.append(index)
+    elif index_t == index_old and rep_count != 0:
+      reps.append('rep'+str(rep_count))
+      rep_count = 1
     index_old = index
 
   return reps
@@ -503,17 +514,17 @@ def main():
   arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
 
-  label_indices = convert_label_seq_to_indices(num_labels=args.num_labels, label_seq=args.label_seq)
+  label_indices = convert_label_seq_to_indices(num_labels=int(args.num_labels), label_seq=args.label_seq)
 
   if (args.fsa.lower() == 'ctc'):
-    num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels), label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
-    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq, repetitions=args.asg_repetition)
+    num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels), label_seq=args.label_seq, repetitions=int(args.asg_repetition))
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.depth, "Specify the depth in argument options: --depth [int]"
-    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon, depth=args.depth)
+    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon, depth=int(args.depth))
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
