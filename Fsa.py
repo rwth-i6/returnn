@@ -54,7 +54,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
 
 def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges):
   """
-  :param str label_seq: sequence of labels (normally some kind of word)
+  :param list[int] label_seq: sequence of labels (normally some kind of word)
   :param int num_states: number of states
   :param int num_labels: number of labels
   :param list edges: list of edges
@@ -159,6 +159,7 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
+  :param int repetitions: number of label repetitions
   :returns (num_states, edges)
   where:
     num_states: int, number of states.
