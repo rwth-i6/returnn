@@ -3,6 +3,23 @@
 from __future__ import print_function
 
 
+def convert_label_seq_to_indices(num_labels, label_seq):
+  """
+  takes label sequence of chars and converts to indices (a->0, b->1, ...)
+  :param int num_labels: total number of labels
+  :param str label_seq: sequence of labels
+  :return list[int] label_indices: labels converted into indices
+  """
+  label_indices = []
+
+  for label in label_seq:
+    label_index = ord(label)-97
+    assert label_index <= num_labels, "Index of label exceeds number of labels"
+    label_indices.append(label_index)
+
+  return label_indices
+
+
 def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels without blank
@@ -460,6 +477,8 @@ def main():
   arg_parser.add_argument("--depth")
   arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
+
+  label_indices = convert_label_seq_to_indices(num_labels=args.num_labels, label_seq=args.label_seq)
 
   if (args.fsa.lower() == 'ctc'):
     num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
