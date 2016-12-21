@@ -155,10 +155,56 @@ class Runner(object):
 
 
 class Engine(object):
-  def __init__(self):
-    # TODO...
-    self.tf_session = tf.get_default_session()  # type: tf.Session
+  def __init__(self, config=None, tf_session=None):
+    """
+    :param Config.Config|None config:
+    :param tf.Session|None tf_session:
+    """
+    if config is None:
+      from Config import get_global_config
+      config = get_global_config()
+    self.config = config
+    self.devices_config = self._get_devices_config()
+    if tf_session is None:
+      tf_session = tf.get_default_session()
+      if tf_session:
+        print("Note: There is a default TF session which we will use.")
+      else:
+        self._check_devices()
+        tf_session = self._make_tf_session(config.typed_value("tf_session_opts", {}))
+    assert isinstance(tf_session, (tf.Session, tf.InteractiveSession))
+    self.tf_session = tf_session  # type: tf.Session
     self.dataset_batches = {}
+
+  def _get_devices_config(self):
+    """
+    :rtype: list[dict[str]]
+    """
+    from Device import getDevicesInitArgs
+    return getDevicesInitArgs(self.config)
+
+  def is_requesting_for_gpu(self):
+    return any([d["device"].startswith("gpu") for d in self.devices_config])
+
+  def _check_devices(self):
+    from TFUtil import print_available_devices, is_gpu_available
+    print_available_devices()
+    assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
+    if self.is_requesting_for_gpu():
+      assert is_gpu_available(), "no GPU available"
+    else:
+      if is_gpu_available():
+        print("Note: There is a GPU available but you have set device=cpu.")
+
+  def _make_tf_session(self, opts):
+    assert isinstance(opts, dict)
+    opts = opts.copy()
+    opts.setdefault("log_device_placement", False)
+    opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    print("Setup tf.Session with options %r ..." % opts)
+    config = tf.ConfigProto(**opts)
+    # config.gpu_options.allow_growth=True
+    return tf.InteractiveSession(config=config)
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
@@ -391,7 +437,6 @@ class Engine(object):
     if self.is_pretrain_epoch():
       self.print_network_info()
 
-    training_devices = self.devices
     if not 'train' in self.dataset_batches:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,

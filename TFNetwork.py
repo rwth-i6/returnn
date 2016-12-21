@@ -76,13 +76,12 @@ class ExternData(object):
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):
     """
-    :param Config.Config config:
+    :param Config.Config config: only needed to init extern_data if not specified explicitely
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool train_flag: True if we want to use this model in training
     :param bool eval_flag: True if we want to use this model in evaluation
     """
-    self.config = config
     if extern_data is None:
       extern_data = ExternData()
       if not config:
