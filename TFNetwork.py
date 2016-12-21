@@ -76,6 +76,25 @@ class ExternData(object):
     return ", ".join(["%s: %s" % (name, self.data[name].get_description(with_name=False))
                       for name in self.data.keys()])
 
+  def get_queue_args(self, with_batch_dim, fixed_batch_dim=None):
+    """
+    :param bool with_batch_dim:
+    :param int|None fixed_batch_dim:
+    :return: kwargs for tf.Queue.__init__
+    :rtype: dict[str,list]
+    """
+    names = list(sorted(self.data.keys()))
+    shapes = [self.data[name].shape for name in names]
+    if with_batch_dim:
+      shapes = [(fixed_batch_dim,) + shape for shape in shapes]
+    dtypes = [self.data[name].dtype for name in names]
+    # And add seq_lens for each.
+    for name in list(names):
+      names.append("%s_seq_lens" % name)
+      shapes.append((fixed_batch_dim,) if with_batch_dim else ())
+      dtypes.append("int64")
+    return {"names": names, "shapes": shapes, "dtypes": dtypes}
+
 
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):

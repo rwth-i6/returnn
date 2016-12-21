@@ -548,7 +548,7 @@ class Dataset(object):
     """
     return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, seq_drop, max_seq_length), shuffle_batches)
 
-  def shapes_for_batches(self, batches, data_keys):
+  def shapes_for_batches(self, batches, data_keys, batch_dim_first=False):
     """
     :type batches: list[EngineBatch.Batch]
     :rtype: dict[str,list[int]] | None
@@ -572,6 +572,10 @@ class Dataset(object):
     d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
     for k in d:
       d[k] += self.get_data_shape(k)
+
+    if batch_dim_first:
+      # Just flip the first two dimensions.
+      d = {k: [shape[1], shape[0]] + shape[2:] for (k, shape) in d.items()}
     return d
 
   @classmethod

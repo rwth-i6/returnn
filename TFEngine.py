@@ -12,8 +12,10 @@ from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 from Network import LayerNetwork
-from TFNetwork import TFNetwork
+from TFNetwork import TFNetwork, ExternData
 from Util import hms
+from threading import Thread
+from Dataset import BatchSetGenerator
 
 
 class DataProvider(object):
@@ -23,25 +25,81 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, capacity, tf_session, placeholders):
+  def __init__(self, tf_session, dataset, batches, extern_data, capacity=10):
     """
-    :param int capacity:
     :param tf.Session tf_session:
+    :param Dataset.Dataset dataset:
+    :param BatchSetGenerator batches:
+    :param ExternData extern_data:
+    :param int capacity:
     """
-    # TODO...
     self.tf_session = tf_session
-    self.queue = tf.FIFOQueue(capacity=capacity, )
+    self.coord = tf.train.Coordinator()
+    self.dataset = dataset
+    self.batches = batches
+    self.extern_data = extern_data
+    self.data_keys = sorted(extern_data.data.keys())
+    self.queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
+    self.thread = None  # type: Thread
+    self.reached_end = False
 
   def start_thread(self):
-    import threading
-    thread = threading.Thread(target=self.thread_main, name="DataProvider thread")
+    thread = Thread(target=self.thread_main, name="DataProvider thread")
     thread.daemon = True  # Thread will close when parent quits.
     thread.start()
+    self.thread = thread
+
+  def stop_thread(self):
+    if not self.thread:
+      return
+    self.coord.request_stop()
+    self.thread.join()
+
+  def _get_next_batch(self):
+    """
+    :param Dataset.Batch batch:
+    :returns (batch-data-value-dict, batch-seq-lens)
+    :rtype: (dict[str,numpy.ndarray], dict[str,numpy.ndarray])
+    """
+    # See EngineUtil.assign_dev_data() for reference.
+    batch, = self.batches.peek_next_n(1)
+    shapes = self.dataset.shapes_for_batches([batch], data_keys=self.data_keys, batch_dim_first=True)
+    data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.get_data(k).dtype)
+            for k in self.data_keys}
+    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype="int64")
+                for k in self.data_keys}
+    self.dataset.load_seqs(batch.start_seq, batch.end_seq)
+    #device.num_frames += batch.get_total_num_frames()
+    with self.dataset.lock:
+      for seq in batch.seqs:
+        o = seq.batch_frame_offset
+        q = seq.batch_slice
+        l = seq.frame_length
+        # input-data, input-index will also be set in this loop. That is data-key "data".
+        for k in self.data_keys:
+          if l[k] == 0: continue
+          v = self.dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
+          ls = v.shape[0]
+          if ls != l[k]:
+            raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (
+              ls, l[k], seq.seq_start_frame, seq.seq_end_frame, seq.seq_idx, self.dataset.get_seq_length(seq.seq_idx)))
+          data[k][q, o[k]:o[k] + ls] = v
+          seq_lens[k][q] = max(seq_lens[q], o[k] + ls)
+    return data, seq_lens
 
   def thread_main(self):
     try:
       import better_exchook
       better_exchook.install()
+
+      while self.batches.has_more() and not self.coord.should_stop():
+        data, seq_lens = self._get_next_batch()
+        enqueue_args = data.copy()
+        for k in data.keys():
+          enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+        self.tf_session.run(self.queue.enqueue(enqueue_args))
+
+      self.reached_end = not self.batches.has_more()
 
     except Exception as exc:
       print("Exception in DataProvider thread: %r" % exc)
@@ -51,45 +109,61 @@ class DataProvider(object):
     """
     :return: when we go through an epoch and finished reading, this will return True
     """
-    return self.queue  # TODO...
+    if not self.reached_end:
+      return False
+    return self.queue.size().eval(self.tf_session) == 0
 
   def get_feed_dict(self):
-    return {}  # TODO...
-
-  def get_fetches_dict(self):
-    # TODO...
-    return {
-      "summary": None,
-      "loss": None,
-      "optim": None,
-      "queue_size": self.queue.size()
-    }
+    """
+    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
+    :rtype: dict[tf.Tensor,tf.Tensor]
+    """
+    output = self.queue.dequeue()
+    assert isinstance(output, dict)
+    return {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
 
 
 class Runner(object):
-  def __init__(self, engine, data_provider):
+  def __init__(self, engine, dataset, batches):
     """
     :param Engine engine:
-    :param DataProvider data_provider:
+    :param Dataset.Dataset dataset:
+    :param BatchSetGenerator batches:
     """
     self.engine = engine
-    self.data_provider = data_provider
-    self.store_metadata_mod_step = False
+    self.data_provider = DataProvider(
+      tf_session=engine.tf_session, extern_data=engine.network.extern_data,
+      dataset=dataset, batches=batches)
+    self.store_metadata_mod_step = False  # 500
+
+  def get_feed_dict(self):
+    return self.data_provider.get_feed_dict()
+
+  def get_fetches_dict(self):
+    d = {
+      "summary": tf.merge_all_summaries(),
+      "queue_size": self.data_provider.queue.size()
+    }
+    for layer_name, loss in self.engine.network.loss_by_layer.items():
+      d["loss_%s" % layer_name] = loss
+    for layer_name, error in self.engine.network.error_by_layer.items():
+      d["error_%s" % layer_name] = error
+    if self.engine.updater:
+      d["loss"] = self.engine.updater.loss
+      d["optim_op"] = self.engine.updater.get_optim_op()
+    return d
 
   def run(self):
     sess = self.engine.tf_session
-    logdir = self.logdir
+    logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     writer = tf.train.SummaryWriter(logdir)
-    writer.add_graph(tf.get_default_graph())
+    writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
 
-    # Create coordinator.
-    coord = tf.train.Coordinator()
-
-    tf.set_random_seed(42)
+    coord = self.data_provider.coord
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    #reader.start_threads(sess)
+    self.data_provider.start_thread()
 
     step = None
     try:
@@ -97,11 +171,11 @@ class Runner(object):
       step = 0
       while True:
         start_time = time.time()
-        fetches_dict = self.data_provider.get_fetches_dict()
+        fetches_dict = self.get_fetches_dict()
         feed_dict = self.data_provider.get_feed_dict()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
-          print('Storing metadata')
+          print('Storing metadata', file=log.v4)
           run_options = tf.RunOptions(
             trace_level=tf.RunOptions.FULL_TRACE)
           fetches_results = sess.run(
@@ -121,8 +195,12 @@ class Runner(object):
           writer.add_summary(fetches_results["summary"], step)
 
         duration = time.time() - start_time
-        print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
-              .format(step, fetches_results["loss"], duration))
+        formated_losses = " - ".join(
+          ["{} = {:.3f}".format(k, v)
+           for (k, v) in fetches_results.items()
+           if k.startswith("loss") or k.startswith("error")])
+        print('step {:d} - {}, ({:.3f} sec/step)'
+              .format(step, formated_losses or "no loss", duration), file=log.v4)
 
         step += 1
 
@@ -172,7 +250,7 @@ class Updater(object):
     Call this if sth is changed which the optim_op depends on.
     See self.create_optim_op().
     """
-    self.optim_op = None
+    self.optim_op = None  # type: tf.Operation
 
   def set_loss(self, loss):
     """
@@ -234,6 +312,9 @@ class Updater(object):
       aggregation_method=aggregation_method)
 
   def get_optim_op(self):
+    """
+    :rtype: tf.Operation
+    """
     if self.optim_op is None:
       self.create_optim_op()
     return self.optim_op
@@ -252,7 +333,7 @@ class Engine(object):
     self._check_devices()
     self.tf_session = None  # type: tf.Session
     self.updater = None  # type: Updater
-    self.dataset_batches = {}
+    self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
 
   def _get_devices_config(self):
     """
@@ -399,6 +480,7 @@ class Engine(object):
     if epoch is None:
       epoch = self.epoch
     self._reset_graph()
+    tf.set_random_seed(42)
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
@@ -517,18 +599,10 @@ class Engine(object):
     else:
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
-    start_batch = self.start_batch if self.epoch == self.start_epoch else 0
 
-
-    trainer = TrainTaskThread(self.network, training_devices, data=self.train_data, batches=train_batches,
-                              learning_rate=self.learning_rate, updater=self.updater,
-                              eval_batch_size=self.update_batch_size,
-                              start_batch=start_batch, share_batches=self.share_batches,
-                              exclude=self.exclude,
-                              seq_train_parallel=self.seq_train_parallel,
-                              report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch,
-                              epoch=self.epoch)
-    trainer.join()
+    self.tf_session.run(self.updater.learning_rate_var.assign(self.learning_rate))
+    runner = Runner(engine=self, dataset=self.train_data, batches=train_batches)
+    runner.run()
 
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
