@@ -85,7 +85,7 @@ class LayerBase(object):
   layer_class = None
   recurrent = False
 
-  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None):
+  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None, is_output_layer=None):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -95,6 +95,7 @@ class LayerBase(object):
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
     :param str|None loss: if set, via get_loss
     :param float|None L2: for constraints
+    :param bool|None is_output_layer:
     """
     self.name = name
     self.network = network
@@ -120,10 +121,25 @@ class LayerBase(object):
       if self.loss.recurrent:
         self.recurrent = True
     self.L2 = L2
+    self._is_output_layer = is_output_layer
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
       self.name, self.layer_class, self.output.get_description(with_name=False))
+
+  def is_output_layer(self):
+    """
+    Some code differs between an output layer and other layers.
+    It is a bit arbitrary what we define as output layer.
+    :rtype: bool
+    """
+    if self._is_output_layer is not None:
+      return self._is_output_layer
+    if self.target:
+      return True
+    if self.name == "output":
+      return True
+    return False
 
   def add_param(self, param):
     """
@@ -134,6 +150,25 @@ class LayerBase(object):
     assert param.name
     self.params[param.name] = param
     return param
+
+  def set_param_values_by_dict(self, values_dict, session):
+    """
+    :param dict[str,numpy.ndarray] values_dict:
+    :param tf.Session session:
+    """
+    for param_name, values in values_dict.items():
+      session.run(tf.assign(self.params[param_name], values))
+
+  def get_param_values_dict(self, session):
+    """
+    :param tf.Session session:
+    :return: dict name -> values
+    :rtype: dict[str,numpy.ndarray]
+    """
+    d = {}
+    for param_name, param in self.params.items():
+      d[param_name] = param.eval(session)
+    return d
 
   def _get_target_value(self):
     """

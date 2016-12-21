@@ -83,9 +83,6 @@ class Runner(object):
     writer.add_graph(tf.get_default_graph())
     run_metadata = tf.RunMetadata()
 
-    # Saver for storing checkpoints of the model.
-    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=100)
-
     # Create coordinator.
     coord = tf.train.Coordinator()
 
@@ -138,25 +135,17 @@ class Runner(object):
 
 
 class Engine(object):
-  def __init__(self, config=None, tf_session=None):
+  def __init__(self, config=None):
     """
     :param Config.Config|None config:
-    :param tf.Session|None tf_session:
     """
     if config is None:
       from Config import get_global_config
       config = get_global_config()
     self.config = config
     self.devices_config = self._get_devices_config()
-    if tf_session is None:
-      tf_session = tf.get_default_session()
-      if tf_session:
-        print("Note: There is a default TF session which we will use.", file=log.v2)
-      else:
-        self._check_devices()
-        tf_session = self._make_tf_session(config.typed_value("tf_session_opts", {}))
-    assert isinstance(tf_session, (tf.Session, tf.InteractiveSession))
-    self.tf_session = tf_session  # type: tf.Session
+    self._check_devices()
+    self.tf_session = None  # type: tf.Session
     self.dataset_batches = {}
 
   def _get_devices_config(self):
@@ -179,7 +168,10 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
-  def _make_tf_session(self, opts):
+  def _make_tf_session(self):
+    if self.tf_session:
+      self.tf_session.close()
+    opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
     opts = opts.copy()
     opts.setdefault("log_device_placement", False)
@@ -187,7 +179,12 @@ class Engine(object):
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
-    return tf.InteractiveSession(config=config)
+    self.tf_session = tf.Session(config=config)
+
+  def _reset_graph(self):
+    tf.reset_default_graph()
+    # The new session will by default use the newly created default graph.
+    self._make_tf_session()
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
@@ -234,23 +231,7 @@ class Engine(object):
     :param int epoch: save epoch idx
     """
     print("Save model from epoch %i under %s" % (epoch, filename), file=log.v4)
-    # We add some extra logic to try again for DiskQuota and other errors.
-    # This could save us multiple hours of computation.
-    try_again_wait_time = 10
-    while True:
-      try:
-        model = h5py.File(filename, "w")
-        self.network.save_hdf(model, epoch)
-        model.close()
-        break
-      except IOError as e:
-        import errno, time
-        if e.errno in [errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC]:
-          print("Exception while saving:", e, file=log.v3)
-          print("Trying again in %s secs." % try_again_wait_time, file=log.v3)
-          time.sleep(try_again_wait_time)
-          continue
-        raise
+    self.network.save_params_to_file(filename, epoch)
 
   def init_train_from_config(self, config, train_data, dev_data, eval_data):
     """
@@ -308,11 +289,15 @@ class Engine(object):
       print("loading weights from", model_epoch_filename, file=log.v2)
       self.network.load_params_from_file(model_epoch_filename)
 
+    # TODO check tf.trainable_variables() == self.get_params() ?
+
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
       epoch = self.epoch
+    self._reset_graph()
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)
+    network.initialize_params(self.tf_session)
     network.layers_desc = net_desc
     network.print_network_info()
     self.network = network
@@ -323,16 +308,13 @@ class Engine(object):
     from Util import dict_diff_str
     print("reinit because network description differs. Diff:",
           dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
-    old_network = self.network
+    old_network_params = self.network.get_param_values_dict(self.tf_session)
     self._init_network(net_desc)
-    if old_network:
-      # Otherwise it's initialized randomly which is fine.
-      # This copy will copy the old params over and leave the rest randomly initialized.
-      # This also works if the old network has just the same topology,
-      # e.g. if it is the initial model from self.init_network_from_config().
-
-      #self.pretrain.copy_params_from_old_network(new_network, old_network)  # TODO...
-      raise NotImplementedError
+    # Otherwise it's initialized randomly which is fine.
+    # This copy will copy the old params over and leave the rest randomly initialized.
+    # This also works if the old network has just the same topology,
+    # e.g. if it is the initial model from self.init_network_from_config().
+    self.network.set_param_values_by_dict(old_network_params, session=self.tf_session)
 
   def train(self):
     if self.start_epoch:
@@ -456,7 +438,6 @@ class Engine(object):
 
     print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
     self.eval_model()
-    print(file=log.v1)
 
   def format_score(self, score):
     if len(score) == 1:
