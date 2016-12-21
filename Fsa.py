@@ -173,7 +173,13 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   num_states = 0
   edges = []
 
+  label_indices = convert_label_seq_to_indices(label_seq)
+  reps = __check_for_repetitions(label_indices)
+
   for label_index in range(0, len(label_seq)):
+    print(label_index)
+    edges_included = [(m, n) for m, n in enumerate(edges) if (n[2] == label_index)]
+    print(edges_included)
     num_states, edges = __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges)
 
   return num_states, edges
