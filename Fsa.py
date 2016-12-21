@@ -456,15 +456,19 @@ def main():
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
-  arg_parser.add_argument("--lexicon", required=True)
-  arg_parser.add_argument("--depth", required=True)
+  arg_parser.add_argument("--lexicon")
+  arg_parser.add_argument("--depth")
+  arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
     num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
-    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
+    assert args.lexicon, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
+    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq, repetitions=args.asg_repetition)
   elif (args.fsa.lower() == 'hmm'):
+    assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
+    assert args.depth, "Specify the depth in argument options: --depth [int]"
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq, lexicon_file=args.lexicon, depth=args.depth)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
