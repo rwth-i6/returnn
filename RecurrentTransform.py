@@ -458,6 +458,9 @@ class AttentionList(AttentionBase):
       self.__setattr__("D_in_%d" % i, self.custom_vars['D_in_%d' % i])
       self.__setattr__("D_out_%d" % i, self.custom_vars['D_out_%d' % i])
       self.__setattr__("Db_out_%d" % i, self.custom_vars['Db_out_%d' % i])
+    if self.attrs['loss']:
+      self.__setattr__("iatt_%d" % i, self.custom_vars['iatt_%d' % i])
+      self.__setattr__("catt_%d" % i, self.add_state_var(T.zeros((shape[1]), 'float32'), "catt_%d" % i))
 
   def create_bias(self, n, name, i=-1):
     if i >= 0: name += '_%d' % i
@@ -526,6 +529,10 @@ class AttentionList(AttentionBase):
                                dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="D_out_%d" % i))
         self.add_param(self.layer.shared(value=numpy.zeros((1,),'float32'), borrow=True, name="Db_out_%d" % i))
+      elif self.attrs['loss']:
+        att = e.att - T.arange(e.att.shape[1]) * e.output.shape[0] # NB
+        self.add_input(att, 'iatt_%d' % i)
+        self.add_state_var(T.zeros((e.output.shape[1],), 'float32'), 'catt_d' % i)
       self.init(i)
 
   def item(self, name, i):
@@ -615,16 +622,22 @@ class AttentionList(AttentionBase):
           z = B[T.argmax(w_i,axis=0),T.arange(w_i.shape[1])]
         else:
           z = T.sum(B * w_i.dimshuffle(0, 1, 'x').repeat(B.shape[2], axis=2), axis=0)
+          if self.attrs['loss']:
+            updates[self.state_vars['catt_%d' % i]] = -T.log(w_i[self.item('iatt', i)[self.n],T.arange(w_i.shape[1])])
       inp += T.dot(z, W_att_in) + b_att_in
     ifelse(T.eq(T.mod(self.n[0],self.attrs['ndec']),0), inp, T.zeros((self.n.shape[0],self.layer.attrs['n_out'] * 4),'float32'))
     return inp, updates
 
   def cost(self):
+    val = 0
     if self.attrs['smooth']:
       penalty = T.constant(0,'float32')
       for i in range(len(self.base)):
         penalty += theano.tensor.extra_ops.cumsum(self.get_state_vars_seq(self.state_vars['datt_%d' % i]),axis=0)
-      return T.sum(T.maximum(penalty,T.zeros_like(penalty)))
+      val += T.sum(T.maximum(penalty,T.zeros_like(penalty)))
+    if self.attrs['loss']:
+      for i in range(len(self.base)):
+        val += T.sum(self.get_state_vars_seq(self.state_vars['catt_%d' % i]))
     return 0
 
 
