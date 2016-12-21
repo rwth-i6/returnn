@@ -215,9 +215,6 @@ def __check_for_repetitions(label_indices, repetitions):
       print("Something went wrong")
     index_old = index
 
-  print(label_indices)
-  print(reps)
-
   return reps
 
 
