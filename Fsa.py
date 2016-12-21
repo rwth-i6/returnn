@@ -179,6 +179,24 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   return num_states, edges
 
 
+def __check_for_repetitions(label_indices):
+  """
+  checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
+  :param list[int] label_indices: sequence of label indices
+  :return: list[int] reps: list of indices of label repetitions
+  """
+
+  reps = []
+  index_old = None
+
+  for index in label_indices:
+    index_t = index
+    reps.append(1 if index_t == index_old else 0)
+    index_old = index
+
+  return reps
+
+
 def __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges):
   """
   :param int label_index: label number
