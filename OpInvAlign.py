@@ -72,7 +72,7 @@ class InvAlignOp(theano.Op):
 
     # remaining columns
     for s in range(1, lengthS):
-      for t in range(max(lengthT - (lengthS - s) * skip,0), lengthT - (lengthS - s - 1)):
+      for t in range(max(lengthT - (lengthS - s) * skip,0), lengthT):
         previous = fwdScore[s - 1, t:t + skip]
         scores = score[s, t + skip - 1]
         scores = np.add(scores, np.add(previous, tdps[::-1]))

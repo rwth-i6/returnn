@@ -484,7 +484,6 @@ class Engine:
 
     print >> log.v1, self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed),
     self.eval_model()
-    print >> log.v1, ""
 
   def format_score(self, score):
     if len(score) == 1:
@@ -510,7 +509,7 @@ class Engine:
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print >> log.v1, " ".join(eval_dump_str).strip(),
+    print >> log.v1, " ".join(eval_dump_str).strip()
 
   def save_model(self, filename, epoch):
     """

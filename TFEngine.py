@@ -1,6 +1,9 @@
 
+from __future__ import print_function
+
 import tensorflow as tf
 from tensorflow.python.client import timeline
+import numpy
 import sys
 import os
 import time
@@ -10,6 +13,7 @@ from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 from Network import LayerNetwork
 from TFNetwork import TFNetwork
+from Util import hms
 
 
 class DataProvider(object):
@@ -70,6 +74,7 @@ class Runner(object):
     """
     self.engine = engine
     self.data_provider = data_provider
+    self.store_metadata_mod_step = False
 
   def run(self):
     sess = self.engine.tf_session
@@ -77,22 +82,6 @@ class Runner(object):
     writer = tf.train.SummaryWriter(logdir)
     writer.add_graph(tf.get_default_graph())
     run_metadata = tf.RunMetadata()
-
-    # Saver for storing checkpoints of the model.
-    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=100)
-
-    try:
-      saved_global_step = load(saver, sess, restore_from)
-      if self.is_overwritten_training or saved_global_step is None:
-        # The first training step will be saved_global_step + 1,
-        # therefore we put -1 here for new or overwritten trainings.
-        saved_global_step = -1
-
-    except:
-      print("Something went wrong while restoring checkpoint. "
-            "We will terminate training to avoid accidentally overwriting "
-            "the previous model.")
-      raise
 
     # Create coordinator.
     coord = tf.train.Coordinator()
@@ -110,7 +99,7 @@ class Runner(object):
         start_time = time.time()
         fetches_dict = self.data_provider.get_fetches_dict()
         feed_dict = self.data_provider.get_feed_dict()
-        if self.store_metadata and step % 500 == 0:
+        if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata')
           run_options = tf.RunOptions(
@@ -135,30 +124,67 @@ class Runner(object):
         print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
               .format(step, fetches_results["loss"], duration))
 
-        if step % self.checkpoint_every == 0:
-          save(saver, sess, logdir, step)
-          last_saved_step = step
-
         step += 1
 
+    except BaseException as exc:
+      print("Exception %r in step %r." % (exc, step), file=log.v1)
 
-    except KeyboardInterrupt:
-      # Introduce a line break after ^C is displayed so save message
-      # is on its own line.
-      print()
-      sys.exit(1)
     finally:
-      if step > last_saved_step and step > saved_global_step + 1:
-        save(saver, sess, logdir, step)
       coord.request_stop()
       coord.join(threads)
 
 
 class Engine(object):
-  def __init__(self):
-    # TODO...
-    self.tf_session = tf.get_default_session()  # type: tf.Session
+  def __init__(self, config=None):
+    """
+    :param Config.Config|None config:
+    """
+    if config is None:
+      from Config import get_global_config
+      config = get_global_config()
+    self.config = config
+    self.devices_config = self._get_devices_config()
+    self._check_devices()
+    self.tf_session = None  # type: tf.Session
     self.dataset_batches = {}
+
+  def _get_devices_config(self):
+    """
+    :rtype: list[dict[str]]
+    """
+    from Device import getDevicesInitArgs
+    return getDevicesInitArgs(self.config)
+
+  def is_requesting_for_gpu(self):
+    return any([d["device"].startswith("gpu") for d in self.devices_config])
+
+  def _check_devices(self):
+    from TFUtil import print_available_devices, is_gpu_available
+    print_available_devices()
+    assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
+    if self.is_requesting_for_gpu():
+      assert is_gpu_available(), "no GPU available"
+    else:
+      if is_gpu_available():
+        print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
+
+  def _make_tf_session(self):
+    if self.tf_session:
+      self.tf_session.close()
+    opts = self.config.typed_value("tf_session_opts", {})
+    assert isinstance(opts, dict)
+    opts = opts.copy()
+    opts.setdefault("log_device_placement", False)
+    opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    print("Setup tf.Session with options %r ..." % opts, file=log.v2)
+    config = tf.ConfigProto(**opts)
+    # config.gpu_options.allow_growth=True
+    self.tf_session = tf.Session(config=config)
+
+  def _reset_graph(self):
+    tf.reset_default_graph()
+    # The new session will by default use the newly created default graph.
+    self._make_tf_session()
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
@@ -204,24 +230,8 @@ class Engine(object):
     :param str filename: full filename for model
     :param int epoch: save epoch idx
     """
-    print >> log.v4, "Save model from epoch %i under %s" % (epoch, filename)
-    # We add some extra logic to try again for DiskQuota and other errors.
-    # This could save us multiple hours of computation.
-    try_again_wait_time = 10
-    while True:
-      try:
-        model = h5py.File(filename, "w")
-        self.network.save_hdf(model, epoch)
-        model.close()
-        break
-      except IOError as e:
-        import errno, time
-        if e.errno in [errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC]:
-          print >> log.v3, "Exception while saving:", e
-          print >> log.v3, "Trying again in %s secs." % try_again_wait_time
-          time.sleep(try_again_wait_time)
-          continue
-        raise
+    print("Save model from epoch %i under %s" % (epoch, filename), file=log.v4)
+    self.network.save_params_to_file(filename, epoch)
 
   def init_train_from_config(self, config, train_data, dev_data, eval_data):
     """
@@ -276,14 +286,18 @@ class Engine(object):
     self._init_network(net_desc=net_dict, epoch=epoch or self.start_epoch)
 
     if model_epoch_filename:
-      print >> log.v2, "loading weights from", model_epoch_filename
+      print("loading weights from", model_epoch_filename, file=log.v2)
       self.network.load_params_from_file(model_epoch_filename)
+
+    # TODO check tf.trainable_variables() == self.get_params() ?
 
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
       epoch = self.epoch
+    self._reset_graph()
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)
+    network.initialize_params(self.tf_session)
     network.layers_desc = net_desc
     network.print_network_info()
     self.network = network
@@ -292,31 +306,28 @@ class Engine(object):
     if self.network.layers_desc == net_desc:
       return
     from Util import dict_diff_str
-    print >> log.v3, "reinit because network description differs. Diff:", \
-                     dict_diff_str(self.network.layers_desc, net_desc)
-    old_network = self.network
+    print("reinit because network description differs. Diff:",
+          dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
+    old_network_params = self.network.get_param_values_dict(self.tf_session)
     self._init_network(net_desc)
-    if old_network:
-      # Otherwise it's initialized randomly which is fine.
-      # This copy will copy the old params over and leave the rest randomly initialized.
-      # This also works if the old network has just the same topology,
-      # e.g. if it is the initial model from self.init_network_from_config().
-
-      #self.pretrain.copy_params_from_old_network(new_network, old_network)  # TODO...
-      raise NotImplementedError
+    # Otherwise it's initialized randomly which is fine.
+    # This copy will copy the old params over and leave the rest randomly initialized.
+    # This also works if the old network has just the same topology,
+    # e.g. if it is the initial model from self.init_network_from_config().
+    self.network.set_param_values_by_dict(old_network_params, session=self.tf_session)
 
   def train(self):
     if self.start_epoch:
-      print >> log.v3, "start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch)
-    print >> log.v4, "using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs)
-    print >> log.v4, "learning rate control:", self.learning_rate_control
-    print >> log.v4, "pretrain:", self.pretrain
+      print("start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch), file=log.v3)
+    print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
+    print("learning rate control:", self.learning_rate_control, file=log.v4)
+    print("pretrain:", self.pretrain, file=log.v4)
 
     assert self.start_epoch >= 1, "Epochs start at 1."
     final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxsize
     if self.start_epoch > final_epoch:
-      print >> log.v1, "No epochs to train, start_epoch: %i, final_epoch: %i" % \
-                       (self.start_epoch, self.final_epoch)
+      print("No epochs to train, start_epoch: %i, final_epoch: %i" %
+            (self.start_epoch, self.final_epoch), file=log.v1)
 
     self.check_last_epoch()
     self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
@@ -326,7 +337,7 @@ class Engine(object):
     while epoch <= final_epoch:
       if self.max_seq_length != sys.maxsize:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
-          print >> log.v3, "increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length)
+          print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
           rebatch = True
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
@@ -355,7 +366,7 @@ class Engine(object):
         self.save_model(self.get_epoch_model_filename(), self.epoch)
 
       if self.epoch != self.final_epoch:
-        print >> log.v3, "Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch)
+        print("Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch), file=log.v3)
 
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
@@ -376,22 +387,17 @@ class Engine(object):
       # Train the whole network.
       self.network.declare_train_params()
 
-    if self.init_train_epoch_posthook:
-      print >> log.v5, "execute init_train_epoch_posthook:", self.init_train_epoch_posthook
-      exec(self.init_train_epoch_posthook)
-
   def train_epoch(self):
-    print >> log.v4, "start", self.get_epoch_str(), "with learning rate", self.learning_rate, "..."
+    print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
     if self.epoch == 1 and self.save_epoch1_initial_model:
       epoch0_model_filename = self.epoch_model_filename(self.model_filename, 0, self.is_pretrain_epoch())
-      print >> log.v4, "save initial epoch1 model", epoch0_model_filename
+      print("save initial epoch1 model", epoch0_model_filename, file=log.v4)
       self.save_model(epoch0_model_filename, 0)
 
     if self.is_pretrain_epoch():
       self.print_network_info()
 
-    training_devices = self.devices
     if not 'train' in self.dataset_batches:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
@@ -430,9 +436,8 @@ class Engine(object):
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
-    print >> log.v1, self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed),
+    print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
     self.eval_model()
-    print >> log.v1, ""
 
   def format_score(self, score):
     if len(score) == 1:
@@ -466,7 +471,7 @@ class Engine(object):
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print >> log.v1, " ".join(eval_dump_str).strip(),
+    print(" ".join(eval_dump_str).strip(), file=log.v1)
 
   def check_last_epoch(self):
     if self.start_epoch == 1:
@@ -476,7 +481,7 @@ class Engine(object):
       if self.dev_data:
         if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
-          print >> log.v4, "Last epoch model not yet evaluated on dev. Doing that now."
+          print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
 
 

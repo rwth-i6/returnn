@@ -134,6 +134,84 @@ def get_device_attributes():
   return attributes
 
 
+TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+
+
+def getDevicesInitArgs(config):
+  """
+  :type config: Config.Config
+  :rtype: list[dict[str]]
+  """
+  multiproc = config.bool('multiprocessing', True)
+  if config.value('task', 'train') == "theano_graph":
+    # Should have been reset earlier. See init() which handles this case.
+    assert not multiproc, "set multiprocessing = False to use theano_graph"
+  device_info = config.list('device', ['cpu0'])
+  if len(device_info) == 1 and device_info[0] == 'json':
+    try:
+      import json
+      specs = json.loads(open(config.value('initialize_from_json', '')).read().replace('(','\"').replace(')','\"'))['worker']
+    except Exception:
+      raise Exception('Unable to parse worker information from json content')
+    devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key].pop('num_batches', 1), "update_specs" : specs[key].pop('update_specs', {}) } for key in specs ]
+  else:
+    device_tags = {}
+    ngpux = 0
+    ncpus, ngpus = get_num_devices()
+    if "all" in device_info:
+      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in range(ncpus)] + [ "gpu" + str(i) for i in range(ngpus)] }
+    else:
+      for info in device_info:
+        device_update = True
+        num_batches = 1
+        if info[0] == '_':
+          device_update = False
+          info = info[1:]
+        if ':' in info:
+          num_batches = int(info.split(':')[1])
+          info = info.split(':')[0]
+        if len(info) == 3: info += "X"
+        assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
+        utype = info[0:3]
+        uid = info[3:]
+        if uid == '*': uid = "[0-9]*"
+        if uid == 'X':
+          ngpux += 1
+          device_tags[info] = [num_batches, True]
+        else:
+          if utype == 'cpu':
+            np = ncpus
+          elif utype == 'gpu':
+            np = ngpus
+          else:
+            np = 0
+          match = False
+          for p in range(np):
+            if re.match(uid, str(p)):
+              device_tags[utype + str(p)] = [num_batches, device_update]
+              match = True
+          assert match, "invalid device specified: " + info
+    tags = sorted(device_tags.keys())
+    if multiproc:
+      assert len(tags) > 0
+      if len(tags) == 1 and tags[0][-1] == 'X':
+        newtag = tags[0][:-1] + 'Z'
+        device_tags[newtag] = device_tags[tags[0]]
+        tags[0] = newtag
+      devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
+      if len(devices) == 1 and ngpux > 1:
+        devices = devices * ngpux
+      import TaskSystem
+      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+        assert not TheanoFlags.get("device", "").startswith("gpu"), \
+            "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+    else:
+      devices = [ {"device": tags[0], "config": config, "blocking": True} ]
+    #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
+    #  devices.append({"device": "cpu127", "config": config})
+  return devices
+
+
 def is_using_gpu():
   import theano.sandbox.cuda as theano_cuda
   if not theano_cuda.cuda_available: return False

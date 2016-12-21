@@ -83,8 +83,9 @@ class Data(object):
 
 class LayerBase(object):
   layer_class = None
+  recurrent = False
 
-  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None):
+  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None, is_output_layer=None):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -94,6 +95,7 @@ class LayerBase(object):
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
     :param str|None loss: if set, via get_loss
     :param float|None L2: for constraints
+    :param bool|None is_output_layer:
     """
     self.name = name
     self.network = network
@@ -112,12 +114,32 @@ class LayerBase(object):
     if loss and not target:
       target = self.network.extern_data.default_target
     self.target = target
-    self.loss = loss
+    self.loss = None
+    if loss:
+      loss_class = get_loss_class(loss)
+      self.loss = loss_class()
+      if self.loss.recurrent:
+        self.recurrent = True
     self.L2 = L2
+    self._is_output_layer = is_output_layer
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
       self.name, self.layer_class, self.output.get_description(with_name=False))
+
+  def is_output_layer(self):
+    """
+    Some code differs between an output layer and other layers.
+    It is a bit arbitrary what we define as output layer.
+    :rtype: bool
+    """
+    if self._is_output_layer is not None:
+      return self._is_output_layer
+    if self.target:
+      return True
+    if self.name == "output":
+      return True
+    return False
 
   def add_param(self, param):
     """
@@ -129,6 +151,32 @@ class LayerBase(object):
     self.params[param.name] = param
     return param
 
+  def set_param_values_by_dict(self, values_dict, session):
+    """
+    :param dict[str,numpy.ndarray] values_dict:
+    :param tf.Session session:
+    """
+    for param_name, values in values_dict.items():
+      session.run(tf.assign(self.params[param_name], values))
+
+  def get_param_values_dict(self, session):
+    """
+    :param tf.Session session:
+    :return: dict name -> values
+    :rtype: dict[str,numpy.ndarray]
+    """
+    d = {}
+    for param_name, param in self.params.items():
+      d[param_name] = param.eval(session)
+    return d
+
+  def _get_target_value(self):
+    """
+    :rtype: Data
+    """
+    target = self.network.extern_data.get_data(self.target)
+    return target
+
   def get_loss_value(self):
     """
     :return: the loss, a scalar value, or None if not set
@@ -136,12 +184,12 @@ class LayerBase(object):
     """
     if not self.loss:
       return None
-    target = self.network.extern_data.get_data(self.target)
-    return get_loss(
-      loss=self.loss,
-      output=self.output,
-      output_before_softmax=self.output_before_softmax,
-      target=target)
+    with tf.name_scope("loss"):
+      self.loss.init(
+        output=self.output,
+        output_before_softmax=self.output_before_softmax,
+        target=self._get_target_value())
+      return self.loss.get_value()
 
   def get_error_value(self):
     """
@@ -282,54 +330,117 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
-def get_loss(loss, output, output_before_softmax=None, target=None):
-  """
-  :param str loss: loss type such as "ce"
-  :param Data output: generated output
-  :param tf.Tensor|None output_before_softmax: if output is softmax(x), this will be x
-  :param Data target: reference target from dataset
-  :return: loss as a scalar value
-  :rtype: tf.Tensor
-  """
-  from TFUtil import flatten_with_seq_len_mask
-  with tf.name_scope("loss"):
-    seq_lens = target.size_placeholder[0]
-    if output_before_softmax is not None:
-      output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, seq_lens)
-      output_flat = None
-    else:
-      output_before_softmax_flat = None
-      output_flat = flatten_with_seq_len_mask(output.placeholder, seq_lens)
-    target_flat = flatten_with_seq_len_mask(target.placeholder, seq_lens)
-    if loss == "ce":
-      if target.sparse:
-        if output_before_softmax_flat is not None:
-          out = tf.nn.sparse_softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+class Loss(object):
+  class_name = None
+  recurrent = False  # if this is a frame-wise criteria, this will be False
+
+  def __init__(self):
+    # All are initialized in self.init().
+    self.output = None
+    self.output_before_softmax = None
+    self.target = None
+    self.seq_lens = None
+    self.output_flat = None
+    self.output_before_softmax_flat = None
+    self.target_flat = None
+
+  def init(self, output, output_before_softmax=None, target=None):
+    """
+    :param Data output: generated output
+    :param tf.Tensor|None output_before_softmax: if output is softmax(x), this will be x
+    :param Data target: reference target from dataset
+    """
+    from TFUtil import flatten_with_seq_len_mask
+    with tf.name_scope("loss_init"):
+      self.output = output
+      self.output_before_softmax = output_before_softmax
+      self.target = None
+      self.seq_lens = target.size_placeholder[0]
+      # Flat variants are with batch,time collapsed into one, masked via seq_lens.
+      self.output_flat = None
+      self.output_before_softmax_flat = None
+      if output_before_softmax is not None:
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.seq_lens)
+      else:
+        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.seq_lens)
+      self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.seq_lens)
+
+  def get_error(self):
+    """
+    :return: frame error rate as a scalar value
+    :rtype: tf.Tensor
+    """
+    with tf.name_scope("loss_frame_error"):
+      from TFUtil import check_input_ndim, check_shape_equal
+      output_flat = check_input_ndim(self.output_flat, ndim=2)
+      last_dim = tf.rank(self.output_flat) - 1  # should be 1
+      if self.target.sparse:
+        target_flat = check_input_ndim(self.target_flat, ndim=1)
+        return tf.reduce_mean(tf.cast(tf.not_equal(
+          tf.arg_max(output_flat, dimension=last_dim),
+          target_flat
+        ), dtype="float32"))
+      else:
+        target_flat = check_shape_equal(self.target_flat, output_flat)
+        return tf.reduce_mean(tf.cast(tf.not_equal(
+          tf.arg_max(output_flat, dimension=last_dim),
+          tf.arg_max(target_flat, dimension=last_dim)
+        ), dtype="float32"))
+
+  def get_value(self):
+    """
+    :return: loss as a scalar value
+    :rtype: tf.Tensor
+    """
+    raise NotImplementedError
+
+
+class CrossEntropyLoss(Loss):
+  class_name = "ce"
+
+  def get_value(self):
+    with tf.name_scope("loss_ce"):
+      if self.target.sparse:
+        if self.output_before_softmax_flat is not None:
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
           return tf.reduce_mean(out)
         else:
-          out = tf.log(tf.gather(output_flat, target_flat))
+          out = tf.log(tf.gather(self.output_flat, self.target_flat))
           return -tf.reduce_mean(out)
       else:  # not sparse
-        if output_before_softmax_flat is not None:
-          out = tf.nn.softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+        if self.output_before_softmax_flat is not None:
+          out = tf.nn.softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
           return tf.reduce_mean(out)
         else:
-          out = target_flat * tf.log(output_flat)
+          out = self.target_flat * tf.log(self.output_flat)
           return -tf.reduce_mean(out)
-    else:
-      raise Exception("unknown loss %r" % loss)
 
 
-_layer_class_dict = {}  # type: dict[str,type(LayerBase)]
+_LossClassDict = {}  # type: dict[str,type(Loss)]
+
+def get_loss_class(loss):
+  """
+  :param str loss: loss type such as "ce"
+  :rtype: () -> Loss
+  """
+  if not _LossClassDict:
+    for v in globals().values():
+      if issubclass(v, Loss) and v.class_name:
+        assert v.class_name not in _LossClassDict
+        _LossClassDict[v.class_name] = v
+  return _LossClassDict[loss]
+
+
+_LayerClassDict = {}  # type: dict[str,type(LayerBase)]
 
 def _init_layer_class_dict():
   for v in globals().values():
     if issubclass(v, LayerBase) and v.layer_class:
-      assert v.layer_class not in _layer_class_dict
-      _layer_class_dict[v.layer_class] = v
+      assert v.layer_class not in _LayerClassDict
+      _LayerClassDict[v.layer_class] = v
   for alias, v in {"forward": LinearLayer}.items():
-    assert alias not in _layer_class_dict
-    _layer_class_dict[alias] = v
+    assert alias not in _LayerClassDict
+    _LayerClassDict[alias] = v
 
 
 def get_layer_class(name):
@@ -337,9 +448,9 @@ def get_layer_class(name):
   :param str name: matches layer_class
   :rtype: () -> LayerBase
   """
-  if not _layer_class_dict:
+  if not _LayerClassDict:
     _init_layer_class_dict()
-  if name not in _layer_class_dict:
+  if name not in _LayerClassDict:
     raise Exception("unknown layer class %r" % name)
-  return _layer_class_dict[name]
+  return _LayerClassDict[name]
 

@@ -1,8 +1,12 @@
 
+from __future__ import print_function
+
 import tensorflow as tf
+import sys
 import numpy
 from Log import log
 from TFNetworkLayer import Data, LayerBase, get_layer_class
+from TFUtil import reuse_name_scope
 
 
 class ExternData(object):
@@ -76,13 +80,12 @@ class ExternData(object):
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):
     """
-    :param Config.Config config:
+    :param Config.Config config: only needed to init extern_data if not specified explicitely
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool train_flag: True if we want to use this model in training
     :param bool eval_flag: True if we want to use this model in evaluation
     """
-    self.config = config
     if extern_data is None:
       extern_data = ExternData()
       if not config:
@@ -101,6 +104,8 @@ class TFNetwork(object):
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
+    self.saver = None  # type: tf.train.Saver
+    self.recurrent = False
 
   def construct_from(self, list_or_dict):
     """
@@ -154,8 +159,6 @@ class TFNetwork(object):
       layer_desc = layer_desc.copy()
       class_name = layer_desc.pop("class")
       layer_class = get_layer_class(class_name)
-      layer_desc["name"] = name
-      layer_desc["network"] = self
       src_names = layer_desc.pop("from", ["data"])
       if not isinstance(src_names, (list, tuple)):
         src_names = [src_names]
@@ -163,13 +166,23 @@ class TFNetwork(object):
         _construct_layer(src_name)
         for src_name in src_names
         if not src_name == "none"]
-      layer = layer_class(**layer_desc)
-      self.layers[name] = layer
-      return layer
+      return self._add_layer(name=name, layer_class=layer_class, **layer_desc)
 
     for name, layer_desc in sorted(net_dict.items()):
-      if name == "output" or "target" in layer_desc or layer_desc.get("class") == "softmax":
+      if name == "output" or "target" in layer_desc:
         _construct_layer(name)
+
+  def _add_layer(self, name, layer_class, **layer_desc):
+    """
+    :param str name:
+    :param () -> LayerBase layer_class:
+    """
+    with reuse_name_scope(name):
+      layer = layer_class(name=name, network=self, **layer_desc)
+    self.layers[name] = layer
+    if layer.recurrent:
+      self.recurrent = True
+    return layer
 
   def construct_objective(self):
     with tf.name_scope("objective"):
@@ -206,43 +219,116 @@ class TFNetwork(object):
       self.construct_objective()
     return self.total_objective
 
-  def get_params(self):
+  def get_params_list(self):
     """
     :return: list of variables
     :rtype: list[tf.Variable]
     """
     l = []  # type: list[tf.Variable]
     for layer_name, layer in sorted(self.layers.items()):
+      assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
         l.append(param)
     return l
 
+  def get_params_nested_dict(self):
+    """
+    :return: dict: layer_name -> param_name -> variable
+    :rtype: dict[str,dict[str,tf.Variable]]
+    """
+    l = {}  # type: dict[str,dict[str,tf.Variable]]
+    for layer_name, layer in self.layers.items():
+      assert isinstance(layer, LayerBase)
+      l[layer_name] = {}  # type: dict[str,tf.Variable]
+      for param_name, param in layer.params.items():
+        assert isinstance(param, tf.Variable)
+        l[layer_name][param_name] = param
+    return l
+
   def get_trainable_params(self):
     # TODO...
-    return self.get_params()  # at the moment just the same
+    return self.get_params_list()  # at the moment just the same
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
     pass  # TODO...
 
   def get_num_params(self):
     num_params = 0
-    params = self.get_params()
+    params = self.get_params_list()
     for param in params:
       shape = param.get_shape().as_list()
       num_params += numpy.prod(shape)
     return num_params
+
+  def initialize_params(self, session):
+    """
+    :param tf.Session session:
+    """
+    session.run(tf.initialize_variables(var_list=self.get_params_list()))
+
+  def get_param_values_dict(self, session):
+    """
+    :param tf.Session session:
+    :return: dict: layer_name -> param_name -> variable numpy array
+    :rtype: dict[str,dict[str,numpy.ndarray]]
+    """
+    l = {}  # type: dict[str,dict[str,numpy.ndarray]]
+    for layer_name, layer in self.layers.items():
+      assert isinstance(layer, LayerBase)
+      l[layer_name] = layer.get_param_values_dict(session)
+    return l
+
+  def set_param_values_by_dict(self, values_dict, session):
+    """
+    :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param tf.Session session:
+    """
+    for layer_name, layer_values_dict in values_dict.items():
+      self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
+
+  def _create_saver(self):
+    # Saver for storing checkpoints of the model.
+    self.saver = tf.train.Saver(var_list=self.get_params_list(), max_to_keep=sys.maxint)
+
+  def save_params_to_file(self, filename, session=None):
+    """
+    Will save the model parameters to the filename.
+    Note that the model parameters live inside the current TF session.
+    :param str filename:
+    :param tf.Session session:
+    """
+    if not self.saver:
+      self._create_saver()
+    if not session:
+      session = tf.get_default_session()
+      assert session
+    # We add some extra logic to try again for DiskQuota and other errors.
+    # This could save us multiple hours of computation.
+    try_again_wait_time = 10
+    while True:
+      try:
+        self.saver.save(sess=session, save_path=filename)
+        break
+      except IOError as e:
+        import errno, time
+        if e.errno in [errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC]:
+          print("Exception while saving:", e, file=log.v3)
+          print("Trying again in %s secs." % try_again_wait_time, file=log.v3)
+          time.sleep(try_again_wait_time)
+          continue
+        raise
 
   def load_params_from_file(self, filename):
     # TODO...
     raise NotImplementedError
 
   def print_network_info(self, name="Network"):
-    print >> log.v2, "%s layer topology:" % name
-    print >> log.v2, "  extern data #:", self.extern_data.get_data_description()
+    print("%s layer topology:" % name, file=log.v2)
+    print("  extern data #:", self.extern_data.get_data_description(), file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
-      print >> log.v2, "  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+      print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"]), file=log.v2)
     if not self.layers:
-      print >> log.v2, "  (no layers)"
-    print >> log.v2, "net params #:", self.get_num_params()
-    print >> log.v2, "net trainable params:", self.get_trainable_params()
+      print("  (no layers)", file=log.v2)
+    print("net params #:", self.get_num_params(), file=log.v2)
+    print("net trainable params:", self.get_trainable_params(), file=log.v2)

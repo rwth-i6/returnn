@@ -335,21 +335,34 @@ class FramewiseOutputLayer(OutputLayer):
       return None, None
     known_grads = None
     if not self.attrs.get("apply_softmax", True):
-      if self.loss != "ce": raise NotImplementedError
-      assert self.p_y_given_x_flat.ndim == 2  # flattened
-      index = T.cast(self.index, "float32").flatten()
-      index_bc = index.dimshuffle(0, 'x')
-      y_idx = self.y_data_flat
-      assert y_idx.ndim == 1
-      p = T.clip(self.p_y_given_x_flat, numpy.float32(1.e-38), numpy.float32(1.e20))
-      from NativeOp import subtensor_batched_index
-      logp = T.log(subtensor_batched_index(p, y_idx))
-      assert logp.ndim == 1
-      nll = -T.sum(logp * index)
-      # the grad for p is: -y_ref/p
-      known_grads = {
-        self.p_y_given_x_flat: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
-      return self.norm * nll, known_grads
+      assert self.p_y_given_x_flat.ndim == 2 \
+             and self.y_data_flat.ndim == 2  # flattened
+      if self.loss == "ce":
+        index = T.cast(self.index, "float32").flatten()
+        index_bc = index.dimshuffle(0, 'x')
+        y_idx = self.y_data_flat
+        assert y_idx.ndim == 1
+        p = T.clip(self.p_y_given_x_flat, numpy.float32(1.e-38), numpy.float32(1.e20))
+        from NativeOp import subtensor_batched_index
+        logp = T.log(subtensor_batched_index(p, y_idx))
+        assert logp.ndim == 1
+        nll = -T.sum(logp * index)
+        # the grad for p is: -y_ref/p
+        known_grads = {
+          self.p_y_given_x_flat: -T.inv(p) * T.extra_ops.to_one_hot(self.y_data_flat, self.attrs["n_out"]) * index_bc}
+        return self.norm * nll, known_grads
+      elif self.loss == "sse":
+        netOutput = self.p_y_given_x_flat
+        groundTruth = self.y_data_flat
+        sseLoss = T.mean(
+          T.sum(
+            T.sqr(netOutput - groundTruth),
+            axis=1
+          )
+        )
+        return sseLoss, known_grads
+      else:
+        raise NotImplementedError
     elif self.loss == 'ce' or self.loss == 'priori':
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
         assert isinstance(self.y, tuple)
@@ -596,7 +609,6 @@ class SequenceOutputLayer(OutputLayer):
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
-      assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
       if self.fast_bw_opts.get("bw_from"):
         out2 = self.fast_bw_opts.get("bw_from")
         bw = self.network.output[out2].baumwelch_alignment
@@ -635,7 +647,59 @@ class SequenceOutputLayer(OutputLayer):
           out2 = self.fast_bw_opts.get("merge_am_from")
           am2 = get_am_scores(self.network.output[out2])
           am_scores = numpy.float32(factor) * am2 + numpy.float32(1.0 - factor) * am_scores
-        edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+        if self.fast_bw_opts.get("fsa_source", "sprint") == "sprint":
+          assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+          edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+        elif self.fast_bw_opts.get("fsa_source") == "ctc_from_uniq_y":
+          from Fsa import ctc_fsa_for_label_seq
+          num_lables = self.network.n_out[self.attrs["target"]][0]
+          assert self.attrs["n_out"] == num_lables + 1  # one added for blank
+          from Util import uniq
+          from theano.compile.ops import as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
+          @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
+                 otypes=[theano.tensor.fmatrix])  # TODO...
+          def fsa_op(labels, index_mask):
+            """
+            :param numpy.ndarray labels: (time,batch) -> label index
+            :param numpy.ndarray index_mask: shape (time,batch) -> 0 or 1
+            :return: (edges, weights, start_end_states)  # TODO of shape...?
+            :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+            """
+            assert index_mask.ndim == labels.ndim == 2
+            assert index_mask.shape == labels.shape
+            for batch in range(index_mask.shape[1]):
+              sub_labels = labels[:, batch][index_mask[:, batch].nonzero()]
+              sub_labels = uniq(sub_labels)
+              num_states, edges = ctc_fsa_for_label_seq(num_labels=num_lables, label_seq=sub_labels)
+            # TODO...
+          edges, weights, start_end_states = fsa_op(self.y, self.target_index)
+          state_buffer = T.zeros()  # TODO...
+        elif self.fast_bw_opts.get("fsa_source") == "ctc_from_chars":
+          from Fsa import ctc_fsa_for_label_seq
+          num_lables = self.network.n_out[self.attrs["target"]][0]
+          assert self.attrs["n_out"] == num_lables + 1  # one added for blank
+          from Util import uniq
+          def get_seq_labels(seq_name):
+            pass  # TODO... maybe from file? or corpus? or sprint?
+          from theano.compile.ops import \
+            as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
+          @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
+                 otypes=[theano.tensor.fmatrix])  # TODO...
+          def fsa_op(tags):
+            """
+            :param numpy.ndarray tags: seq names (frame,batch) ... TODO...
+            :return: (edges, weights, start_end_states)  # TODO of shape...?
+            :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+            """
+            assert tags.ndim == 2
+            for batch in range(tags.shape[1]):
+              labels = get_seq_labels(seq_name=tags[:, batch])  # TODO...?
+              num_states, edges = ctc_fsa_for_label_seq(num_labels=num_lables, label_seq=labels)
+              # TODO...
+          edges, weights, start_end_states = fsa_op(self.y, self.target_index)
+          state_buffer = T.zeros()  # TODO...
+        else:
+          raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
         fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
@@ -765,6 +829,17 @@ class SequenceOutputLayer(OutputLayer):
       y = NumpyAlignOp(False)(self.sources[0].index, self.index, -scores, self.y)
       self.y_data_flat = y.flatten()
       return super(SequenceOutputLayer, self).errors()
+    elif self.loss == "fast_bw":
+      if self.fast_bw_opts.get("fsa_source") == "ctc_from_y":
+        # TODO ... use Util.uniq / TheanoUtil.uniq ....
+        from theano.tensor.extra_ops import cpu_contiguous
+        return T.sum(
+          BestPathDecodeOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+      elif self.fast_bw_opts.get("fsa_source") == "ctc_from_chars":
+        # TODO... maybe share code with cost(). we need the same target label seq anyway.
+        pass
+      else:
+        return super(SequenceOutputLayer, self).errors()
     else:
       return super(SequenceOutputLayer, self).errors()
 
