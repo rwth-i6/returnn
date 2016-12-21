@@ -134,6 +134,111 @@ class Runner(object):
       coord.join(threads)
 
 
+_OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
+
+def get_optimizer_class(class_name):
+  """
+  :param str class_name: e.g. "adam"
+  :return:
+  """
+  if not _OptimizerClassesDict:
+    for name, v in vars(tf.train).items():
+      if name.endswith("Optimizer"):
+        name = name[:-len("Optimizer")]
+      else:
+        continue
+      if not issubclass(v, tf.train.Optimizer):
+        continue
+      name = name.lower()
+      assert name not in _OptimizerClassesDict
+      _OptimizerClassesDict[name] = v
+  return _OptimizerClassesDict[class_name.lower()]
+
+
+class Updater(object):
+  def __init__(self, config):
+    """
+    :param Config.Config config:
+    """
+    self.config = config
+    self.learning_rate_var = tf.Variable(initial_value=0.0, trainable=False, dtype="float32")
+    self.trainable_vars = []  # type: list[tf.Variable]
+    self.loss = None  # type: tf.Tensor
+    self.optimizer = None  # type: tf.train.Optimizer
+    self.optim_op = None  # type: tf.Operation
+
+  def reset_optim_op(self):
+    """
+    Call this if sth is changed which the optim_op depends on.
+    See self.create_optim_op().
+    """
+    self.optim_op = None
+
+  def set_loss(self, loss):
+    """
+    :param tf.Tensor loss:
+    """
+    self.loss = loss
+    self.reset_optim_op()
+
+  def set_trainable_vars(self, trainable_vars):
+    """
+    :param list[tf.Variable] trainable_vars:
+    """
+    if trainable_vars == self.trainable_vars:
+      return
+    self.trainable_vars = trainable_vars
+    self.reset_optim_op()
+
+  def create_optimizer(self):
+    lr = self.learning_rate_var
+    epsilon = 1e-16
+    momentum = self.config.float("momentum", 0.0)
+    optim_config = self.config.typed_value("optimizer")
+    if optim_config:
+      assert isinstance(optim_config, dict)
+      optim_config = optim_config.copy()
+      optim_class_name = optim_config.pop("class")
+      optim_class = get_optimizer_class(optim_class_name)
+      optim_config.setdefault("epsilon", epsilon)
+      if momentum:
+        optim_config.setdefault("momentum", momentum)
+      optim_config["learning_rate"] = lr
+      print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
+      optimizer = optim_class(**optim_config)
+      assert isinstance(optimizer, tf.train.Optimizer)
+    elif self.config.bool("adam", False):
+      assert not momentum
+      print("Create Adam optimizer.", file=log.v2)
+      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
+    elif self.config.bool("rmsprop", False):
+      print("Create RMSProp optimizer.", file=log.v2)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
+    elif momentum:
+      print("Create Momentum optimizer.", file=log.v2)
+      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum)
+    else:
+      print("Create SGD optimizer.", file=log.v2)
+      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
+    self.optimizer = optimizer
+    self.reset_optim_op()
+
+  def create_optim_op(self):
+    if not self.optimizer:
+      self.create_optimizer()
+
+    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+
+    self.optim_op = self.optimizer.minimize(
+      self.loss, var_list=self.trainable_vars,
+      aggregation_method=aggregation_method)
+
+  def get_optim_op(self):
+    if self.optim_op is None:
+      self.create_optim_op()
+    return self.optim_op
+
+
 class Engine(object):
   def __init__(self, config=None):
     """
@@ -146,6 +251,7 @@ class Engine(object):
     self.devices_config = self._get_devices_config()
     self._check_devices()
     self.tf_session = None  # type: tf.Session
+    self.updater = None  # type: Updater
     self.dataset_batches = {}
 
   def _get_devices_config(self):
@@ -225,13 +331,12 @@ class Engine(object):
   def print_network_info(self):
     self.network.print_network_info()
 
-  def save_model(self, filename, epoch):
+  def save_model(self, filename):
     """
     :param str filename: full filename for model
-    :param int epoch: save epoch idx
     """
-    print("Save model from epoch %i under %s" % (epoch, filename), file=log.v4)
-    self.network.save_params_to_file(filename, epoch)
+    print("Save model under %s" % (filename,), file=log.v4)
+    self.network.save_params_to_file(filename, session=self.tf_session)
 
   def init_train_from_config(self, config, train_data, dev_data, eval_data):
     """
@@ -268,6 +373,7 @@ class Engine(object):
       self.max_seq_length = sys.maxsize
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
+    self.updater = Updater(config=config)
 
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
@@ -287,9 +393,7 @@ class Engine(object):
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
-      self.network.load_params_from_file(model_epoch_filename)
-
-    # TODO check tf.trainable_variables() == self.get_params() ?
+      self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
 
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
@@ -297,10 +401,13 @@ class Engine(object):
     self._reset_graph()
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)
-    network.initialize_params(self.tf_session)
+    network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
     network.print_network_info()
     self.network = network
+    if self.updater:
+      self.updater.set_loss(network.get_objective())
+      self.updater.set_trainable_vars(network.get_trainable_params())
 
   def maybe_init_new_network(self, net_desc):
     if self.network.layers_desc == net_desc:
@@ -363,7 +470,7 @@ class Engine(object):
       assert self.epoch
       # Save last model, in case it was not saved yet (depends on save_model_epoch_interval).
       if self.model_filename:
-        self.save_model(self.get_epoch_model_filename(), self.epoch)
+        self.save_model(self.get_epoch_model_filename())
 
       if self.epoch != self.final_epoch:
         print("Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch), file=log.v3)
@@ -387,13 +494,15 @@ class Engine(object):
       # Train the whole network.
       self.network.declare_train_params()
 
+    self.updater.set_trainable_vars(self.network.get_trainable_params())
+
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
     if self.epoch == 1 and self.save_epoch1_initial_model:
       epoch0_model_filename = self.epoch_model_filename(self.model_filename, 0, self.is_pretrain_epoch())
       print("save initial epoch1 model", epoch0_model_filename, file=log.v4)
-      self.save_model(epoch0_model_filename, 0)
+      self.save_model(epoch0_model_filename)
 
     if self.is_pretrain_epoch():
       self.print_network_info()
@@ -423,14 +532,14 @@ class Engine(object):
 
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
-        self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch, self.epoch - 1)
+        self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
       sys.exit(1)
 
     assert not any(numpy.isinf(trainer.score.values())) or any(numpy.isnan(trainer.score.values())), \
       "Model is broken, got inf or nan final score: %s" % trainer.score
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
-      self.save_model(self.get_epoch_model_filename(), self.epoch)
+      self.save_model(self.get_epoch_model_filename())
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
     self.learning_rate_control.save()
     if self.ctc_prior_file is not None:

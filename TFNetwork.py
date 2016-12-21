@@ -191,10 +191,15 @@ class TFNetwork(object):
       self.loss_by_layer.clear()
       self.error_by_layer.clear()
       for name, layer in sorted(self.layers.items()):
-        assert isinstance(layer, LayerBase)
-        loss = layer.get_loss_value()
-        error = layer.get_error_value()
-        constraints = layer.get_constraints_value()
+        with reuse_name_scope(layer.name):
+          assert isinstance(layer, LayerBase)
+          loss = layer.get_loss_value()
+          error = layer.get_error_value()
+          constraints = layer.get_constraints_value()
+          if loss is not None:
+            tf.scalar_summary("loss_%s" % layer.name, loss)
+          if error is not None:
+            tf.scalar_summary("error_%s" % layer.name, error)
         if loss is not None:
           self.loss_by_layer[name] = loss
           self.total_loss += loss
@@ -202,7 +207,10 @@ class TFNetwork(object):
           self.error_by_layer[name] = error
         if constraints is not None:
           self.total_constraints += constraints
+      tf.scalar_summary("loss", self.total_loss)
+      tf.scalar_summary("constraints", self.total_constraints)
       self.total_objective = self.total_loss + self.total_constraints
+      tf.scalar_summary("objective", self.total_objective)
 
   def get_all_losses(self):
     if self.total_objective is None:
@@ -291,7 +299,7 @@ class TFNetwork(object):
     # Saver for storing checkpoints of the model.
     self.saver = tf.train.Saver(var_list=self.get_params_list(), max_to_keep=sys.maxint)
 
-  def save_params_to_file(self, filename, session=None):
+  def save_params_to_file(self, filename, session):
     """
     Will save the model parameters to the filename.
     Note that the model parameters live inside the current TF session.
@@ -300,9 +308,6 @@ class TFNetwork(object):
     """
     if not self.saver:
       self._create_saver()
-    if not session:
-      session = tf.get_default_session()
-      assert session
     # We add some extra logic to try again for DiskQuota and other errors.
     # This could save us multiple hours of computation.
     try_again_wait_time = 10
@@ -319,9 +324,16 @@ class TFNetwork(object):
           continue
         raise
 
-  def load_params_from_file(self, filename):
-    # TODO...
-    raise NotImplementedError
+  def load_params_from_file(self, filename, session):
+    """
+    Will save the model parameters to the filename.
+    Note that the model parameters live inside the current TF session.
+    :param str filename:
+    :param tf.Session session:
+    """
+    if not self.saver:
+      self._create_saver()
+    self.saver.restore(sess=session, save_path=filename)
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
