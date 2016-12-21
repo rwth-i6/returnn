@@ -138,7 +138,7 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def asg_fsa_for_label_seq(num_labels, label_seq):
+def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
@@ -464,7 +464,7 @@ def main():
   if (args.fsa.lower() == 'ctc'):
     num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
-    assert args.lexicon, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
+    assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels, label_seq=args.label_seq, repetitions=args.asg_repetition)
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
