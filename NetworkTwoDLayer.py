@@ -334,7 +334,7 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     filter_shape = (n_maps, n_in, filter_height, filter_width)
     X_shuffled = X.dimshuffle(2, 3, 0, 1)
     conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W,
-                           filter_shape=filter_shape, filter_dilation=filter_dilation,
+                           filter_shape=filter_shape, # filter_dilation=filter_dilation,
                            image_shape=(None, n_in, None, None)) if filter_height * filter_width > 0 else X
     crop_out = CropToBatchImageSizeInstance(conv_out.dimshuffle(2, 3, 0, 1), sizes).dimshuffle(2, 3, 0, 1)
     if poolsize == (1, 1):
