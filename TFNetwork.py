@@ -288,9 +288,10 @@ class TFNetwork(object):
     return l
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
-    hidden_layer_selection = list(hidden_layer_selection)
     if hidden_layer_selection is None:
       hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+    else:
+      hidden_layer_selection = list(hidden_layer_selection)
     if with_output is None:
       with_output = True
     if with_output:
@@ -376,7 +377,7 @@ class TFNetwork(object):
     print("%s layer topology:" % name, file=log.v2)
     print("  extern data #:", self.extern_data.get_data_description(), file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
-      print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"]), file=log.v2)
+      print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
     if not self.layers:
       print("  (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)

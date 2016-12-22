@@ -52,7 +52,7 @@ class Data(object):
     if dim is None:
       assert not sparse, "need dim"
       dim = shape[-1]
-    self.feature_dim = dim
+    self.dim = dim
     self.dtype = dtype
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
@@ -67,6 +67,10 @@ class Data(object):
             size_placeholder[i] = tf.placeholder(
               name="%s_dim%i_size" % (name, i), dtype="int64", shape=(None,))
     self.size_placeholder = size_placeholder
+
+  def get_kwargs(self):
+    keys = ["name", "shape", "dtype", "sparse", "dim"]
+    return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
     keys = ["shape", "dtype", "sparse"]
@@ -90,7 +94,7 @@ class LayerBase(object):
     :param str name:
     :param TFNetwork.TFNetwork network:
     :param None|int n_out: output dim
-    :param dict[str] out_type:
+    :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources:
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
     :param str|None loss: if set, via get_loss
@@ -99,6 +103,11 @@ class LayerBase(object):
     """
     self.name = name
     self.network = network
+    if loss and not target:
+      target = self.network.extern_data.default_target
+    self.target = target
+    if out_type is None and n_out is None and target:
+      n_out = self.network.extern_data.get_data(target).dim
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -111,9 +120,6 @@ class LayerBase(object):
     self.output_before_softmax = None  # type: None|tf.Tensor
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
-    if loss and not target:
-      target = self.network.extern_data.default_target
-    self.target = target
     self.loss = None
     if loss:
       loss_class = get_loss_class(loss)
@@ -213,12 +219,13 @@ class LayerBase(object):
 class SourceLayer(LayerBase):
   layer_class = "source"
 
-  def __init__(self, data_key=None, **kwargs):
-    super(SourceLayer, self).__init__(**kwargs)
+  def __init__(self, network, data_key=None, sources=(), **kwargs):
     if data_key is None:
-      data_key = self.network.extern_data.default_input
-    assert not self.sources, "source layer does not expect sources"
-    self.output = self.network.extern_data.get_data(data_key)
+      data_key = network.extern_data.default_input
+    assert not sources, "source layer does not expect sources"
+    data = network.extern_data.get_data(data_key)
+    super(SourceLayer, self).__init__(out_type=data.get_kwargs(), network=network, **kwargs)
+    self.output = data
 
 
 def concat_sources(src_layers):
@@ -289,7 +296,7 @@ class LinearLayer(_ConcatInputLayer):
     input_data = self.input_data
     n_in = input_data.shape[-1]
     n_out = self.output.shape[-1]
-    assert n_in and n_out
+    assert n_in and n_out, "%r and %r" % (input_data.shape, self.output.shape)
 
     W = self.add_param(
       tf.Variable(
@@ -321,6 +328,57 @@ class LinearLayer(_ConcatInputLayer):
         x = act_func(x)
 
     self.output.placeholder = x
+
+
+class RecLayer(_ConcatInputLayer):
+  layer_class = "rec"
+  _rnn_cells_dict = {}
+
+  @classmethod
+  def _create_rnn_cells_dict(cls):
+    from tensorflow.python.ops import rnn_cell
+    for key, v in vars(rnn_cell).items():
+      if isinstance(v, type) and issubclass(v, rnn_cell.RNNCell):
+        name = key
+        if name.endswith("Cell"):
+          name = name[:-len("Cell")]
+        name = name.lower()
+        assert name not in cls._rnn_cells_dict
+        cls._rnn_cells_dict[name] = v
+
+  def __init__(self, bidirectional=False, unit="basiclstm", **kwargs):
+    super(RecLayer, self).__init__(**kwargs)
+    from tensorflow.python.ops import rnn, rnn_cell
+    if not self._rnn_cells_dict:
+      self._create_rnn_cells_dict()
+    rnn_cell_class = self._rnn_cells_dict[unit.lower()]
+    with tf.name_scope("rec") as scope:
+      n_hidden = self.output.dim
+      if bidirectional:
+        assert n_hidden % 2 == 0
+        n_hidden //= 2
+      cell_fw = rnn_cell_class(n_hidden)
+      assert isinstance(cell_fw, rnn_cell.RNNCell)
+      if bidirectional:
+        cell_bw = rnn_cell_class(n_hidden)
+      else:
+        cell_bw = None
+      x = tf.transpose(self.input_data.placeholder, perm=(1, 0, 2))  # (time,batch,dim)
+      seq_len = self.input_data.size_placeholder[0]
+      if bidirectional:
+        # Will get (time,batch,ydim/2).
+        (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
+          cell_fw=cell_fw, cell_bw=cell_bw,
+          inputs=x, sequence_length=seq_len,
+          dtype="float32")
+        y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
+      else:
+        # Will get (time,batch,ydim).
+        y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, sequence_length=seq_len, dtype="float32")
+      self.output.placeholder = tf.transpose(y, perm=(1, 0, 2))  # (time,batch,dim)
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
+      print(params, [p.name[len(scope):-2] for p in params])  # TODO...
+      self.params.update({p.name[len(scope):-2]: p for p in params})
 
 
 class SoftmaxLayer(LinearLayer):
@@ -448,7 +506,7 @@ def get_loss_class(loss):
   """
   if not _LossClassDict:
     for v in globals().values():
-      if issubclass(v, Loss) and v.class_name:
+      if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
         assert v.class_name not in _LossClassDict
         _LossClassDict[v.class_name] = v
   return _LossClassDict[loss]
