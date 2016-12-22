@@ -145,7 +145,6 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
 
   i = num_states
   edges.append((i, i, num_labels + 1, 1.))
-  edges.append((i, i, label_seq[-1], 1.))
   edges.append((i - 1, i, num_labels + 1, 1.))
   edges.append((i - 2, i, label_seq[-1], 1.))
   edges.append((i - 3, i, label_seq[-1], 1.))
