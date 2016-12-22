@@ -13,7 +13,7 @@ def convert_label_seq_to_indices(num_labels, label_seq):
   label_indices = []
 
   for label in label_seq:
-    label_index = ord(label)-97
+    label_index = ord(label) - 97
     assert label_index < num_labels, "Index of label exceeds number of labels"
     label_indices.append(label_index)
 
@@ -73,7 +73,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
     # if to remove skips if two equal labels follow each other
     if label_seq[label_index] != label_seq[label_index - 1]:
       n = 2 * label_index
-      edges.append((n, n+2, label_seq[label_index], 1.))
+      edges.append((n, n + 2, label_seq[label_index], 1.))
 
   return num_states, edges
 
@@ -98,8 +98,8 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   # adds blank labels to fsa
   for label_index in range(0, len(label_seq)):
     label_blank = 2 * label_index + 1
-    edges.append((label_blank-1, label_blank, 'blank', 1.))
-    edges.append((label_blank, label_blank+1, label_seq[label_index], 1.))
+    edges.append((label_blank - 1, label_blank, 'blank', 1.))
+    edges.append((label_blank, label_blank + 1, label_seq[label_index], 1.))
 
   return num_states, edges
 
@@ -147,15 +147,15 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   i = num_states
-  edges.append((i-1, i, 'blank', 1.))
-  edges.append((i-2, i, label_seq[-1], 1.))
-  edges.append((i-3, i, label_seq[-1], 1.))
+  edges.append((i - 1, i, 'blank', 1.))
+  edges.append((i - 2, i, label_seq[-1], 1.))
+  edges.append((i - 3, i, label_seq[-1], 1.))
   num_states += 1
 
   return num_states, edges
 
 
-def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
+def asg_fsa_for_label_seq(label_seq, repetitions):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
@@ -202,13 +202,13 @@ def __check_for_repetitions(label_indices, repetitions):
       if rep_count < repetitions:
         rep_count += 1
       elif rep_count != 0:
-        reps.append('rep'+str(rep_count))
+        reps.append('rep' + str(rep_count))
         rep_count = 1
       else:
         print("Something went wrong")
     elif index_t != index_old:
       if rep_count != 0:
-        reps.append('rep'+str(rep_count))
+        reps.append('rep' + str(rep_count))
         rep_count = 0
       reps.append(index)
     else:
@@ -299,16 +299,17 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
     num_states_end = num_states - 1
   else:
     word_seq_len = len(word_seq)
-    num_states = 2 + 2 + 4 * (word_seq_len) # start/end + 2 for sil + number of states for word * 4
+    num_states = 2 + 2 + 4 * (word_seq_len)  # start/end + 2 for sil + number of states for word * 4
     num_states_start = 0
     num_states_end = num_states - 1
 
-  edges.append((num_states_start, num_states_start+1, sil, 1.))
-  edges.append((num_states_end-1, num_states_end, sil, 1.))
+  edges.append((num_states_start, num_states_start + 1, sil, 1.))
+  edges.append((num_states_end - 1, num_states_end, sil, 1.))
   if type(word_seq) is str:
     for i in range(num_states_start, num_states):
       for j in range(i, num_states):
-        edges_included = [m for m, n in enumerate(edges) if (n[0] == i and n[1] == j and n[2] == sil)]
+        edges_included = [m for m, n in enumerate(edges) if
+                          (n[0] == i and n[1] == j and n[2] == sil)]
         if len(edges_included) == 0 and not (i == j):
           edges.append((i, j, word_seq, 1.))
   else:
@@ -317,6 +318,7 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
         print(char)
 
   return num_states, edges
+
 
 def __phoneme_acceptor_for_hmm_fsa(word_seq):
   num_states = 0
@@ -350,7 +352,7 @@ def __create_states_from_tri_seq(tri_seq, num_states, edges):
 
   # go through the list and create the edge for each triphone
   for tri_index in range(0, len(tri_seq)):
-    edges.append((tri_index, tri_index+1, tri_seq[tri_index], 1.))
+    edges.append((tri_index, tri_index + 1, tri_seq[tri_index], 1.))
 
   return num_states, edges
 
@@ -481,7 +483,7 @@ def fsa_to_dot_format(file, num_states, edges):
   __add_nodes(G, nodes)
   __add_edges(G, edges)
 
-  #print(G.source)
+  # print(G.source)
   filepath = "./tmp/" + file
   filename = G.render(filename=filepath)
   print("File saved in:", filename)
@@ -498,7 +500,7 @@ def __add_nodes(graph, nodes):
 
 def __add_edges(graph, edges):
   for e in edges:
-    e = ((str(e[0]), str(e[1])), {'label': e[2]})
+    e = ((str(e[0]), str(e[1])), {'label': str(e[2])})
     if isinstance(e[0], tuple):
       graph.edge(*e[0], **e[1])
     else:
