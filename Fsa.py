@@ -47,7 +47,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
 
   # adds loops to fsa
-  num_states, edges = __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges)
+  num_states, edges = __adds_loop_edges(num_states, edges)
 
   return num_states, edges
 
@@ -104,11 +104,9 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges):
+def __adds_loop_edges(num_states, edges):
   """
-  :param str label_seq: sequence of labels (normally some kind of word)
   :param int num_states: number of states
-  :param int num_labels: number of labels
   :param list edges: list of edges
   :returns (num_states, edges)
   where:
@@ -529,6 +527,8 @@ def main():
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(label_seq=label_indices,
                                               repetitions=int(args.asg_repetition))
+    print("Number of labels:", args.num_labels)
+    print("Number of repetition symbols:", args.asg_repetition)
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.depth, "Specify the depth in argument options: --depth [int]"
