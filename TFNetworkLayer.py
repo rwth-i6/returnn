@@ -336,13 +336,14 @@ class Loss(object):
 
   def __init__(self):
     # All are initialized in self.init().
-    self.output = None
-    self.output_before_softmax = None
-    self.target = None
-    self.seq_lens = None
-    self.output_flat = None
-    self.output_before_softmax_flat = None
-    self.target_flat = None
+    self.output = None  # type: Data
+    self.output_before_softmax = None  # type: tf.Tensor
+    self.output_seq_lens = None  # type: tf.Tensor
+    self.target = None  # type: Data
+    self.target_seq_lens = None  # type: tf.Tensor
+    self.output_flat = None  # type: tf.Tensor
+    self.output_before_softmax_flat = None  # type: tf.Tensor
+    self.target_flat = None  # type: tf.Tensor
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
 
@@ -356,16 +357,17 @@ class Loss(object):
     with tf.name_scope("loss_init"):
       self.output = output
       self.output_before_softmax = output_before_softmax
-      self.target = None
-      self.seq_lens = target.size_placeholder[0]
+      self.output_seq_lens = output.size_placeholder[0]
+      self.target = target
+      self.target_seq_lens = target.size_placeholder[0]
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
       if output_before_softmax is not None:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.seq_lens)
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.target_seq_lens)
       else:
-        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.seq_lens)
-      self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.seq_lens)
+        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.target_seq_lens)
+      self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens)
 
   def get_error(self):
     """
@@ -418,6 +420,25 @@ class CrossEntropyLoss(Loss):
           return -self.reduce_func(out)
 
 
+class CtcLoss(Loss):
+  class_name = "ctc"
+  recurrent = True
+
+  def get_value(self):
+    with tf.name_scope("loss_ctc"):
+      if self.target.sparse:
+        logits = self.output_before_softmax
+        if logits is None:
+          logits = tf.log(self.output)
+        seq_lens = self.output_seq_lens
+        from TFUtil import sparse_labels
+        labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
+        loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=True)
+        return tf.reduce_mean(loss)  # or self.reduce_func?
+      else:  # not sparse
+        raise Exception("CTC target expected to be sparse (symbols)")
+
+
 _LossClassDict = {}  # type: dict[str,type(Loss)]
 
 def get_loss_class(loss):
@@ -437,7 +458,7 @@ _LayerClassDict = {}  # type: dict[str,type(LayerBase)]
 
 def _init_layer_class_dict():
   for v in globals().values():
-    if issubclass(v, LayerBase) and v.layer_class:
+    if isinstance(v, type) and issubclass(v, LayerBase) and v.layer_class:
       assert v.layer_class not in _LayerClassDict
       _LayerClassDict[v.layer_class] = v
   for alias, v in {"forward": LinearLayer}.items():

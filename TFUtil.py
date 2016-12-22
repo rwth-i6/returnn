@@ -263,7 +263,7 @@ def flatten_with_seq_len_mask(x, seq_lens):
   """
   :param tf.Tensor x: shape (batch,time,...s...)
   :param tf.Tensor seq_lens: shape (batch,) of int64
-  :return: tensor of shape (min(batch*time, sum(seq_len)), ...s...)
+  :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
   with tf.name_scope("flatten_with_seq_len_mask"):
@@ -271,3 +271,20 @@ def flatten_with_seq_len_mask(x, seq_lens):
     mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     return tf.boolean_mask(x, mask)
 
+
+def sparse_labels(x, seq_lens):
+  """
+  :param tf.Tensor x: shape (batch,time)
+  :param tf.Tensor seq_lens: shape (batch,) of int64
+  :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
+  :rtype: tf.SparseTensor
+  """
+  with tf.name_scope("sparse_labels"):
+    x = check_input_ndim(x, ndim=2)
+    x = check_dim_equal(x, 0, seq_lens, 0)
+    batch_size = tf.shape(x)[0]
+    mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    flat_x = tf.boolean_mask(x, mask)  # (time', ...s...)
+    idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
+    flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
+    return tf.SparseTensor(flat_idxs, flat_x, [batch_size, tf.reduce_max(seq_lens)])

@@ -60,7 +60,7 @@ class BackendEngine:
 
   @classmethod
   def is_tensorflow_selected(cls):
-    return cls.get_selected_engine() == cls.Theano
+    return cls.get_selected_engine() == cls.TensorFlow
 
 
 def cmd(s):
