@@ -167,17 +167,12 @@ def asg_fsa_for_label_seq(label_seq, repetitions):
       weight is a float, in -log space
   """
 
-  num_states = 0
   edges = []
 
-  label_indices = convert_label_seq_to_indices(num_labels, label_seq)
-  reps = __check_for_repetitions(label_indices, repetitions)
+  rep_seq = __check_for_repetitions(label_seq, repetitions)
 
-  for label_index in range(0, len(label_seq)):
-    #print(label_index)
-    edges_included = [(m, n) for m, n in enumerate(edges) if (n[2] == label_index)]
-    #print(edges_included)
-    num_states, edges = __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges)
+  num_states, edges = __create_states_from_label_for_asg(rep_seq, edges)
+  num_states, edges = __adds_loop_edges(num_states, edges)
 
   return num_states, edges
 
@@ -229,10 +224,10 @@ def __create_states_from_label_for_asg(rep_seq, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  i = label_index
-  edges.append((i, i+1, label_seq[label_index], 1.))
-  edges.append((i+1, i+1, label_seq[label_index], 1.))
-  num_states = len(label_seq)
+  for rep_index, rep_label in enumerate(rep_seq):
+    edges.append((rep_index, rep_index+1, rep_label, 1.))
+
+  num_states = len(rep_seq) + 1
 
   return num_states, edges
 
