@@ -107,7 +107,6 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
 def __adds_loop_edges_for_ctc(label_seq, num_states, num_labels, edges):
   """
   :param str label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
   :param int num_states: number of states
   :param int num_labels: number of labels
   :param list edges: list of edges
@@ -218,9 +217,9 @@ def __check_for_repetitions(label_indices, repetitions):
   return reps
 
 
-def __create_states_from_label_for_asg(label_seq, label_index, num_labels, edges):
+def __create_states_from_label_for_asg(rep_seq, edges):
   """
-  :param int label_index: label number
+  :param int rep_index: label number
   :param int num_labels: number of labels
   :param list edges: list of edges
   :returns (num_states, edges)
