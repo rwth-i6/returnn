@@ -526,10 +526,10 @@ def main():
     num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
                                               label_seq=label_indices,
                                               repetitions=int(args.asg_repetition))
-    print("Number of labels:", args.num_labels)
+    print("Number of labels (a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
     for rep in range(1, int(args.asg_repetition) + 1):
-      print("Label of repetition:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
+      print("Repetition label:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.depth, "Specify the depth in argument options: --depth [int]"
