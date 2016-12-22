@@ -98,7 +98,7 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   # adds blank labels to fsa
   for label_index in range(0, len(label_seq)):
     label_blank = 2 * label_index + 1
-    edges.append((label_blank - 1, label_blank, 'blank', 1.))
+    edges.append((label_blank - 1, label_blank, num_labels + 1, 1.))
     edges.append((label_blank, label_blank + 1, label_seq[label_index], 1.))
 
   return num_states, edges
@@ -144,9 +144,9 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   i = num_states
-  edges.append((i, i, 'blank', 1.))
+  edges.append((i, i, num_labels + 1, 1.))
   edges.append((i, i, label_seq[-1], 1.))
-  edges.append((i - 1, i, 'blank', 1.))
+  edges.append((i - 1, i, num_labels + 1, 1.))
   edges.append((i - 2, i, label_seq[-1], 1.))
   edges.append((i - 3, i, label_seq[-1], 1.))
   num_states += 1
@@ -522,7 +522,7 @@ def main():
 
   if (args.fsa.lower() == 'ctc'):
     num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=args.label_seq)
+                                              label_seq=label_indices)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
