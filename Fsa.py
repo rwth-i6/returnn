@@ -188,24 +188,27 @@ def __check_for_repetitions(num_labels, label_indices, repetitions):
   rep_count = 0
   index_old = None
 
-  for index in label_indices:
-    index_t = index
-    if index_t == index_old:
-      if rep_count < repetitions:
-        rep_count += 1
-      elif rep_count != 0:
-        reps.append(num_labels + rep_count)
-        rep_count = 1
+  if repetitions == 0:
+    reps = label_indices
+  else:
+    for index in label_indices:
+      index_t = index
+      if index_t == index_old:
+        if rep_count < repetitions:
+          rep_count += 1
+        elif rep_count != 0:
+          reps.append(num_labels + rep_count)
+          rep_count = 1
+        else:
+          print("Something went wrong")
+      elif index_t != index_old:
+        if rep_count != 0:
+          reps.append(num_labels + rep_count)
+          rep_count = 0
+        reps.append(index)
       else:
         print("Something went wrong")
-    elif index_t != index_old:
-      if rep_count != 0:
-        reps.append(num_labels + rep_count)
-        rep_count = 0
-      reps.append(index)
-    else:
-      print("Something went wrong")
-    index_old = index
+      index_old = index
 
   return reps
 
