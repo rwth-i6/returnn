@@ -80,7 +80,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
 
 def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
   """
-  :param str label_seq: sequence of labels (normally some kind of word)
+  :param list[int] label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
   :param int num_states: number of states
   :param int num_labels: number of labels
@@ -128,7 +128,7 @@ def __adds_loop_edges(num_states, edges):
 
 def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
-  :param str label_seq: sequence of labels (normally some kind of word)
+  :param list[int] label_seq: sequence of labels (normally some kind of word)
   :param int label: label number
   :param int num_states: number of states
   :param int num_labels: number of labels
