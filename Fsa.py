@@ -152,7 +152,7 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def asg_fsa_for_label_seq(label_seq, repetitions):
+def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   """
   :param int num_labels: number of labels
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
@@ -169,7 +169,7 @@ def asg_fsa_for_label_seq(label_seq, repetitions):
 
   edges = []
 
-  rep_seq = __check_for_repetitions(label_seq, repetitions)
+  rep_seq = __check_for_repetitions(num_labels, label_seq, repetitions)
 
   num_states, edges = __create_states_from_label_for_asg(rep_seq, edges)
   num_states, edges = __adds_loop_edges(num_states, edges)
@@ -177,7 +177,7 @@ def asg_fsa_for_label_seq(label_seq, repetitions):
   return num_states, edges
 
 
-def __check_for_repetitions(label_indices, repetitions):
+def __check_for_repetitions(num_labels, label_indices, repetitions):
   """
   checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
   :param list[int] label_indices: sequence of label indices
@@ -194,13 +194,13 @@ def __check_for_repetitions(label_indices, repetitions):
       if rep_count < repetitions:
         rep_count += 1
       elif rep_count != 0:
-        reps.append('rep' + str(rep_count))
+        reps.append(num_labels + rep_count)
         rep_count = 1
       else:
         print("Something went wrong")
     elif index_t != index_old:
       if rep_count != 0:
-        reps.append('rep' + str(rep_count))
+        reps.append(num_labels + rep_count)
         rep_count = 0
       reps.append(index)
     else:
@@ -520,10 +520,13 @@ def main():
                                               label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
-    num_states, edges = asg_fsa_for_label_seq(label_seq=label_indices,
+    num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
+                                              label_seq=label_indices,
                                               repetitions=int(args.asg_repetition))
     print("Number of labels:", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
+    for rep in range(1, int(args.asg_repetition) + 1):
+      print("Label of repetition:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.depth, "Specify the depth in argument options: --depth [int]"
