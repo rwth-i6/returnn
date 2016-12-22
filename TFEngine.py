@@ -13,7 +13,7 @@ from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 from Network import LayerNetwork
 from TFNetwork import TFNetwork, ExternData
-from Util import hms
+from Util import hms, NumbersDict
 from threading import Thread
 from Dataset import BatchSetGenerator
 
@@ -41,6 +41,7 @@ class DataProvider(object):
     self.data_keys = sorted(extern_data.data.keys())
     self.queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
     self.thread = None  # type: Thread
+    self.num_frames = NumbersDict(0)
     self.reached_end = False
 
   def start_thread(self):
@@ -69,7 +70,7 @@ class DataProvider(object):
     seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype="int64")
                 for k in self.data_keys}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-    #device.num_frames += batch.get_total_num_frames()
+    self.num_frames += batch.get_total_num_frames()
     with self.dataset.lock:
       for seq in batch.seqs:
         o = seq.batch_frame_offset
@@ -120,40 +121,165 @@ class DataProvider(object):
     """
     output = self.queue.dequeue()
     assert isinstance(output, dict)
-    return {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
+    # The data itself.
+    d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
+    # And seq lengths info.
+    for k in self.data_keys:
+      data = self.extern_data.get_data(k)
+      for dim, len_placeholder in data.size_placeholder:
+        if dim == 0:  # time-dim
+          d[len_placeholder] = output["%s_seq_lens" % k]
+        else:
+          raise Exception(
+            "dataset currently does not support variable shape in other dimensions than the first. "
+            "dim=%i, placeholder=%r" % (dim, len_placeholder))
+    return d
 
 
 class Runner(object):
-  def __init__(self, engine, dataset, batches):
+  def __init__(self, engine, dataset, batches, train, eval=True):
     """
     :param Engine engine:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
+    :param bool train: whether to do updates on the model
+    :param bool eval: whether to evaluate (i.e. calculate loss/error)
     """
     self.engine = engine
     self.data_provider = DataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       dataset=dataset, batches=batches)
+    self._should_train = train
+    self._should_eval = eval
     self.store_metadata_mod_step = False  # 500
+    self.finalized = False
+    self.device_crash_batch = None
+    self.start_time = None
+    self.elapsed = None
+    self._results_accumulated = {}  # dict[str,float]  # entries like "cost:output" or "loss"
+    self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
+    self.score = {}  # type: dict[str,float]  # entries like "cost:output"
+    self.error = {}  # type: dict[str,float]  # entries like "error:output"
 
-  def get_feed_dict(self):
+    from Util import terminal_size
+    terminal_width, _ = terminal_size()
+    self._show_interactive_process_bar = (log.v[3] and terminal_width >= 0)
+
+  def _get_feed_dict(self):
     return self.data_provider.get_feed_dict()
 
-  def get_fetches_dict(self):
-    d = {
-      "summary": tf.merge_all_summaries(),
-      "queue_size": self.data_provider.queue.size()
-    }
-    for layer_name, loss in self.engine.network.loss_by_layer.items():
-      d["loss_%s" % layer_name] = loss
-    for layer_name, error in self.engine.network.error_by_layer.items():
-      d["error_%s" % layer_name] = error
-    if self.engine.updater:
-      d["loss"] = self.engine.updater.loss
+  def _get_fetches_dict(self):
+    """
+    :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
+    :rtype: dict[str,tf.Tensor|tf.Operation]
+    """
+    d = {"summary": tf.merge_all_summaries()}
+    for key in self.data_provider.data_keys:
+      data = self.data_provider.extern_data.get_data(key)
+      for dim, v in data.size_placeholder.items():
+        d["size:%s:%i" % (key, dim)] = v
+    if self._should_train or self._should_eval:
+      d["loss"] = self.engine.network.get_objective()
+      for layer_name, loss in self.engine.network.loss_by_layer.items():
+        d["cost:%s" % layer_name] = loss
+      for layer_name, error in self.engine.network.error_by_layer.items():
+        d["error:%s" % layer_name] = error
+    if self._should_train:
+      assert self.engine.updater
       d["optim_op"] = self.engine.updater.get_optim_op()
     return d
 
-  def run(self):
+  def _print_process(self, report_prefix, step, step_duration, eval_info):
+    if not self._show_interactive_process_bar and not log.v[5]:
+      return
+    start_elapsed = time.time() - self.start_time
+    complete = self.data_provider.batches.completed_frac()
+    assert complete > 0
+    total_time_estimated = start_elapsed / complete
+    remaining_estimated = total_time_estimated - start_elapsed
+    if log.verbose[5]:
+      info = [
+        report_prefix,
+        "step %i" % step]
+      if eval_info:  # Such as score.
+        info += ["%s %s" % item for item in sorted(eval_info.items())]
+      info += [
+        "%.3f sec/step" % step_duration,
+        "elapsed %s" % hms(start_elapsed),
+        "exp. remaining %s" % hms(remaining_estimated),
+        "complete %.02f%%" % (complete * 100)]
+      print(", ".join(filter(None, info)), file=log.v5)
+    elif self._show_interactive_process_bar:
+      from Util import progress_bar
+      progress_bar(complete, hms(remaining_estimated))
+
+  def _get_target_for_key(self, key):
+    """
+    :param str key: e.g. "cost:output" where the last part is the layer name. or "loss"
+    :return: target name which is the data-key in the dataset, e.g. "classes"
+    :rtype: str
+    """
+    if ":" not in key:
+      return self.data_provider.extern_data.get_default_target_data()  # e.g. "classes"
+    return self.engine.network.layers[key.split(':')[-1]].target
+
+  def _epoch_norm_factor_for_result(self, key):
+    target = self._get_target_for_key(key)
+    # Default: Normalize by number of frames.
+    return 1.0 / float(self.data_provider.num_frames[target])
+
+  def _finalize(self):
+    """
+    Called at the end of an epoch.
+    """
+    assert self.data_provider.is_data_finished()
+    assert self.data_provider.num_frames["data"] > 0
+    results = {key: value * self._epoch_norm_factor_for_result(key)
+               for (key, value) in self._results_accumulated.items()}
+    self.results = results
+    self.score = dict([(key,value) for (key, value) in results.items() if key.startswith("cost:")])
+    self.error = dict([(key,value) for (key, value) in results.items() if key.startswith("error:")])
+    self.finalized = True
+
+  def _step_seq_len(self, fetches_results, data_key):
+    """
+    :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
+    :param str data_key: e.g. "classes"
+    :return: the seq length of this batch
+    :rtype: int
+    """
+    num_frames = numpy.sum(fetches_results["size:%s:0" % data_key])
+    return num_frames
+
+  def _collect_eval_info(self, fetches_results):
+    """
+    :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
+    :return: dict for printing the step stats, see self._print_process(), e.g. {"cost:output": 2.3}
+    :rtype: dict[str,float]
+    """
+    # See see self._get_fetches_dict() for the keys.
+    keys = [k for k in fetches_results.keys() if k.startswith("cost:") or k.startswith("error:") or k == "loss"]
+
+    # Accumulate for epoch stats.
+    for key in keys:
+      value = fetches_results[key]
+      if key not in self._results_accumulated:
+        self._results_accumulated[key] = value
+      else:
+        self._results_accumulated[key] += value
+
+    # Prepare eval info stats for this batch run.
+    eval_info = {}
+    for key in keys:
+      value = fetches_results[key]
+      target = self._get_target_for_key(key)
+      eval_info[key] = value / float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
+    return eval_info
+
+  def run(self, report_prefix):
+    """
+    :param str report_prefix: prefix for logging
+    """
     sess = self.engine.tf_session
     logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     writer = tf.train.SummaryWriter(logdir)
@@ -165,17 +291,18 @@ class Runner(object):
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     self.data_provider.start_thread()
 
+    self.start_time = time.time()
     step = None
     try:
       # step is like mini-batch in our usual terminology
       step = 0
-      while True:
+      fetches_dict = self._get_fetches_dict()
+      feed_dict = self.data_provider.get_feed_dict()
+      while not self.data_provider.is_data_finished():
         start_time = time.time()
-        fetches_dict = self.get_fetches_dict()
-        feed_dict = self.data_provider.get_feed_dict()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
-          print('Storing metadata', file=log.v4)
+          print('Storing metadata', file=log.v5)
           run_options = tf.RunOptions(
             trace_level=tf.RunOptions.FULL_TRACE)
           fetches_results = sess.run(
@@ -184,8 +311,7 @@ class Runner(object):
             options=run_options,
             run_metadata=run_metadata)
           writer.add_summary(fetches_results["summary"], step)
-          writer.add_run_metadata(run_metadata,
-                                  'step_{:04d}'.format(step))
+          writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step))
           tl = timeline.Timeline(run_metadata.step_stats)
           timeline_path = os.path.join(logdir, 'timeline.trace')
           with open(timeline_path, 'w') as f:
@@ -194,22 +320,24 @@ class Runner(object):
           fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)
           writer.add_summary(fetches_results["summary"], step)
 
+        eval_info = self._collect_eval_info(fetches_results=fetches_results)
         duration = time.time() - start_time
-        formated_losses = " - ".join(
-          ["{} = {:.3f}".format(k, v)
-           for (k, v) in fetches_results.items()
-           if k.startswith("loss") or k.startswith("error")])
-        print('step {:d} - {}, ({:.3f} sec/step)'
-              .format(step, formated_losses or "no loss", duration), file=log.v4)
-
+        self._print_process(report_prefix=report_prefix, step=step, step_duration=duration,
+                            eval_info=eval_info)
         step += 1
+
+      self._finalize()
 
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
+      if not isinstance(exc, KeyboardInterrupt):
+        sys.excepthook(*sys.exc_info())
+      self.device_crash_batch = step
 
     finally:
       coord.request_stop()
       coord.join(threads)
+      self.elapsed = time.time() - self.start_time
 
 
 _OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
@@ -601,8 +729,8 @@ class Engine(object):
     train_batches = self.dataset_batches['train']
 
     self.tf_session.run(self.updater.learning_rate_var.assign(self.learning_rate))
-    runner = Runner(engine=self, dataset=self.train_data, batches=train_batches)
-    runner.run()
+    trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
+    trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
@@ -616,8 +744,6 @@ class Engine(object):
       self.save_model(self.get_epoch_model_filename())
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
     self.learning_rate_control.save()
-    if self.ctc_prior_file is not None:
-      trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
 
     print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
     self.eval_model()
@@ -646,9 +772,8 @@ class Engine(object):
                                                                       max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize))
       else:
         self.dataset_batches[dataset_name].reset()
-      tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
-                              report_prefix=self.get_epoch_str() + " eval", epoch=self.epoch)
-      tester.join()
+      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
+      tester.run(report_prefix=self.get_epoch_str() + " eval")
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       if dataset_name == "dev":

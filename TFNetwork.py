@@ -116,6 +116,7 @@ class TFNetwork(object):
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
     self.eval_flag = eval_flag
+    self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
     self.loss_by_layer = {}  # type: dict[str,tf.Tensor]
@@ -267,18 +268,35 @@ class TFNetwork(object):
     l = {}  # type: dict[str,dict[str,tf.Variable]]
     for layer_name, layer in self.layers.items():
       assert isinstance(layer, LayerBase)
-      l[layer_name] = {}  # type: dict[str,tf.Variable]
-      for param_name, param in layer.params.items():
-        assert isinstance(param, tf.Variable)
-        l[layer_name][param_name] = param
+      l[layer_name] = layer.params
     return l
 
   def get_trainable_params(self):
-    # TODO...
-    return self.get_params_list()  # at the moment just the same
+    """
+    :return: list of variables
+    :rtype: list[tf.Variable]
+    """
+    if not self._selected_train_layers:
+      self.declare_train_params()
+    l = []  # type: list[tf.Variable]
+    for layer_name in sorted(self._selected_train_layers):
+      layer = self.layers[layer_name]
+      assert isinstance(layer, LayerBase)
+      for param_name, param in sorted(layer.params.items()):
+        assert isinstance(param, tf.Variable)
+        l.append(param)
+    return l
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
-    pass  # TODO...
+    hidden_layer_selection = list(hidden_layer_selection)
+    if hidden_layer_selection is None:
+      hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+    if with_output is None:
+      with_output = True
+    if with_output:
+      hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
+    hidden_layer_selection = set(hidden_layer_selection)
+    self._selected_train_layers = sorted(hidden_layer_selection)
 
   def get_num_params(self):
     num_params = 0

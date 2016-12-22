@@ -343,6 +343,8 @@ class Loss(object):
     self.output_flat = None
     self.output_before_softmax_flat = None
     self.target_flat = None
+    # Maybe make configurable. For now, same as in our Theano behavior.
+    self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
 
   def init(self, output, output_before_softmax=None, target=None):
     """
@@ -376,13 +378,13 @@ class Loss(object):
       last_dim = tf.rank(self.output_flat) - 1  # should be 1
       if self.target.sparse:
         target_flat = check_input_ndim(self.target_flat, ndim=1)
-        return tf.reduce_mean(tf.cast(tf.not_equal(
+        return self.reduce_func(tf.cast(tf.not_equal(
           tf.arg_max(output_flat, dimension=last_dim),
           target_flat
         ), dtype="float32"))
       else:
         target_flat = check_shape_equal(self.target_flat, output_flat)
-        return tf.reduce_mean(tf.cast(tf.not_equal(
+        return self.reduce_func(tf.cast(tf.not_equal(
           tf.arg_max(output_flat, dimension=last_dim),
           tf.arg_max(target_flat, dimension=last_dim)
         ), dtype="float32"))
@@ -403,17 +405,17 @@ class CrossEntropyLoss(Loss):
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
-          return tf.reduce_mean(out)
+          return self.reduce_func(out)
         else:
           out = tf.log(tf.gather(self.output_flat, self.target_flat))
-          return -tf.reduce_mean(out)
+          return -self.reduce_func(out)
       else:  # not sparse
         if self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
-          return tf.reduce_mean(out)
+          return self.reduce_func(out)
         else:
           out = self.target_flat * tf.log(self.output_flat)
-          return -tf.reduce_mean(out)
+          return -self.reduce_func(out)
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
