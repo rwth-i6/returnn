@@ -43,11 +43,11 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   # adds blank labels to fsa
   num_states, edges = __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges)
 
-  # creates end state
-  num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
-
   # adds loops to fsa
   num_states, edges = __adds_loop_edges(num_states, edges)
+
+  # creates end state
+  num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
 
   return num_states, edges
 
@@ -144,6 +144,8 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   i = num_states
+  edges.append((i, i, 'blank', 1.))
+  edges.append((i, i, label_seq[-1], 1.))
   edges.append((i - 1, i, 'blank', 1.))
   edges.append((i - 2, i, label_seq[-1], 1.))
   edges.append((i - 3, i, label_seq[-1], 1.))
