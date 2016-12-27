@@ -379,7 +379,9 @@ class RecLayer(_ConcatInputLayer):
     if not self._rnn_cells_dict:
       self._create_rnn_cells_dict()
     rnn_cell_class = self._rnn_cells_dict[unit.lower()]
-    with tf.name_scope("rec") as scope:
+    with tf.variable_scope("rec") as scope:
+      assert isinstance(scope, tf.VariableScope)
+      scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       n_hidden = self.output.dim
       if bidirectional:
         assert n_hidden % 2 == 0
@@ -403,9 +405,9 @@ class RecLayer(_ConcatInputLayer):
         # Will get (time,batch,ydim).
         y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, sequence_length=seq_len, dtype="float32")
       self.output.placeholder = tf.transpose(y, perm=(1, 0, 2))  # (time,batch,dim)
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
-      print(params, [p.name[len(scope):-2] for p in params])  # TODO...
-      self.params.update({p.name[len(scope):-2]: p for p in params})
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+      assert params
+      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
 
 class SoftmaxLayer(LinearLayer):

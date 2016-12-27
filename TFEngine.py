@@ -401,11 +401,13 @@ def get_optimizer_class(class_name):
 
 
 class Updater(object):
-  def __init__(self, config):
+  def __init__(self, config, tf_session):
     """
     :param Config.Config config:
+    :param tf.Session tf_session:
     """
     self.config = config
+    self.tf_session = tf_session
     self.learning_rate_var = tf.Variable(initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
     self.loss = None  # type: tf.Tensor
@@ -472,12 +474,21 @@ class Updater(object):
     if not self.optimizer:
       self.create_optimizer()
 
-    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
 
     assert self.loss is not None
+    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
     self.optim_op = self.optimizer.minimize(
       self.loss, var_list=self.trainable_vars,
       aggregation_method=aggregation_method)
+
+    slot_vars = []
+    for slot_name in self.optimizer.get_slot_names():
+      for v in self.trainable_vars:
+        slot_var = self.optimizer.get_slot(var=v, name=slot_name)
+        assert slot_var is not None
+        slot_vars.append(slot_var)
+    self.tf_session.run(tf.initialize_variables(slot_vars, name="init_optim_slot_vars"))
 
   def get_optim_op(self):
     """
@@ -656,7 +667,7 @@ class Engine(object):
     self.network = network
     if self.train_data:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
-      self.updater = Updater(config=self.config)
+      self.updater = Updater(config=self.config, tf_session=self.tf_session)
       self.updater.set_loss(network.get_objective())
       self.updater.set_trainable_vars(network.get_trainable_params())
 

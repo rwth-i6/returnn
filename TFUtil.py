@@ -45,7 +45,16 @@ def reuse_name_scope(name):
     name = current_name_scope + "/" + name
   if name[-1] != "/":
     name += "/"
-  with g.name_scope(name) as scope:
+  # Actually, tf.variable_scope doesn't fully support the absolute name-scope with ending "/"
+  # but it uses tf.name_scope internally which uses this syntax.
+  with tf.variable_scope(name) as scope:
+    assert isinstance(scope, tf.VariableScope)
+    # remove "/" from the end of the var-scope.
+    # This is a work-around to fix up the variable scope behavior for nested variable scopes.
+    # WARNING: This might break at some future point.
+    assert scope.name is scope._name
+    assert scope.name[-1] == "/"
+    scope._name = scope._name[:-1]
     yield scope
 
 
