@@ -114,6 +114,7 @@ class DataProvider(object):
           self.tf_session.run(self.tf_queue.enqueue(enqueue_args))
         with self.state_change_cond:
           self.state_change_cond.notifyAll()
+        self.batches.advance(1)
 
       self.reached_end = not self.batches.has_more()
 
@@ -254,9 +255,11 @@ class Runner(object):
     :return: target name which is the data-key in the dataset, e.g. "classes"
     :rtype: str
     """
-    if ":" not in key:
-      return self.data_provider.extern_data.get_default_target_data()  # e.g. "classes"
-    return self.engine.network.layers[key.split(':')[-1]].target
+    if ":" in key:
+      layer = self.engine.network.layers[key.split(':')[-1]]
+      if layer.target:
+        return layer.target
+    return self.data_provider.extern_data.default_target  # e.g. "classes"
 
   def _epoch_norm_factor_for_result(self, key):
     target = self._get_target_for_key(key)

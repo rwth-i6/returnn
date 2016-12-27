@@ -359,6 +359,7 @@ class LinearLayer(_ConcatInputLayer):
 
 class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
+  recurrent = True
   _rnn_cells_dict = {}
 
   @classmethod
@@ -392,19 +393,19 @@ class RecLayer(_ConcatInputLayer):
         cell_bw = rnn_cell_class(n_hidden)
       else:
         cell_bw = None
-      x = tf.transpose(self.input_data.placeholder, perm=(1, 0, 2))  # (time,batch,dim)
+      x = self.input_data.placeholder  # (batch,time,dim)
       seq_len = self.input_data.size_placeholder[0]
       if bidirectional:
-        # Will get (time,batch,ydim/2).
+        # Will get (batch,time,ydim/2).
         (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
           cell_fw=cell_fw, cell_bw=cell_bw,
           inputs=x, sequence_length=seq_len,
           dtype="float32")
-        y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
+        y = tf.concat(2, (y_fw, y_bw))  # (batch,time,ydim)
       else:
-        # Will get (time,batch,ydim).
+        # Will get (batch,time,ydim).
         y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, sequence_length=seq_len, dtype="float32")
-      self.output.placeholder = tf.transpose(y, perm=(1, 0, 2))  # (time,batch,dim)
+      self.output.placeholder = y
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
