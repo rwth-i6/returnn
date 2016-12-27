@@ -51,6 +51,7 @@ class DataProvider(object):
       self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
     self.num_frames = NumbersDict(0)
+    self.thread_finished = False
     self.reached_end = False
 
   def start_thread(self):
@@ -94,7 +95,7 @@ class DataProvider(object):
             raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (
               ls, l[k], seq.seq_start_frame, seq.seq_end_frame, seq.seq_idx, self.dataset.get_seq_length(seq.seq_idx)))
           data[k][q, o[k]:o[k] + ls] = v
-          seq_lens[k][q] = max(seq_lens[q], o[k] + ls)
+          seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
     return data, seq_lens
 
   def thread_main(self):
@@ -107,12 +108,14 @@ class DataProvider(object):
         enqueue_args = data.copy()
         for k in data.keys():
           enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+        if self.queue:
+          self.queue.put(enqueue_args)
+        else:
+          self.tf_session.run(self.tf_queue.enqueue(enqueue_args))
         with self.state_change_cond:
-          if self.queue:
-            self.queue.put(enqueue_args)
-          else:
-            self.tf_session.run(self.tf_queue.enqueue(enqueue_args))
           self.state_change_cond.notifyAll()
+
+      self.reached_end = not self.batches.has_more()
 
     except Exception as exc:
       print("Exception in DataProvider thread: %r" % exc)
@@ -120,13 +123,14 @@ class DataProvider(object):
 
     finally:
       with self.state_change_cond:
-        self.reached_end = True
+        self.thread_finished = True
         self.state_change_cond.notifyAll()
 
   def have_more_data(self):
     """
     :return: when we go through an epoch and finished reading, this will return False
     If this returns True, you can definitely read another item from the queue.
+    Threading safety: This assumes that there is no other consumer thread for the queue.
     """
     with self.state_change_cond:
       while True:
@@ -135,7 +139,7 @@ class DataProvider(object):
           return True
         if self.tf_queue and self.tf_queue.size().eval(self.tf_session) > 0:
           return True
-        if self.reached_end:
+        if self.thread_finished:
           return False
         if not self.thread.is_alive:
           return False
@@ -160,7 +164,7 @@ class DataProvider(object):
     # And seq lengths info.
     for k in self.data_keys:
       data = self.extern_data.get_data(k)
-      for dim, len_placeholder in data.size_placeholder:
+      for dim, len_placeholder in data.size_placeholder.items():
         if dim == 0:  # time-dim
           d[len_placeholder] = output["%s_seq_lens" % k]
         else:
@@ -358,6 +362,9 @@ class Runner(object):
                             eval_info=eval_info)
         step += 1
 
+      if not self.data_provider.reached_end:
+        raise Exception("Did not successfully reached the end of the dataset.")
+
       self._finalize()
 
     except BaseException as exc:
@@ -467,6 +474,7 @@ class Updater(object):
 
     aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
 
+    assert self.loss is not None
     self.optim_op = self.optimizer.minimize(
       self.loss, var_list=self.trainable_vars,
       aggregation_method=aggregation_method)
@@ -614,7 +622,6 @@ class Engine(object):
       self.max_seq_length = sys.maxsize
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
-    self.updater = Updater(config=config)
 
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
@@ -647,7 +654,9 @@ class Engine(object):
     network.layers_desc = net_desc
     network.print_network_info()
     self.network = network
-    if self.updater:
+    if self.train_data:
+      # Need to create new Updater because it has the learning_rate var which must be in the current graph.
+      self.updater = Updater(config=self.config)
       self.updater.set_loss(network.get_objective())
       self.updater.set_trainable_vars(network.get_trainable_params())
 
@@ -667,7 +676,7 @@ class Engine(object):
 
   def train(self):
     if self.start_epoch:
-      print("start training at epoch %i and batch %i" % (self.start_epoch, self.start_batch), file=log.v3)
+      print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
     print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
@@ -781,18 +790,18 @@ class Engine(object):
     self.eval_model()
 
   def format_score(self, score):
+    if not score:
+      return "None"
     if len(score) == 1:
       return str(list(score.values())[0])
     return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
-  def _run_data_provider(self):
-    pass
-
   def _eval_model(self, dataset_name):
     batches = self.dataset_batches[dataset_name]
     report_prefix = self.get_epoch_str() + " eval"
     epoch = self.epoch
+    # TODO...
 
   def eval_model(self):
     eval_dump_str = []

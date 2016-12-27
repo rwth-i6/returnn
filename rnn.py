@@ -301,9 +301,10 @@ def finalize():
   global quit
   quit = True
   sys.exited = True
-  if engine:
-    for device in engine.devices:
-      device.terminate()
+  if BackendEngine.is_theano_selected():
+    if engine:
+      for device in engine.devices:
+        device.terminate()
 
 
 def needData():

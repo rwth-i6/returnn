@@ -336,10 +336,15 @@ class LinearLayer(_ConcatInputLayer):
 
     with tf.name_scope("linear"):
       from TFUtil import dot
-      x = dot(input_data.placeholder, W)
+      x = input_data.placeholder
+      ndim = x.get_shape().ndims
+
+      x = dot(x, W)
+      assert x.get_shape().ndims == ndim
 
       if self.with_bias:
         x = tf.add(x, b, name="add_bias")
+        assert x.get_shape().ndims == ndim
 
     if self.activation:
       from TFUtil import get_activation_function
@@ -456,20 +461,19 @@ class Loss(object):
     """
     with tf.name_scope("loss_frame_error"):
       from TFUtil import check_input_ndim, check_shape_equal
-      output_flat = check_input_ndim(self.output_flat, ndim=2)
-      last_dim = tf.rank(self.output_flat) - 1  # should be 1
+      output_flat = self.output_before_softmax_flat
+      if output_flat is None:
+        output_flat = self.output_flat
+      output_flat = check_input_ndim(output_flat, ndim=2)
+      last_dim = tf.rank(output_flat) - 1  # should be 1
+      output_label = tf.cast(tf.arg_max(output_flat, dimension=last_dim), "int32")
       if self.target.sparse:
-        target_flat = check_input_ndim(self.target_flat, ndim=1)
-        return self.reduce_func(tf.cast(tf.not_equal(
-          tf.arg_max(output_flat, dimension=last_dim),
-          target_flat
-        ), dtype="float32"))
+        target_label = check_input_ndim(self.target_flat, ndim=1)
       else:
         target_flat = check_shape_equal(self.target_flat, output_flat)
-        return self.reduce_func(tf.cast(tf.not_equal(
-          tf.arg_max(output_flat, dimension=last_dim),
-          tf.arg_max(target_flat, dimension=last_dim)
-        ), dtype="float32"))
+        target_label = tf.cast(tf.arg_max(target_flat, dimension=last_dim), "int32")
+      not_equal = tf.not_equal(output_label, target_label)
+      return self.reduce_func(tf.cast(not_equal, "float32"))
 
   def get_value(self):
     """

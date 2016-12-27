@@ -98,6 +98,28 @@ def check_input_ndim(x, ndim):
       return tf.identity(x, "identity_with_ndim_check")
 
 
+def check_input_ndim_equal_offset(x, y, y_ndim_offset=0):
+  """
+  :param tf.Tensor x:
+  :param tf.Tensor y:
+  :param int y_ndim_offset:
+  :return: x with check added such that ndim(x) == ndim(y) + y_ndim_offset
+  :rtype: tf.Tensor
+  """
+  x_dyn_shape = x.get_shape()
+  y_dyn_shape = y.get_shape()
+  if x_dyn_shape.ndims is not None and y_dyn_shape.ndims is not None:
+    assert x_dyn_shape.ndims == y_dyn_shape.ndims + y_ndim_offset
+    return x
+  # Need to fall-back to runtime check.
+  with reuse_name_scope("checks"):
+    with tf.control_dependencies(
+      [tf.assert_equal(tf.rank(x), tf.rank(y) + y_ndim_offset,
+                       data=["ndim not equal with offset %i" % y_ndim_offset,
+                             tf.shape(x), tf.shape(y)])]):
+      return tf.identity(x, "identity_with_ndim_equal_check")
+
+
 def check_input_dim(x, axis, dim):
   """
   :param tf.Tensor x:
@@ -246,7 +268,7 @@ def dot(a, b):
     res = tf.matmul(a, b)
     if a_ndim > 2 or b_ndim > 2:
       res = tf.reshape(
-        res, [a_shape[i] for i in range(a_ndim)] + [b_shape[i] for i in range(1, b_ndim)])
+        res, [a_shape[i] for i in range(0, a_ndim - 1)] + [b_shape[i] for i in range(1, b_ndim)])
     return res
 
 
@@ -267,10 +289,16 @@ def flatten_with_seq_len_mask(x, seq_lens):
   :rtype: tf.Tensor
   """
   with tf.name_scope("flatten_with_seq_len_mask"):
+    seq_lens = check_input_ndim(seq_lens, 1)
     x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
-    return tf.boolean_mask(x, mask)
+    mask = check_input_ndim(mask, 2)
+    mask = check_dim_equal(mask, 0, x, 0)
+    mask = check_dim_equal(mask, 1, x, 1)
+    res = tf.boolean_mask(x, mask)
+    res = check_input_ndim_equal_offset(res, x, -1)
+    return res
 
 
 def sparse_labels(x, seq_lens):
