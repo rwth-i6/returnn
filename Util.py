@@ -1178,3 +1178,22 @@ def auto_prefix_os_exec_prefix_ubuntu(prefix_args, ubuntu_min_version=16):
   print("You are running Ubuntu %i, thus we prefix all os.exec with %s." % (ubuntu_version, prefix_args))
   assert os.path.exists(prefix_args[0])
   overwrite_os_exec(prefix_args=prefix_args)
+
+
+def cleanup_env_var_path(env_var, path_prefix):
+  """
+  :param str env_var: e.g. "LD_LIBRARY_PATH"
+  :param str path_prefix:
+
+  Will remove all paths in os.environ[env_var] which are prefixed with path_prefix.
+  """
+  if env_var not in os.environ:
+    return
+  ps = os.environ[env_var].split(":")
+  def f(p):
+    if p == path_prefix or p.startswith(path_prefix + "/"):
+      print("Removing %s from %s." % (p, env_var))
+      return False
+    return True
+  ps = filter(f, ps)
+  os.environ[env_var] = ":".join(ps)
