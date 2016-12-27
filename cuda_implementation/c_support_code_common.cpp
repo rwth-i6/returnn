@@ -46,7 +46,7 @@ static const char *_cudaGetErrorEnum(cublasStatus_t error)
   return "<unknown>";
 }
 
-static void HandleError(cudaError_t err, const char *file, int line) 
+static void HandleError(cudaError_t err, const char *file, int line)
 {
   if (err != cudaSuccess)
   {

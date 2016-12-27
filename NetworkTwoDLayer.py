@@ -313,13 +313,7 @@ printed_cudnn_warning = False
 
 def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, filter_dilation, poolsize):
   global printed_cudnn_warning
-  import theano.sandbox.cuda as theano_cuda
-  have_cudnn = theano_cuda.cuda_enabled and theano.sandbox.cuda.dnn.dnn_available()
-  if theano_cuda.cuda_enabled and not have_cudnn and not printed_cudnn_warning:
-    print >> log.v1, "warning, cudnn not available, using theano conv implementation"
-    printed_cudnn_warning = True
-
-  if have_cudnn:
+  if theano.sandbox.cuda.dnn.dnn_available():
     conv_op = CuDNNConvHWBCOpValidInstance
     pool_op = PoolHWBCOp(poolsize)
     conv_out = conv_op(X, W, b) if filter_height * filter_width > 0 else X
@@ -328,6 +322,9 @@ def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height,
     Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
     return Y
   else:
+    if not printed_cudnn_warning:
+      print >> log.v2, "warning, cudnn not available, using theano conv implementation"
+      printed_cudnn_warning = True
     #note: this solution uses alot of dimshuffles and so also alot of memory
     #I only have this so that I can still run on my laptop for testing
     #it's not really useful for productive use and also not much tested
