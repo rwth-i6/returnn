@@ -14,7 +14,8 @@ from Pretrain import pretrainFromConfig
 from Network import LayerNetwork
 from TFNetwork import TFNetwork, ExternData
 from Util import hms, NumbersDict
-from threading import Thread
+from threading import Thread, Condition
+from Queue import Queue
 from Dataset import BatchSetGenerator
 
 
@@ -25,7 +26,7 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, extern_data, capacity=10):
+  def __init__(self, tf_session, dataset, batches, extern_data, capacity=10, have_fixed_batch_size=False):
     """
     :param tf.Session tf_session:
     :param Dataset.Dataset dataset:
@@ -39,7 +40,15 @@ class DataProvider(object):
     self.batches = batches
     self.extern_data = extern_data
     self.data_keys = sorted(extern_data.data.keys())
-    self.queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
+    self.state_change_cond = Condition()
+    self.queue = None  # type: Queue
+    self.tf_queue = None  # type: tf.FIFOQueue
+    self._have_fixed_batch_size = have_fixed_batch_size
+    if have_fixed_batch_size:
+      # TODO...
+      self.tf_queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
+    else:
+      self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
     self.num_frames = NumbersDict(0)
     self.reached_end = False
@@ -98,28 +107,53 @@ class DataProvider(object):
         enqueue_args = data.copy()
         for k in data.keys():
           enqueue_args["%s_seq_lens" % k] = seq_lens[k]
-        self.tf_session.run(self.queue.enqueue(enqueue_args))
-
-      self.reached_end = not self.batches.has_more()
+        with self.state_change_cond:
+          if self.queue:
+            self.queue.put(enqueue_args)
+          else:
+            self.tf_session.run(self.tf_queue.enqueue(enqueue_args))
+          self.state_change_cond.notifyAll()
 
     except Exception as exc:
       print("Exception in DataProvider thread: %r" % exc)
       sys.excepthook(*sys.exc_info())
 
-  def is_data_finished(self):
-    """
-    :return: when we go through an epoch and finished reading, this will return True
-    """
-    if not self.reached_end:
-      return False
-    return self.queue.size().eval(self.tf_session) == 0
+    finally:
+      with self.state_change_cond:
+        self.reached_end = True
+        self.state_change_cond.notifyAll()
 
-  def get_feed_dict(self):
+  def have_more_data(self):
     """
+    :return: when we go through an epoch and finished reading, this will return False
+    If this returns True, you can definitely read another item from the queue.
+    """
+    with self.state_change_cond:
+      while True:
+        # First check if there is still data in the queue to be processed.
+        if self.queue and not self.queue.empty():
+          return True
+        if self.tf_queue and self.tf_queue.size().eval(self.tf_session) > 0:
+          return True
+        if self.reached_end:
+          return False
+        if not self.thread.is_alive:
+          return False
+        # The thread is alive and working. Wait for a change.
+        self.state_change_cond.wait()
+
+  def get_feed_dict(self, previous_feed_dict):
+    """
+    :param dict[tf.Tensor,tf.Tensor]|None previous_feed_dict:
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
     """
-    output = self.queue.dequeue()
+    if previous_feed_dict and self._have_fixed_batch_size:
+      # We can reuse the same feed dict every time.
+      # It is based on the tf_queue.dequeue() which is symbolic.
+      assert self.tf_queue and not self.queue
+      return previous_feed_dict
+    output = self.queue.get() if self.queue else self.tf_queue.dequeue()
     assert isinstance(output, dict)
     # The data itself.
     d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
@@ -164,9 +198,6 @@ class Runner(object):
     from Util import terminal_size
     terminal_width, _ = terminal_size()
     self._show_interactive_process_bar = (log.v[3] and terminal_width >= 0)
-
-  def _get_feed_dict(self):
-    return self.data_provider.get_feed_dict()
 
   def _get_fetches_dict(self):
     """
@@ -232,7 +263,7 @@ class Runner(object):
     """
     Called at the end of an epoch.
     """
-    assert self.data_provider.is_data_finished()
+    assert not self.data_provider.have_more_data()
     assert self.data_provider.num_frames["data"] > 0
     results = {key: value * self._epoch_norm_factor_for_result(key)
                for (key, value) in self._results_accumulated.items()}
@@ -297,8 +328,9 @@ class Runner(object):
       # step is like mini-batch in our usual terminology
       step = 0
       fetches_dict = self._get_fetches_dict()
-      feed_dict = self.data_provider.get_feed_dict()
-      while not self.data_provider.is_data_finished():
+      feed_dict = None
+      while self.data_provider.have_more_data():
+        feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
         start_time = time.time()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
