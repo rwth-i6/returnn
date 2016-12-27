@@ -137,7 +137,7 @@ class DataProvider(object):
         # First check if there is still data in the queue to be processed.
         if self.queue and not self.queue.empty():
           return True
-        if self.tf_queue and self.tf_queue.size().eval(self.tf_session) > 0:
+        if self.tf_queue and self.tf_queue.size().eval(session=self.tf_session) > 0:
           return True
         if self.thread_finished:
           return False
@@ -311,6 +311,25 @@ class Runner(object):
       eval_info[key] = value / float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
     return eval_info
 
+  def _check_uninitialized_vars(self):
+    """
+    All vars in TF which are controlled by us should also have been initialized by us.
+    We also take care about the optimizer slot variables.
+    However, TF can still create other vars which we do not know about.
+    E.g. the Adam optimizer creates the beta1_power/beta2_power vars (which are no slot vars).
+    Here, we find all remaining uninitialized vars, report about them and initialize them.
+    """
+    # Like tf.report_uninitialized_variables().
+    var_list = tf.all_variables() + tf.local_variables()
+    # Get a 1-D boolean tensor listing whether each variable is initialized.
+    var_mask = tf.logical_not(tf.pack(
+      [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.engine.tf_session)
+    assert len(var_mask) == len(var_list)
+    uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
+    if uninitialized_vars:
+      print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
+      self.engine.tf_session.run(tf.initialize_variables(uninitialized_vars))
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging
@@ -332,6 +351,8 @@ class Runner(object):
       # step is like mini-batch in our usual terminology
       step = 0
       fetches_dict = self._get_fetches_dict()
+      # After get_fetches_dict, maybe some new uninitialized vars. Last check.
+      self._check_uninitialized_vars()
       feed_dict = None
       while self.data_provider.have_more_data():
         feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
@@ -474,7 +495,6 @@ class Updater(object):
     if not self.optimizer:
       self.create_optimizer()
 
-    print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
 
     assert self.loss is not None
     aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
@@ -482,6 +502,7 @@ class Updater(object):
       self.loss, var_list=self.trainable_vars,
       aggregation_method=aggregation_method)
 
+    print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
     for slot_name in self.optimizer.get_slot_names():
       for v in self.trainable_vars:
