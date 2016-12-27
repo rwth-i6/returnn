@@ -230,13 +230,23 @@ def identity_with_ops(x, ops):
       return tf.identity(x, name="identity_with_ops")
 
 
+_list_local_devices = None
+
+def _get_tf_list_local_devices():
+  global _list_local_devices
+  if _list_local_devices:
+    return _list_local_devices
+  _list_local_devices = list(device_lib.list_local_devices())
+  return _list_local_devices
+
+
 def print_available_devices():
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
   print("Collecting TensorFlow device list...")
-  devs = list(device_lib.list_local_devices())
+  devs = _get_tf_list_local_devices()
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
@@ -244,7 +254,7 @@ def print_available_devices():
 
 def is_gpu_available():
   """Returns whether TensorFlow can access a GPU."""
-  return any(x.device_type == 'GPU' for x in device_lib.list_local_devices())
+  return any(x.device_type == 'GPU' for x in _get_tf_list_local_devices())
 
 
 def dot(a, b):

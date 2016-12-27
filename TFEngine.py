@@ -543,6 +543,11 @@ class Engine(object):
     :rtype: list[dict[str]]
     """
     from Device import getDevicesInitArgs
+    if not self.config.value("device", None):
+      # Better default: Use GPU if available.
+      from TFUtil import is_gpu_available
+      if is_gpu_available():
+        self.config.set("device", "gpu")
     return getDevicesInitArgs(self.config)
 
   def is_requesting_for_gpu(self):
