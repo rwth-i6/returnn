@@ -496,18 +496,32 @@ class CtcLoss(Loss):
   recurrent = True
 
   def get_value(self):
+    if not self.target.sparse:
+      raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc"):
-      if self.target.sparse:
-        logits = self.output_before_softmax
-        if logits is None:
-          logits = tf.log(self.output)
-        seq_lens = self.output_seq_lens
-        from TFUtil import sparse_labels
-        labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
-        loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=True)
-        return tf.reduce_mean(loss)  # or self.reduce_func?
-      else:  # not sparse
-        raise Exception("CTC target expected to be sparse (symbols)")
+      logits = self.output_before_softmax
+      if logits is None:
+        logits = tf.log(self.output)
+      seq_lens = self.output_seq_lens
+      from TFUtil import sparse_labels
+      labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
+      loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=True)
+      return tf.reduce_mean(loss)  # or self.reduce_func?
+
+  def get_error(self):
+    if not self.target.sparse:
+      raise Exception("CTC target expected to be sparse (symbols)")
+    with tf.name_scope("loss_ctc_error"):
+      logits = self.output_before_softmax
+      if logits is None:
+        logits = tf.log(self.output)
+      logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
+      seq_lens = self.output_seq_lens
+      decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
+      from TFUtil import sparse_labels
+      labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
+      error = tf.edit_distance(hypothesis=decoded, truth=labels)
+      return tf.reduce_mean(error)  # or self.reduce_func?
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
