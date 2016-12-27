@@ -196,6 +196,14 @@ class LayerBase(object):
     target = self.network.extern_data.get_data(self.target)
     return target
 
+  def _init_loss(self):
+    if self.loss.output is self.output:
+      return
+    self.loss.init(
+      output=self.output,
+      output_before_softmax=self.output_before_softmax,
+      target=self._get_target_value())
+
   def get_loss_value(self):
     """
     :return: the loss, a scalar value, or None if not set
@@ -203,11 +211,8 @@ class LayerBase(object):
     """
     if not self.loss:
       return None
+    self._init_loss()
     with tf.name_scope("loss"):
-      self.loss.init(
-        output=self.output,
-        output_before_softmax=self.output_before_softmax,
-        target=self._get_target_value())
       return self.loss.get_value()
 
   def get_error_value(self):
@@ -215,7 +220,11 @@ class LayerBase(object):
     :return: usually the frame error rate, or None if not defined
     :rtype: tf.Tensor | None
     """
-    # TODO ...
+    if not self.loss:
+      return None
+    self._init_loss()
+    with tf.name_scope("error"):
+      return self.loss.get_error()
 
   def get_params_l2_norm(self):
     return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
