@@ -1031,3 +1031,150 @@ class CollectionReadCheckCovered:
     remaining = set(self.collection).difference(self.got_items)
     assert not remaining, "The keys %r were not read in the collection %r." % (remaining, self.collection)
 
+
+def which(program):
+  def is_exe(fpath):
+    return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+  fpath, fname = os.path.split(program)
+  if fpath:
+    if is_exe(program):
+      return program
+  else:
+    for path in os.environ["PATH"].split(os.pathsep):
+      path = path.strip('"')
+      exe_file = os.path.join(path, program)
+      if is_exe(exe_file):
+        return exe_file
+
+  return None
+
+_original_execv = None
+_original_execve = None
+_original_execvpe = None
+
+def overwrite_os_exec(prefix_args):
+  """
+  :param list[str] prefix_args:
+  """
+  global _original_execv, _original_execve, _original_execvpe
+  if not _original_execv:
+    _original_execv = os.execv
+  if not _original_execve:
+    _original_execve = os.execve
+  if not _original_execvpe:
+    _original_execvpe = os._execvpe
+
+  def wrapped_execvpe(file, args, env=None):
+    new_args = prefix_args + [which(args[0])] + args[1:]
+    sys.stderr.write("$ %s\n" % " ".join(new_args))
+    sys.stderr.flush()
+    _original_execvpe(file=prefix_args[0], args=new_args, env=env)
+
+  def execv(path, args):
+    if args[:len(prefix_args)] == prefix_args:
+      _original_execv(path, args)
+    else:
+      wrapped_execvpe(path, args)
+
+  def execve(path, args, env):
+    if args[:len(prefix_args)] == prefix_args:
+      _original_execve(path, args, env)
+    else:
+      wrapped_execvpe(path, args, env)
+
+  def execl(file, *args):
+    """execl(file, *args)
+
+    Execute the executable file with argument list args, replacing the
+    current process. """
+    os.execv(file, args)
+
+  def execle(file, *args):
+    """execle(file, *args, env)
+
+    Execute the executable file with argument list args and
+    environment env, replacing the current process. """
+    env = args[-1]
+    os.execve(file, args[:-1], env)
+
+  def execlp(file, *args):
+    """execlp(file, *args)
+
+    Execute the executable file (which is searched for along $PATH)
+    with argument list args, replacing the current process. """
+    os.execvp(file, args)
+
+  def execlpe(file, *args):
+    """execlpe(file, *args, env)
+
+    Execute the executable file (which is searched for along $PATH)
+    with argument list args and environment env, replacing the current
+    process. """
+    env = args[-1]
+    os.execvpe(file, args[:-1], env)
+
+  def execvp(file, args):
+    """execvp(file, args)
+
+    Execute the executable file (which is searched for along $PATH)
+    with argument list args, replacing the current process.
+    args may be a list or tuple of strings. """
+    wrapped_execvpe(file, args)
+
+  def execvpe(file, args, env):
+    """execvpe(file, args, env)
+
+    Execute the executable file (which is searched for along $PATH)
+    with argument list args and environment env , replacing the
+    current process.
+    args may be a list or tuple of strings. """
+    wrapped_execvpe(file, args, env)
+
+  os.execv = execv
+  os.execve = execve
+  os.execl = execl
+  os.execle = execle
+  os.execlp = execlp
+  os.execlpe = execlpe
+  os.execvp = execvp
+  os.execvpe = execvpe
+  os._execvpe = wrapped_execvpe
+
+
+def get_lsb_release():
+  d = {}
+  for l in open("/etc/lsb-release").read().splitlines():
+    k, v = l.split("=", 1)
+    if v[0] == v[-1] == "\"":
+      v = v[1:-1]
+    d[k] = v
+  return d
+
+
+def get_ubuntu_major_version():
+  """
+  :rtype: int|None
+  """
+  d = get_lsb_release()
+  if d["DISTRIB_ID"] != "Ubuntu":
+    return None
+  return int(float(d["DISTRIB_RELEASE"]))
+
+
+def auto_prefix_os_exec_prefix_ubuntu(prefix_args, ubuntu_min_version=16):
+  """
+  :param list[str] prefix_args:
+  :param int ubuntu_min_version:
+
+  Example usage:
+    auto_prefix_os_exec_prefix_ubuntu(["/u/zeyer/tools/glibc217/ld-linux-x86-64.so.2"])
+  """
+  ubuntu_version = get_ubuntu_major_version()
+  if ubuntu_version is None:
+    return
+  if ubuntu_version >= ubuntu_min_version:
+    return
+  print("You are running Ubuntu %i, thus we prefix all os.exec with %s." % (ubuntu_version, prefix_args))
+  assert os.path.exists(prefix_args[0])
+  overwrite_os_exec(prefix_args=prefix_args)
