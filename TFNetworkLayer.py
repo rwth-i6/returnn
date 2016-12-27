@@ -10,6 +10,9 @@ class Data(object):
   This is used in TFNetwork to describe the dataset external data
   as well as for every layer output.
   """
+
+  size_dtype = "int32"
+
   def __init__(self, name,
                shape=None, dtype=None,
                placeholder=None,
@@ -65,12 +68,15 @@ class Data(object):
           if dim is None:
             # For each batch a separate size.
             size_placeholder[i] = tf.placeholder(
-              name="%s_dim%i_size" % (name, i), dtype="int64", shape=(None,))
+              name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
     self.size_placeholder = size_placeholder
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim"]
     return {key: getattr(self, key) for key in keys}
+
+  def get_variable_dim_pattern(self):
+    return tuple([dim is None for dim in self.shape])
 
   def get_description(self, with_name=True, with_placeholder=False):
     keys = ["shape", "dtype", "sparse"]
@@ -117,6 +123,13 @@ class LayerBase(object):
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
     self.output = Data(**out_type)
+    # You are not supposed to set self.output.placeholder to the value which you want to return by the layer.
+    # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
+    # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
+    # We check for this case and preset it by that if possible.
+    # If you want to have it different in your layer, just overwrite it.
+    if sources and sources[0].output.get_variable_dim_pattern() == self.output.get_variable_dim_pattern():
+      self.output.size_placeholder = sources[0].output.size_placeholder.copy()
     self.output_before_softmax = None  # type: None|tf.Tensor
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]

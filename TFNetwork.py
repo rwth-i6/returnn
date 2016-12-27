@@ -92,7 +92,7 @@ class ExternData(object):
     for name in list(names):
       names.append("%s_seq_lens" % name)
       shapes.append((fixed_batch_dim,) if with_batch_dim else ())
-      dtypes.append("int64")
+      dtypes.append(self.data[name].size_dtype)
     return {"names": names, "shapes": shapes, "dtypes": dtypes}
 
 
@@ -335,7 +335,7 @@ class TFNetwork(object):
 
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
-    self.saver = tf.train.Saver(var_list=self.get_params_list(), max_to_keep=sys.maxint)
+    self.saver = tf.train.Saver(var_list=self.get_params_list(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
     """

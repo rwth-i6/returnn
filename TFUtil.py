@@ -130,8 +130,8 @@ def check_dim_equal(x, x_axis, y, y_axis):
   x_dyn_shape = x.get_shape()
   y_dyn_shape = y.get_shape()
   if x_dyn_shape.ndims is not None and y_dyn_shape.ndims is not None:
-    if x_dyn_shape.dims[x_axis] is not None and y_dyn_shape.dims[y_axis] is not None:
-      assert x_dyn_shape.dims[x_axis] == y_dyn_shape.dims[y_axis]
+    if x_dyn_shape.dims[x_axis].value is not None and y_dyn_shape.dims[y_axis].value is not None:
+      assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value
       return x
   # Need to fall-back to runtime check.
   with reuse_name_scope("checks"):
@@ -156,8 +156,8 @@ def check_shape_equal(x, y):
     assert x_dyn_shape.ndims == y_dyn_shape.ndims
     have_unknown = False
     for axis in range(x_dyn_shape.ndims):
-      if x_dyn_shape.dims[axis] is not None and y_dyn_shape.dims[axis] is not None:
-        assert x_dyn_shape.dims[axis] == y_dyn_shape.dims[axis]
+      if x_dyn_shape.dims[axis].value is not None and y_dyn_shape.dims[axis].value is not None:
+        assert x_dyn_shape.dims[axis].value == y_dyn_shape.dims[axis].value
       else:
         have_unknown = True
     if not have_unknown:
@@ -262,12 +262,13 @@ def get_activation_function(s):
 def flatten_with_seq_len_mask(x, seq_lens):
   """
   :param tf.Tensor x: shape (batch,time,...s...)
-  :param tf.Tensor seq_lens: shape (batch,) of int64
+  :param tf.Tensor seq_lens: shape (batch,) of int32
   :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
   with tf.name_scope("flatten_with_seq_len_mask"):
-    x = check_dim_equal(x, 0, seq_lens, 0)
+    x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
+    # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     return tf.boolean_mask(x, mask)
 
@@ -275,7 +276,7 @@ def flatten_with_seq_len_mask(x, seq_lens):
 def sparse_labels(x, seq_lens):
   """
   :param tf.Tensor x: shape (batch,time)
-  :param tf.Tensor seq_lens: shape (batch,) of int64
+  :param tf.Tensor seq_lens: shape (batch,) of int32
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
   :rtype: tf.SparseTensor
   """

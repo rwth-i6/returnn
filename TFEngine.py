@@ -76,7 +76,7 @@ class DataProvider(object):
     shapes = self.dataset.shapes_for_batches([batch], data_keys=self.data_keys, batch_dim_first=True)
     data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.get_data(k).dtype)
             for k in self.data_keys}
-    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype="int64")
+    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.get_data(k).size_dtype)
                 for k in self.data_keys}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
     self.num_frames += batch.get_total_num_frames()
