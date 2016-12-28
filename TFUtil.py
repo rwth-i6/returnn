@@ -9,12 +9,12 @@ def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
   with tf.name_scope('summaries_%s' % name):
     mean = tf.reduce_mean(var)
-    tf.scalar_summary('%s_mean' % name, mean)
+    tf.summary.scalar('%s_mean' % name, mean)
     with tf.name_scope('stddev'):
       stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-    tf.scalar_summary('%s_stddev' % name, stddev)
-    tf.scalar_summary('%s_max' % name, tf.reduce_max(var))
-    tf.scalar_summary('%s_min' % name, tf.reduce_min(var))
+    tf.summary.scalar('%s_stddev' % name, stddev)
+    tf.summary.scalar('%s_max' % name, tf.reduce_max(var))
+    tf.summary.scalar('%s_min' % name, tf.reduce_min(var))
     tf.histogram_summary('%s_histogram' % name, var)
 
 

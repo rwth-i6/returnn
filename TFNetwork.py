@@ -217,9 +217,9 @@ class TFNetwork(object):
           error = layer.get_error_value()
           constraints = layer.get_constraints_value()
           if loss is not None:
-            tf.scalar_summary("loss_%s" % layer.name, loss)
+            tf.summary.scalar("loss_%s" % layer.name, loss)
           if error is not None:
-            tf.scalar_summary("error_%s" % layer.name, error)
+            tf.summary.scalar("error_%s" % layer.name, error)
         if loss is not None:
           self.loss_by_layer[name] = loss
           self.total_loss += loss
@@ -227,10 +227,10 @@ class TFNetwork(object):
           self.error_by_layer[name] = error
         if constraints is not None:
           self.total_constraints += constraints
-      tf.scalar_summary("loss", self.total_loss)
-      tf.scalar_summary("constraints", self.total_constraints)
+      tf.summary.scalar("loss", self.total_loss)
+      tf.summary.scalar("constraints", self.total_constraints)
       self.total_objective = self.total_loss + self.total_constraints
-      tf.scalar_summary("objective", self.total_objective)
+      tf.summary.scalar("objective", self.total_objective)
 
   def get_all_losses(self):
     if self.total_objective is None:
@@ -311,7 +311,7 @@ class TFNetwork(object):
     """
     :param tf.Session session:
     """
-    session.run(tf.initialize_variables(var_list=self.get_params_list()))
+    session.run(tf.variables_initializer(var_list=self.get_params_list()))
 
   def get_param_values_dict(self, session):
     """

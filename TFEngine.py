@@ -209,7 +209,7 @@ class Runner(object):
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
     :rtype: dict[str,tf.Tensor|tf.Operation]
     """
-    d = {"summary": tf.merge_all_summaries()}
+    d = {"summary": tf.summary.merge_all()}
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
       for dim, v in data.size_placeholder.items():
@@ -323,7 +323,7 @@ class Runner(object):
     Here, we find all remaining uninitialized vars, report about them and initialize them.
     """
     # Like tf.report_uninitialized_variables().
-    var_list = tf.all_variables() + tf.local_variables()
+    var_list = tf.global_variables() + tf.local_variables()
     # Get a 1-D boolean tensor listing whether each variable is initialized.
     var_mask = tf.logical_not(tf.pack(
       [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.engine.tf_session)
@@ -331,7 +331,7 @@ class Runner(object):
     uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
     if uninitialized_vars:
       print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
-      self.engine.tf_session.run(tf.initialize_variables(uninitialized_vars))
+      self.engine.tf_session.run(tf.variables_initializer(uninitialized_vars))
 
   def run(self, report_prefix):
     """
@@ -339,7 +339,7 @@ class Runner(object):
     """
     sess = self.engine.tf_session
     logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    writer = tf.train.SummaryWriter(logdir)
+    writer = tf.summary.FileWriter(logdir)
     writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
 
@@ -526,7 +526,7 @@ class Updater(object):
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
         assert slot_var is not None
         slot_vars.append(slot_var)
-    self.tf_session.run(tf.initialize_variables(slot_vars, name="init_optim_slot_vars"))
+    self.tf_session.run(tf.variables_initializer(slot_vars, name="init_optim_slot_vars"))
 
   def get_optim_op(self):
     """
