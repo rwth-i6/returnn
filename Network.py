@@ -464,6 +464,7 @@ class LayerNetwork(object):
     kwargs = kwargs.copy()
     if "n_out" not in kwargs:
       n_in, n_out = cls._n_in_out_from_hdf_model(model)
+      n_out['__final'] = True
       kwargs["n_in"] = n_in
       kwargs["n_out"] = n_out
     network = cls.from_json(json_content, **kwargs)
@@ -591,7 +592,7 @@ class LayerNetwork(object):
       targets = self.y[target]
     else:
       targets = None
-    if self.loss == "ctc":
+    if self.loss == "ctc" and not '__final' in self.n_out:
       self.n_out[target][0] += 1
     elif self.loss == "hmm":
       self.n_out[target][0] = 2 * self.n_out[target][0] - 1  # silence has only 1 state
