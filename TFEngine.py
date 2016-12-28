@@ -547,7 +547,10 @@ class Engine(object):
       # Better default: Use GPU if available.
       from TFUtil import is_gpu_available
       if is_gpu_available():
+        print("Device not set explicitly, and we found a GPU, which we will use.", file=log.v2)
         self.config.set("device", "gpu")
+      else:
+        print("Device not set explicitly, and no GPU found.", file=log.v2)
     return getDevicesInitArgs(self.config)
 
   def is_requesting_for_gpu(self):

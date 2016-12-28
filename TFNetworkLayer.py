@@ -260,7 +260,7 @@ def concat_sources(src_layers):
   if len(src_layers) == 1:
     return src_layers[0].output
   assert not src_layers[0].output.sparse, "sparse concat not supported"
-  shape = src_layers[0].output.shape
+  shape = src_layers[0].output.shape  # without batch-dim
   assert shape, "source must not be a scalar of layer %r" % src_layers[0]
   prefix_shape = shape[:-1]
   dim = 0
@@ -268,6 +268,7 @@ def concat_sources(src_layers):
   for layer in src_layers:
     assert layer.output.dtype == dtype, "incompatible dtype with layer %r" % layer
     shape = layer.output.shape
+    assert layer.output.placeholder.get_shape().ndims == len(shape) + 1  # with batch-dim
     assert shape, "source must not be a scalar of layer %r" % layer
     assert shape[:-1] == prefix_shape, "incompatible concat with layer %r" % layer
     assert shape[-1], "source last-dim must be specified of layer %r" % layer
@@ -279,7 +280,7 @@ def concat_sources(src_layers):
     sparse=False,
     dtype=dtype)
   data.placeholder = tf.concat(
-    concat_dim=len(prefix_shape),
+    concat_dim=len(prefix_shape) + 1,  # one more because this is with batch-dim
     values=[layer.output.placeholder for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder
   return data
@@ -374,9 +375,14 @@ class RecLayer(_ConcatInputLayer):
         assert name not in cls._rnn_cells_dict
         cls._rnn_cells_dict[name] = v
 
-  def __init__(self, bidirectional=False, unit="basiclstm", **kwargs):
+  def __init__(self, unit="basiclstm", bidirectional=False, direction=None, **kwargs):
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn, rnn_cell
+    if unit in ["lstmp", "lstm"]:
+      unit = "basiclstm"
+    if direction is not None:
+      assert not bidirectional
+      assert direction in [-1, 1]
     if not self._rnn_cells_dict:
       self._create_rnn_cells_dict()
     rnn_cell_class = self._rnn_cells_dict[unit.lower()]
@@ -395,6 +401,8 @@ class RecLayer(_ConcatInputLayer):
         cell_bw = None
       x = self.input_data.placeholder  # (batch,time,dim)
       seq_len = self.input_data.size_placeholder[0]
+      if direction == -1:
+        x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=0, seq_dim=1)
       if bidirectional:
         # Will get (batch,time,ydim/2).
         (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
@@ -405,6 +413,8 @@ class RecLayer(_ConcatInputLayer):
       else:
         # Will get (batch,time,ydim).
         y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, sequence_length=seq_len, dtype="float32")
+      if direction == -1:
+        y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=0, seq_dim=1)
       self.output.placeholder = y
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
