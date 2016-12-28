@@ -465,6 +465,10 @@ class Updater(object):
     lr = self.learning_rate_var
     epsilon = 1e-16
     momentum = self.config.float("momentum", 0.0)
+    if self.config.float("gradient_clip", 0.0):
+      raise NotImplementedError("gradient_clip not implemented yet")
+    if self.config.float("gradient_noise", 0.0):
+      raise NotImplementedError("gradient_noise not implemented yet")
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
       assert isinstance(optim_config, dict)
@@ -482,6 +486,16 @@ class Updater(object):
       assert not momentum
       print("Create Adam optimizer.", file=log.v2)
       optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
+    elif self.config.bool("nadam", False):
+      raise NotImplementedError("NAdam not implemented yet.")
+    elif self.config.bool("adadelta", False):
+      assert not momentum
+      print("Create Adadelta optimizer.", file=log.v2)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon)
+    elif self.config.bool("adagrad", False):
+      assert not momentum
+      print("Create Adagrad optimizer.", file=log.v2)
+      optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
       optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
