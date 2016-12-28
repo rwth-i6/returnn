@@ -22,11 +22,11 @@ class Data(object):
                auto_create_placeholders=False):
     """
     :param str name:
-    :param tuple[int|None] shape: including time-dim, which can be None. excluding batch-dim
+    :param tuple[int|None] shape: including time-dim (can be None). excluding batch-dim. e.g. (time,feat)=(None,128)
     :param str dtype: e.g. "float32" or "int64"
     :param tf.Tensor|None placeholder: with added batch-dim
     :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
-    :param None|int dim: shape[-1] if not sparse, otherwise like num_classes
+    :param None|int dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size
     """
     self.name = name
@@ -45,8 +45,8 @@ class Data(object):
       if sparse:
         shape = (None,)  # assume common (time,)
       else:
-        shape = (None, dim)  # assume common (time,dim)
-    self.shape = shape
+        shape = (None, dim)  # assume common (time,feat)
+    self.shape = shape  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -88,7 +88,11 @@ class Data(object):
 
   @property
   def batch_shape(self):
-      return (None,) + self.shape
+    """
+    :return: shape with added batch-dim at the beginning. e.g. (batch,time,feat) = (None,None,128)
+    :rtype: tuple[int|None]
+    """
+    return (None,) + self.shape
 
 
 class LayerBase(object):
@@ -324,7 +328,7 @@ class LinearLayer(_ConcatInputLayer):
     W = self.add_param(
       tf.Variable(
         name="W",
-        initial_value=tf.contrib.layers.xavier_initializer()(
+        initial_value=tf.contrib.layers.xavier_initializer(seed=self.network.random.randint(2**31))(
           shape=(n_in, n_out))))
 
     if self.with_bias:
@@ -386,7 +390,10 @@ class RecLayer(_ConcatInputLayer):
     if not self._rnn_cells_dict:
       self._create_rnn_cells_dict()
     rnn_cell_class = self._rnn_cells_dict[unit.lower()]
-    with tf.variable_scope("rec") as scope:
+    with tf.variable_scope(
+          "rec",
+          initializer=tf.contrib.layers.xavier_initializer(
+            seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       n_hidden = self.output.dim
@@ -394,7 +401,7 @@ class RecLayer(_ConcatInputLayer):
         assert n_hidden % 2 == 0
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, rnn_cell.RNNCell)
+      assert isinstance(cell_fw, rnn_cell.RNNCell)  # e.g. BasicLSTMCell
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
