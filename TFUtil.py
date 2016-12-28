@@ -240,9 +240,26 @@ def _get_tf_list_local_devices():
   return _list_local_devices
 
 
+def _parse_physical_device_desc(s):
+  """
+  :param str s: string via dev.physical_device_desc. e.g. "device: 0, name: GeForce GTX 980, pci bus id: 0000:41:00.0"
+  :return: dict key -> value
+  :rtype: dict[str,str]
+  """
+  d = {}
+  for part in s.split(","):
+    part = part.strip()
+    key, value = part.split(":", 1)
+    key, value = key.strip(), value.strip()
+    d[key] = value
+  return d
+
+
 def print_available_devices():
+  cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
+    cuda_visible_devs = dict(enumerate(map(int, os.environ["CUDA_VISIBLE_DEVICES"].split(","))))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
   print("Collecting TensorFlow device list...")
@@ -250,6 +267,17 @@ def print_available_devices():
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
+
+  # Theano prints sth like: Using gpu device 2: GeForce GTX 980 (...)
+  # Print in a similar format so that some scripts which grep our stdout work just as before.
+  for dev in devs:
+    if dev.device_type == "GPU":
+      d = _parse_physical_device_desc(dev.physical_device_desc)
+      dev_id = int(d["device"])
+      if cuda_visible_devs:
+        dev_id = cuda_visible_devs[dev_id]
+      dev_name = d["name"]
+      print("Using gpu device %i: %s" % (dev_id, dev_name))
 
 
 def is_gpu_available():
