@@ -180,6 +180,10 @@ class LayerBase(object):
     :param tf.Session session:
     """
     for param_name, values in values_dict.items():
+      shape = self.params[param_name].get_shape()
+      assert isinstance(shape, tf.TensorShape)
+      assert shape.is_fully_defined()
+      assert tuple(shape.as_list()) == values.shape
       session.run(tf.assign(self.params[param_name], values))
 
   def get_param_values_dict(self, session):
