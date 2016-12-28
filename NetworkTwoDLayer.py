@@ -124,7 +124,7 @@ class TwoDToOneDLayer(TwoDBaseLayer):
 
     n_out = self.sources[0].attrs['n_out']
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y, n_out, force_sample=True)
+      Y = self.batch_norm(Y, n_out, force_sample=False)
     self.output = Y
     self.act = [Y, Y]
     self.set_attr('n_out', n_out)
@@ -443,7 +443,7 @@ class ConvPoolLayer2(ConvBaseLayer):
                           self.filter_width, filter_dilation, pool_size)
     Y = self.activation(Z)
     if self.attrs['batch_norm']:
-      Y = self.batch_norm(Y,self.attrs['n_out'],index=sizes, force_sample=False)
+      Y = self.batch_norm(Y,self.attrs['n_out'], index=sizes, force_sample=False)
 
     self.output = Y
 
