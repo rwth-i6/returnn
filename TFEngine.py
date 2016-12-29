@@ -45,7 +45,7 @@ class DataProvider(object):
     self.tf_queue = None  # type: tf.FIFOQueue
     self._have_fixed_batch_size = have_fixed_batch_size
     if have_fixed_batch_size:
-      # TODO...
+      # TODO... also cache this ....
       self.tf_queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
     else:
       self.queue = Queue(maxsize=capacity)
@@ -111,7 +111,7 @@ class DataProvider(object):
         if self.queue:
           self.queue.put(enqueue_args)
         else:
-          self.tf_session.run(self.tf_queue.enqueue(enqueue_args))
+          self.tf_session.run(self.tf_queue.enqueue(enqueue_args))  # TODO cache op
         with self.state_change_cond:
           self.state_change_cond.notifyAll()
         self.batches.advance(1)
@@ -138,7 +138,7 @@ class DataProvider(object):
         # First check if there is still data in the queue to be processed.
         if self.queue and not self.queue.empty():
           return True
-        if self.tf_queue and self.tf_queue.size().eval(session=self.tf_session) > 0:
+        if self.tf_queue and self.tf_queue.size().eval(session=self.tf_session) > 0:  # TODO cache op
           return True
         if self.thread_finished:
           return False
@@ -158,7 +158,7 @@ class DataProvider(object):
       # It is based on the tf_queue.dequeue() which is symbolic.
       assert self.tf_queue and not self.queue
       return previous_feed_dict
-    output = self.queue.get() if self.queue else self.tf_queue.dequeue()
+    output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
     assert isinstance(output, dict)
     # The data itself.
     d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
@@ -192,6 +192,7 @@ class Runner(object):
     self._should_eval = eval
     self.store_metadata_mod_step = False  # 500
     self.finalized = False
+    self.num_steps = None
     self.device_crash_batch = None
     self.start_time = None
     self.elapsed = None
@@ -202,19 +203,22 @@ class Runner(object):
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
-    self._show_interactive_process_bar = (log.v[3] and terminal_width >= 0)
+    self._show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
 
   def _get_fetches_dict(self):
     """
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
     :rtype: dict[str,tf.Tensor|tf.Operation]
     """
-    d = {"summary": tf.summary.merge_all()}
+    # Note that it is important that we do not recreate graph nodes for every call to this function.
+    # Thus everything which we access here should be cached.
+    d = {}
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
       for dim, v in data.size_placeholder.items():
         d["size:%s:%i" % (key, dim)] = v
     if self._should_train or self._should_eval:
+      # These values are cached internally and the graph nodes are created on the first call.
       d["loss"] = self.engine.network.get_objective()
       for layer_name, loss in self.engine.network.loss_by_layer.items():
         d["cost:%s" % layer_name] = loss
@@ -223,6 +227,7 @@ class Runner(object):
     if self._should_train:
       assert self.engine.updater
       d["optim_op"] = self.engine.updater.get_optim_op()
+    d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -249,6 +254,11 @@ class Runner(object):
       from Util import progress_bar
       progress_bar(complete, hms(remaining_estimated))
 
+  def _print_finish_process(self):
+    if self._show_interactive_process_bar:
+      from Util import progress_bar
+      progress_bar()
+
   def _get_target_for_key(self, key):
     """
     :param str key: e.g. "cost:output" where the last part is the layer name. or "loss"
@@ -266,9 +276,10 @@ class Runner(object):
     # Default: Normalize by number of frames.
     return 1.0 / float(self.data_provider.num_frames[target])
 
-  def _finalize(self):
+  def _finalize(self, num_steps):
     """
     Called at the end of an epoch.
+    :param int num_steps: number of steps we did for this epoch
     """
     assert not self.data_provider.have_more_data()
     assert self.data_provider.num_frames["data"] > 0
@@ -277,6 +288,7 @@ class Runner(object):
     self.results = results
     self.score = dict([(key,value) for (key, value) in results.items() if key.startswith("cost:")])
     self.error = dict([(key,value) for (key, value) in results.items() if key.startswith("error:")])
+    self.num_steps = num_steps
     self.finalized = True
 
   def _step_seq_len(self, fetches_results, data_key):
@@ -314,40 +326,28 @@ class Runner(object):
       eval_info[key] = value / float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
     return eval_info
 
-  def _check_uninitialized_vars(self):
-    """
-    All vars in TF which are controlled by us should also have been initialized by us.
-    We also take care about the optimizer slot variables.
-    However, TF can still create other vars which we do not know about.
-    E.g. the Adam optimizer creates the beta1_power/beta2_power vars (which are no slot vars).
-    Here, we find all remaining uninitialized vars, report about them and initialize them.
-    """
-    # Like tf.report_uninitialized_variables().
-    var_list = tf.global_variables() + tf.local_variables()
-    # Get a 1-D boolean tensor listing whether each variable is initialized.
-    var_mask = tf.logical_not(tf.pack(
-      [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.engine.tf_session)
-    assert len(var_mask) == len(var_list)
-    uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
-    if uninitialized_vars:
-      print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
-      self.engine.tf_session.run(tf.variables_initializer(uninitialized_vars))
-
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging
     """
     sess = self.engine.tf_session
     logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+    logdir += "/logdir/%s" % self.data_provider.dataset.name
+    if not self._should_train:  # like eval
+      logdir += "-%i" % self.engine.epoch
     writer = tf.summary.FileWriter(logdir)
     writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
+
+    if self._should_train:
+      step_offset = self.engine.network.get_global_train_step(session=sess)
+    else:
+      step_offset = 0
 
     coord = self.data_provider.coord
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     self.data_provider.start_thread()
-
     self.start_time = time.time()
     step = None
     try:
@@ -355,7 +355,7 @@ class Runner(object):
       step = 0
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
-      self._check_uninitialized_vars()
+      self.engine.check_uninitialized_vars()
       feed_dict = None
       while self.data_provider.have_more_data():
         feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
@@ -370,15 +370,15 @@ class Runner(object):
             feed_dict=feed_dict,
             options=run_options,
             run_metadata=run_metadata)
-          writer.add_summary(fetches_results["summary"], step)
-          writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step))
+          writer.add_summary(fetches_results["summary"], step + step_offset)
+          writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
           tl = timeline.Timeline(run_metadata.step_stats)
           timeline_path = os.path.join(logdir, 'timeline.trace')
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
           fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)
-          writer.add_summary(fetches_results["summary"], step)
+          writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         duration = time.time() - start_time
@@ -386,15 +386,23 @@ class Runner(object):
                             eval_info=eval_info)
         step += 1
 
+      self._print_finish_process()
+
       if not self.data_provider.reached_end:
         raise Exception("Did not successfully reached the end of the dataset.")
 
-      self._finalize()
+      if self._should_train:
+        final_global_train_step = self.engine.network.get_global_train_step(session=sess)
+        assert step + step_offset == final_global_train_step
+
+      self._finalize(num_steps=step)
+
+    except KeyboardInterrupt:
+      print("KeyboardInterrupt in step %r." % step)
 
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
-      if not isinstance(exc, KeyboardInterrupt):
-        sys.excepthook(*sys.exc_info())
+      sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step
 
     finally:
@@ -425,16 +433,18 @@ def get_optimizer_class(class_name):
 
 
 class Updater(object):
-  def __init__(self, config, tf_session):
+  def __init__(self, config, tf_session, network):
     """
     :param Config.Config config:
     :param tf.Session tf_session:
+    :param TFNetwork network:
     """
     self.config = config
     self.tf_session = tf_session
-    self.learning_rate_var = tf.Variable(initial_value=0.0, trainable=False, dtype="float32")
+    self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
-    self.loss = None  # type: tf.Tensor
+    self.network = network
+    self.loss = network.get_objective()
     self.optimizer = None  # type: tf.train.Optimizer
     self.optim_op = None  # type: tf.Operation
 
@@ -445,13 +455,6 @@ class Updater(object):
     """
     self.optim_op = None  # type: tf.Operation
 
-  def set_loss(self, loss):
-    """
-    :param tf.Tensor loss:
-    """
-    self.loss = loss
-    self.reset_optim_op()
-
   def set_trainable_vars(self, trainable_vars):
     """
     :param list[tf.Variable] trainable_vars:
@@ -460,6 +463,12 @@ class Updater(object):
       return
     self.trainable_vars = trainable_vars
     self.reset_optim_op()
+
+  def set_learning_rate(self, value):
+    """
+    :param float value:
+    """
+    self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
 
   def create_optimizer(self):
     lr = self.learning_rate_var
@@ -512,12 +521,14 @@ class Updater(object):
     if not self.optimizer:
       self.create_optimizer()
 
-
     assert self.loss is not None
-    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-    self.optim_op = self.optimizer.minimize(
-      self.loss, var_list=self.trainable_vars,
-      aggregation_method=aggregation_method)
+    with tf.variable_scope("optimize"):
+      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+      self.optim_op = self.optimizer.minimize(
+        self.loss, var_list=self.trainable_vars,
+        aggregation_method=aggregation_method)
+      incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
+      self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
@@ -550,6 +561,8 @@ class Engine(object):
     self._check_devices()
     self.tf_session = None  # type: tf.Session
     self.updater = None  # type: Updater
+    self._checked_uninitialized_vars = False
+    self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
 
   def _get_devices_config(self):
@@ -597,6 +610,8 @@ class Engine(object):
     tf.reset_default_graph()
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
+    self._checked_uninitialized_vars = False
+    self._merge_all_summaries = None
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
@@ -713,8 +728,7 @@ class Engine(object):
     self.network = network
     if self.train_data:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
-      self.updater = Updater(config=self.config, tf_session=self.tf_session)
-      self.updater.set_loss(network.get_objective())
+      self.updater = Updater(config=self.config, tf_session=self.tf_session, network=network)
       self.updater.set_trainable_vars(network.get_trainable_params())
 
   def maybe_init_new_network(self, net_desc):
@@ -723,13 +737,13 @@ class Engine(object):
     from Util import dict_diff_str
     print("reinit because network description differs. Diff:",
           dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
-    old_network_params = self.network.get_param_values_dict(self.tf_session)
+    old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     # Otherwise it's initialized randomly which is fine.
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
     # e.g. if it is the initial model from self.init_network_from_config().
-    self.network.set_param_values_by_dict(old_network_params, session=self.tf_session)
+    self.network.set_params_by_serialized(old_network_params, session=self.tf_session)
 
   def train(self):
     if self.start_epoch:
@@ -826,7 +840,7 @@ class Engine(object):
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
 
-    self.tf_session.run(self.updater.learning_rate_var.assign(self.learning_rate))
+    self.updater.set_learning_rate(self.learning_rate)
     trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
@@ -854,12 +868,6 @@ class Engine(object):
     return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
-  def _eval_model(self, dataset_name):
-    batches = self.dataset_batches[dataset_name]
-    report_prefix = self.get_epoch_str() + " eval"
-    epoch = self.epoch
-    # TODO...
-
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
@@ -872,6 +880,7 @@ class Engine(object):
         self.dataset_batches[dataset_name].reset()
       tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
       tester.run(report_prefix=self.get_epoch_str() + " eval")
+      assert tester.finalized
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       if dataset_name == "dev":
@@ -890,5 +899,32 @@ class Engine(object):
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
 
+  def get_all_merged_summaries(self):
+    # Note: This assumes that the summaries never change.
+    # Both both training and evaluation on the CV dataset, this is the case.
+    if self._merge_all_summaries is None:
+      self._merge_all_summaries = tf.summary.merge_all()
+    return self._merge_all_summaries
 
-
+  def check_uninitialized_vars(self):
+    """
+    All vars in TF which are controlled by us should also have been initialized by us.
+    We also take care about the optimizer slot variables.
+    However, TF can still create other vars which we do not know about.
+    E.g. the Adam optimizer creates the beta1_power/beta2_power vars (which are no slot vars).
+    Here, we find all remaining uninitialized vars, report about them and initialize them.
+    """
+    if self._checked_uninitialized_vars:
+      return
+    with tf.name_scope("check_uninitialized_vars"):
+      # Like tf.report_uninitialized_variables().
+      var_list = tf.global_variables() + tf.local_variables()
+      # Get a 1-D boolean tensor listing whether each variable is initialized.
+      var_mask = tf.logical_not(tf.pack(
+        [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
+      assert len(var_mask) == len(var_list)
+      uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
+      if uninitialized_vars:
+        print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
+        self.tf_session.run(tf.variables_initializer(uninitialized_vars))
+      self._checked_uninitialized_vars = True

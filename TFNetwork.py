@@ -6,7 +6,7 @@ import sys
 import numpy
 from Log import log
 from TFNetworkLayer import Data, LayerBase, get_layer_class
-from TFUtil import reuse_name_scope
+from TFUtil import reuse_name_scope, VariableAssigner
 
 
 class ExternData(object):
@@ -124,8 +124,11 @@ class TFNetwork(object):
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
+    self.global_train_step = tf.Variable(
+      name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.saver = None  # type: tf.train.Saver
     self.recurrent = False
+    self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
 
   def construct_from(self, list_or_dict):
     """
@@ -249,7 +252,7 @@ class TFNetwork(object):
 
   def get_params_list(self):
     """
-    :return: list of variables
+    :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step
     :rtype: list[tf.Variable]
     """
     l = []  # type: list[tf.Variable]
@@ -300,6 +303,10 @@ class TFNetwork(object):
     self._selected_train_layers = sorted(hidden_layer_selection)
 
   def get_num_params(self):
+    """
+    :return: number of model parameters, i.e. total dimension
+    :rtype: int
+    """
     num_params = 0
     params = self.get_params_list()
     for param in params:
@@ -310,14 +317,33 @@ class TFNetwork(object):
   def initialize_params(self, session):
     """
     :param tf.Session session:
+    Note: This will create a new node to the graph for each call!
+    And it will overwrite also the already initialized variables.
+    So you should call this only once after network construction and before you maybe load some of the params
+    from external sources.
+    If you know that you will load all params explicitly, you would not need to call this function.
     """
-    session.run(tf.variables_initializer(var_list=self.get_params_list()))
+    with tf.name_scope("var_initializer"):
+      initializer_op = tf.variables_initializer(var_list=self.get_params_list() + self.get_auxiliary_params())
+    session.run(initializer_op)
+
+  def get_var_assigner(self, var):
+    """
+    :param tf.Variable var:
+    """
+    if var in self._assigner_cache:
+      return self._assigner_cache[var]
+    with reuse_name_scope("var_assigner"):
+      assigner = VariableAssigner(var)
+    self._assigner_cache[var] = assigner
+    return assigner
 
   def get_param_values_dict(self, session):
     """
     :param tf.Session session:
     :return: dict: layer_name -> param_name -> variable numpy array
     :rtype: dict[str,dict[str,numpy.ndarray]]
+    Note that this excludes auxiliary params.
     """
     l = {}  # type: dict[str,dict[str,numpy.ndarray]]
     for layer_name, layer in self.layers.items():
@@ -329,13 +355,50 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str,numpy.ndarray]] values_dict:
     :param tf.Session session:
+    Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
       self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
 
+  def get_auxiliary_params(self):
+    return [self.global_train_step]
+
+  def get_params_serialized(self, session):
+    """
+    :param tf.Session session:
+    :rtype: TFNetworkParamsSerialized
+    """
+    return TFNetworkParamsSerialized(
+      values_dict=self.get_param_values_dict(session=session),
+      global_train_step=self.get_global_train_step(session=session))
+
+  def set_params_by_serialized(self, serialized, session):
+    """
+    :param TFNetworkParamsSerialized serialized:
+    :param tf.Session session:
+    """
+    self.set_param_values_by_dict(serialized.values_dict, session=session)
+    self.set_global_train_step(serialized.global_train_step, session=session)
+
+  def set_global_train_step(self, step, session):
+    """
+    :param int step:
+    :param tf.Session session:
+    """
+    self.get_var_assigner(self.global_train_step).assign(step, session=session)
+
+  def get_global_train_step(self, session):
+    """
+    :param tf.Session session:
+    :rtype: int
+    """
+    return self.global_train_step.eval(session=session)
+
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
-    self.saver = tf.train.Saver(var_list=self.get_params_list(), max_to_keep=2 ** 31 - 1)
+    with tf.name_scope("saver"):
+      self.saver = tf.train.Saver(
+        var_list=self.get_params_list() + self.get_auxiliary_params(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
     """
@@ -382,3 +445,16 @@ class TFNetwork(object):
       print("  (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
     print("net trainable params:", self.get_trainable_params(), file=log.v2)
+
+
+class TFNetworkParamsSerialized(object):
+  """
+  Holds all the params as numpy arrays, including auxiliary params.
+  """
+  def __init__(self, values_dict, global_train_step):
+    """
+    :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param int global_train_step:
+    """
+    self.values_dict = values_dict
+    self.global_train_step = global_train_step

@@ -176,20 +176,22 @@ def getCacheByteSizes():
 
 def load_data(config, cache_byte_size, files_config_key, **kwargs):
   """
-  :type config: Config
-  :type cache_byte_size: int
-  :type chunking: str
-  :type seq_ordering: str
+  :param Config config:
+  :param int cache_byte_size:
+  :param str files_config_key: such as "train" or "dev"
+  :param dict[str] kwargs: passed on to init_dataset() or init_dataset_via_str()
   :rtype: (Dataset,int)
   :returns the dataset, and the cache byte size left over if we cache the whole dataset.
   """
   if not config.has(files_config_key):
     return None, 0
+  kwargs = kwargs.copy()
+  kwargs.setdefault("name", files_config_key)
   if config.is_typed(files_config_key) and isinstance(config.typed_value(files_config_key), dict):
-    new_kwargs = config.typed_value(files_config_key)
-    assert isinstance(new_kwargs, dict)
-    kwargs.update(new_kwargs)
-    if 'cache_byte_size' not in new_kwargs:
+    config_opts = config.typed_value(files_config_key)
+    assert isinstance(config_opts, dict)
+    kwargs.update(config_opts)
+    if 'cache_byte_size' not in config_opts:
       if kwargs.get('class', None) == 'HDFDataset':
         kwargs["cache_byte_size"] = cache_byte_size
     Dataset.kwargs_update_from_config(config, kwargs)

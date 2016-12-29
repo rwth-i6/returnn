@@ -43,14 +43,14 @@ class Dataset(object):
   def from_config(cls, config, **kwargs):
     """
     :type config: Config.Config
-    :type chunking: str
-    :type seq_ordering: str
+    :param dict[str] kwargs: passed on to __init__
     :rtype: Dataset
     """
     cls.kwargs_update_from_config(config, kwargs)
     return cls(**kwargs)
 
-  def __init__(self, window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0, estimated_num_seqs=None):
+  def __init__(self, name="dataset", window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0, estimated_num_seqs=None):
+    self.name = name
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
@@ -673,6 +673,7 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   :param int|None cache_byte_size: optional, only for HDFDataset
   :rtype: Dataset
   """
+  kwargs = kwargs.copy()
   if not 'window' in kwargs and config and config.has('window'):
     kwargs['window'] = config.int('window',1)
   from HDFDataset import HDFDataset

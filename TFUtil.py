@@ -236,6 +236,7 @@ def _get_tf_list_local_devices():
   global _list_local_devices
   if _list_local_devices:
     return _list_local_devices
+  print("Collecting TensorFlow device list...")
   _list_local_devices = list(device_lib.list_local_devices())
   return _list_local_devices
 
@@ -259,10 +260,9 @@ def print_available_devices():
   cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
-    cuda_visible_devs = dict(enumerate(map(int, os.environ["CUDA_VISIBLE_DEVICES"].split(","))))
+    cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
-  print("Collecting TensorFlow device list...")
   devs = _get_tf_list_local_devices()
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
@@ -364,3 +364,23 @@ def sparse_labels(x, seq_lens):
     idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
     flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
     return tf.SparseTensor(flat_idxs, flat_x, [batch_size, tf.reduce_max(seq_lens)])
+
+
+class VariableAssigner(object):
+  def __init__(self, var):
+    """
+    :param tf.Variable var:
+    """
+    self.var = var
+    self.value_placeholder = tf.placeholder(
+      name="%s_placeholder_assign_value" % var.name.split("/")[-1][:-2],
+      shape=var.get_shape(),
+      dtype=var.dtype)
+    self.assign_op = tf.assign(self.var, self.value_placeholder)
+
+  def assign(self, value, session):
+    """
+    :param numpy.ndarray|int|float value:
+    :param tf.Session session:
+    """
+    session.run(self.assign_op, feed_dict={self.value_placeholder: value})
