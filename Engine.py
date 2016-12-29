@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms, hdf5_dimension
+from Util import hms, hdf5_dimension, BackendEngine
 import errno
 import time
 try:
@@ -67,6 +67,10 @@ class Engine:
         if os.path.exists(fn):
           file_list += [(epoch, fn)]  # epoch, fn
           break
+        if BackendEngine.is_tensorflow_selected():
+          if os.path.exists(fn + ".index"):
+            file_list += [(epoch, fn)]  # epoch, fn
+            break
     file_list.sort()
     return file_list
 

@@ -615,19 +615,7 @@ class Engine(object):
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
   get_epoch_model = TheanoEngine.get_epoch_model
-
-  @classmethod
-  def epoch_model_filename(cls, model_filename, epoch, is_pretrain):
-    """
-    :type model_filename: str
-    :type epoch: int
-    :type is_pretrain: bool
-    :rtype: str
-    """
-    if sys.platform == "win32" and model_filename.startswith("/tmp/"):
-      import tempfile
-      model_filename = tempfile.gettempdir() + model_filename[len("/tmp")]
-    return model_filename + (".pretrain" if is_pretrain else "") + ".%03d" % epoch
+  epoch_model_filename = TheanoEngine.epoch_model_filename
 
   def get_epoch_model_filename(self):
     return self.epoch_model_filename(self.model_filename, self.epoch, self.is_pretrain_epoch())
