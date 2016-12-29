@@ -332,17 +332,16 @@ class Runner(object):
     """
     sess = self.engine.tf_session
     logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/logdir/%s" % self.data_provider.dataset.name
+    logdir += "/%s" % self.data_provider.dataset.name
     if not self._should_train:  # like eval
       logdir += "-%i" % self.engine.epoch
     writer = tf.summary.FileWriter(logdir)
     writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
 
-    if self._should_train:
-      step_offset = self.engine.network.get_global_train_step(session=sess)
-    else:
-      step_offset = 0
+    # Not sure if this is the best thing to do for an evaluation but it's ok for now.
+    # We could also set it to 0 for non train epochs.
+    step_offset = self.engine.network.get_global_train_step(session=sess)
 
     coord = self.data_provider.coord
 
