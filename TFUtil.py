@@ -3,6 +3,7 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 import contextlib
 import os
+import sys
 
 
 def variable_summaries(var, name):
@@ -384,3 +385,152 @@ class VariableAssigner(object):
     :param tf.Session session:
     """
     session.run(self.assign_op, feed_dict={self.value_placeholder: value})
+
+
+class OpCodeCompiler(object):
+  """
+  Helper class to compile TF ops on-the-fly, similar as Theano.
+  https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+  """
+
+  def __init__(self, base_name, code_version, code):
+    """
+    :param str base_name: base name for the module, e.g. "zero_out"
+    :param int|tuple[int] code_version: check for the cache whether to reuse
+    :param str code: the source code itself
+    """
+    self.cache_dir = "/tmp/.returnn_tf_cache"  # TODO...?
+    self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
+    self.base_name = base_name
+    self.code_version = code_version
+    self.code = code
+    self._info_dict = self._make_info_dict()
+    self._hash = self._make_hash()
+    self._mod = None
+    self._cleanup_old()
+
+  @property
+  def _mod_path(self):
+    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self._hash[:10])
+
+  @property
+  def _info_filename(self):
+    return "%s/info.py" % (self._mod_path,)
+
+  @property
+  def _so_filename(self):
+    return "%s/%s.so" % (self._mod_path, self.base_name)
+
+  @property
+  def _cc_filename(self):
+    return "%s/%s.cc" % (self._mod_path, self.base_name)
+
+  _cleanup_time_limit_days = 60
+
+  def _cleanup_old(self):
+    mod_path = self._mod_path  # .../base_name/hash
+    base_mod_path = os.path.dirname(mod_path)  # .../base_name
+    my_mod_path_name = os.path.basename(mod_path)
+    if not os.path.exists(base_mod_path):
+      return
+    import time
+    from Util import hms
+    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
+    for p in os.listdir(base_mod_path):
+      if p == my_mod_path_name:
+        continue
+      full_dir_path = "%s/%s" % (base_mod_path, p)
+      info_path = "%s/info.py" % full_dir_path
+      if not os.path.exists(info_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir")
+        continue
+      dt = time.time() - os.path.getmtime()
+      if dt > cleanup_time_limit_secs:
+        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
+
+  def _cleanup_old_path(self, p, reason):
+    print("OpCompiler delete old, %s: %s" % (reason, p))
+    assert os.path.exists(p)
+    import shutil
+    shutil.rmtree(p)
+
+  def _load_info(self):
+    filename = self._info_filename
+    if not os.path.exists(filename):
+      return None
+    return eval(open(filename))
+
+  _relevant_info_keys = ("tf_version", "code_version", "with_cuda")
+
+  def _make_info_dict(self):
+    return {
+      "base_name": self.base_name,
+      "tf_version": tf.__version__,
+      "tf_include_path": self._include_path,
+      "code_version": self.code_version,
+      "with_cuda": False  # TODO...
+    }
+
+  def _make_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update("{")
+    hash.update("code:{%s}" % self.code)
+    for key in self._relevant_info_keys:
+      hash.update("%s:{%s}" % (key, self._info_dict[key]))
+    hash.update("}")
+    return hash.hexdigest()
+
+  def _save_info(self):
+    filename = self._info_filename
+    from Util import betterRepr
+    with open(filename, "w") as f:
+      f.write("%s\n" % betterRepr(self._info_dict))
+
+  def _need_recompile(self):
+    old_info = self._load_info()
+    new_info = self._make_info_dict()
+    if not old_info:
+      return True
+    # The hash already matched but very unlikely, this could be a collision.
+    # Anyway, just do this very cheap check.
+    for key in self._relevant_info_keys:
+      if key not in old_info:
+        return True
+      if old_info[key] != new_info[key]:
+        return True
+    # If no code version is provided, we could also check the code itself now.
+    # But I think this is overkill.
+    return False
+
+  def _maybe_compile(self):
+    if not self._need_recompile():
+      # Touch it so that we can see that we used it recently.
+      os.utime(self._info_filename, None)
+      return
+    # Not sure if always needed to cleanup first...
+    if os.path.exists(self._mod_path):
+      self._cleanup_old_path(self._mod_path, reason="need recompile")
+    if not os.path.exists(self._mod_path):
+      print("OpCompiler create dir: %s" % self._mod_path)
+      os.makedirs(self._mod_path)
+    common_opts = ["-shared", "-fPIC", "-O2", "-std=c++11"]
+    if sys.platform == "darwin":
+      common_opts += ["-undefined", "dynamic_lookup"]
+    common_opts += ["-I", self._include_path]
+    # TODO cuda...
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    opts = common_opts + [self._cc_filename, "-o", self._so_filename]
+    cmd_args = ["g++"] + opts
+    from subprocess import check_call
+    print("OpCompiler call: %s" % cmd_args)
+    check_call(cmd_args, cwd=self._mod_path)
+    self._save_info()
+    assert not self._need_recompile()
+
+  def load_module(self):
+    if self._mod:
+      return self._mod
+    self._maybe_compile()
+    self._mod = tf.load_op_library(self._so_filename)
+    return self._mod
