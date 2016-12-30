@@ -23,6 +23,15 @@ else:
   long = builtins.long
 
 
+def is_64bit_platform():
+  """
+  :return: True if we run on 64bit, False for 32bit
+  :rtype: bool
+  http://stackoverflow.com/questions/1405913/how-do-i-determine-if-my-python-shell-is-executing-in-32bit-or-64bit-mode-on-os
+  """
+  return sys.maxsize > 2**32
+
+
 class BackendEngine:
   Theano = 0
   Default = Theano

@@ -387,31 +387,152 @@ class VariableAssigner(object):
     session.run(self.assign_op, feed_dict={self.value_placeholder: value})
 
 
+class CudaEnv(object):
+  _instance = None
+  verbose_find_cuda = False
+
+  def __init__(self):
+    self.cuda_path = self._find_cuda_path()
+
+  @classmethod
+  def _find_nvcc_in_path(cls):
+    """
+    :return: yields full path to nvcc
+    :rtype: list[str]
+    """
+    for p in os.environ["PATH"].split(":"):
+      pp = "%s/nvcc" % p
+      if os.path.exists(pp):
+        yield pp
+
+  @classmethod
+  def _find_lib_in_ld_path(cls):
+    """
+    :return: yields full path to libcudart.so
+    :rtype: list[str]
+    """
+    if not os.environ.get("LD_LIBRARY_PATH"):
+      return
+    for p in os.environ["LD_LIBRARY_PATH"].split(":"):
+      pp = "%s/libcudart.so" % p
+      if os.path.exists(pp):
+        yield pp
+
+  @classmethod
+  def _get_lib_dir_name(cls):
+    from Util import is_64bit_platform
+    if is_64bit_platform():
+      return "lib64"
+    return "lib"
+
+  @classmethod
+  def _cuda_path_candidates(cls):
+    for p in cls._find_nvcc_in_path():
+      # Expect p == "/usr/local/cuda-8.0/bin/nvcc" or so.
+      postfix = "/bin/nvcc"
+      if cls.verbose_find_cuda:
+        print("found cuda nvcc (wanted postfix: %r): %s" % (postfix, p))
+      if not p.endswith(postfix):
+        continue
+      yield p[:-len(postfix)]
+    for p in cls._find_lib_in_ld_path():
+      # Expect p == "/usr/local/cuda-8.0/lib64/libcudart.so" or so.
+      postfix = "/%s/libcudart.so" % cls._get_lib_dir_name()
+      if cls.verbose_find_cuda:
+        print("found cuda lib (wanted postfix: %r): %s" % (postfix, p))
+      if not p.endswith(postfix):
+        continue
+      yield p[:-len(postfix)]
+
+  @classmethod
+  def _check_valid_cuda_path(cls, p):
+    """
+    :param str p: path to CUDA, e.g. "/usr/local/cuda-8.0"
+    :return: whether this is a valid CUDA path, i.e. we find all what we need
+    :rtype: bool
+    """
+    if cls.verbose_find_cuda:
+      print("check valid CUDA path: %s" % p)
+    if not os.path.exists("%s/bin/nvcc" % p):
+      return False
+    if not os.path.exists("%s/include/cuda.h" % p):
+      return False
+    if not os.path.exists("%s/%s/libcudart.so" % (p, cls._get_lib_dir_name())):
+      return False
+    return True
+
+  @classmethod
+  def _find_cuda_path(cls):
+    """
+    :return: base CUDA path if we find one, otherwise None
+    :rtype: str|None
+    """
+    for p in cls._cuda_path_candidates():
+      if cls._check_valid_cuda_path(p):
+        return p
+    return None
+
+  def __nonzero__(self):
+    """
+    :return: whether this is a valid usable CUDA env
+    :rtype: bool
+    """
+    return bool(self.cuda_path)
+
+  def get_compiler_opts(self):
+    return [
+      "-I", "%s/include" % self.cuda_path, "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
+      "-x", "cu"]
+
+  def get_compiler_bin(self):
+    return "%s/bin/nvcc" % self.cuda_path
+
+  @classmethod
+  def get_instance(cls):
+    """
+    :rtype: CudaEnv
+    """
+    if cls._instance is not None:
+      return cls._instance
+    cls._instance = cls()
+    return cls._instance
+
+
 class OpCodeCompiler(object):
   """
   Helper class to compile TF ops on-the-fly, similar as Theano.
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
 
-  def __init__(self, base_name, code_version, code):
+  def __init__(self, base_name, code_version, code, static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
     :param str code: the source code itself
+    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+      but this would use .../base_name/static_version_name.
+    :param bool should_cleanup_old_all: whether we should look in the cache dir
+      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
+    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     """
     self.cache_dir = "/tmp/.returnn_tf_cache"  # TODO...?
     self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     self.base_name = base_name
     self.code_version = code_version
     self.code = code
+    self.static_version_name = static_version_name
+    self._cuda_env = CudaEnv.get_instance()
+    self._code_hash = self._make_code_hash()
     self._info_dict = self._make_info_dict()
     self._hash = self._make_hash()
     self._mod = None
-    self._cleanup_old()
+    if should_cleanup_old_all:
+      self._cleanup_old()
+    self._should_cleanup_old_mydir = should_cleanup_old_mydir
 
   @property
   def _mod_path(self):
-    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self._hash[:10])
+    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
 
   @property
   def _info_filename(self):
@@ -458,9 +579,10 @@ class OpCodeCompiler(object):
     filename = self._info_filename
     if not os.path.exists(filename):
       return None
-    return eval(open(filename))
+    s = open(filename).read()
+    return eval(s)
 
-  _relevant_info_keys = ("tf_version", "code_version", "with_cuda")
+  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash")
 
   def _make_info_dict(self):
     return {
@@ -468,14 +590,20 @@ class OpCodeCompiler(object):
       "tf_version": tf.__version__,
       "tf_include_path": self._include_path,
       "code_version": self.code_version,
-      "with_cuda": False  # TODO...
+      "code_hash": self._code_hash,
+      "with_cuda": bool(self._cuda_env)
     }
+
+  def _make_code_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update(self.code)
+    return hash.hexdigest()
 
   def _make_hash(self):
     import hashlib
     hash = hashlib.md5()
     hash.update("{")
-    hash.update("code:{%s}" % self.code)
     for key in self._relevant_info_keys:
       hash.update("%s:{%s}" % (key, self._info_dict[key]))
     hash.update("}")
@@ -488,6 +616,8 @@ class OpCodeCompiler(object):
       f.write("%s\n" % betterRepr(self._info_dict))
 
   def _need_recompile(self):
+    if not os.path.exists(self._so_filename):
+      return True
     old_info = self._load_info()
     new_info = self._make_info_dict()
     if not old_info:
@@ -508,23 +638,42 @@ class OpCodeCompiler(object):
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
-    # Not sure if always needed to cleanup first...
-    if os.path.exists(self._mod_path):
-      self._cleanup_old_path(self._mod_path, reason="need recompile")
+    if self._should_cleanup_old_mydir:
+      if os.path.exists(self._mod_path):
+        self._cleanup_old_path(self._mod_path, reason="need recompile")
     if not os.path.exists(self._mod_path):
       print("OpCompiler create dir: %s" % self._mod_path)
       os.makedirs(self._mod_path)
-    common_opts = ["-shared", "-fPIC", "-O2", "-std=c++11"]
+    with open(self._cc_filename, "w") as f:
+      f.write(self.code)
+    common_opts = ["-shared", "-O2", "-std=c++11"]
     if sys.platform == "darwin":
       common_opts += ["-undefined", "dynamic_lookup"]
     common_opts += ["-I", self._include_path]
-    # TODO cuda...
+    compiler_opts = ["-fPIC"]
+    if self._cuda_env:
+      common_opts += self._cuda_env.get_compiler_opts()
+      common_opts += ["-DGOOGLE_CUDA=1"]
+      for opt in compiler_opts:
+        common_opts += ["-Xcompiler", opt]
+    else:
+      common_opts += compiler_opts
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
-    cmd_args = ["g++"] + opts
-    from subprocess import check_call
-    print("OpCompiler call: %s" % cmd_args)
-    check_call(cmd_args, cwd=self._mod_path)
+    cmd_bin = "g++"
+    if self._cuda_env:
+      cmd_bin = self._cuda_env.get_compiler_bin()
+    cmd_args = [cmd_bin] + opts
+    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
+    print("OpCompiler call: %s" % " ".join(cmd_args))
+    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
+    stdout, stderr = proc.communicate()
+    assert stderr is None  # should only have stdout
+    if proc.returncode != 0:
+      print("OpCompiler: %s failed." % cmd_bin)
+      print("Original stdout/stderr:")
+      print(stdout)
+      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     self._save_info()
     assert not self._need_recompile()
 

@@ -505,12 +505,12 @@ class NativeOpGenBase:
   Base interface for op generation.
   See NativeOp.__init__() for attribs.
   """
-  in_info = None
-  out_info = None
-  c_fw_code = None
-  c_bw_code = None
-  c_extra_support_code = None
-  code_version = None
+  in_info = None  # type: tuple[dict[str]]
+  out_info = None  # type: tuple[dict[str]]
+  c_fw_code = None  # type: str
+  c_bw_code = None  # type: str
+  c_extra_support_code = None  # type: dict[str,str]
+  code_version = None  # type: tuple[int]|int
   grad_input_map = None
   custom_grad = None
 
