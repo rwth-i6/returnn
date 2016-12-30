@@ -9,8 +9,32 @@
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
+#ifndef TENSORFLOW
+#define TENSORFLOW 0
+#endif
+
+#if TENSORFLOW
+// https://www.tensorflow.org/api_docs/cc/class/tensorflow/tensor
+// TODO...
+#define Ndarray tensorflow::Tensor
+#define Ndarray_DEV_DATA(x) (x).flat<float>().data()
+#define Ndarray_HOST_DIMS(x) (x).shape().dim_sizes()
+#define Ndarray_DIMS Ndarray_HOST_DIMS
+#define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
+#define Ndarray_NDIM(x) (x).dims()
+#define Ndarray_DIM_Type int
+#define Ndarray_SIZE CudaNdarray_SIZE
+// PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
+#define Ndarray_NewDims CudaNdarray_NewDims
+// PyObject * CudaNdarray_Copy(const CudaNdarray * self);
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
+// copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
+#define Ndarray_Copy CudaNdarray_Copy
+#endif
+
 #if CUDA
 
+#if !TENSORFLOW  // Theano
 // Defined here: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
 // See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
 #define Ndarray CudaNdarray
@@ -25,6 +49,8 @@
 #define Ndarray_NewDims CudaNdarray_NewDims
 // PyObject * CudaNdarray_Copy(const CudaNdarray * self);
 #define Ndarray_Copy CudaNdarray_Copy
+#endif
+
 #define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
 #define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
 /*
@@ -107,6 +133,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #else   // not CUDA
 
+#if !TENSORFLOW
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
 // And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
 #define Ndarray PyArrayObject
@@ -119,6 +146,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
+#endif
+
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 #define Ndarray_memset(s, c, size) (memset(s, c, size))
 /*

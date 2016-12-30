@@ -28,6 +28,7 @@ class OpMaker(object):
     self.name = name
     self.gen_base = gen_base
     self.compiler_opts = compiler_opts or {}
+    self.with_cuda = bool(TFUtil.CudaEnv.get_instance())
 
   @property
   def op_name(self):
@@ -39,32 +40,50 @@ class OpMaker(object):
       code_register_op_io += ".Input(\"%s: %s\")\n" % (v["name"].lower(), v.get("dtype", "float32"))
     for v in self.gen_base.out_info:
       code_register_op_io += ".Output(\"%s: %s\")\n" % (v["name"].lower(), v.get("dtype", "float32"))
-    code = """
+    format_args = {
+      "op_name": self.op_name,
+      "code_register_op_io": code_register_op_io
+    }
+    code_header = """
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
 
     using namespace tensorflow;
-
+    """
+    code_register = """
     REGISTER_OP("%(op_name)s")
     %(code_register_op_io)s;
-
+    """ % format_args
+    # In the user code, we assume that we have the following variables:
+    # int n_inputs; int n_outputs;
+    # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
+    code_op = """
     class %(op_name)sOp : public OpKernel {
     public:
-      explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {
-        // ...
-      }
+      explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
       void Compute(OpKernelContext* context) override {
         // ...
       }
     };
 
     REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
-    """ % {
-      "op_name": self.op_name,
-      "code_register_op_io": code_register_op_io
-    }
-    return code
+    """ % format_args
+    if self.with_cuda:
+      code_gpu_op = """
+      class %(op_name)sGpuOp : public OpKernel {
+      public:
+        explicit %(op_name)sGpuOp(OpKernelConstruction* context) : OpKernel(context) {}
+        void Compute(OpKernelContext* context) override {
+          // ...
+        }
+      };
+
+      REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_GPU), %(op_name)sGpuOp);
+      """ % format_args
+    else:
+      code_gpu_op = ""
+    return code_header + code_register + code_op + code_gpu_op
 
   def _make_mod(self):
     comp = TFUtil.OpCodeCompiler(
