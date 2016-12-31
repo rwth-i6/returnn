@@ -15,21 +15,39 @@
 
 #if TENSORFLOW
 // https://www.tensorflow.org/api_docs/cc/class/tensorflow/tensor
-// TODO...
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
+// https://eigen.tuxfamily.org/dox-devel/unsupported/Tensor_8h_source.html
 #define Ndarray tensorflow::Tensor
-#define Ndarray_DEV_DATA(x) (x).flat<float>().data()
-#define Ndarray_HOST_DIMS(x) (x).shape().dim_sizes()
+#define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
+#define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
 #define Ndarray_DIMS Ndarray_HOST_DIMS
-#define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
-#define Ndarray_NDIM(x) (x).dims()
-#define Ndarray_DIM_Type int
-#define Ndarray_SIZE CudaNdarray_SIZE
-// PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
-#define Ndarray_NewDims CudaNdarray_NewDims
-// PyObject * CudaNdarray_Copy(const CudaNdarray * self);
-// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
-// copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
-#define Ndarray_Copy CudaNdarray_Copy
+#define Ndarray_NDIM(x) (x)->dims()
+typedef long long Ndarray_DIM_Type;
+#define Ndarray_SIZE(x) (x)->flat<float>().size()
+
+// return in elements
+static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
+    int ndim = x->dims();
+    if(dim + 1 >= ndim)
+        return 1;
+    return x->dim_size(dim + 1) * Ndarray_STRIDE(x, dim + 1);
+}
+
+// uninitialized
+static Ndarray* Ndarray_NewDims(int nd, const Ndarray_DIM_Type* dims) {
+    // TODO...
+    return NULL;
+}
+
+
+Ndarray* Ndarray_Copy(const Ndarray* self) {
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
+    // copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
+    // TODO...
+    return NULL;
+}
+
 #endif
 
 #if CUDA

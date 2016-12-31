@@ -504,22 +504,27 @@ class OpCodeCompiler(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
 
-  def __init__(self, base_name, code_version, code, static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+  def __init__(self, base_name, code_version, code, c_macro_defines=None, include_deps=None, static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
     :param str code: the source code itself
+    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
+      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
     :param str|None static_version_name: normally, we use .../base_name/hash as the dir
       but this would use .../base_name/static_version_name.
     :param bool should_cleanup_old_all: whether we should look in the cache dir
       and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     """
-    self.cache_dir = "/tmp/.returnn_tf_cache"  # TODO...?
+    self.cache_dir = "/tmp/returnn_tf_cache"  # TODO...?
     self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     self.base_name = base_name
     self.code_version = code_version
     self.code = code
+    self.c_macro_defines = c_macro_defines or {}
+    self.include_deps = include_deps
     self.static_version_name = static_version_name
     self._cuda_env = CudaEnv.get_instance()
     self._code_hash = self._make_code_hash()
@@ -561,6 +566,8 @@ class OpCodeCompiler(object):
       if p == my_mod_path_name:
         continue
       full_dir_path = "%s/%s" % (base_mod_path, p)
+      if not os.path.isdir(full_dir_path):
+        continue  # ignore for now
       info_path = "%s/info.py" % full_dir_path
       if not os.path.exists(info_path):
         self._cleanup_old_path(full_dir_path, reason="corrupt dir")
@@ -582,7 +589,7 @@ class OpCodeCompiler(object):
     s = open(filename).read()
     return eval(s)
 
-  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash")
+  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines")
 
   def _make_info_dict(self):
     return {
@@ -591,6 +598,7 @@ class OpCodeCompiler(object):
       "tf_include_path": self._include_path,
       "code_version": self.code_version,
       "code_hash": self._code_hash,
+      "c_macro_defines": self.c_macro_defines,
       "with_cuda": bool(self._cuda_env)
     }
 
@@ -618,6 +626,11 @@ class OpCodeCompiler(object):
   def _need_recompile(self):
     if not os.path.exists(self._so_filename):
       return True
+    if self.include_deps:
+      so_mtime = os.path.getmtime(self._so_filename)
+      for fn in self.include_deps:
+        if os.path.getmtime(fn) > so_mtime:
+          return True
     old_info = self._load_info()
     new_info = self._make_info_dict()
     if not old_info:
@@ -659,6 +672,7 @@ class OpCodeCompiler(object):
     else:
       common_opts += compiler_opts
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
     cmd_bin = "g++"
     if self._cuda_env:
@@ -674,6 +688,7 @@ class OpCodeCompiler(object):
       print("Original stdout/stderr:")
       print(stdout)
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
+    assert os.path.exists(self._so_filename)
     self._save_info()
     assert not self._need_recompile()
 

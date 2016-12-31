@@ -4,6 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import NativeOp
 import TFUtil
+import os
 import re
 
 
@@ -34,6 +35,13 @@ class OpMaker(object):
   def op_name(self):
     return self.name
 
+  @property
+  def support_native_op_cpp_filename(self):
+    my_dir = os.path.abspath(os.path.dirname(__file__) or os.getcwd())
+    support_native_op_cpp_filename = "%s/NativeOp.cpp" % my_dir
+    assert os.path.exists(support_native_op_cpp_filename)
+    return support_native_op_cpp_filename
+
   def _make_code(self):
     code_register_op_io = ""
     for v in self.gen_base.in_info:
@@ -42,7 +50,8 @@ class OpMaker(object):
       code_register_op_io += ".Output(\"%s: %s\")\n" % (v["name"].lower(), v.get("dtype", "float32"))
     format_args = {
       "op_name": self.op_name,
-      "code_register_op_io": code_register_op_io
+      "code_register_op_io": code_register_op_io,
+      "native_op_cpp_filename": self.support_native_op_cpp_filename
     }
     code_header = """
     #include "tensorflow/core/framework/op.h"
@@ -51,6 +60,25 @@ class OpMaker(object):
 
     using namespace tensorflow;
     """
+    if self.with_cuda:
+      # http://docs.nvidia.com/cuda/cublas
+      code_header += """
+      #include <cuda_runtime.h>
+      #include "cublas_v2.h"
+      """
+    else:
+      code_header += """
+      typedef float real;
+      typedef int integer;
+      extern "C"
+      extern int sgemm_(char *transa, char *transb,
+        integer *m, integer *n, integer *k,
+        const real *alpha,
+        const real *a, integer *lda,
+        const real *b, integer *ldb,
+        const real *beta,
+        real *c, integer *ldc);
+      """
     code_register = """
     REGISTER_OP("%(op_name)s")
     %(code_register_op_io)s;
@@ -58,7 +86,13 @@ class OpMaker(object):
     # In the user code, we assume that we have the following variables:
     # int n_inputs; int n_outputs;
     # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
+    # Reference:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
+    # We also include NativeOp.cpp.
     code_op = """
+    #define TENSORFLOW 1
+    #include "%(native_op_cpp_filename)s"
+
     class %(op_name)sOp : public OpKernel {
     public:
       explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
@@ -89,6 +123,7 @@ class OpMaker(object):
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.gen_base.code_version,
       code=self._make_code(),
+      include_deps=[self.support_native_op_cpp_filename],
       **dict(self.compiler_opts))
     mod = comp.load_module()
     return mod
