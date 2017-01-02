@@ -2859,6 +2859,7 @@ class DiscriminatorLayer(ForwardLayer):
     self.known_grads = {}
     lng = T.sum(self.index, dtype='float32')
     preal = numpy.float32((1. - pgen) / float(len(self.sources)))
+
     if forge:
       self.params = {}
       W = base[0].W

@@ -662,7 +662,10 @@ class HDFForwardTaskThread(TaskThread):
       self.cache = cache
       self.network = network
       self.num_seqs = 0
-      target = network.get_layer('output').attrs['target']
+      if network.get_layer('output'):
+        target = network.get_layer('output').attrs['target']
+      else:
+        target = 'classes'
       cache.attrs['numTimesteps'] = 0
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
