@@ -418,7 +418,10 @@ class Updater:
 
       if param.layer.device != self.device and param.layer.device is not None:
         grads[param] = grads[param].transfer(self.device)
-      deltas = grads[param] * param.layer.gradient_scale
+      gradient_scale = param.layer.gradient_scale
+      if isinstance(param.layer.gradient_scale, list):
+        gradient_scale = T.switch(T.eq(T.mod(self.network.epoch - 1,gradient_scale[1]),0), gradient_scale[0], numpy.float32(0))
+      deltas = grads[param] * T.cast(gradient_scale,'float32')
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
 
@@ -658,7 +661,7 @@ class Updater:
 
         __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
 
-        step = -self.learning_rate_var * __m / ( T.sqrt(_v) + self.adam_offset )
+        step = -self.learning_rate_var * gradient_scale * __m / ( T.sqrt(_v) + self.adam_offset )
 
         upd[param] += step
 

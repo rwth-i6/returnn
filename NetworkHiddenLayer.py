@@ -2705,7 +2705,7 @@ class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
   def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, search='search', train_skips=False,
-               output_attention=False, output_z=False, reduce_output=True, **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -2714,8 +2714,15 @@ class AlignmentLayer(ForwardLayer):
       tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
     else:
       nskips = len(tdps) - 2
+    if base is None:
+      base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
+    if base:
+      self.params = base[0].params
+      self.W_in = base[0].W_in
+      self.b = base[0].b
+      self.z = self.get_linear_forward_output()
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
@@ -2730,9 +2737,7 @@ class AlignmentLayer(ForwardLayer):
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
-      if search != 'time':
-        search = "search"
-      else:
+      if search == 'time':
         self.index = self.sources[0].index
         self.output = x_in
         self.y_out = self.y_in[target].reshape(self.index.shape)
@@ -2834,6 +2839,83 @@ class AlignmentLayer(ForwardLayer):
 
   def errors(self):
     return self.error_val
+
+
+class DiscriminatorLayer(ForwardLayer):
+  layer_class = 'disc'
+
+  def __init__(self, base = None, pgen=0.5, forge=False, **kwargs):
+    kwargs['n_out'] = 1
+    super(DiscriminatorLayer, self).__init__(**kwargs)
+    if not base:
+      base = []
+    self.params = {}
+    W = self.add_param(self.create_forward_weights(self.sources[0].attrs['n_out'], self.attrs['n_out'], name="W_%s" % self.name))
+    b = self.add_param(self.create_bias(1))
+    self.W = W
+    self.b = b
+    self.cost_val = 0.0
+    self.error_val = 0.0
+    self.known_grads = {}
+    lng = T.sum(self.index, dtype='float32')
+    preal = numpy.float32((1. - pgen) / float(len(self.sources)))
+    if forge:
+      self.params = {}
+      W = base[0].W
+      b = base[0].b
+      base = []
+      preal = numpy.float32(1.0)
+    for src in self.sources: # real
+      idx = (src.index.flatten() > 0).nonzero()
+      z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-10),numpy.float32(1. - 1e-10))
+      ratio = lng / T.sum(src.index, dtype='float32')
+      self.cost_val += preal * ratio * -T.sum(T.log(z))
+      self.error_val += ratio * T.sum(T.lt(z,numpy.float32(0.5)))
+    if base:
+      pgen = numpy.float32(pgen / float(len(base)))
+      for src in base: # gen
+        idx = (src.index.flatten() > 0).nonzero()
+        z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-10),numpy.float32(1. - 1e-10))
+        ratio = lng / T.sum(src.index, dtype='float32')
+        self.cost_val += ratio * pgen * -T.sum(T.log(numpy.float32(1) - z))
+        self.error_val += ratio * T.sum(T.ge(z, numpy.float32(0.5)))
+    self.error_val /= numpy.float32(len(self.sources + base))
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+
+class ScaleGradientOp(theano.gof.Op):
+  view_map = {0: [0]}
+
+  __props__ = ('scale',)
+
+  def __init__(self, scale):
+    super(ScaleGradientOp, self).__init__()
+    self.scale = numpy.float32(scale)
+
+  def make_node(self, x):
+    return theano.gof.graph.Apply(self, [x], [x.type.make_variable()])
+
+  def perform(self, node, inputs, output_storage):
+    xin, = inputs
+    xout, = output_storage
+    xout[0] = xin
+
+  def grad(self, input, output_gradients):
+    return [self.scale * output_gradients[0]]
+
+
+class ScaleGradLayer(_NoOpLayer):
+  layer_class = 'scale_grad'
+
+  def __init__(self, scale = 1.0, **kwargs):
+    super(ScaleGradLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    self.output = ScaleGradientOp(scale)(self.sources[0].output)
 
 
 class RNNBlockLayer(ForwardLayer):

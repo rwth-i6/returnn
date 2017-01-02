@@ -195,7 +195,9 @@ class TwoDLSTMLayer(TwoDBaseLayer):
   layer_class = "mdlstm"
   recurrent = True
 
-  def __init__(self, n_out, collapse_output=False, collapse_transpose=False, directions=4, projection='average', **kwargs):
+  def __init__(self, n_out, collapse_output=False, directions=4, projection='average', base=None, **kwargs):
+    if base is None:
+      base = []
     super(TwoDLSTMLayer, self).__init__(n_out, **kwargs)
     assert len(self.sources) == 1
     source = self.sources[0]
@@ -213,17 +215,29 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     if mask is not None:
       X = self.mass * mask * X
 
-    b1 = self.create_and_add_bias(n_out, "1")
-    b2 = self.create_and_add_bias(n_out, "2")
-    if directions >= 1:
-      b3 = self.create_and_add_bias(n_out, "3")
-      b4 = self.create_and_add_bias(n_out, "4")
+    if base:
+      self.b1 = self.add_param(base[0].b1)
+      self.b2 = self.add_param(base[0].b2)
+      if directions >= 1:
+        self.b3 = self.add_param(base[0].b3)
+        self.b4 = self.add_param(base[0].b4)
+      self.W1, self.V_h1, self.V_v1 = self.add_param(base[0].W1), self.add_param(base[0].V_h1), self.add_param(base[0].V_v1)
+      self.W2, self.V_h2, self.V_v2 = self.add_param(base[0].W2), self.add_param(base[0].V_h2), self.add_param(base[0].V_v2)
+      if directions >= 1:
+        self.W3, self.V_h3, self.V_v3 = self.add_param(base[0].W3), self.add_param(base[0].V_h3), self.add_param(base[0].V_v3)
+        self.W4, self.V_h4, self.V_v4 = self.add_param(base[0].W4), self.add_param(base[0].V_h4), self.add_param(base[0].V_v4)
+    else:
+      self.b1 = self.create_and_add_bias(n_out, "1")
+      self.b2 = self.create_and_add_bias(n_out, "2")
+      if directions >= 1:
+        self.b3 = self.create_and_add_bias(n_out, "3")
+        self.b4 = self.create_and_add_bias(n_out, "4")
 
-    W1, V_h1, V_v1 = self.create_and_add_2d_lstm_weights(n_in, n_out, "1")
-    W2, V_h2, V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
-    if directions >= 1:
-      W3, V_h3, V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
-      W4, V_h4, V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
+      self.W1, self.V_h1, self.V_v1 = self.create_and_add_2d_lstm_weights(n_in, n_out, "1")
+      self.W2, self.V_h2, self.V_v2 = self.create_and_add_2d_lstm_weights(n_in, n_out, "2")
+      if directions >= 1:
+        self.W3, self.V_h3, self.V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
+        self.W4, self.V_h4, self.V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
 
     if str(theano.config.device).startswith('cpu'):
       Y = T.zeros_like(X)
@@ -232,10 +246,10 @@ class TwoDLSTMLayer(TwoDBaseLayer):
         n_out *= directions
     else:
       if directions <= 2:
-        Y = BidirectionalTwoDLSTMOpInstance(X, W1, W2, V_h1, V_h2, V_v1, V_v2, b1, b2, sizes)
+        Y = BidirectionalTwoDLSTMOpInstance(X, self.W1, self.W2, self.V_h1, self.V_h2, self.V_v1, self.V_v2, self.b1, self.b2, sizes)
       else:
-        Y = MultiDirectionalTwoDLSTMOpInstance(X, W1, W2, W3, W4, V_h1, V_h2, V_h3, V_h4,
-                                                  V_v1, V_v2, V_v3, V_v4, b1, b2, b3, b4, sizes)
+        Y = MultiDirectionalTwoDLSTMOpInstance(X, self.W1, self.W2, self.W3, self.W4, self.V_h1, self.V_h2, self.V_h3, self.V_h4,
+                                               self.V_v1, self.V_v2, self.V_v3, self.V_v4, self.b1, self.b2, self.b3, self.b4, sizes)
 
       if directions > 1:
         Y = T.stack(Y[:directions],axis=-1)
@@ -250,13 +264,8 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     Y.name = 'Y'
     self.set_attr('n_out', n_out)
     self.set_attr('collapse_output', collapse_output)
-    self.set_attr('collapse_transpose', collapse_transpose)
     self.set_attr('directions', directions)
     self.set_attr('projection', projection)
-
-    if collapse_transpose:
-      assert collapse_output != False
-      Y = Y.dimshuffle(1, 0, 2, 3)
 
     #index handling
     def index_fn(index, size):
@@ -356,7 +365,9 @@ class ConvBaseLayer(TwoDBaseLayer):
   layer_class = "conv_base"
   recurrent = False
 
-  def __init__(self, n_features, filter, base = [], activation="tanh", **kwargs):
+  def __init__(self, n_features, filter, base = None, activation="tanh", **kwargs):
+    if base is None:
+      base = []
     kwargs['n_out'] = n_features
     super(ConvBaseLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1

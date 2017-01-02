@@ -357,7 +357,7 @@ class FramewiseOutputLayer(OutputLayer):
         sseLoss = T.mean(
           T.sum(
             T.sqr(netOutput - groundTruth),
-            axis=1
+            axis=(0,1)
           )
         )
         return sseLoss, known_grads

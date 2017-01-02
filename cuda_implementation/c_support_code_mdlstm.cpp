@@ -501,6 +501,7 @@ void do_lstm_batched_multidir(CudaNdarray * H1, CudaNdarray * H2, CudaNdarray * 
     valid.size() * sizeof(float), cudaMemcpyHostToDevice));
   HANDLE_ERROR(cudaMemcpy(CudaNdarray_DEV_DATA(ptr_storage), ptrs.data(),
     ptrs.size() * sizeof(float*), cudaMemcpyHostToDevice));
+  //HANDLE_ERROR(cudaMemPrefetchAsync(*ptr_storage, ptrs.size() * sizeof(float*), 0, stream));
   float ** ptr_storage_data = reinterpret_cast<float**>(CudaNdarray_DEV_DATA(ptr_storage));
   float ** data_Hs = ptr_storage_data + 0 * 4 * n_outer_batch;
   const float ** data_old_state_ys = (const float**) ptr_storage_data + 1 * 4 * n_outer_batch;
