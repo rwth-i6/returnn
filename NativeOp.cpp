@@ -9,8 +9,50 @@
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
+#ifndef TENSORFLOW
+#define TENSORFLOW 0
+#endif
+
+#if TENSORFLOW
+// https://www.tensorflow.org/api_docs/cc/class/tensorflow/tensor
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
+// https://eigen.tuxfamily.org/dox-devel/unsupported/Tensor_8h_source.html
+#define Ndarray tensorflow::Tensor
+#define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
+#define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
+#define Ndarray_DIMS Ndarray_HOST_DIMS
+#define Ndarray_NDIM(x) (x)->dims()
+typedef long long Ndarray_DIM_Type;
+#define Ndarray_SIZE(x) (x)->flat<float>().size()
+
+// return in elements
+static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
+    int ndim = x->dims();
+    if(dim + 1 >= ndim)
+        return 1;
+    return x->dim_size(dim + 1) * Ndarray_STRIDE(x, dim + 1);
+}
+
+// uninitialized
+static Ndarray* Ndarray_NewDims(int nd, const Ndarray_DIM_Type* dims) {
+    // TODO...
+    return NULL;
+}
+
+
+Ndarray* Ndarray_Copy(const Ndarray* self) {
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
+    // copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
+    // TODO...
+    return NULL;
+}
+
+#endif
+
 #if CUDA
 
+#if !TENSORFLOW  // Theano
 // Defined here: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
 // See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
 #define Ndarray CudaNdarray
@@ -25,6 +67,8 @@
 #define Ndarray_NewDims CudaNdarray_NewDims
 // PyObject * CudaNdarray_Copy(const CudaNdarray * self);
 #define Ndarray_Copy CudaNdarray_Copy
+#endif
+
 #define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
 #define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
 /*
@@ -107,6 +151,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #else   // not CUDA
 
+#if !TENSORFLOW
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
 // And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
 #define Ndarray PyArrayObject
@@ -119,6 +164,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
+#endif
+
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 #define Ndarray_memset(s, c, size) (memset(s, c, size))
 /*
@@ -143,24 +190,37 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define start_dev_kernel(kernel, args) \
 	{ for(_KernelLoop loop; !loop.finished(); loop.next()) { kernel args; } }
 
-struct vec3 {
-	int x; int y; int z;
-	void reset() { x = y = z = 0; }
+struct _int3 {
+    int x, y, z;
 };
 
-vec3 gridDim;
-vec3 blockDim;
-vec3 threadIdx;
-vec3 blockIdx;
+struct _uint3 {
+    unsigned int x, y, z;
+};
+
+template<typename T>
+static void resetVec3(T& v) {
+    v.x = v.y = v.z = 0;
+}
+
+static _uint3 _threadIdx;
+static _uint3 _blockIdx;
+static _int3 _blockDim;
+static _int3 _gridDim;
+// We need those as macros to not infer with the CUDA versions if CUDA was also included.
+#define threadIdx _threadIdx
+#define blockIdx _blockIdx
+#define blockDim _blockDim
+#define gridDim _gridDim
 
 struct _KernelLoop {
 	_KernelLoop() {
 		// When we can choose whatever we want here, this loops becomes trivial,
 		// there will only be one iteration.
-		gridDim.reset(); gridDim.x = 1;
-		blockDim.reset(); blockDim.x = 1;
-		threadIdx.reset();
-		blockIdx.reset();
+		resetVec3(gridDim); gridDim.x = 1;
+		resetVec3(blockDim); blockDim.x = 1;
+		resetVec3(threadIdx);
+		resetVec3(blockIdx);
 	}
 	bool finished() {
 		// TODO: Also block idx but doesn't matter with the constants above.

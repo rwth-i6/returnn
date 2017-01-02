@@ -3,18 +3,19 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 import contextlib
 import os
+import sys
 
 
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
   with tf.name_scope('summaries_%s' % name):
     mean = tf.reduce_mean(var)
-    tf.scalar_summary('%s_mean' % name, mean)
+    tf.summary.scalar('%s_mean' % name, mean)
     with tf.name_scope('stddev'):
       stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-    tf.scalar_summary('%s_stddev' % name, stddev)
-    tf.scalar_summary('%s_max' % name, tf.reduce_max(var))
-    tf.scalar_summary('%s_min' % name, tf.reduce_min(var))
+    tf.summary.scalar('%s_stddev' % name, stddev)
+    tf.summary.scalar('%s_max' % name, tf.reduce_max(var))
+    tf.summary.scalar('%s_min' % name, tf.reduce_min(var))
     tf.histogram_summary('%s_histogram' % name, var)
 
 
@@ -236,20 +237,48 @@ def _get_tf_list_local_devices():
   global _list_local_devices
   if _list_local_devices:
     return _list_local_devices
+  print("Collecting TensorFlow device list...")
   _list_local_devices = list(device_lib.list_local_devices())
   return _list_local_devices
 
 
+def _parse_physical_device_desc(s):
+  """
+  :param str s: string via dev.physical_device_desc. e.g. "device: 0, name: GeForce GTX 980, pci bus id: 0000:41:00.0"
+  :return: dict key -> value
+  :rtype: dict[str,str]
+  """
+  d = {}
+  for part in s.split(","):
+    part = part.strip()
+    key, value = part.split(":", 1)
+    key, value = key.strip(), value.strip()
+    d[key] = value
+  return d
+
+
 def print_available_devices():
+  cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
+    cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
-  print("Collecting TensorFlow device list...")
   devs = _get_tf_list_local_devices()
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
+
+  # Theano prints sth like: Using gpu device 2: GeForce GTX 980 (...)
+  # Print in a similar format so that some scripts which grep our stdout work just as before.
+  for dev in devs:
+    if dev.device_type == "GPU":
+      d = _parse_physical_device_desc(dev.physical_device_desc)
+      dev_id = int(d["device"])
+      if cuda_visible_devs:
+        dev_id = cuda_visible_devs[dev_id]
+      dev_name = d["name"]
+      print("Using gpu device %i: %s" % (dev_id, dev_name))
 
 
 def is_gpu_available():
@@ -336,3 +365,341 @@ def sparse_labels(x, seq_lens):
     idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
     flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
     return tf.SparseTensor(flat_idxs, flat_x, [batch_size, tf.reduce_max(seq_lens)])
+
+
+class VariableAssigner(object):
+  def __init__(self, var):
+    """
+    :param tf.Variable var:
+    """
+    self.var = var
+    self.value_placeholder = tf.placeholder(
+      name="%s_placeholder_assign_value" % var.name.split("/")[-1][:-2],
+      shape=var.get_shape(),
+      dtype=var.dtype)
+    self.assign_op = tf.assign(self.var, self.value_placeholder)
+
+  def assign(self, value, session):
+    """
+    :param numpy.ndarray|int|float value:
+    :param tf.Session session:
+    """
+    session.run(self.assign_op, feed_dict={self.value_placeholder: value})
+
+
+class CudaEnv(object):
+  _instance = None
+  verbose_find_cuda = False
+
+  def __init__(self):
+    self.cuda_path = self._find_cuda_path()
+
+  @classmethod
+  def _find_nvcc_in_path(cls):
+    """
+    :return: yields full path to nvcc
+    :rtype: list[str]
+    """
+    for p in os.environ["PATH"].split(":"):
+      pp = "%s/nvcc" % p
+      if os.path.exists(pp):
+        yield pp
+
+  @classmethod
+  def _find_lib_in_ld_path(cls):
+    """
+    :return: yields full path to libcudart.so
+    :rtype: list[str]
+    """
+    if not os.environ.get("LD_LIBRARY_PATH"):
+      return
+    for p in os.environ["LD_LIBRARY_PATH"].split(":"):
+      pp = "%s/libcudart.so" % p
+      if os.path.exists(pp):
+        yield pp
+
+  @classmethod
+  def _get_lib_dir_name(cls):
+    from Util import is_64bit_platform
+    if is_64bit_platform():
+      return "lib64"
+    return "lib"
+
+  @classmethod
+  def _cuda_path_candidates(cls):
+    for p in cls._find_nvcc_in_path():
+      # Expect p == "/usr/local/cuda-8.0/bin/nvcc" or so.
+      postfix = "/bin/nvcc"
+      if cls.verbose_find_cuda:
+        print("found cuda nvcc (wanted postfix: %r): %s" % (postfix, p))
+      if not p.endswith(postfix):
+        continue
+      yield p[:-len(postfix)]
+    for p in cls._find_lib_in_ld_path():
+      # Expect p == "/usr/local/cuda-8.0/lib64/libcudart.so" or so.
+      postfix = "/%s/libcudart.so" % cls._get_lib_dir_name()
+      if cls.verbose_find_cuda:
+        print("found cuda lib (wanted postfix: %r): %s" % (postfix, p))
+      if not p.endswith(postfix):
+        continue
+      yield p[:-len(postfix)]
+
+  @classmethod
+  def _check_valid_cuda_path(cls, p):
+    """
+    :param str p: path to CUDA, e.g. "/usr/local/cuda-8.0"
+    :return: whether this is a valid CUDA path, i.e. we find all what we need
+    :rtype: bool
+    """
+    if cls.verbose_find_cuda:
+      print("check valid CUDA path: %s" % p)
+    if not os.path.exists("%s/bin/nvcc" % p):
+      return False
+    if not os.path.exists("%s/include/cuda.h" % p):
+      return False
+    if not os.path.exists("%s/%s/libcudart.so" % (p, cls._get_lib_dir_name())):
+      return False
+    return True
+
+  @classmethod
+  def _find_cuda_path(cls):
+    """
+    :return: base CUDA path if we find one, otherwise None
+    :rtype: str|None
+    """
+    for p in cls._cuda_path_candidates():
+      if cls._check_valid_cuda_path(p):
+        return p
+    return None
+
+  def __nonzero__(self):
+    """
+    :return: whether this is a valid usable CUDA env
+    :rtype: bool
+    """
+    return bool(self.cuda_path)
+
+  def get_compiler_opts(self):
+    return [
+      "-I", "%s/include" % self.cuda_path, "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
+      "-x", "cu"]
+
+  def get_compiler_bin(self):
+    return "%s/bin/nvcc" % self.cuda_path
+
+  @classmethod
+  def get_instance(cls):
+    """
+    :rtype: CudaEnv
+    """
+    if cls._instance is not None:
+      return cls._instance
+    cls._instance = cls()
+    return cls._instance
+
+
+class OpCodeCompiler(object):
+  """
+  Helper class to compile TF ops on-the-fly, similar as Theano.
+  https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+  """
+
+  def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+    """
+    :param str base_name: base name for the module, e.g. "zero_out"
+    :param int|tuple[int] code_version: check for the cache whether to reuse
+    :param str code: the source code itself
+    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param list[str]|None ld_flags: e.g. ["-lblas"]
+    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
+      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
+    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+      but this would use .../base_name/static_version_name.
+    :param bool should_cleanup_old_all: whether we should look in the cache dir
+      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
+    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+    """
+    self.cache_dir = "/tmp/returnn_tf_cache"  # TODO...?
+    self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
+    self.base_name = base_name
+    self.code_version = code_version
+    self.code = code
+    self.c_macro_defines = c_macro_defines or {}
+    self.ld_flags = ld_flags or []
+    self.include_deps = include_deps
+    self.static_version_name = static_version_name
+    self._cuda_env = CudaEnv.get_instance()
+    self._code_hash = self._make_code_hash()
+    self._info_dict = self._make_info_dict()
+    self._hash = self._make_hash()
+    self._mod = None
+    if should_cleanup_old_all:
+      self._cleanup_old()
+    self._should_cleanup_old_mydir = should_cleanup_old_mydir
+
+  @property
+  def _mod_path(self):
+    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
+
+  @property
+  def _info_filename(self):
+    return "%s/info.py" % (self._mod_path,)
+
+  @property
+  def _so_filename(self):
+    return "%s/%s.so" % (self._mod_path, self.base_name)
+
+  @property
+  def _cc_filename(self):
+    return "%s/%s.cc" % (self._mod_path, self.base_name)
+
+  _cleanup_time_limit_days = 60
+
+  def _cleanup_old(self):
+    mod_path = self._mod_path  # .../base_name/hash
+    base_mod_path = os.path.dirname(mod_path)  # .../base_name
+    my_mod_path_name = os.path.basename(mod_path)
+    if not os.path.exists(base_mod_path):
+      return
+    import time
+    from Util import hms
+    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
+    for p in os.listdir(base_mod_path):
+      if p == my_mod_path_name:
+        continue
+      full_dir_path = "%s/%s" % (base_mod_path, p)
+      if not os.path.isdir(full_dir_path):
+        continue  # ignore for now
+      info_path = "%s/info.py" % full_dir_path
+      if not os.path.exists(info_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir")
+        continue
+      dt = time.time() - os.path.getmtime()
+      if dt > cleanup_time_limit_secs:
+        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
+
+  def _cleanup_old_path(self, p, reason):
+    print("OpCompiler delete old, %s: %s" % (reason, p))
+    assert os.path.exists(p)
+    import shutil
+    shutil.rmtree(p)
+
+  def _load_info(self):
+    filename = self._info_filename
+    if not os.path.exists(filename):
+      return None
+    s = open(filename).read()
+    return eval(s)
+
+  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines", "ld_flags")
+
+  def _make_info_dict(self):
+    return {
+      "base_name": self.base_name,
+      "tf_version": tf.__version__,
+      "tf_include_path": self._include_path,
+      "code_version": self.code_version,
+      "code_hash": self._code_hash,
+      "c_macro_defines": self.c_macro_defines,
+      "ld_flags": self.ld_flags,
+      "with_cuda": bool(self._cuda_env)
+    }
+
+  def _make_code_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update(self.code)
+    return hash.hexdigest()
+
+  def _make_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update("{")
+    for key in self._relevant_info_keys:
+      hash.update("%s:{%s}" % (key, self._info_dict[key]))
+    hash.update("}")
+    return hash.hexdigest()
+
+  def _save_info(self):
+    filename = self._info_filename
+    from Util import betterRepr
+    with open(filename, "w") as f:
+      f.write("%s\n" % betterRepr(self._info_dict))
+
+  def _need_recompile(self):
+    if not os.path.exists(self._so_filename):
+      return True
+    if self.include_deps:
+      so_mtime = os.path.getmtime(self._so_filename)
+      for fn in self.include_deps:
+        if os.path.getmtime(fn) > so_mtime:
+          return True
+    old_info = self._load_info()
+    new_info = self._make_info_dict()
+    if not old_info:
+      return True
+    # The hash already matched but very unlikely, this could be a collision.
+    # Anyway, just do this very cheap check.
+    for key in self._relevant_info_keys:
+      if key not in old_info:
+        return True
+      if old_info[key] != new_info[key]:
+        return True
+    # If no code version is provided, we could also check the code itself now.
+    # But I think this is overkill.
+    return False
+
+  def _maybe_compile(self):
+    if not self._need_recompile():
+      # Touch it so that we can see that we used it recently.
+      os.utime(self._info_filename, None)
+      return
+    if self._should_cleanup_old_mydir:
+      if os.path.exists(self._mod_path):
+        self._cleanup_old_path(self._mod_path, reason="need recompile")
+    if not os.path.exists(self._mod_path):
+      print("OpCompiler create dir: %s" % self._mod_path)
+      os.makedirs(self._mod_path)
+    with open(self._cc_filename, "w") as f:
+      f.write(self.code)
+    common_opts = ["-shared", "-O2", "-std=c++11"]
+    if sys.platform == "darwin":
+      common_opts += ["-undefined", "dynamic_lookup"]
+    common_opts += ["-I", self._include_path]
+    compiler_opts = ["-fPIC"]
+    if self._cuda_env:
+      common_opts += self._cuda_env.get_compiler_opts()
+      common_opts += ["-DGOOGLE_CUDA=1"]
+      for opt in compiler_opts:
+        common_opts += ["-Xcompiler", opt]
+    else:
+      common_opts += compiler_opts
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += self.ld_flags
+    opts = common_opts + [self._cc_filename, "-o", self._so_filename]
+    cmd_bin = "g++"
+    if self._cuda_env:
+      cmd_bin = self._cuda_env.get_compiler_bin()
+    cmd_args = [cmd_bin] + opts
+    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
+    print("OpCompiler call: %s" % " ".join(cmd_args))
+    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
+    stdout, stderr = proc.communicate()
+    assert stderr is None  # should only have stdout
+    if proc.returncode != 0:
+      print("OpCompiler: %s failed." % cmd_bin)
+      print("Original stdout/stderr:")
+      print(stdout)
+      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
+    assert os.path.exists(self._so_filename)
+    self._save_info()
+    assert not self._need_recompile()
+
+  def load_module(self):
+    if self._mod:
+      return self._mod
+    self._maybe_compile()
+    self._mod = tf.load_op_library(self._so_filename)
+    return self._mod

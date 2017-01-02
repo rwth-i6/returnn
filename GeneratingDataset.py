@@ -8,7 +8,7 @@ class GeneratingDataset(Dataset):
 
   def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
     assert window == 1
-    super(GeneratingDataset, self).__init__(window, **kwargs)
+    super(GeneratingDataset, self).__init__(window=window, **kwargs)
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
