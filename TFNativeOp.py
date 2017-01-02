@@ -43,15 +43,78 @@ class OpMaker(object):
     return support_native_op_cpp_filename
 
   def _make_code(self):
+    # In the user code, we assume that we have the following variables:
+    # int n_inputs; int n_outputs;
+    # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
+    # Reference:
+    # https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/g3doc/how_tos/adding_an_op/
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/pad_op.cc
+    # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
+    # We also include NativeOp.cpp.
+    in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
+      in_info=self.gen_base.in_info, out_info=self.gen_base.out_info)
+    out_is_ref = dict()  # output vars which are inplace, out_name -> in_idx
+    # want_inplace: output-index which this input should operate on
+    # Unlike the Theano variant, we always do it inplace,
+    # so the user has to make a copy if this is not the intention.
+    for in_idx, v in enumerate(in_info):
+      out_idx = v.get("want_inplace", -1)
+      if out_idx >= 0:
+        out_name = out_info[out_idx]["name"]
+        assert out_name not in out_is_ref
+        out_is_ref[out_name] = in_idx
+    def map_name(v):
+      return v["name"].lower()
+    def map_type(v, is_out=False):
+      t = v.get("dtype", "float32")
+      if is_out:
+        if v["name"] in out_is_ref:
+          t = "Ref(%s)" % t
+      else:
+        if v.get("want_inplace", -1) >= 0:
+          t = "Ref(%s)" % t
+      return t
     code_register_op_io = ""
-    for v in self.gen_base.in_info:
-      code_register_op_io += ".Input(\"%s: %s\")\n" % (v["name"].lower(), v.get("dtype", "float32"))
-    for v in self.gen_base.out_info:
-      code_register_op_io += ".Output(\"%s: %s\")\n" % (v["name"].lower(), v.get("dtype", "float32"))
+    for v in in_info:
+      code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
+    for v in out_info:
+      code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v), map_type(v, is_out=True))
+    code_forward_io = ""
+    for in_idx, v in enumerate(in_info):
+      out_idx = v.get("want_inplace", -1)
+      if out_idx >= 0:
+        code_forward_io += "context->forward_ref_input_to_ref_output(%i, %i);\n" % (in_idx, out_idx)
+    code_set_io = ""
+    for in_idx, v in enumerate(in_info):
+      if v.get("want_inplace", -1) >= 0:  # is ref
+        code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
+        code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+      else:  # no ref
+        code_set_io += "inputs[%i] = const_cast<Ndarray*>(&context->input(%i));\n" % (in_idx, in_idx)
+    for out_idx, v in enumerate(out_info):
+      out_name = out_info[out_idx]["name"]
+      if out_name in out_is_ref:  # is ref on input
+        in_idx = out_is_ref[out_name]
+        code_set_io += "outputs[%i] = &inputs[%i];\n" % (out_idx, in_idx)
+      else:  # no ref
+        code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
+        code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
+        cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
+                                                  for (in_idx, in_dim) in v["shape"]])
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
     format_args = {
       "op_name": self.op_name,
       "code_register_op_io": code_register_op_io,
-      "native_op_cpp_filename": self.support_native_op_cpp_filename
+      "code_forward_io": code_forward_io,
+      "code_set_io": code_set_io,
+      "user_code": self.gen_base.c_fw_code % {"fail": "assert(false);"},
+      "user_code_kernels": NativeOp.NativeOp._reduce_c_extra_support_code(self.gen_base.c_extra_support_code),
+      "native_op_cpp_filename": self.support_native_op_cpp_filename,
+      "n_inputs": len(in_info),
+      "n_outputs": len(out_info)
     }
     code_header = """
     #include "tensorflow/core/framework/op.h"
@@ -83,21 +146,23 @@ class OpMaker(object):
     REGISTER_OP("%(op_name)s")
     %(code_register_op_io)s;
     """ % format_args
-    # In the user code, we assume that we have the following variables:
-    # int n_inputs; int n_outputs;
-    # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
-    # Reference:
-    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
-    # We also include NativeOp.cpp.
     code_op = """
     #define TENSORFLOW 1
     #include "%(native_op_cpp_filename)s"
+
+    %(user_code_kernels)s
+
+    static const int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
 
     class %(op_name)sOp : public OpKernel {
     public:
       explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
       void Compute(OpKernelContext* context) override {
-        // ...
+        %(code_forward_io)s
+        Ndarray* inputs[n_inputs];
+        Ndarray** outputs[n_outputs];
+        %(code_set_io)s
+        %(user_code)s
       }
     };
 

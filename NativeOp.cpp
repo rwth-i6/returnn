@@ -37,6 +37,7 @@ static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
 // uninitialized
 static Ndarray* Ndarray_NewDims(int nd, const Ndarray_DIM_Type* dims) {
     // TODO...
+    assert("not implemented" && 0);
     return NULL;
 }
 
@@ -45,6 +46,7 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
     // copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
     // TODO...
+    assert("not implemented" && 0);
     return NULL;
 }
 

@@ -104,7 +104,8 @@ class NativeOp(theano.Op):
         dummy_out_idx = len(out_info)
         dummy_out = {"ndim": info["ndim"],
                      "shape": [(in_idx, i) for i in range(info["ndim"])],
-                     "dtype": info.get("dtype", "float32")}
+                     "dtype": info.get("dtype", "float32"),
+                     "name": "dummy_out_%i" % num_dummy_outs}
         out_info += [dummy_out]
         info["want_inplace"] = dummy_out_idx
     return in_info, out_info, num_dummy_outs
