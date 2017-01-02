@@ -66,19 +66,19 @@ class OpMaker(object):
       #include <cuda_runtime.h>
       #include "cublas_v2.h"
       """
-    else:
-      code_header += """
-      typedef float real;
-      typedef int integer;
-      extern "C"
-      extern int sgemm_(char *transa, char *transb,
-        integer *m, integer *n, integer *k,
-        const real *alpha,
-        const real *a, integer *lda,
-        const real *b, integer *ldb,
-        const real *beta,
-        real *c, integer *ldc);
-      """
+    # sgemm
+    code_header += """
+    typedef float real;
+    typedef int integer;
+    extern "C"
+    extern int sgemm_(char *transa, char *transb,
+      integer *m, integer *n, integer *k,
+      const real *alpha,
+      const real *a, integer *lda,
+      const real *b, integer *ldb,
+      const real *beta,
+      real *c, integer *ldc);
+    """
     code_register = """
     REGISTER_OP("%(op_name)s")
     %(code_register_op_io)s;
@@ -124,6 +124,7 @@ class OpMaker(object):
       base_name=self.name, code_version=self.gen_base.code_version,
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
+      ld_flags=["-lblas"],
       **dict(self.compiler_opts))
     mod = comp.load_module()
     return mod

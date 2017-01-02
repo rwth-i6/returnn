@@ -190,24 +190,37 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define start_dev_kernel(kernel, args) \
 	{ for(_KernelLoop loop; !loop.finished(); loop.next()) { kernel args; } }
 
-struct vec3 {
-	int x; int y; int z;
-	void reset() { x = y = z = 0; }
+struct _int3 {
+    int x, y, z;
 };
 
-vec3 gridDim;
-vec3 blockDim;
-vec3 threadIdx;
-vec3 blockIdx;
+struct _uint3 {
+    unsigned int x, y, z;
+};
+
+template<typename T>
+static void resetVec3(T& v) {
+    v.x = v.y = v.z = 0;
+}
+
+static _uint3 _threadIdx;
+static _uint3 _blockIdx;
+static _int3 _blockDim;
+static _int3 _gridDim;
+// We need those as macros to not infer with the CUDA versions if CUDA was also included.
+#define threadIdx _threadIdx
+#define blockIdx _blockIdx
+#define blockDim _blockDim
+#define gridDim _gridDim
 
 struct _KernelLoop {
 	_KernelLoop() {
 		// When we can choose whatever we want here, this loops becomes trivial,
 		// there will only be one iteration.
-		gridDim.reset(); gridDim.x = 1;
-		blockDim.reset(); blockDim.x = 1;
-		threadIdx.reset();
-		blockIdx.reset();
+		resetVec3(gridDim); gridDim.x = 1;
+		resetVec3(blockDim); blockDim.x = 1;
+		resetVec3(threadIdx);
+		resetVec3(blockIdx);
 	}
 	bool finished() {
 		// TODO: Also block idx but doesn't matter with the constants above.

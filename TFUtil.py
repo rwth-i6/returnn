@@ -504,12 +504,14 @@ class OpCodeCompiler(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
 
-  def __init__(self, base_name, code_version, code, c_macro_defines=None, include_deps=None, static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+  def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
     :param str code: the source code itself
     :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param list[str]|None ld_flags: e.g. ["-lblas"]
     :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
       and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
     :param str|None static_version_name: normally, we use .../base_name/hash as the dir
@@ -524,6 +526,7 @@ class OpCodeCompiler(object):
     self.code_version = code_version
     self.code = code
     self.c_macro_defines = c_macro_defines or {}
+    self.ld_flags = ld_flags or []
     self.include_deps = include_deps
     self.static_version_name = static_version_name
     self._cuda_env = CudaEnv.get_instance()
@@ -589,7 +592,7 @@ class OpCodeCompiler(object):
     s = open(filename).read()
     return eval(s)
 
-  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines")
+  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines", "ld_flags")
 
   def _make_info_dict(self):
     return {
@@ -599,6 +602,7 @@ class OpCodeCompiler(object):
       "code_version": self.code_version,
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
+      "ld_flags": self.ld_flags,
       "with_cuda": bool(self._cuda_env)
     }
 
@@ -673,6 +677,7 @@ class OpCodeCompiler(object):
       common_opts += compiler_opts
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += self.ld_flags
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
     cmd_bin = "g++"
     if self._cuda_env:
