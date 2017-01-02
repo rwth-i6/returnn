@@ -87,7 +87,10 @@ class OpMaker(object):
       out_idx = v.get("want_inplace", -1)
       if out_idx >= 0:
         code_forward_io += "context->forward_ref_input_to_ref_output(%i, %i);\n" % (in_idx, out_idx)
-    code_set_io = ""
+    code_set_io = """
+    Ndarray* inputs[n_inputs];
+    Ndarray** outputs[n_outputs];
+    """
     for in_idx, v in enumerate(in_info):
       if v.get("want_inplace", -1) >= 0:  # is ref
         code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
@@ -105,12 +108,19 @@ class OpMaker(object):
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
+    code_user = self.gen_base.c_fw_code % {"fail": "assert(false);"}
+    code_compute = "\n".join([
+      "cur_op_kernel_context = context;",
+      code_forward_io,
+      code_set_io,
+      code_user,
+      "cur_op_kernel_context = NULL;"])
     format_args = {
       "op_name": self.op_name,
       "code_register_op_io": code_register_op_io,
       "code_forward_io": code_forward_io,
       "code_set_io": code_set_io,
-      "user_code": self.gen_base.c_fw_code % {"fail": "assert(false);"},
+      "code_compute": code_compute,
       "user_code_kernels": NativeOp.NativeOp._reduce_c_extra_support_code(self.gen_base.c_extra_support_code),
       "native_op_cpp_filename": self.support_native_op_cpp_filename,
       "n_inputs": len(in_info),
@@ -120,15 +130,23 @@ class OpMaker(object):
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
-
-    using namespace tensorflow;
     """
     if self.with_cuda:
       # http://docs.nvidia.com/cuda/cublas
       code_header += """
+      #include <cuda.h>
       #include <cuda_runtime.h>
-      #include "cublas_v2.h"
+      #include <cublas_v2.h>
+
+      // https://github.com/tensorflow/tensorflow/issues/6602 ?
+      #include "tensorflow/core/platform/stream_executor.h"
       """
+    code_header += """
+    using namespace tensorflow;
+
+    // need global helper
+    OpKernelContext* cur_op_kernel_context = NULL;
+    """
     # sgemm
     code_header += """
     typedef float real;
@@ -148,6 +166,7 @@ class OpMaker(object):
     """ % format_args
     code_op = """
     #define TENSORFLOW 1
+    #define CUDA 0
     #include "%(native_op_cpp_filename)s"
 
     %(user_code_kernels)s
@@ -158,11 +177,7 @@ class OpMaker(object):
     public:
       explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
       void Compute(OpKernelContext* context) override {
-        %(code_forward_io)s
-        Ndarray* inputs[n_inputs];
-        Ndarray** outputs[n_outputs];
-        %(code_set_io)s
-        %(user_code)s
+        %(code_compute)s
       }
     };
 
@@ -170,15 +185,33 @@ class OpMaker(object):
     """ % format_args
     if self.with_cuda:
       code_gpu_op = """
-      class %(op_name)sGpuOp : public OpKernel {
-      public:
-        explicit %(op_name)sGpuOp(OpKernelConstruction* context) : OpKernel(context) {}
-        void Compute(OpKernelContext* context) override {
-          // ...
-        }
-      };
+      namespace _gpu {
+        #undef CUDA
+        #define CUDA 1
+        #undef Ndarray_memcpy
+        #undef Ndarray_memset
+        #undef Ndarray_sgemm
+        #undef DEF_KERNEL
+        #undef start_dev_kernel
+        #undef assert_cmp
+        #undef threadIdx
+        #undef blockIdx
+        #undef blockDim
+        #undef gridDim
+        #include "%(native_op_cpp_filename)s"
 
-      REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_GPU), %(op_name)sGpuOp);
+        %(user_code_kernels)s
+
+        class %(op_name)sGpuOp : public OpKernel {
+        public:
+          explicit %(op_name)sGpuOp(OpKernelConstruction* context) : OpKernel(context) {}
+          void Compute(OpKernelContext* context) override {
+            %(code_compute)s
+          }
+        };
+
+        REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_GPU), %(op_name)sGpuOp);
+      }
       """ % format_args
     else:
       code_gpu_op = ""

@@ -13,6 +13,20 @@
 #define TENSORFLOW 0
 #endif
 
+/*
+Reference: https://en.wikipedia.org/wiki/Row-_and_column-major_order
+Memory layout:
+* Row-major order, C contiguous
+* Column-major, Fortran contiguous
+
+Numpy (Ndarray) and Theano (and CudaNdarray) can support any memory layout (via custom strides),
+    although row-major (C-contiguous) is the standard,
+    and you get it via theano.extra_ops.CpuContiguous() or numpy.ascontiguousarray().
+TensorFlow (Tensor) is always row-major, although it uses Eigen under the hood,
+    which supports both row-major and column-major.
+The BLAS functions expect the inputs in column-major and return in column-major.
+*/
+
 #if TENSORFLOW
 // https://www.tensorflow.org/api_docs/cc/class/tensorflow/tensor
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
@@ -41,7 +55,6 @@ static Ndarray* Ndarray_NewDims(int nd, const Ndarray_DIM_Type* dims) {
     return NULL;
 }
 
-
 Ndarray* Ndarray_Copy(const Ndarray* self) {
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
     // copy(context->eigen_device<Device>(), lhs->flat<T>(), rhs.flat<T>()) ....
@@ -50,7 +63,91 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
     return NULL;
 }
 
+// BLAS:
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/matmul_op.cc
+
+#if GOOGLE_CUDA
+/*
+// or tensorflow/include/tensorflow/core/util/stream_executor_util.h ?
+template <typename T>
+perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
+  perftools::gputools::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
+  perftools::gputools::DeviceMemory<T> typed(wrapped);
+  return typed;
+}
+
+static perftools::gputools::blas::Transpose int get_transpose(char t) {
+    switch(t) {
+    case 'T':
+        return perftools::gputools::blas::Transpose::kTranspose;
+    case 'C':
+        return perftools::gputools::blas::Transpose::kConjugateTranspose;
+    case 'N':
+        return perftools::gputools::blas::Transpose::kNoTranspose;
+    default:
+        assert("invalid transpose option" || 0);
+    }
+}
+*/
 #endif
+
+template<typename T>
+static void tf_cuda_sgemm(
+        OpKernelContext* context,
+        char transa, char transb,
+        int m, int n, int k,
+        const T* alpha_, const T* a, int lda,
+        const T* b, int ldb, const T* beta_,
+        T* c,
+        int ldc) {
+  T alpha = *alpha_;
+  T beta = *beta_;
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
+#if GOOGLE_CUDA
+  auto a_ptr = AsDeviceMemory(a);
+  auto b_ptr = AsDeviceMemory(b);
+  auto c_ptr = AsDeviceMemory(c);
+
+  bool blas_launch_status =
+      context->op_device_context()
+             ->stream()
+             ->ThenBlasGemm(get_transpose(transa), get_transpose(transb),
+                            m, n, k, alpha, a_ptr,
+                            lda, b_ptr, ldb, beta, &c_ptr, ldc)
+             .ok();
+  OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
+#else
+  context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
+#endif
+}
+
+#if CUDA
+#define Ndarray_sgemm( \
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+    tf_cuda_sgemm<float>(cur_op_kernel_context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+#else  // CUDA
+/*
+    // matrices are in column-major form
+	int sgemm_(char *transa, char *transb,
+		integer *m, integer *n, integer *k,
+		real *alpha, real *a, integer *lda,
+		real *b, integer *ldb, real *beta,
+		real *c, integer *ldc);
+*/
+#define Ndarray_sgemm(\
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+	{ \
+		char transa = transpose_A, transb = transpose_B; \
+		int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
+		sgemm_(&transa, &transb, \
+			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
+	}
+#endif  // CUDA
+
+#endif  // TENSORFLOW
 
 #if CUDA
 
@@ -69,10 +166,7 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 #define Ndarray_NewDims CudaNdarray_NewDims
 // PyObject * CudaNdarray_Copy(const CudaNdarray * self);
 #define Ndarray_Copy CudaNdarray_Copy
-#endif
 
-#define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
-#define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
 /*
     // via: http://docs.nvidia.com/cuda/cublas/
     // matrices are in column-major form
@@ -95,6 +189,11 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 	_cublasTranspose(transpose_B), \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc), \
 	__FILE__, __LINE__ ))
+
+#endif
+
+#define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
+#define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
 
 #define DIM_GRID 128
 #define DIM_BLOCK 512
@@ -166,10 +265,6 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
-#endif
-
-#define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
-#define Ndarray_memset(s, c, size) (memset(s, c, size))
 /*
     // matrices are in column-major form
 	int sgemm_(char *transa, char *transb,
@@ -187,6 +282,10 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 		sgemm_(&transa, &transb, \
 			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
 	}
+#endif
+
+#define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
+#define Ndarray_memset(s, c, size) (memset(s, c, size))
 
 #define DEF_KERNEL
 #define start_dev_kernel(kernel, args) \
