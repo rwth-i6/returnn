@@ -101,24 +101,31 @@ static void tf_cuda_sgemm(
         const T* b, int ldb, const T* beta_,
         T* c,
         int ldc) {
-  T alpha = *alpha_;
-  T beta = *beta_;
+    T alpha = *alpha_;
+    T beta = *beta_;
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 #if GOOGLE_CUDA
-  auto a_ptr = AsDeviceMemory(a);
-  auto b_ptr = AsDeviceMemory(b);
-  auto c_ptr = AsDeviceMemory(c);
+    auto a_ptr = AsDeviceMemory(a);
+    auto b_ptr = AsDeviceMemory(b);
+    auto c_ptr = AsDeviceMemory(c);
 
-  bool blas_launch_status =
-      context->op_device_context()
-             ->stream()
+    cudaStream_t cuda_stream = context->eigen_gpu_device().stream();
+
+    // cublasCreate, http://docs.nvidia.com/cuda/cublas/#cublascreate
+
+    auto dev_ctx = context->op_device_context();
+    auto* dev_stream = dev_ctx->stream();
+    OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
+
+    bool blas_launch_status =
+        dev_stream
              ->ThenBlasGemm(get_transpose(transa), get_transpose(transb),
                             m, n, k, alpha, a_ptr,
                             lda, b_ptr, ldb, beta, &c_ptr, ldc)
              .ok();
-  OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
+    OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
 #else
-  context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
+    context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
 #endif
 }
 
@@ -126,7 +133,7 @@ static void tf_cuda_sgemm(
 #define Ndarray_sgemm( \
 	transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
-    tf_cuda_sgemm<float>(cur_op_kernel_context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+    tf_cuda_sgemm<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
 #else  // CUDA
 /*
     // matrices are in column-major form
@@ -146,6 +153,14 @@ static void tf_cuda_sgemm(
 			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
 	}
 #endif  // CUDA
+
+// See Context struct below.
+#define CONTEXT_ARGS    context
+
+#else  // TENSORFLOW
+
+// See Context struct below.
+#define CONTEXT_ARGS
 
 #endif  // TENSORFLOW
 
@@ -199,8 +214,14 @@ static void tf_cuda_sgemm(
 #define DIM_BLOCK 512
 
 #define DEF_KERNEL __global__
+// <<<DimGrid,DimBlock,ShmemSize|0,Stream|0>>>. http://docs.nvidia.com/cuda/cuda-c-programming-guide/#execution-configuration
+#if TENSORFLOW
+#define start_dev_kernel(kernel, args) \
+	(kernel<<<DIM_GRID,DIM_BLOCK,0,context->eigen_gpu_device().stream()>>>  args);
+#else
 #define start_dev_kernel(kernel, args) \
 	(kernel<<<DIM_GRID,DIM_BLOCK>>>  args);
+#endif
 
 static const char *_cudaGetErrorEnum(cublasStatus_t error) {
 	switch (error) {
@@ -390,11 +411,24 @@ int lastTwoDimsStride(const Ndarray * a) {
 	return dims[0] * dims[1];
 }
 
+struct Context  {
+    /*
+    E.g. TensorFlow requires that we know about the context in some subroutines.
+    This helper class/struct is there to capture the context and make it accessible to any potential subroutines.
+    */
+#if TENSORFLOW
+    OpKernelContext* context;
+    Context(OpKernelContext* ctx_) : context(ctx_) {}
+#else
+    Context() {}
+#endif
 
 //C[x] += A[x]*B[x]
 //(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
-void affine_y_x(int x_A, Ndarray* A, int x_B, Ndarray* B,
-	            int x_C, /*out*/Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
+
+void _affine_y_x(
+        int x_A, Ndarray* A, int x_B, Ndarray* B,
+	    int x_C, /*out*/Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
 	const float* data_A = data_ptr(A, x_A);
 	const float* data_B = data_ptr(B, x_B);
 	float* data_C = data_ptr(C, x_C);
@@ -417,11 +451,13 @@ void affine_y_x(int x_A, Ndarray* A, int x_B, Ndarray* B,
 	Ndarray_sgemm(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
 		data_A, ldA, &beta, data_C, B_dim[1]);
 }
+#define affine_y_x Context(CONTEXT_ARGS)._affine_y_x
 
 //offset is used for x time-shift between A and B
 //if offset == 1, then we will calculate A[0..end-1] * B[1..end]
-void affine_global(Ndarray* A, Ndarray* B, /*out*/Ndarray* C,
-                   bool transpose_A = false, bool transpose_B = false, int offset = 0, float beta = 1.0) {
+void _affine_global(
+        Ndarray* A, Ndarray* B, /*out*/Ndarray* C,
+        bool transpose_A = false, bool transpose_B = false, int offset = 0, float beta = 1.0) {
 	float* data_C = Ndarray_DEV_DATA(C);
 	int A_dim[2], B_dim[2];
 	lastTwoDims(A, A_dim);
@@ -446,3 +482,6 @@ void affine_global(Ndarray* A, Ndarray* B, /*out*/Ndarray* C,
 	Ndarray_sgemm(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
 		data_A, ldA, &beta, data_C, B_dim[1]);
 }
+#define affine_global Context(CONTEXT_ARGS)._affine_global
+
+};

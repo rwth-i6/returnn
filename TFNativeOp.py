@@ -110,11 +110,9 @@ class OpMaker(object):
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
     code_user = self.gen_base.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
-      "cur_op_kernel_context = context;",
       code_forward_io,
       code_set_io,
-      code_user,
-      "cur_op_kernel_context = NULL;"])
+      code_user])
     format_args = {
       "op_name": self.op_name,
       "code_register_op_io": code_register_op_io,
@@ -126,7 +124,13 @@ class OpMaker(object):
       "n_inputs": len(in_info),
       "n_outputs": len(out_info)
     }
-    code_header = """
+    code_header = ""
+    if self.with_cuda:
+      code_header += """
+      // For Eigen::GpuDevice.
+      #define EIGEN_USE_GPU 1
+      """
+    code_header += """
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
@@ -139,13 +143,10 @@ class OpMaker(object):
       #include <cublas_v2.h>
 
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
-      #include "tensorflow/core/platform/stream_executor.h"
+      //#include "tensorflow/core/platform/stream_executor.h"
       """
     code_header += """
     using namespace tensorflow;
-
-    // need global helper
-    OpKernelContext* cur_op_kernel_context = NULL;
     """
     # sgemm
     code_header += """
