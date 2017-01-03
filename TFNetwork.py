@@ -46,6 +46,10 @@ class ExternData(object):
         init_args["shape"] = (None,) * (ndim - 1) + (dim,)
       if key == "data":
         init_args["sparse"] = sparse_input
+      # In Returnn with Theano, we usually have the shape (time,batch,feature).
+      # In TensorFlow, the default is (batch,time,feature).
+      # This is also what we use here, i.e.:
+      # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 

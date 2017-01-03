@@ -74,6 +74,10 @@ class DataProvider(object):
     """
     # See EngineUtil.assign_dev_data() for reference.
     batch, = self.batches.peek_next_n(1)
+    # In Returnn with Theano, we usually have the shape (time,batch,feature).
+    # In TensorFlow, the default is (batch,time,feature).
+    # This is also what we use here, i.e. batch_dim_first=True.
+    # This must match the Data specification in TFNetwork.ExternData.init_from_config().
     shapes = self.dataset.shapes_for_batches([batch], data_keys=self.data_keys, batch_dim_first=True)
     data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.get_data(k).dtype)
             for k in self.data_keys}

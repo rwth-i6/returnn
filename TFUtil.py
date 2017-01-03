@@ -4,6 +4,7 @@ from tensorflow.python.client import device_lib
 import contextlib
 import os
 import sys
+from Util import NotSpecified
 
 
 def variable_summaries(var, name):
@@ -219,6 +220,34 @@ def get_shape_dim(x, axis):
   return tf.shape(x)[axis]
 
 
+def get_ndim(x):
+  """
+  :param tf.Tensor x:
+  :return: x.ndim either as a static int or otherwise as an expression
+  :rtype: int|tf.Tensor
+  """
+  dyn_shape = x.get_shape()
+  if dyn_shape.ndims is not None:
+    return dyn_shape.ndims
+  # Need to fall-back to runtime.
+  return tf.rank(x)
+
+
+def get_range(start, stop=NotSpecified):
+  """
+  :param int|tf.Tensor|None start:
+  :param int|tf.Tensor|None stop:
+  :return: either tuple(range(start, stop)) or the same as a symbolic expression
+  :rtype: tuple[int]|tf.Tensor
+  """
+  if stop is NotSpecified:
+    stop = start
+    start = 0
+  if isinstance(start, tf.Tensor) or isinstance(stop, tf.Tensor):
+    return tf.range(start, stop)
+  return tuple(range(start, stop))
+
+
 def identity_with_ops(x, ops):
   """
   :param tf.Tensor x:
@@ -329,15 +358,56 @@ def get_activation_function(s):
   return act_func
 
 
-def flatten_with_seq_len_mask(x, seq_lens):
+def swapaxes(x, axis1, axis2):
   """
-  :param tf.Tensor x: shape (batch,time,...s...)
+  :param tf.Tensor x:
+  :param tf.Tensor|int axis1:
+  :param tf.Tensor|int axis2:
+  :return: tensor with swapped axes, like numpy.swapaxes
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("swapaxes"):
+    shape = tf.shape(x)
+    ndim = x.get_shape().ndims
+    if ndim is not None:
+      if isinstance(axis1, tf.Tensor) or isinstance(axis2, tf.Tensor):
+        perm = [tf.select(tf.equal(axis1, i), axis2,
+                          tf.select(tf.equal(axis2, i), axis1,
+                                    i))
+                for i in range(ndim)]
+      else:
+        perm = [shape[i] for i in range(ndim)]
+        perm[axis1] = axis2
+        perm[axis2] = axis1
+    else:
+      # Just fall back to the very generic pure symbolic variant.
+      rank = tf.rank(x)
+      all_axes = tf.range(rank)
+      assert all_axes.get_shape().ndims == 1
+      axis1 = tf.convert_to_tensor(axis1)
+      axis2 = tf.convert_to_tensor(axis2)
+      assert axis1.get_shape().ndims == 0
+      assert axis2.get_shape().ndims == 0
+      axis1_bc = tf.expand_dims(axis1, 0)
+      axis2_bc = tf.expand_dims(axis2, 0)
+      perm = tf.select(tf.equal(axis1_bc, all_axes), axis2_bc,
+                       tf.select(tf.equal(axis2_bc, all_axes), axis1_bc,
+                                 all_axes))
+    return tf.transpose(x, perm=perm)
+
+
+def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
+  """
+  :param tf.Tensor x: shape (batch,time,...s...) with time_major=False or otherwise shape (time,batch,...s....)
   :param tf.Tensor seq_lens: shape (batch,) of int32
+  :param bool time_major: if the time-dim is the first dimension in x
   :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
+    if time_major:
+      x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
     x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)

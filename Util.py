@@ -23,6 +23,12 @@ else:
   long = builtins.long
 
 
+class NotSpecified(object):
+  """
+  This is just a placeholder, to be used as default argument to mark that it is not specified.
+  """
+
+
 def is_64bit_platform():
   """
   :return: True if we run on 64bit, False for 32bit
