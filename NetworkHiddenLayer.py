@@ -985,6 +985,132 @@ class TimeBlurLayer(_NoOpLayer):
       weight_sum = T.inc_subtensor(weight_sum[o_slice], w)
     self.output = self.output / T.maximum(weight_sum.dimshuffle(0, 1, 'x'), numpy.float32(0.0001))
 
+class MfccLayer(_NoOpLayer):
+  """
+  The source layer of this layer should be the DftLayer
+  """
+  layer_class = "mfcc_layer"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+
+  def __init__(self, dftSize=512, samplingFrequency=16*1e3, fl=0, fh=None, nrOfFilters=40, nrOfMfccCoefficients=None, **kwargs):
+    super(MfccLayer, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    if nrOfMfccCoefficients==None:
+      nrOfMfccCoefficients = nrOfFilters
+    if fh==None:
+      fh = samplingFrequency/2.0
+      
+    #create MFCC filter matrix
+    filterMatrix = self.getMfccFilterMatrix(samplingFrequency, fl, fh, dftSize, nrOfFilters, 0)
+    #apply MFCC filter
+    filtered = T.log(T.dot(self.sources[0].output ** 2, filterMatrix))
+    #convert to cepstral domain
+    numpy.reshape(numpy.asarray(range(10)), (10, 1)) * numpy.reshape(numpy.asarray(range(10))+0.5, (1, 10))
+    dctIndMatrix = numpy.reshape(numpy.asarray(range(nrOfFilters)), (nrOfFilters, 1)) * numpy.reshape((numpy.asarray(range(nrOfFilters)) + 1), (1, nrOfFilters))
+    dctMatrix = T.cos(numpy.pi/nrOfFilters * dctIndMatrix)
+    mfccs = T.dot(filtered, dctMatrix)
+    self.attrs['n_out'] = nrOfMfccCoefficients
+    self.make_output(mfccs[:,:,0:nrOfMfccCoefficients])
+
+  def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None):
+    """
+    overwrite function from Layer to  change default parameters of batch_norm: use_shift, use_std and foce_sample
+    """
+    return super(MfccLayer, self).batch_norm(h=h, dim=dim, use_shift=use_shift, use_std=use_std, use_sample=use_sample, force_sample=force_sample, index=index)
+
+  def melScale(self, freq):
+    """
+    returns the respective value on the mel scale
+
+    :type freq: float
+    :param freq: frequency value to transform onto mel scale
+    :rtype: float
+    """
+    return 1125.0 * numpy.log(1 + float(freq)/700)
+
+  def invMelScale(self, melVal):
+    """
+    returns the respective value in the frequency domain
+
+    :type melVal: float
+    :param melVal: value in mel domain 
+    :rtype: float
+    """
+    return 700.0 * (numpy.exp(float(melVal) / 1125) - 1)
+
+  def getMfccFilterMatrix(self, samplingFrequency, fl, fh, dftSize, nrOfFilters, flag_areaNormalized=0):
+    """
+    returns the filter bank matrix used for the MFCCs
+    For mathematical details see the book "speech language processing" by Huang et. al. pp. 314
+
+    #TBD !!!
+    :type dftSize: int
+    :param dftSize: size of dft
+    :type nrOfFilters: int
+    :param nrOfFilters: the number of filters used for the filterbank
+    :type flag_areaNormalized: int
+    :param flag_areaNormalized: flag that specifies which filter bank will be returned
+                0 - not normalized filter bank 
+                1 - normalized filter bank where each filter covers an area of 1
+    """
+    boundaryPoints=[numpy.round(dftSize/float(samplingFrequency) * self.invMelScale(self.melScale(fl) + m * (self.melScale(fh) - self.melScale(fl))/(float(nrOfFilters) + 1))) for m in range(nrOfFilters+2)]
+    filterMatrixNumerator = numpy.zeros((int(numpy.floor(dftSize/2.0)+1), nrOfFilters))
+    filterMatrixDenominator = numpy.ones((int(numpy.floor(dftSize/2.0)+1), nrOfFilters))
+    if flag_areaNormalized==0:
+      for i1 in range(nrOfFilters):
+        m = i1 + 1
+        #- rising flank of filter
+        filterMatrixNumerator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = 2 * (numpy.asarray(range(int(numpy.ceil(boundaryPoints[m-1])), int(numpy.floor(boundaryPoints[m])))) - boundaryPoints[m-1])
+        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m+1] - boundaryPoints[m-1]) * (boundaryPoints[m] - boundaryPoints[m-1]) 
+        #- falling flank of filter
+        filterMatrixNumerator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] = 2 * (boundaryPoints[m+1] - numpy.asarray(range(int(numpy.floor(boundaryPoints[m])), int(numpy.floor(boundaryPoints[m+1])))))
+        filterMatrixDenominator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] = (boundaryPoints[m+1] - boundaryPoints[m-1]) * (boundaryPoints[m+1] - boundaryPoints[m])
+
+      filterMatrix = numpy.divide(filterMatrixNumerator, filterMatrixDenominator)
+      return filterMatrix
+    else:
+      for i1 in range(nrOfFilters):
+        m = i1 + 1
+        #- rising flank of filter
+        filterMatrixNumerator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (numpy.asarray(range(int(numpy.ceil(boundaryPoints[m-1])), int(numpy.floor(boundaryPoints[m])))) - boundaryPoints[m-1])
+        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m] - boundaryPoints[m-1]) 
+        #- falling flank of filter
+        filterMatrixNumerator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] =(boundaryPoints[m+1] - numpy.asarray(range(int(numpy.floor(boundaryPoints[m])), int(numpy.floor(boundaryPoints[m+1])))))
+        filterMatrixDenominator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] =(boundaryPoints[m+1] - boundaryPoints[m])
+
+      filterMatrix = numpy.divide(filterMatrixNumerator, filterMatrixDenominator)
+      return filterMatrix
+    
+
+
+class DftLayer(_NoOpLayer):
+  """
+  This layer is applying the DFT of the input vector. The input is expected to be a segment of the time signal
+  cut out with the rectangular function (so no windowing has been done)
+  The output of the layer is the absolute values of the complex DFT coefficients. Only non negative coefficients
+  are returned because of symmetric spectrum
+  """
+  layer_class = "dft_layer_abs"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+
+  def __init__(self, dftLength=512, **kwargs):
+    super(DftLayer, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    # DFT properties
+    nrOfFreqBins=int(numpy.floor(dftLength/2.0) + 1)
+    # windowing
+    win = scipy.signal.get_window('hamming', dftLength)
+    windowedInput = self.sources[0].output * win
+    # create DFT matrix
+    nVec = numpy.asarray(range(dftLength))
+    kVec = numpy.asarray(range(nrOfFreqBins))
+    indexMatrix = numpy.dot(numpy.reshape(kVec, (kVec.shape[0], 1)), numpy.transpose(numpy.reshape(nVec, (nVec.shape[0], 1))))
+    dftRealMatrix = numpy.sin(2*numpy.pi*indexMatrix/(float(dftLength)))
+    dftImagMatrix = numpy.cos(2*numpy.pi*indexMatrix/(float(dftLength)))
+    # apply DFT matrix
+    dftAbsCoeff = T.sqrt(T.dot(windowedInput, numpy.transpose(dftRealMatrix))**2 + T.dot(windowedInput, numpy.transpose(dftImagMatrix))**2)
+    self.attrs['n_out'] = kVec.shape[0]
+    self.make_output(dftAbsCoeff)
 
 class GaussianFilter1DLayer(_NoOpLayer):
   layer_class = "gaussian_filter_1d"
