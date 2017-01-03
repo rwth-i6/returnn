@@ -218,6 +218,22 @@ class OpMaker(object):
       code_gpu_op = ""
     return code_header + code_register + code_op + code_gpu_op
 
+  def _load_cuda_blas_gemm(self):
+    """
+    https://github.com/tensorflow/tensorflow/issues/6602
+    As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
+    See NativeOp.cpp.
+    To make the symbols available in the namespace, load the library now.
+    """
+    if not self.with_cuda:
+      return
+    import tensorflow.contrib.rnn.python.ops.lstm_ops as lstm_ops
+    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
+    assert os.path.exists(lstm_ops_so)
+    # Maybe a bit hacky: Just load all symbols into the global namespace.
+    from ctypes import RTLD_GLOBAL, CDLL
+    CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
+
   def _make_mod(self):
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.gen_base.code_version,
@@ -225,6 +241,7 @@ class OpMaker(object):
       include_deps=[self.support_native_op_cpp_filename],
       ld_flags=["-lblas"],
       **dict(self.compiler_opts))
+    self._load_cuda_blas_gemm()
     mod = comp.load_module()
     return mod
 
