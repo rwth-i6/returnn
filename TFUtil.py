@@ -376,7 +376,7 @@ def swapaxes(x, axis1, axis2):
                                     i))
                 for i in range(ndim)]
       else:
-        perm = [shape[i] for i in range(ndim)]
+        perm = list(range(ndim))
         perm[axis1] = axis2
         perm[axis2] = axis1
     else:
