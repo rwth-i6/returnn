@@ -447,20 +447,26 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def _create_rnn_cells_dict(cls):
     from tensorflow.python.ops import rnn_cell
-    for key, v in vars(rnn_cell).items():
-      if isinstance(v, type) and issubclass(v, rnn_cell.RNNCell):
+    import tensorflow.contrib.rnn as rnn_contrib
+    def maybe_add(key, v):
+      if isinstance(v, type) and issubclass(v, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
         name = name.lower()
         assert name not in cls._rnn_cells_dict
         cls._rnn_cells_dict[name] = v
+    for key, v in vars(rnn_cell).items():
+      maybe_add(key, v)
+    for key, v in vars(rnn_contrib).items():
+      maybe_add(key, v)
 
-  def __init__(self, unit="basiclstm", bidirectional=False, direction=None, **kwargs):
+  def __init__(self, unit="lstm", bidirectional=False, direction=None, **kwargs):
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn, rnn_cell
+    import tensorflow.contrib.rnn as rnn_contrib
     if unit in ["lstmp", "lstm"]:
-      unit = "basiclstm"
+      unit = "LSTMBlockFused"
     if direction is not None:
       assert not bidirectional
       assert direction in [-1, 1]
@@ -478,7 +484,7 @@ class RecLayer(_ConcatInputLayer):
         assert n_hidden % 2 == 0
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, rnn_cell.RNNCell)  # e.g. BasicLSTMCell
+      assert isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell))  # e.g. BasicLSTMCell
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
@@ -491,16 +497,24 @@ class RecLayer(_ConcatInputLayer):
       seq_len = self.input_data.size_placeholder[0]
       if direction == -1:
         x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-      if bidirectional:
-        # Will get (time,batch,ydim/2).
-        (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
-          cell_fw=cell_fw, cell_bw=cell_bw,
-          inputs=x, time_major=True, sequence_length=seq_len,
-          dtype="float32")
-        y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
-      else:
+      if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
+        if bidirectional:
+          # Will get (time,batch,ydim/2).
+          (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
+            cell_fw=cell_fw, cell_bw=cell_bw,
+            inputs=x, time_major=True, sequence_length=seq_len,
+            dtype=tf.float32)
+          y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
+        else:
+          # Will get (time,batch,ydim).
+          y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32)
+      elif isinstance(cell_fw, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
+        if bidirectional:
+          raise NotImplementedError
         # Will get (time,batch,ydim).
-        y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, time_major=True, sequence_length=seq_len, dtype="float32")
+        y, _ = cell_fw(inputs=x, sequence_length=seq_len, dtype=tf.float32)
+      else:
+        raise Exception("invalid type: %s" % type(cell_fw))
       if direction == -1:
         y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       self.output.time_dim_axis = 0
