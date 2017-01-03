@@ -209,12 +209,6 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     assert directions in [1,2,4], "only 1, 2 or 4 directions are supported"
     assert projection in ['average', 'concat'], "invalid projection"
 
-    #dropout
-    assert len(self.masks) == 1
-    mask = self.masks[0]
-    if mask is not None:
-      X = self.mass * mask * X
-
     if base:
       self.b1 = self.add_param(base[0].b1)
       self.b2 = self.add_param(base[0].b2)
@@ -226,6 +220,8 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       if directions >= 1:
         self.W3, self.V_h3, self.V_v3 = self.add_param(base[0].W3), self.add_param(base[0].V_h3), self.add_param(base[0].V_v3)
         self.W4, self.V_h4, self.V_v4 = self.add_param(base[0].W4), self.add_param(base[0].V_h4), self.add_param(base[0].V_v4)
+      self.mass = base[0].mass
+      self.masks = base[0].masks
     else:
       self.b1 = self.create_and_add_bias(n_out, "1")
       self.b2 = self.create_and_add_bias(n_out, "2")
@@ -238,6 +234,12 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       if directions >= 1:
         self.W3, self.V_h3, self.V_v3 = self.create_and_add_2d_lstm_weights(n_in, n_out, "3")
         self.W4, self.V_h4, self.V_v4 = self.create_and_add_2d_lstm_weights(n_in, n_out, "4")
+
+    # dropout
+    assert len(self.masks) == 1
+    mask = self.masks[0]
+    if mask is not None:
+      X = self.mass * mask * X
 
     if str(theano.config.device).startswith('cpu'):
       Y = T.zeros_like(X)
