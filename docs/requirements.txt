@@ -2,4 +2,5 @@ numpy
 scipy
 h5py
 theano
+tensorflow
 numpydoc
