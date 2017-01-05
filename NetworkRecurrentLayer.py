@@ -555,7 +555,7 @@ class RecurrentUnitLayer(Layer):
     self.W_re = None
     if copy_weights_from_base:
       self.W_re = self.add_param(base[0].W_re)
-    if unit.n_re > 0:
+    elif unit.n_re > 0:
       self.W_re = self.add_param(self.create_recurrent_weights(unit.n_units, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
     bias_init_value = self.create_bias(unit.n_in).get_value()
