@@ -427,6 +427,7 @@ class RecurrentUnitLayer(Layer):
                droplm = 1.0,
                forward_weights_init=None,
                bias_random_init_forget_shift=0.0,
+               copy_weights_from_base=False,
                **kwargs):
     """
     :param n_out: number of cells
@@ -552,6 +553,8 @@ class RecurrentUnitLayer(Layer):
       n_dec = self.index.shape[0]
     # initialize recurrent weights
     self.W_re = None
+    if copy_weights_from_base:
+      self.W_re = self.add_param(base[0].W_re)
     if unit.n_re > 0:
       self.W_re = self.add_param(self.create_recurrent_weights(unit.n_units, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
@@ -566,9 +569,13 @@ class RecurrentUnitLayer(Layer):
       self.set_attr('forward_weights_init', forward_weights_init)
     self.forward_weights_init = forward_weights_init
     self.W_in = []
-    for s in self.sources:
-      W = self.create_forward_weights(s.attrs['n_out'], unit.n_in, name="W_in_%s_%s" % (s.name, self.name))
-      self.W_in.append(self.add_param(W))
+    if copy_weights_from_base:
+      self.W_in = [ self.add_param(W) for W in base[0].W_in ]
+      self.b = self.add_param(base[0].b)
+    else:
+      for s in self.sources:
+        W = self.create_forward_weights(s.attrs['n_out'], unit.n_in, name="W_in_%s_%s" % (s.name, self.name))
+        self.W_in.append(self.add_param(W))
     # make input
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):

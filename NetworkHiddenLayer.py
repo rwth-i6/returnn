@@ -1001,7 +1001,7 @@ class MfccLayer(_NoOpLayer):
       nrOfMfccCoefficients = nrOfFilters
     if fh==None:
       fh = samplingFrequency/2.0
-      
+
     #create MFCC filter matrix
     filterMatrix = self.getMfccFilterMatrix(samplingFrequency, fl, fh, dftSize, nrOfFilters, 0)
     #apply MFCC filter
@@ -1035,7 +1035,7 @@ class MfccLayer(_NoOpLayer):
     returns the respective value in the frequency domain
 
     :type melVal: float
-    :param melVal: value in mel domain 
+    :param melVal: value in mel domain
     :rtype: float
     """
     return 700.0 * (numpy.exp(float(melVal) / 1125) - 1)
@@ -1052,7 +1052,7 @@ class MfccLayer(_NoOpLayer):
     :param nrOfFilters: the number of filters used for the filterbank
     :type flag_areaNormalized: int
     :param flag_areaNormalized: flag that specifies which filter bank will be returned
-                0 - not normalized filter bank 
+                0 - not normalized filter bank
                 1 - normalized filter bank where each filter covers an area of 1
     """
     boundaryPoints=[numpy.round(dftSize/float(samplingFrequency) * self.invMelScale(self.melScale(fl) + m * (self.melScale(fh) - self.melScale(fl))/(float(nrOfFilters) + 1))) for m in range(nrOfFilters+2)]
@@ -1063,7 +1063,7 @@ class MfccLayer(_NoOpLayer):
         m = i1 + 1
         #- rising flank of filter
         filterMatrixNumerator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = 2 * (numpy.asarray(range(int(numpy.ceil(boundaryPoints[m-1])), int(numpy.floor(boundaryPoints[m])))) - boundaryPoints[m-1])
-        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m+1] - boundaryPoints[m-1]) * (boundaryPoints[m] - boundaryPoints[m-1]) 
+        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m+1] - boundaryPoints[m-1]) * (boundaryPoints[m] - boundaryPoints[m-1])
         #- falling flank of filter
         filterMatrixNumerator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] = 2 * (boundaryPoints[m+1] - numpy.asarray(range(int(numpy.floor(boundaryPoints[m])), int(numpy.floor(boundaryPoints[m+1])))))
         filterMatrixDenominator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] = (boundaryPoints[m+1] - boundaryPoints[m-1]) * (boundaryPoints[m+1] - boundaryPoints[m])
@@ -1075,14 +1075,14 @@ class MfccLayer(_NoOpLayer):
         m = i1 + 1
         #- rising flank of filter
         filterMatrixNumerator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (numpy.asarray(range(int(numpy.ceil(boundaryPoints[m-1])), int(numpy.floor(boundaryPoints[m])))) - boundaryPoints[m-1])
-        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m] - boundaryPoints[m-1]) 
+        filterMatrixDenominator[int(numpy.ceil(boundaryPoints[m-1])):int(numpy.floor(boundaryPoints[m])),i1] = (boundaryPoints[m] - boundaryPoints[m-1])
         #- falling flank of filter
         filterMatrixNumerator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] =(boundaryPoints[m+1] - numpy.asarray(range(int(numpy.floor(boundaryPoints[m])), int(numpy.floor(boundaryPoints[m+1])))))
         filterMatrixDenominator[int(numpy.floor(boundaryPoints[m])):int(numpy.floor(boundaryPoints[m+1])),i1] =(boundaryPoints[m+1] - boundaryPoints[m])
 
       filterMatrix = numpy.divide(filterMatrixNumerator, filterMatrixDenominator)
       return filterMatrix
-    
+
 
 
 class DftLayer(_NoOpLayer):
@@ -2996,15 +2996,15 @@ class DiscriminatorLayer(ForwardLayer):
       preal = numpy.float32(1.0)
     for src in self.sources: # real
       idx = (src.index.flatten() > 0).nonzero()
-      z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-10),numpy.float32(1. - 1e-10))
+      z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-5),numpy.float32(1. - 1e-5))
       ratio = lng / T.sum(src.index, dtype='float32')
-      self.cost_val += preal * ratio * -T.sum(T.log(z))
+      self.cost_val += ratio * preal *  -T.sum(T.log(z))
       self.error_val += ratio * T.sum(T.lt(z,numpy.float32(0.5)))
     if base:
       pgen = numpy.float32(pgen / float(len(base)))
       for src in base: # gen
         idx = (src.index.flatten() > 0).nonzero()
-        z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-10),numpy.float32(1. - 1e-10))
+        z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-5),numpy.float32(1. - 1e-5))
         ratio = lng / T.sum(src.index, dtype='float32')
         self.cost_val += ratio * pgen * -T.sum(T.log(numpy.float32(1) - z))
         self.error_val += ratio * T.sum(T.ge(z, numpy.float32(0.5)))
