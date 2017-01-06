@@ -1734,6 +1734,25 @@ class BatchToTimeLayer(ForwardLayer):
     self.index = self.index.reshape((self.index.shape[0] * self.index.shape[1],))
     self.index = self.index.reshape((self.index.shape[0]/n_batch,n_batch))
 
+class ConcatBatchLayer(_NoOpLayer):
+  layer_class = "concat_batch"
+
+  def __init__(self, **kwargs):
+    super(ConcatBatchLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    self.output = T.concatenate([s.output for s in self.sources], axis=1)
+    self.index = T.concatenate([s.index for s in self.sources], axis=1)
+
+class SplitBatchLayer(_NoOpLayer):
+  layer_class = "split_batch"
+
+  def __init__(self, n_parts=1, part=0, **kwargs):
+    super(SplitBatchLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    chunk = self.index.shape[1] / n_parts
+    self.output = self.sources[0].output[:,part*chunk:(part+1)*chunk]
+    self.index = self.sources[0].index[:,part*chunk:(part+1)*chunk]
+
 
 class LengthLayer(HiddenLayer):
   layer_class = "length"
@@ -2972,7 +2991,7 @@ class AlignmentLayer(ForwardLayer):
 class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
 
-  def __init__(self, base = None, pgen=0.5, forge=False, **kwargs):
+  def __init__(self, base = None, pgen=0.5, forge=False, copy_input = None, **kwargs):
     kwargs['n_out'] = 1
     super(DiscriminatorLayer, self).__init__(**kwargs)
     if not base:
@@ -2982,8 +3001,8 @@ class DiscriminatorLayer(ForwardLayer):
     b = self.add_param(self.create_bias(1))
     self.W = W
     self.b = b
-    self.cost_val = 0.0
-    self.error_val = 0.0
+    self.cost_val = numpy.float32(0)
+    self.error_val = numpy.float32(0)
     self.known_grads = {}
     lng = T.sum(self.index, dtype='float32')
     preal = numpy.float32((1. - pgen) / float(len(self.sources)))
@@ -3008,10 +3027,12 @@ class DiscriminatorLayer(ForwardLayer):
         ratio = lng / T.sum(src.index, dtype='float32')
         self.cost_val += ratio * pgen * -T.sum(T.log(numpy.float32(1) - z))
         self.error_val += ratio * T.sum(T.ge(z, numpy.float32(0.5)))
+    #if copy_input:
+    #  self.known_grads[copy_input.output] = numpy.float32(0) #T.grad(invcost,copy_input.output,disconnected_inputs='warn')
     self.error_val /= numpy.float32(len(self.sources + base))
 
   def cost(self):
-    return self.cost_val, None
+    return self.cost_val, self.known_grads
 
   def errors(self):
     return self.error_val
@@ -3044,7 +3065,10 @@ class ScaleGradLayer(_NoOpLayer):
   def __init__(self, scale = 1.0, **kwargs):
     super(ScaleGradLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = self.sources[0].attrs['n_out']
-    self.output = ScaleGradientOp(scale)(self.sources[0].output)
+    if scale == 0 and False:
+      self.output = theano.gradient.disconnected_grad(self.sources[0].output)
+    else:
+      self.output = ScaleGradientOp(scale)(self.sources[0].output)
 
 
 class RNNBlockLayer(ForwardLayer):
