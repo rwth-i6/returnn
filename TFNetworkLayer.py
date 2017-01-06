@@ -524,8 +524,8 @@ class RecLayer(_ConcatInputLayer):
           y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
         assert not bidirectional
-        W = tf.get_variable(name="W", shape=(self.input_data.dim, n_hidden * 4), dtype=tf.float32)
-        b = tf.get_variable(name="b", shape=(n_hidden * 4,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
+        W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
+        b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
         from TFUtil import dot, sequence_mask_time_major, directed
         x = dot(x, W) + b
         index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])

@@ -345,9 +345,13 @@ def make_lstm_op(**kwargs):
 
 
 class RecSeqCellOp(object):
+  def __init__(self, n_hidden):
+    self.n_hidden = n_hidden
+    self.n_input_dim = n_hidden
+
   def __call__(self, inputs, index):
     """
-    :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor inputs: shape (time,batch,n_input_dim)
     :param tf.Tensor index: shape (time,batch)
     :returns: shape (time,batch,n_hidden)
     :rtype: tf.Tensor
@@ -357,7 +361,8 @@ class RecSeqCellOp(object):
 
 class NativeLstmCell(RecSeqCellOp):
   def __init__(self, n_hidden):
-    self.n_hidden = n_hidden
+    super(NativeLstmCell, self).__init__(n_hidden=n_hidden)
+    self.n_input_dim = n_hidden * 4
     self.op = make_lstm_op()
 
   @classmethod
