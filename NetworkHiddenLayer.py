@@ -2992,13 +2992,13 @@ class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
 
   def __init__(self, base = None, pgen=0.5, forge=False, copy_input = None, **kwargs):
-    kwargs['n_out'] = 1
+    kwargs['n_out'] = 2
     super(DiscriminatorLayer, self).__init__(**kwargs)
     if not base:
       base = []
     self.params = {}
-    W = self.add_param(self.create_forward_weights(self.sources[0].attrs['n_out'], self.attrs['n_out'], name="W_%s" % self.name))
-    b = self.add_param(self.create_bias(1))
+    W = self.add_param(self.create_random_normal_weights(self.sources[0].attrs['n_out'], 2, scale=100., name="W_%s" % self.name))
+    b = self.add_param(self.create_bias(2))
     self.W = W
     self.b = b
     self.cost_val = numpy.float32(0)
@@ -3015,18 +3015,34 @@ class DiscriminatorLayer(ForwardLayer):
       preal = numpy.float32(1.0)
     for src in self.sources: # real
       idx = (src.index.flatten() > 0).nonzero()
-      z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-5),numpy.float32(1. - 1e-5))
+      z = T.dot(src.output, W) + b
+      z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
+      #z = print_to_file('rz', z)
+      pcx = T.nnet.softmax(z[idx])
+      nll = -T.log(pcx[:,0])
+
+      #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=T.zeros((z.shape[0],), 'int32')[idx])
+
+      #pcx = print_to_file('rpcx', pcx)
+      #nll = print_to_file('rnll', nll)
       ratio = lng / T.sum(src.index, dtype='float32')
-      self.cost_val += ratio * preal *  -T.sum(T.log(z))
-      self.error_val += ratio * T.sum(T.lt(z,numpy.float32(0.5)))
+      self.cost_val += ratio * preal * T.sum(nll)
+      self.error_val += ratio * T.sum(T.lt(pcx[:,0],numpy.float32(0.5)))
     if base:
       pgen = numpy.float32(pgen / float(len(base)))
       for src in base: # gen
         idx = (src.index.flatten() > 0).nonzero()
-        z = T.clip(T.nnet.sigmoid(T.dot(src.output, W) + b).flatten()[idx],numpy.float32(1e-5),numpy.float32(1. - 1e-5))
+        z = T.dot(src.output, W) + b
+        z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
+        #z = print_to_file('fz', z)
+        pcx = T.nnet.softmax(z[idx])
+        nll = -T.log(pcx[:, 1])
+        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=T.ones((z.shape[0],), 'int32')[idx])
+        #pcx = print_to_file('fpcx', pcx)
+        #nll = print_to_file('fnll', nll)
         ratio = lng / T.sum(src.index, dtype='float32')
-        self.cost_val += ratio * pgen * -T.sum(T.log(numpy.float32(1) - z))
-        self.error_val += ratio * T.sum(T.ge(z, numpy.float32(0.5)))
+        self.cost_val += ratio * pgen * T.sum(nll)
+        self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
     #if copy_input:
     #  self.known_grads[copy_input.output] = numpy.float32(0) #T.grad(invcost,copy_input.output,disconnected_inputs='warn')
     self.error_val /= numpy.float32(len(self.sources + base))
