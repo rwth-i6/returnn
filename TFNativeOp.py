@@ -338,10 +338,58 @@ def make_lstm_op(**kwargs):
   """
   Demo.
   :return: op
-  :rtype: (tf.Tensor) -> tf.Tensor
+  :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
   maker = OpMaker(OpDescription.from_gen_base(NativeOp.LstmGenericBase), **kwargs)
   return maker.make_op()
+
+
+class RecSeqCellOp(object):
+  def __call__(self, inputs, index):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor index: shape (time,batch)
+    :returns: shape (time,batch,n_hidden)
+    :rtype: tf.Tensor
+    """
+    raise NotImplementedError
+
+
+class NativeLstmCell(RecSeqCellOp):
+  def __init__(self, n_hidden):
+    self.n_hidden = n_hidden
+    self.op = make_lstm_op()
+
+  @classmethod
+  def map_layer_inputs_to_op(cls, Z, V_h, i):
+    """
+    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
+    :param tf.Tensor Z: inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor V_h: W_re: shape (n_hidden,n_hidden*4)
+    :param tf.Tensor i: index: shape (time,batch)
+    :rtype: (tf.Tensor,tf.Tensor,tf.Tensor,tf.Tensor)
+    """
+    assert Z.get_shape().ndims == 3
+    assert V_h.get_shape().ndims == 2
+    assert i.get_shape().ndims == 2
+    n_batch = tf.shape(Z)[1]
+    n_out = tf.shape(V_h)[0]
+    c = tf.zeros((n_batch, n_out), dtype=tf.float32)
+    return Z, V_h, c, i
+
+  def __call__(self, inputs, index):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor index: shape (time,batch)
+    :returns: shape (time,batch,n_hidden)
+    :rtype: tf.Tensor
+    """
+    W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
+    lstm_op = make_lstm_op()
+    op_out = lstm_op(*self.map_layer_inputs_to_op(inputs, W_re, index))
+    from TheanoUtil import make_var_tuple
+    out = NativeOp.LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
+    return out
 
 
 def demo():
