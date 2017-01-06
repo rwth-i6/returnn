@@ -26,30 +26,15 @@ if PY3:
   long = int
 
 
-class NativeOp(theano.Op):
+class NativeOpBaseMixin(object):
   """
-  We wrap some C code which can define a forward pass
-  and optionally a backward pass (for gradient calculation).
-  The C code should be Numpy and CUDA compatible. See NativeOp.cpp.
-  We also support inplace operations, i.e. we can operate inplace on some inputs.
-  You can define in a flexible way all the inputs and the outputs.
-  See __init__() for the details.
-
-  All output variables are created automatically with the right shape
-   but their content is not initialized,
-   except when its used by some input variable as the inplace output
-   - in that case, it is either the input variable or it has a copy of its data.
+  The purpose of having this as a separate base class is to make this independent of any Theano specific
+  functionality so that we can also use this base for example for TensorFlow.
   """
-
-  __props__ = ("in_info", "out_info",
-               "c_fw_code", "c_bw_code", "c_extra_support_code", "code_version",
-               "grad_input_map", "name",
-               "custom_grad")
 
   def __init__(self, in_info, out_info,
                c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
-               grad_input_map=None, name=None,
-               custom_grad=None):
+               grad_input_map=None, name=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
       attribs in the dict:
@@ -69,15 +54,13 @@ class NativeOp(theano.Op):
         shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
         need_contiguous/want_inplace: used for bw, in case for bw_input == True.
     :param str c_fw_code: C code for forward pass
-    :param str c_extra_support_code: C support code (for c_support_code)
+    :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
     :param str|None c_bw_code: C code for backward pass (for gradient)
     :param tuple[int] code_version: will be returned by c_code_cache_version.
-    :param tuple|callable grad_input_map: selection of grad inputs.
+    :param tuple[int]|callable grad_input_map: selection of grad inputs.
       by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
-    :param function custom_grad: if given, will use this instead for self.grad
     """
-    super(NativeOp, self).__init__()
     assert isinstance(in_info, (list, tuple))
     assert isinstance(out_info, (list, tuple))
     in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
@@ -91,7 +74,6 @@ class NativeOp(theano.Op):
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
     self.destroy_map = self._construct_destroy_map(in_info)
-    self.custom_grad = custom_grad
 
   @classmethod
   def _resolve_want_inplace_dummy(cls, in_info, out_info):
@@ -139,6 +121,12 @@ class NativeOp(theano.Op):
 
   @classmethod
   def _convert_grad_input_map(cls, gi_map, num_params):
+    """
+    :param gi_map: see grad_input_map argument for self.__init__
+    :param int num_params:
+    :return: tuple of int
+    :rtype: tuple[int]
+    """
     if gi_map is None:
       gi_map = tuple(range(num_params))
     if callable(gi_map):
@@ -149,8 +137,141 @@ class NativeOp(theano.Op):
     return gi_map
 
   def _filter_grad_inputs(self, inputs):
+    """
+    :param list[T] inputs: inputs + outputs + output_grads. can be either symbolic tensors or info dicts
+    :return: filtered list, via self.grad_input_map
+    :rtype: list[T]
+    """
     assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
     return [inputs[i] for i in self.grad_input_map]
+
+  def infer_shape(self, node, input_shapes):
+    assert len(input_shapes) == len(self.in_info)
+    out_shapes = []
+    for info in self.out_info:
+      out_shape = list(info["shape"])
+      for idx, s in enumerate(out_shape):
+        if isinstance(s, tuple):  # we interpret this as a reference to input shapes
+          assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
+          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info)
+          out_shape[idx] = input_shapes[s[0]][s[1]]
+      assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
+      out_shapes += [tuple(out_shape)]
+    return out_shapes
+
+  @classmethod
+  def _bw_in_var_info(cls, info):
+    """
+    :param dict[str] info:
+    :return: updated info dict for the gradient (bwd) as input
+    :rtype: dict[str]
+    """
+    if "bw_in_var" in info:
+      info = dict(info)
+      info.update(info.pop("bw_in_var"))
+    return info
+
+  @classmethod
+  def _bw_grad_var_info(cls, info):
+    """
+    :param dict[str] info: backward gradient input for one of our outputs
+    :return: updated info dict for the gradient (bwd) as input
+    :rtype: dict[str]
+    """
+    info = dict(info)
+    if "bw_grad_var" in info:
+      info.update(info.pop("bw_grad_var"))
+    if "name" in info:
+      info["name"] = "D_" + info["name"]
+    return info
+
+  def kwargs_for_grad_op(self):
+    """
+    :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc
+    :rtype: dict[str]
+
+    Note: The inputs of the gradient are by default: fwd_op.inputs + fwd_op.outputs + output_grads.
+    We filter them via self._filter_grad_inputs.
+    """
+    # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
+    # i.e. we might reuse some of the calculation.
+    in_info = [self._bw_in_var_info(info) for info in self.in_info]
+    in_info += [self._bw_in_var_info(info) for info in self.out_info]
+    in_info += [self._bw_grad_var_info(info) for info in self.out_info]
+    in_info = self._filter_grad_inputs(in_info)
+    in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
+    # Outputs: All like original inputs. Filter our the disconnected.
+    out_info = [info.copy() for info in self.in_info]
+    for idx, info in enumerate(out_info):
+      info.pop("shape")
+      if "bw_out_var" in info:
+        info.update(info["bw_out_var"])
+      if "shape" not in info:
+        # Refer to input shapes. See infer_shape().
+        info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
+    out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
+
+    return dict(
+      name="GradOf%s" % self.name,
+      in_info=in_info,
+      out_info=out_info,
+      c_fw_code=self.c_bw_code,
+      c_extra_support_code=self.c_extra_support_code,
+      code_version=self.code_version
+    )
+
+  def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
+    """
+    :param list[T] grad_op_outputs: this is already with dummy outputs removed
+    :param S disconnected_type:
+    :return: gradient for each input of our op
+    :rtype: list[T|S]
+    """
+    if disconnected_type is None:
+      disconnected_type = lambda: None
+    grad_op_outputs = list(grad_op_outputs)
+    results = []
+    for info in self.in_info:
+      if info.get("gradient", "") == "disconnected":
+        results += [disconnected_type()]
+      else:
+        results += grad_op_outputs[:1]
+        grad_op_outputs = grad_op_outputs[1:]
+    assert len(grad_op_outputs) == 0
+    assert len(results) == len(self.in_info)
+    return results
+
+
+
+class NativeOp(theano.Op, NativeOpBaseMixin):
+  """
+  We wrap some C code which can define a forward pass
+  and optionally a backward pass (for gradient calculation).
+  The C code should be Numpy and CUDA compatible. See NativeOp.cpp.
+  We also support inplace operations, i.e. we can operate inplace on some inputs.
+  You can define in a flexible way all the inputs and the outputs.
+  See __init__() for the details.
+
+  All output variables are created automatically with the right shape
+   but their content is not initialized,
+   except when its used by some input variable as the inplace output
+   - in that case, it is either the input variable or it has a copy of its data.
+  """
+
+  __props__ = ("in_info", "out_info",
+               "c_fw_code", "c_bw_code", "c_extra_support_code", "code_version",
+               "grad_input_map", "name",
+               "custom_grad")
+
+  def __init__(self, custom_grad=None, **kwargs):
+    """
+    :param function custom_grad: if given, will use this instead for self.grad
+    :param dict[str] kwargs: all passed to NativeOpBaseMixin
+    """
+    theano.Op.__init__(self)
+    NativeOpBaseMixin.__init__(**kwargs)
+    self.custom_grad = custom_grad
 
   def __str__(self):
     return "%s{%s,%s}" % (
@@ -187,37 +308,6 @@ class NativeOp(theano.Op):
       v = self.contiguous(v)
     return v
 
-  def infer_shape(self, node, input_shapes):
-    assert len(input_shapes) == len(self.in_info)
-    out_shapes = []
-    for info in self.out_info:
-      out_shape = list(info["shape"])
-      for idx, s in enumerate(out_shape):
-        if isinstance(s, tuple):  # we interpret this as a reference to input shapes
-          assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
-          assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
-          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info)
-          out_shape[idx] = input_shapes[s[0]][s[1]]
-      assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
-      out_shapes += [tuple(out_shape)]
-    return out_shapes
-
-  @classmethod
-  def _bw_in_var_info(cls, info):
-    if "bw_in_var" in info:
-      info = dict(info)
-      info.update(info.pop("bw_in_var"))
-    return info
-
-  @classmethod
-  def _bw_grad_var_info(cls, info):
-    info = dict(info)
-    if "bw_grad_var" in info:
-      info.update(info.pop("bw_grad_var"))
-    if "name" in info:
-      info["name"] = "D_" + info["name"]
-    return info
-
   def grad(self, inputs, output_grads):
     if self.custom_grad:
       return self.custom_grad(self, inputs, output_grads)
@@ -236,39 +326,16 @@ class NativeOp(theano.Op):
       if isinstance(out_grad.type, T.DisconnectedType):
         output_grads[i] = T.zeros(out_shapes[i], dtype="float32")
 
-    # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
-    # i.e. we might reuse some of the calculation.
+    kwargs_for_grad = self.kwargs_for_grad_op()
+    grad_op = self.__class__(**kwargs_for_grad)
+
     grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
-    in_info = [self._bw_in_var_info(info) for info in self.in_info]
-    in_info += [self._bw_in_var_info(info) for info in self.out_info]
-    in_info += [self._bw_grad_var_info(info) for info in self.out_info]
-    in_info = self._filter_grad_inputs(in_info)
-    assert len(in_info) == len(grad_inputs)
-    in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
-    # Outputs: All like original inputs. Filter our the disconnected.
-    out_info = [info.copy() for info in self.in_info]
-    for idx, info in enumerate(out_info):
-      info.pop("shape")
-      if "bw_out_var" in info:
-        info.update(info["bw_out_var"])
-      if "shape" not in info:
-        # Refer to input shapes. See infer_shape().
-        info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
-    out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
-
-    grad_op = self.__class__(
-      name="grad-of-%s" % self.name,
-      in_info=in_info,
-      out_info=out_info,
-      c_fw_code=self.c_bw_code,
-      c_extra_support_code=self.c_extra_support_code,
-      code_version=self.code_version
-    )
-    input_grads = make_var_tuple(grad_op(*grad_inputs))
+    assert len(grad_op.in_info) == len(grad_inputs)
+    grad_outputs = make_var_tuple(grad_op(*grad_inputs))
+    assert len(grad_op.out_info) == len(grad_outputs)
     if grad_op.num_dummy_outs > 0:
-      input_grads = input_grads[:-grad_op.num_dummy_outs]  # remove any dummy outputs
-    assert len(out_info) == len(input_grads)
+      grad_outputs = grad_outputs[:-grad_op.num_dummy_outs]  # remove any dummy outputs
 
     def print_fn(op, x):
       import numpy
@@ -279,16 +346,7 @@ class NativeOp(theano.Op):
     #input_grads = [theano.printing.Print("in grad %i" % i, global_fn=print_fn)(v)
     #               for (i, v) in enumerate(input_grads)]
 
-    results = []
-    for info in self.in_info:
-      if info.get("gradient", "") == "disconnected":
-        results += [T.DisconnectedType()()]
-      else:
-        results += input_grads[:1]
-        input_grads = input_grads[1:]
-    assert len(input_grads) == 0
-    assert len(results) == len(self.in_info)
-    return results
+    return self.make_results_of_gradient(grad_outputs, disconnected_type=T.DisconnectedType())
 
   def connection_pattern(self, node):
     assert len(node.inputs) == len(self.in_info)

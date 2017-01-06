@@ -13,26 +13,85 @@ def _camel_case_to_snake_case(name):
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
+class OpDescription(NativeOp.NativeOpBaseMixin):
+  @classmethod
+  def from_gen_base(x, gen_base):
+    """
+    :param NativeOp.NativeOpGenBase gen_base:
+    :rtype: OpDescription
+    """
+    name = gen_base.__name__
+    assert gen_base.in_info is not None
+    assert gen_base.out_info is not None
+    assert gen_base.c_fw_code is not None
+    assert gen_base.custom_grad is None  # not supported for TF currently
+    return OpDescription(
+      in_info=gen_base.in_info, out_info=gen_base.out_info,
+      c_fw_code=gen_base.c_fw_code, c_bw_code=gen_base.c_bw_code,
+      c_extra_support_code=gen_base.c_extra_support_code,
+      grad_input_map=gen_base.grad_input_map,
+      name=name)
+
+  @property
+  def is_grad_defined(self):
+    return bool(self.c_bw_code)
+
+  def grad(self):
+    """
+    :rtype: OpDescription|None
+    """
+    if not self.is_grad_defined:
+      return None
+    kwargs = self.kwargs_for_grad_op()
+    return OpDescription(**kwargs)
+
+
 class OpMaker(object):
   """
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
+  with_cuda = None
+  mod_cache = {}  # cache_key -> mod
+  op_cache = {}  # cache_key -> op
 
-  def __init__(self, gen_base, name=None, compiler_opts=None):
+  def __init__(self, description, compiler_opts=None):
     """
-    :param NativeOp.NativeOpGenBase gen_base:
-    :param str|None name: e.g. "LstmGenericBase", or automatically via gen_base.__name__
+    :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
     """
-    if not name:
-      name = gen_base.__name__
-    self.name = name
-    self.gen_base = gen_base
+    self._cls_init()
+    self.description = description
+    self.name = description.name
     self.compiler_opts = compiler_opts or {}
-    self.with_cuda = bool(TFUtil.CudaEnv.get_instance())
+
+  @classmethod
+  def _cls_init(cls):
+    if cls.with_cuda is None:
+      cls.with_cuda = bool(TFUtil.CudaEnv.get_instance())
+      if cls.with_cuda:
+        cls._load_cuda_blas_gemm()
+
+  @classmethod
+  def _load_cuda_blas_gemm(cls):
+    """
+    https://github.com/tensorflow/tensorflow/issues/6602
+    As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
+    See NativeOp.cpp.
+    To make the symbols available in the namespace, load the library now.
+    """
+    import tensorflow.contrib.rnn.python.ops.lstm_ops as lstm_ops
+    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
+    assert os.path.exists(lstm_ops_so)
+    # Maybe a bit hacky: Just load all symbols into the global namespace.
+    from ctypes import RTLD_GLOBAL, CDLL
+    CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
 
   @property
   def op_name(self):
+    return self.name
+
+  @property
+  def cache_key(self):
     return self.name
 
   @property
@@ -55,7 +114,7 @@ class OpMaker(object):
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
-      in_info=self.gen_base.in_info, out_info=self.gen_base.out_info)
+      in_info=self.description.in_info, out_info=self.description.out_info)
     out_is_ref = dict()  # output vars which are inplace, out_name -> in_idx
     # want_inplace: output-index which this input should operate on
     # Unlike the Theano variant, we always do it inplace,
@@ -66,8 +125,13 @@ class OpMaker(object):
         out_name = out_info[out_idx]["name"]
         assert out_name not in out_is_ref
         out_is_ref[out_name] = in_idx
-    def map_name(v):
-      return v["name"].lower()
+    def map_name(v, is_out=False):
+      name = v["name"].lower()
+      if is_out:
+        # Maybe it clashes with some input name. TF doesn't allow the same name.
+        if any([v["name"].lower() == name for v in in_info]):
+          name = "out_%s" % name
+      return name
     def map_type(v, is_out=False):
       t = v.get("dtype", "float32")
       if is_out:
@@ -81,7 +145,7 @@ class OpMaker(object):
     for v in in_info:
       code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
     for v in out_info:
-      code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v), map_type(v, is_out=True))
+      code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v, is_out=True), map_type(v, is_out=True))
     code_forward_io = ""
     for in_idx, v in enumerate(in_info):
       out_idx = v.get("want_inplace", -1)
@@ -108,7 +172,7 @@ class OpMaker(object):
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
-    code_user = self.gen_base.c_fw_code % {"fail": "assert(false);"}
+    code_user = self.description.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
       code_forward_io,
       code_set_io,
@@ -119,7 +183,7 @@ class OpMaker(object):
       "code_forward_io": code_forward_io,
       "code_set_io": code_set_io,
       "code_compute": code_compute,
-      "user_code_kernels": NativeOp.NativeOp._reduce_c_extra_support_code(self.gen_base.c_extra_support_code),
+      "user_code_kernels": self.description._reduce_c_extra_support_code(self.description.c_extra_support_code),
       "native_op_cpp_filename": self.support_native_op_cpp_filename,
       "n_inputs": len(in_info),
       "n_outputs": len(out_info)
@@ -218,36 +282,56 @@ class OpMaker(object):
       code_gpu_op = ""
     return code_header + code_register + code_op + code_gpu_op
 
-  def _load_cuda_blas_gemm(self):
-    """
-    https://github.com/tensorflow/tensorflow/issues/6602
-    As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
-    See NativeOp.cpp.
-    To make the symbols available in the namespace, load the library now.
-    """
-    if not self.with_cuda:
-      return
-    import tensorflow.contrib.rnn.python.ops.lstm_ops as lstm_ops
-    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
-    assert os.path.exists(lstm_ops_so)
-    # Maybe a bit hacky: Just load all symbols into the global namespace.
-    from ctypes import RTLD_GLOBAL, CDLL
-    CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
-
   def _make_mod(self):
+    if self.cache_key in self.mod_cache:
+      return self.mod_cache[self.cache_key]
     comp = TFUtil.OpCodeCompiler(
-      base_name=self.name, code_version=self.gen_base.code_version,
+      base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
       ld_flags=["-lblas"],
       **dict(self.compiler_opts))
-    self._load_cuda_blas_gemm()
     mod = comp.load_module()
+    self.mod_cache[self.cache_key] = mod
     return mod
 
   def make_op(self):
+    if self.cache_key in self.op_cache:
+      return self.op_cache[self.cache_key]
     mod = self._make_mod()
-    return getattr(mod, _camel_case_to_snake_case(self.op_name))
+    op = getattr(mod, _camel_case_to_snake_case(self.op_name))
+    self.op_cache[self.cache_key] = op
+
+    if self.description.is_grad_defined:
+      grad_description = self.description.grad()
+      grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
+      grad_op = grad_op_maker.make_op()
+
+      from tensorflow.python.framework import ops
+      def grad_wrapper(fwd_op, bwd_grads):
+        """
+        :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
+        :param list[tf.Tensor]|tf.Tensor bwd_grads: list if len(fwd_op.outputs) > 1
+        :return: list of tensors of gradients for each input
+        :rtype: list[tf.Tensor]
+        """
+        if len(fwd_op.outputs) == 1:
+          assert isinstance(bwd_grads, tf.Tensor)
+          bwd_grads = [bwd_grads]
+        assert len(bwd_grads) == len(fwd_op.outputs)
+
+        grad_inputs = fwd_op.inputs + fwd_op.outputs + bwd_grads
+        grad_inputs = self.description._filter_grad_inputs(grad_inputs)
+        grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
+        if grad_description.num_dummy_outs > 0:
+          grad_outputs = grad_outputs[:-grad_description.num_dummy_outs]
+        grad_outputs = self.description.make_results_of_gradient(grad_outputs)
+        return grad_outputs
+
+      grad_wrapper.__name__ = grad_description.name
+      ops.RegisterGradient(self.name)(grad_wrapper)
+
+    return op
 
 
 def make_lstm_op(**kwargs):
@@ -256,7 +340,7 @@ def make_lstm_op(**kwargs):
   :return: op
   :rtype: (tf.Tensor) -> tf.Tensor
   """
-  maker = OpMaker(NativeOp.LstmGenericBase, **kwargs)
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.LstmGenericBase), **kwargs)
   return maker.make_op()
 
 

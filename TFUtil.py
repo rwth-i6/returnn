@@ -773,3 +773,18 @@ class OpCodeCompiler(object):
     self._maybe_compile()
     self._mod = tf.load_op_library(self._so_filename)
     return self._mod
+
+
+def make_var_tuple(v):
+  """
+  :param tf.Tensor|list[tf.Tensor]|tuple[tf.Tensor] v:
+  :return: tuple of tensors
+  :rtype: tuple[tf.Tensor]
+  """
+  if isinstance(v, (int, float, tf.Tensor, tf.Operation)):
+    return (v,)
+  if isinstance(v, list):
+    return tuple(v)
+  assert isinstance(v, tuple)
+  return v
+
