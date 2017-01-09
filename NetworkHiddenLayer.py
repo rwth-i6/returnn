@@ -2680,15 +2680,16 @@ class DiscriminatorLayer(ForwardLayer):
     self.error_val /= numpy.float32(len(self.sources + base))
     self.cost_val *= numpy.float32(len(self.sources + base))
     if forge:
-      self.cost_val *= T.maximum(T.minimum(self.cost_val / basecost, numpy.float32(100.)), numpy.float32(0.01))
-    #else:
-    #  self.cost_scale_val = numpy.float32(2.0)
+      self.cost_scale_val = numpy.float32(1.0)
+      #self.cost_val *= T.maximum(T.minimum(self.cost_val / basecost, numpy.float32(10.)), numpy.float32(0.1))
+    else:
+      self.cost_scale_val = numpy.float32(2.0)
 
   def cost(self):
     return self.cost_val, self.known_grads
 
-  #def cost_scale(self):
-  #  return self.cost_scale_val
+  def cost_scale(self):
+    return self.cost_scale_val
 
   def errors(self):
     return self.error_val
