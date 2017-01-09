@@ -2495,6 +2495,7 @@ class AlignmentLayer(ForwardLayer):
     if base is None:
       base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out
+    n_cls = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
     if base:
       self.params = base[0].params
@@ -2577,6 +2578,8 @@ class AlignmentLayer(ForwardLayer):
       else:
         self.output = self.z if output_z else x_in
         self.p_y_given_x = p_in
+        if output_z:
+          self.attrs['n_out'] = n_cls
         self.index = self.sources[0].index
 
     if self.attrs['search'] == 'time' or self.eval_flag:
@@ -2622,7 +2625,7 @@ class AlignmentLayer(ForwardLayer):
 class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
 
-  def __init__(self, base = None, pgen=0.5, forge=False, copy_input = None, **kwargs):
+  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, **kwargs):
     kwargs['n_out'] = 2
     super(DiscriminatorLayer, self).__init__(**kwargs)
     if not base:
@@ -2649,14 +2652,8 @@ class DiscriminatorLayer(ForwardLayer):
       idx = (src.index.flatten() > 0).nonzero()
       z = T.dot(src.output, W) + b
       z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
-      #z = print_to_file('rz', z)
       pcx = T.nnet.softmax(z[idx])
       nll = -T.log(pcx[:,0])
-
-      #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=T.zeros((z.shape[0],), 'int32')[idx])
-
-      #pcx = print_to_file('rpcx', pcx)
-      #nll = print_to_file('rnll', nll)
       ratio = lng / T.sum(src.index, dtype='float32')
       self.cost_val += ratio * preal * T.sum(nll)
       self.error_val += ratio * T.sum(T.lt(pcx[:,0],numpy.float32(0.5)))
@@ -2666,30 +2663,27 @@ class DiscriminatorLayer(ForwardLayer):
         idx = (src.index.flatten() > 0).nonzero()
         z = T.dot(src.output, W) + b
         z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
-        #z = print_to_file('fz', z)
         pcx = T.nnet.softmax(z[idx])
         nll = -T.log(pcx[:, 1])
-        #nll, pcx = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=T.ones((z.shape[0],), 'int32')[idx])
-        #pcx = print_to_file('fpcx', pcx)
-        #nll = print_to_file('fnll', nll)
         ratio = lng / T.sum(src.index, dtype='float32')
         self.cost_val += ratio * pgen * T.sum(nll)
         self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
-    #if copy_input:
-    #  self.known_grads[copy_input.output] = numpy.float32(0) #T.grad(invcost,copy_input.output,disconnected_inputs='warn')
+
     self.error_val /= numpy.float32(len(self.sources + base))
-    self.cost_val *= numpy.float32(len(self.sources + base))
+    #self.cost_val *= numpy.float32(len(self.sources + base))
     if forge:
-      self.cost_scale_val = numpy.float32(1.)
-      #self.cost_val *= T.maximum(T.minimum(self.cost_val / basecost, numpy.float32(10.)), numpy.float32(0.1))
+      if dynamic_scaling:
+        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.5), numpy.float32(2.0))
+      else:
+        self.cost_scale_val = numpy.float32(1.0)
     else:
-      self.cost_scale_val = numpy.float32(2.0)
+      self.cost_scale_val = numpy.float32(len(self.sources + base))
 
   def cost(self):
     return self.cost_val, self.known_grads
 
-  #def cost_scale(self):
-  #  return self.cost_scale_val
+  def cost_scale(self):
+    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
   def errors(self):
     return self.error_val

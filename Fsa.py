@@ -251,18 +251,23 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
   :returns (num_states, edges) like above
   """
   print("Word sequence:", word_seq)
+  sil = 'sil'
   print("Silence: sil")
   print("Place holder: epsilon")
   depth = int(depth)
   if depth == 1:
     print("Lemma acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
   elif depth == 2:
     print("Phoneme acceptor chosen.")
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_seq)
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
   elif depth == 3:
     print("Triphone acceptor chosen.")
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(word_seq)
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
   elif depth == 4:
     print("Allophone state acceptor chosen.")
     allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
@@ -281,12 +286,11 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
   return num_states, edges
 
 
-def __lemma_acceptor_for_hmm_fsa(word_seq):
+def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
   """
   :param word_seq:
   :return: num_states, edges
   """
-  sil = 'sil'
   edges = []
   if type(word_seq) is str:
     word_seq_len = 1
@@ -316,64 +320,82 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   return num_states, edges
 
 
-def __phoneme_acceptor_for_hmm_fsa(word_seq):
-  num_states = 0
-  edges = []
-  return num_states, edges
+def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
+  allo_len = len(allo_seq)
+  num_states_new = num_states + 4 * (allo_len - 1)
+  edges_new = []
+  state_idx = 2
+
+  for edge in edges:
+    if edge[2] == sil and edge[1] == num_states - 1:
+      lst = list(edge)
+      lst[0] = num_states_new - 2
+      lst[1] = num_states_new - 1
+      edge = tuple(lst)
+      edges_new.append(edge)
+    elif edge[2] == word_seq:
+      for allo_idx in range(allo_len):
+        if allo_idx == 0:
+          idx1 = edge[0]
+          idx2 = state_idx
+        elif allo_idx == allo_len - 1:
+          idx1 = state_idx
+          if edge[1] == 3:
+            edge_idx_t = 1
+          elif edge[1] == 2:
+            edge_idx_t = 2
+          idx2 = num_states_new - edge_idx_t
+          state_idx += 1
+        else:
+          idx1 = state_idx
+          state_idx += 1
+          idx2 = state_idx
+        edge_t = (idx1, idx2, allo_seq[allo_idx], 1.)
+        edges_new.append(edge_t)
+    else:
+      edges_new.append(edge)
+
+  return num_states_new, edges_new
 
 
-def __triphone_acceptor_for_hmm_fsa(word_seq):
-  tri_seq = __triphone_from_phon(word_seq)
-  num_states = len(tri_seq)
-  edges = []
-  num_states, edges = __create_states_from_tri_seq(tri_seq, num_states, edges)
-  num_states, edges = __adds_loop_edges_for_tri_seq(num_states, edges)
-  return num_states, edges
+def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
+  allo_len = len(allo_seq)
+  num_states_new = num_states + 4 * (allo_len - 1)
+  edges_new = []
+  state_idx = 2
 
+  tri_seq = __triphone_from_phon(allo_seq)
 
-def __create_states_from_tri_seq(tri_seq, num_states, edges):
-  """
-    :param list of tuples tri_seq: list of tuples containing triphones
-    :param int num_states: number of states
-    :param list edges: list of edges
-    :returns (num_states, edges)
-    where:
-      num_states: int, number of states.
-        per convention, state 0 is start state, state (num_states - 1) is single final state
-      edges: list[(from,to,label_idx,weight)]
-        from and to are state_idx >= 0 and < num_states,
-        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-        weight is a float, in -log space
-    """
+  for edge in edges:
+    if edge[2] == sil and edge[1] == num_states - 1:
+      lst = list(edge)
+      lst[0] = num_states_new - 2
+      lst[1] = num_states_new - 1
+      edge = tuple(lst)
+      edges_new.append(edge)
+    elif edge[2] == word_seq:
+      for allo_idx in range(allo_len):
+        if allo_idx == 0:
+          idx1 = edge[0]
+          idx2 = state_idx
+        elif allo_idx == allo_len - 1:
+          idx1 = state_idx
+          if edge[1] == 3:
+            edge_idx_t = 1
+          elif edge[1] == 2:
+            edge_idx_t = 2
+          idx2 = num_states_new - edge_idx_t
+          state_idx += 1
+        else:
+          idx1 = state_idx
+          state_idx += 1
+          idx2 = state_idx
+        edge_t = (idx1, idx2, tri_seq[allo_idx], 1.)
+        edges_new.append(edge_t)
+    else:
+      edges_new.append(edge)
 
-  # go through the list and create the edge for each triphone
-  for tri_index in range(0, len(tri_seq)):
-    edges.append((tri_index, tri_index + 1, tri_seq[tri_index], 1.))
-
-  return num_states, edges
-
-
-def __adds_loop_edges_for_tri_seq(num_states, edges):
-  """
-    :param int num_states: number of states
-    :param list edges: list of edges
-    :returns (num_states, edges)
-    where:
-      num_states: int, number of states.
-        per convention, state 0 is start state, state (num_states - 1) is single final state
-      edges: list[(from,to,label_idx,weight)]
-        from and to are state_idx >= 0 and < num_states,
-        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-        weight is a float, in -log space
-    """
-
-  # adds loops to fsa
-  for state in range(1, num_states):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if
-                      (edge[1] == state)]
-    edges.append((state, state, edges[edges_included[0]][2], 1.))
-
-  return num_states, edges
+  return num_states_new, edges_new
 
 
 def __allophone_state_acceptor_for_hmm_fsa(allo_seq):
@@ -456,7 +478,8 @@ def __triphone_from_phon(word_seq):
     else:
       tri_r = word_seq[allo_index + 1]
     tri_c = word_seq[allo_index]
-    tri_seq.append((tri_l, tri_c, tri_r))
+    tri = (tri_l, tri_c, tri_r)
+    tri_seq.append(tri)
 
   return tri_seq
 
