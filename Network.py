@@ -562,8 +562,9 @@ class LayerNetwork(object):
       self.known_grads.update(cost[1])
     if len(cost) > 2:
       if self.ctc_priors:
-        raise Exception("multiple ctc_priors, second one from layer %s" % layer.name)
-      self.ctc_priors = cost[2]
+        print >> log.v3, "multiple ctc_priors, second one from layer %s" % layer.name
+      else:
+        self.ctc_priors = cost[2]
       assert self.ctc_priors is not None
 
   def make_classifier(self, name='output', target='classes', **kwargs):
