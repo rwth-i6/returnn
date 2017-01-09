@@ -1552,103 +1552,6 @@ class HDF5DataLayer(Layer):
     self.index = T.ones((1, self.index.shape[1]), dtype = 'int8')
     h5.close()
 
-
-class CentroidLayer2(ForwardLayer):
-  recurrent=True
-  layer_class="centroid2"
-
-  def __init__(self, centroids, output_scores=False, **kwargs):
-    assert centroids
-    kwargs['n_out'] = centroids.z.get_value().shape[1]
-    super(CentroidLayer2, self).__init__(**kwargs)
-    self.set_attr('centroids', centroids.name)
-    self.set_attr('output_scores', output_scores)
-    self.z = self.output
-    diff = T.sqr(self.z.dimshuffle(0,1,'x', 2).repeat(centroids.z.get_value().shape[0], axis=2) - centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1)) # TBQD
-    if output_scores:
-      self.make_output(T.cast(T.argmin(T.sqrt(T.sum(diff, axis=3)),axis=2,keepdims=True),'float32'))
-    else:
-      self.make_output(centroids.z[T.argmin(T.sqrt(T.sum(diff, axis=3)), axis=2)])
-
-    if 'dual' in centroids.attrs:
-      self.act = [ T.tanh(self.output), self.output ]
-    else:
-      self.act = [ self.output, self.output ]
-
-
-class CentroidLayer(ForwardLayer):
-  recurrent=True
-  layer_class="centroid"
-
-  def __init__(self, centroids, output_scores=False, entropy_weight=1.0, **kwargs):
-    assert centroids
-    kwargs['n_out'] = centroids.z.get_value().shape[1]
-    super(CentroidLayer, self).__init__(**kwargs)
-    self.set_attr('centroids', centroids.name)
-    self.set_attr('output_scores', output_scores)
-    self.set_attr('entropy_weight', entropy_weight)
-    W_att_ce = self.add_param(self.create_forward_weights(centroids.z.get_value().shape[1], 1), name = "W_att_ce_%s" % self.name)
-    W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
-
-    zc = centroids.z.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1) # TBQD
-    ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(centroids.z.get_value().shape[0],axis=2)) # TBQ1
-    att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
-    if output_scores:
-      self.make_output(att.flatten(ndim=3))
-    else:
-      self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
-
-    self.constraints += entropy_weight * -T.sum(att * T.log(att))
-
-    if 'dual' in centroids.attrs:
-      self.act = [ T.tanh(self.output), self.output ]
-    else:
-      self.act = [ self.output, self.output ]
-
-
-class CentroidEyeLayer(ForwardLayer):
-  recurrent=True
-  layer_class="eye"
-
-  def __init__(self, n_clusters, output_scores=False, entropy_weight=0.0, **kwargs):
-    centroids = T.eye(n_clusters)
-    kwargs['n_out'] = n_clusters
-    super(CentroidEyeLayer, self).__init__(**kwargs)
-    self.set_attr('n_clusters', n_clusters)
-    self.set_attr('output_scores', output_scores)
-    self.set_attr('entropy_weight', entropy_weight)
-    W_att_ce = self.add_param(self.create_forward_weights(n_clusters, 1), name = "W_att_ce_%s" % self.name)
-    W_att_in = self.add_param(self.create_forward_weights(self.attrs['n_out'], 1), name = "W_att_in_%s" % self.name)
-
-    zc = centroids.dimshuffle('x','x',0,1).repeat(self.z.shape[0],axis=0).repeat(self.z.shape[1],axis=1) # TBQD
-    ze = T.exp(T.dot(zc, W_att_ce) + T.dot(self.z, W_att_in).dimshuffle(0,1,'x',2).repeat(n_clusters,axis=2)) # TBQ1
-    att = ze / T.sum(ze, axis=2, keepdims=True) # TBQ1
-    if output_scores:
-      self.make_output(att.flatten(ndim=3))
-    else:
-      self.make_output(T.sum(att.repeat(self.attrs['n_out'],axis=3) * zc,axis=2)) # TBD
-      #self.make_output(centroids[T.argmax(att.reshape((att.shape[0],att.shape[1],att.shape[2])), axis=2)])
-
-    self.constraints += entropy_weight * -T.sum(att * T.log(att))
-    self.act = [ T.tanh(self.output), self.output ]
-
-
-class ProtoLayer(ForwardLayer):
-  recurrent=True
-  layer_class="proto"
-
-  def __init__(self, train_proto=True, output_scores=False, **kwargs):
-    super(ProtoLayer, self).__init__(**kwargs)
-    W_proto = self.create_random_uniform_weights(self.attrs['n_out'], self.attrs['n_out'])
-    if train_proto:
-      self.add_param(W_proto, name = "W_proto_%s" % self.name)
-    if output_scores:
-      self.make_output(T.cast(T.argmax(self.z,axis=-1,keepdims=True),'float32'))
-    else:
-      self.make_output(W_proto[T.argmax(self.z,axis=-1)])
-    self.act = [ T.tanh(self.output), self.output ]
-
-
 class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and input defined over T' and outputs a T' vector built over an input dependent linear combination of the base elements
   layer_class = "base"
 
@@ -1797,63 +1700,6 @@ class LengthLayer(HiddenLayer):
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
-
-class EosLengthLayer(HiddenLayer):
-  layer_class = "eoslength"
-  def __init__(self, eos=-1, pad=0, **kwargs):
-    target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(EosLengthLayer, self).__init__(**kwargs)
-    self.set_attr('eos',eos)
-    self.set_attr('pad',pad)
-    assert len(self.sources) == 2
-    if eos < 0:
-      eos += self.y_in[target].n_out
-
-    z_fw = T.dot(self.sources[0].output, self.W_in[0])
-    z_bw = T.dot(self.sources[1].output, self.W_in[1])
-    y_fw = z_fw.reshape((z_fw.shape[0]*z_fw.shape[1],z_fw.shape[2]))
-    y_bw = z_bw.reshape((z_bw.shape[0]*z_bw.shape[1],z_bw.shape[2]))
-
-    if self.train_flag:
-      eos_p = (T.eq(self.y_in[target], eos) > 0).nonzero()
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_fw[eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_eos = T.sum(nll) * z_fw.shape[0]
-      nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_bw[::-1][eos_p], y_idx=self.y_in[target][eos_p])
-      self.cost_sos = T.sum(nll) * z_bw.shape[0]
-    else:
-      self.cost_sos = 0.0
-      self.cost_eos = 0.0
-
-    pcx_fw = T.nnet.softmax(y_fw).reshape(z_fw.shape)
-    pcx_bw = T.nnet.softmax(y_bw).reshape(z_bw.shape)[::-1]
-    batch = T.ones((self.index.shape[1],), 'int32')
-    length = T.cast(T.maximum(2 * batch, T.minimum(z_fw.shape[0] * batch, T.argmax(pcx_fw[:,:,eos] + pcx_bw[:,:,eos], axis=0) + 1 + pad)), 'int32')
-    max_length = T.max(length)
-    fw = self.sources[0].output[:max_length].dimshuffle(1,0,2)
-    bw = self.sources[1].output[::-1][:max_length].dimshuffle(1,0,2)
-
-    def cut(fw_t, bw_t, len_t, *args):
-      residual = T.zeros((fw_t.shape[0] - len_t, fw_t.shape[1]), 'float32')
-      fw_o = T.concatenate([fw_t[:len_t],residual],axis=0)
-      residual = T.zeros((fw_t.shape[0] - len_t, bw_t.shape[1]), 'float32')
-      bw_o = T.concatenate([residual,bw_t[:len_t]],axis=0)
-      ix_o = T.concatenate([T.ones((len_t, ), 'int8'), T.zeros((fw_t.shape[0] - len_t, ), 'int8')],axis=0)
-      return fw_o, bw_o, T.cast(len_t, 'int32'), ix_o
-    reduced, _ = theano.scan(cut,
-                             sequences = [fw, bw, length],
-                             outputs_info = [T.zeros_like(fw[0]),T.zeros_like(bw[0]),T.zeros_like(length[0]),T.ones((max_length,), 'int8')])
-    fw = reduced[0].dimshuffle(1,0,2)
-    bw = reduced[1].dimshuffle(1,0,2)[::-1]
-    self.index = reduced[3].dimshuffle(1,0)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out'] + self.sources[1].attrs['n_out']
-    self.output = T.concatenate([fw,bw], axis=2)
-    self.length = length
-
-  def cost(self):
-    return self.cost_eos + self.cost_sos, None
-
-
 class LengthProjectionLayer(HiddenLayer):
   layer_class = "length_projection"
   def __init__(self, use_real=1.0, oracle=True, eval_oracle=False, pad=0, smo=0.0, avg=10.0, method="mapq", **kwargs):
@@ -1933,223 +1779,6 @@ class LengthProjectionLayer(HiddenLayer):
 
   def errors(self):
     return self.error_val
-
-  def cost_scale(self):
-    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-
-class MultiLengthLayer(HiddenLayer):
-  layer_class = "multilength"
-  def __init__(self, avg=2.0, oracle=True, subsampling = 50, **kwargs):
-    kwargs['n_out'] = 1
-    real = T.sum(T.cast(kwargs['index'],'float32'),axis=0)
-    kwargs['index'] = T.ones((1,kwargs['index'].shape[1]), 'int8')
-    super(MultiLengthLayer, self).__init__(**kwargs)
-    self.params = {}
-    z = T.concatenate([s.output for s in self.sources], axis=2)[::subsampling]
-    dim = sum([s.attrs['n_out'] for s in self.sources])
-
-    self.b = self.add_param(self.create_bias(1, "b_%s" % self.name))
-    self.W_a = self.add_param(self.create_forward_weights(dim, dim, 'A'))
-    self.ba = self.add_param(self.create_bias(dim, "ba_%s" % self.name))
-    #z = T.nnet.relu(T.dot(z, self.W_a) + self.ba)
-    z = T.tanh(T.dot(z, self.W_a) + self.ba)
-    self.W = self.add_param(self.create_forward_weights(dim, 1, name='W_%s' % self.name))
-    self.hyps = (T.dot(z,self.W)[:,:,0] + self.b[0] + T.constant(avg, 'float32')) # TB
-    #self.hyps = self.hyps.reshape((self.hyps.shape[0],self.hyps.shape[1])) # TB
-    self.hyps = T.ones((z.shape[0],z.shape[1]),'float32')
-    self.hyps = theano.printing.Print("hypin")(self.hyps)
-    hyp = T.sum(self.hyps,axis=0)
-    #real = theano.printing.Print("real")(real)
-    self.cost_val = T.constant(0,'float32') #T.sqrt(T.sum(((hyp - real) ** 2) * T.cast(real, 'float32')))
-    self.error_val = T.constant(0,'int32') #T.sum(T.cast(T.neq(T.cast(T.round(hyp),'int32'), real), 'float32') * T.cast(real, 'float32'))
-    #if self.train_flag or oracle:
-    #  self.hyps = T.maximum(self.hyps, T.ones_like(self.hyps))
-    #  self.hyps = self.hyps * T.cast(real / T.sum(self.hyps,axis=0),'float32').dimshuffle('x',0).repeat(self.hyps.shape[0],axis=0)
-    self.lengths = T.cast(T.maximum(T.round(self.hyps),T.ones_like(self.hyps)),'int32')
-    self.chunks = self.lengths.flatten()
-    self.chunks = theano.printing.Print("chunks")(self.chunks)
-    idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
-                       sequences=[self.chunks], non_sequences=[T.max(self.chunks) + T.cast(1,'int32')])
-    self.index = idx.dimshuffle(1,0)[::-1]
-    self.act = [T.concatenate([s.act[i][::s.attrs['direction'] * subsampling]
-                               for s in self.sources], axis=2) for i in [0, 1]]
-    self.act = [act.reshape((act.shape[0] * act.shape[1], act.shape[2])).dimshuffle('x', 0, 1) for act in self.act]
-    self.output = 0
-
-    #def outer(lx,ml):
-    #  idx, _ = theano.map(lambda l_t,m_t:T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
-    #                      sequences = [lx], non_sequences=[ml])
-    #  return idx # BL
-    #idxs, _ = theano.map(outer,sequences=[self.lengths], non_sequences=[T.max(self.lengths) + 1]) # TBL
-    #self.index = idxs.dimshuffle(1,0,2).reshape((idxs.shape[1],idxs.shape[0]*idxs.shape[2]))[:-1].dimshuffle(1,0)
-    #self.act = [ T.concatenate([s.act[i][::s.attrs['direction']].reshape((s.act[i].shape[0]*s.act[i].shape[1],s.act[i].shape[2])).dimshuffle('x',0,1)
-    #                            for s in self.sources], axis=2) for i in [0,1] ]
-    #self.output = hyp.dimshuffle('x',0,'x')
-
-  def cost(self):
-    return self.cost_val, None
-
-  def errors(self):
-    return self.error_val
-
-  def cost_scale(self):
-    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-
-class MergeLengthLayer(_NoOpLayer):
-  layer_class = "mergelength"
-
-  def __init__(self, base, **kwargs):
-    assert base and len(base) == 1
-    kwargs['n_out'] = 1
-    super(MergeLengthLayer, self).__init__(**kwargs)
-    num_batches = base[0].hyps.shape[1]
-    num_pos = base[0].hyps.shape[0]
-    z = T.concatenate([s.output for s in self.sources], axis=2)
-    z = z.reshape((z.shape[0] * num_pos,num_batches,z.shape[2])).dimshuffle(1,0,2)  # BND
-    idx = base[0].index.reshape((z.shape[1], num_batches)).dimshuffle(1,0)  # BN
-    dx = T.sum(T.cast(idx,'int32'),axis=1)
-    def merge(zn,dxn,idxn,m):
-      zm = zn[(idxn>0).nonzero()].reshape((dxn,zn.shape[1]))
-      i = T.concatenate([T.ones((dxn,), 'int8'), T.zeros((m - dxn,), 'int8')],axis=0)
-      #x = T.concatenate([zm, T.zeros((m - dxn,zm.shape[1]), 'float32')],axis=0)
-      x = T.concatenate([zm, zm[-1].dimshuffle('x',0).repeat(m-dxn,axis=0)],axis=0)
-      return x,i
-    outputs, _ = theano.map(merge, sequences=[z,dx,idx], non_sequences=[T.max(dx) + T.cast(1,'int32')])
-    #self.output = outputs[0].dimshuffle(1,0,2)[:-1]
-    #self.index = outputs[1].dimshuffle(1,0)[:-1]
-    self.output = z.dimshuffle(1,0,2)
-    self.index = T.ones_like(idx.dimshuffle(1,0))
-    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
-
-
-class AttentionLengthLayer(HiddenLayer):
-  layer_class = "attention_length"
-  def __init__(self, use_real=1.0, oracle=False, filter=[3,3], n_features=1, avg_obs=8, avg_var=16, rho=1.0, use_act=True, use_att=False, use_rbf=False, use_eos=False, **kwargs):
-    kwargs['n_out'] = 1
-    super(AttentionLengthLayer, self).__init__(**kwargs)
-    self.set_attr('use_real', use_real)
-    self.set_attr('oracle', oracle)
-    self.set_attr('filter', filter)
-    self.set_attr('n_features', n_features)
-    self.set_attr('avg_obs', avg_obs)
-    self.set_attr('avg_var', avg_var)
-    self.set_attr('use_act', use_act)
-    self.set_attr('use_att', use_att)
-    self.set_attr('use_rbf', use_rbf)
-    self.set_attr('use_eos', use_eos)
-    real = T.sum(T.cast(self.index, 'int32'), axis=0)
-    self.index = kwargs['sources'][-1].index
-    nT = kwargs['sources'][-1].output.shape[0]
-    index = kwargs['sources'][-1].target_index
-    x_in, n_in = concat_sources(self.sources)
-
-    eps = T.constant(1e-10, 'float32')
-    uniform = T.ones(self.index.shape,'float32') - eps #/ T.cast(self.index.shape[0],'float32')
-    w_act, w_att, w_rbf, w_eos = uniform, uniform, uniform, uniform
-
-    if use_act:
-      z = T.nnet.sigmoid(self.get_linear_forward_output().reshape(self.index.shape))
-      y = T.switch(T.eq(z.shape[0],1), z, T.inc_subtensor(z[:-1],-z[1:]))
-      w_act = T.exp(y)
-      w_act = w_act / T.sum(w_act,axis=0,keepdims=True)
-    else:
-      self.params = {}
-
-    if use_eos:
-      assert any([src.layer_class == 'softmax' for src in kwargs['sources']])
-      w_eos = T.zeros(self.index.shape,'float32')
-      eos = 0
-      for src in kwargs['sources']:
-        if src.layer_class == 'softmax':
-          pcx = src.output[:nT,:,eos]
-          w_eos += pcx
-      w_eos = w_eos / T.sum(w_eos,axis=0,keepdims=True)
-
-    if use_att:
-      assert any([src.layer_class == 'rec' for src in kwargs['sources']])
-      attention = T.zeros((self.index.shape[0], self.index.shape[1], nT), 'float32')
-      for src in kwargs['sources']:
-        if src.layer_class == 'rec':
-          for att in src.attention:
-            attention += att
-      l = numpy.sqrt(6. / (filter[0]*filter[1]*n_features))
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_features, 1, filter[0], filter[1])), dtype=theano.config.floatX)
-      F = self.add_param(self.shared(value=values, name="F"))
-      conv_out = T.nnet.conv2d(border_mode='full',
-                            input=attention.dimshuffle(1,'x',2,0), # B1TN
-                            filters=F).dimshuffle(3,0,2,1)[filter[1]/2:-filter[1]/2+1,:,filter[0]/2:-filter[0]/2+1] # NBTF
-      if n_features > 1:
-        W_f = self.add_param(self.create_forward_weights(n_features, 1, 'W_f'))
-        conv_out = T.dot(conv_out, W_f)
-      conv_out = T.exp(T.sum(conv_out.reshape(attention.shape), axis=2)) # NB
-      w_att = conv_out / T.sum(conv_out, axis=0, keepdims=True)
-
-    if use_rbf:
-      x =  T.arange(nT,dtype='float32').dimshuffle(0, 'x').repeat(self.index.shape[1],axis=1)
-      m = self.add_param(self.create_bias(1),'m')[0] + T.cast(nT,'float32') / T.constant(avg_obs,'float32')
-      s = self.add_param(self.create_bias(1),'s')[0] + T.cast(nT,'float32') / T.constant(avg_var,'float32')
-      from math import sqrt,pi
-      w_rbf = T.exp(-((x - m) ** 2) / (2 * s)) / (s * T.constant(sqrt(2 * pi), "float32"))
-
-    #w_act = theano.printing.Print("w_act", attrs=['shape'])(w_act)
-    #w_att = theano.printing.Print("w_att", attrs=['shape'])(w_att)
-    #w_rbf = theano.printing.Print("w_rbf", attrs=['shape'])(w_rbf)
-    #w_eos = theano.printing.Print("w_eos", attrs=['shape'])(w_eos)
-    halting = (w_act+eps) * (w_att+eps) * (w_rbf+eps) * (w_eos+eps) #* T.cast(self.index, 'float32') #- (use_act+use_att+use_rbf+use_eos) * eps
-    #halting = ((w_att+eps) + (w_eos+eps)) * (w_rbf+eps)
-    #halting = w_act * w_att * w_rbf * w_eos * T.cast(self.index,'float32')
-    #halting = T.exp(T.dot(T.stack([w_act, w_att, w_rbf, w_eos]).dimshuffle(1,2,0), self.add_param(self.create_forward_weights(4,1,"W_p")))).reshape(self.index.shape) # * T.cast(self.index,'float32')
-    halting = halting / T.sum(halting, axis=0, keepdims=True)
-    #real = theano.printing.Print("real")(real)
-    #exl = T.sum(halting * T.arange(halting.shape[0],dtype='float32').dimshuffle(0,'x').repeat(halting.shape[1],axis=1),axis=0) + numpy.float32(1)
-    exl = T.dot(T.arange(halting.shape[0], dtype='float32'),halting) + T.constant(1.,'float32')
-    hyp = T.cast(T.argmax(halting, axis=0), 'float32') + numpy.float32(1)
-    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]), halting.shape[1]),
-    #             'float32')  # + T.min(halting) #T.constant(0.5,'float32')
-    #halting = T.concatenate([halting, pad], axis=0)
-    sse = T.sum(((exl - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
-    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]), halting.shape[1]),'float32') / T.cast(T.max(real),'float32')
-    #halting = T.concatenate([halting,pad])
-    #import theano.ifelse
-    ce = T.sum(T.switch(T.ge(real,halting.shape[0]),
-                                  T.zeros((halting.shape[1],),'float32') + T.constant(25.,'float32'),
-                                  -T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32')))
-    #ce = -T.sum(T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
-    #sse = T.sum(halting) - T.sum([real-1,T.arange(halting.shape[1])])
-    #pad = T.ones((T.abs_(T.max(real) - halting.shape[0]),halting.shape[1]),'float32') #/ T.cast(T.max(real),'float32')
-    #halting = T.concatenate([halting,pad])
-    #import theano.ifelse
-    #halting = theano.ifelse.ifelse(T.le(T.max(real),halting.shape[0]), halting, T.concatenate([halting,pad],axis=0))
-    #ridx = T.arange(halting.shape[1],dtype='int32') * halting.shape[0] + (real-1).flatten()
-    #ce = T.sum(-T.log(halting.flatten()[ridx]) * T.cast(real.flatten(),'float32'))
-    #ce = T.sum(-T.log(halting[real - 1, T.arange(halting.shape[1])]) * T.cast(real,'float32'))
-    rho = T.constant(rho,'float32')
-    self.cost_val = rho * ce + (1.-rho) * sse
-    hyp = rho * hyp + (1.-rho) * exl
-    #self.error_val = T.sum(((T.cast(T.argmax(halting[:self.index.shape[0]],axis=0) + 1,'float32') - T.cast(real,'float32'))**2) * T.cast(real,'float32'))
-    #hyp = (rho * T.cast(T.argmax(halting,axis=0),'float32') + (1.-rho) * exl) + numpy.float32(1)
-    #hyp = theano.printing.Print("hyp")(hyp)
-    #real = theano.printing.Print("real")(real)
-    self.error_val = T.sum(((hyp - T.cast(real, 'float32')) ** 2) * T.cast(real, 'float32'))
-    #self.cost_val = sse
-    if self.train_flag or oracle:
-      self.length = (1. - use_real) * T.ceil(hyp) + use_real * real
-    else:
-      self.length = T.ceil(hyp)
-    self.length = T.cast(self.length, 'int32')
-    out, _ = theano.map(lambda l_t,x_t,m_t:(T.concatenate([T.ones((l_t, ), 'int8'), T.zeros((m_t - l_t, ), 'int8')]),
-                                            T.concatenate([x_t[:l_t], T.zeros((m_t - l_t,x_t.shape[1]), 'float32')])),
-                        sequences = [self.length,x_in.dimshuffle(1,0,2)], non_sequences=[T.max(self.length) + 1])
-    self.index = out[0].dimshuffle(1,0)[:-1]
-    self.make_output(T.zeros(self.index.shape,'float32').dimshuffle(0,1,'x'))
-
-  def errors(self):
-    return self.error_val
-
-  def cost(self):
-    return self.cost_val, None
 
   def cost_scale(self):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
@@ -2508,20 +2137,22 @@ class TruncationLayer(Layer):
     #self.make_output(z)
 
 
-class CorruptionLayer(ForwardLayer): # x = x + noise
+class CorruptionLayer(_NoOpLayer): # x = x + noise
   layer_class = "corruption"
   from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
   rng = RandomStreams(hash(layer_class) % 2147462579)
 
-  def __init__(self, noise='gaussian', p=0.0, **kwargs):
-    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
+  def __init__(self, noise='gaussian', p=0.0, clip=False, **kwargs):
     super(CorruptionLayer, self).__init__(**kwargs)
     self.set_attr('noise', noise)
     self.set_attr('p', p)
+    self.set_attr('n_out', sum([s.attrs['n_out'] for s in self.sources]))
 
     z = T.concatenate([s.output for s in self.sources], axis=2)
     if noise == 'gaussian':
-      z = self.rng.normal(size=z.shape,avg=0,std=p,dtype='float32') + (z - T.mean(z, axis=(0,1), keepdims=True)) / T.std(z, axis=(0,1), keepdims=True)
+      z += self.rng.normal(size=z.shape,avg=0,std=p,dtype='float32') #+ (z - T.mean(z, axis=(0,1), keepdims=True)) / T.std(z, axis=(0,1), keepdims=True)
+    if clip:
+      z = T.clip(z,numpy.float32(0),numpy.float32(1))
     self.make_output(z)
 
 class InputBase(Layer):
@@ -3011,6 +2642,7 @@ class DiscriminatorLayer(ForwardLayer):
       self.params = {}
       W = base[0].W
       b = base[0].b
+      basecost = base[0].cost_val
       base = []
       preal = numpy.float32(1.0)
     for src in self.sources: # real
@@ -3046,9 +2678,17 @@ class DiscriminatorLayer(ForwardLayer):
     #if copy_input:
     #  self.known_grads[copy_input.output] = numpy.float32(0) #T.grad(invcost,copy_input.output,disconnected_inputs='warn')
     self.error_val /= numpy.float32(len(self.sources + base))
+    #self.cost_val *= numpy.float32(len(self.sources + base))
+    if forge:
+      self.cost_scale_val = T.maximum(T.minimum(self.cost_val / basecost, numpy.float32(100.)), numpy.float32(0.01))
+    else:
+      self.cost_scale_val = numpy.float32(2.0)
 
   def cost(self):
     return self.cost_val, self.known_grads
+
+  def cost_scale(self):
+    return self.cost_scale_val
 
   def errors(self):
     return self.error_val
@@ -3078,11 +2718,11 @@ class ScaleGradientOp(theano.gof.Op):
 class ScaleGradLayer(_NoOpLayer):
   layer_class = 'scale_grad'
 
-  def __init__(self, scale = 1.0, **kwargs):
+  def __init__(self, scale = 1.0, disconnect = False, **kwargs):
     super(ScaleGradLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = self.sources[0].attrs['n_out']
-    if scale == 0 and False:
-      self.output = theano.gradient.disconnected_grad(self.sources[0].output)
+    if scale == 0 and disconnect:
+      self.output = theano.gradient.zero_grad(self.sources[0].output)
     else:
       self.output = ScaleGradientOp(scale)(self.sources[0].output)
 
