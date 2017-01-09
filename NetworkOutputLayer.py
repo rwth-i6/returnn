@@ -33,6 +33,7 @@ class OutputLayer(Layer):
                substract_prior_from_output=False,
                input_output_similarity=None,
                input_output_similarity_scale=1,
+               copy_weights=False,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -61,12 +62,18 @@ class OutputLayer(Layer):
       self.set_attr("use_source_index", use_source_index)
       src_index = self.sources[0].index
       self.index = src_index
-    if not copy_input:
+    if not copy_input or copy_weights:
+      if copy_weights:
+        self.params = {}
+        self.b = copy_input.b
+        self.W_in = copy_input.W_in
+        self.masks = copy_input.masks
+        self.mass = copy_input.mass
+      else:
+        self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
+                                                                name="W_in_%s_%s" % (source.name, self.name)))
+                     for source in self.sources]
       self.z = self.b
-      self.W_in = [self.add_param(self.create_forward_weights(source.attrs['n_out'], self.attrs['n_out'],
-                                                              name="W_in_%s_%s" % (source.name, self.name)))
-                   for source in self.sources]
-
       assert len(self.sources) == len(self.masks) == len(self.W_in)
       assert len(self.sources) > 0
       for source, m, W in zip(self.sources, self.masks, self.W_in):

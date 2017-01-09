@@ -101,6 +101,7 @@ class TwoDToOneDLayer(TwoDBaseLayer):
     index_init = T.zeros((Y.shape[2],Y.shape[1]), dtype='int8')
     self.index, _ = theano.scan(index_fn, [index_init, T.cast(self.sources[0].output_sizes[:,1],"int32")])
     self.index = self.index.dimshuffle(1, 0)
+    n_out = self.sources[0].attrs['n_out']
 
     if collapse == 'sum' or collapse == True:
       Y = Y.sum(axis=0)
@@ -118,11 +119,10 @@ class TwoDToOneDLayer(TwoDBaseLayer):
       Y = ifelse(T.lt(Y.shape[0],pad),T.concatenate([Y,T.zeros((pad-Y.shape[0],Y.shape[1],Y.shape[2],Y.shape[3]),'float32')],axis=0),
                  ifelse(T.gt(Y.shape[0],pad),Y[:pad],Y))
       Y = Y.dimshuffle(1,2,3,0).reshape((Y.shape[1],Y.shape[2],Y.shape[3]*Y.shape[0]))
-      self.attrs['n_out'] *= pad
+      n_out *= pad
     elif collapse != False:
       assert False, "invalid collapse mode"
 
-    n_out = self.sources[0].attrs['n_out']
     if self.attrs['batch_norm']:
       Y = self.batch_norm(Y, n_out, force_sample=False)
     self.output = Y
@@ -220,8 +220,8 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       if directions >= 1:
         self.W3, self.V_h3, self.V_v3 = self.add_param(base[0].W3), self.add_param(base[0].V_h3), self.add_param(base[0].V_v3)
         self.W4, self.V_h4, self.V_v4 = self.add_param(base[0].W4), self.add_param(base[0].V_h4), self.add_param(base[0].V_v4)
-      self.mass = base[0].mass
-      self.masks = base[0].masks
+      #self.mass = base[0].mass
+      #self.masks = base[0].masks
       #self.b1 = base[0].b1
       #self.b2 = base[0].b2
       #if directions >= 1:

@@ -50,7 +50,7 @@ class InvAlignOp(theano.Op):
 
     hmm = self._buildHmm(transcription)
     lengthT = end - start
-    skip = min(len(self.tdps), lengthT - self.nstates)
+    skip = max(min(len(self.tdps), lengthT - self.nstates),1)
     tdps = self.tdps[:skip]
     lengthS = transcription.shape[0] * self.nstates
 
