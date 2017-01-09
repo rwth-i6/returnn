@@ -333,9 +333,6 @@ def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
       edges_new.append(edge)
     elif edge[2] == word_seq:
       for allo_idx in range(allo_len):
-        print(edge[0])
-        print(edge[1])
-        print(state_idx)
         if allo_idx == 0:
           idx1 = edge[0]
           idx2 = state_idx
@@ -352,7 +349,6 @@ def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
           state_idx += 1
           idx2 = state_idx
         edge_t = (idx1, idx2, allo_seq[allo_idx], 1.)
-        print(edge_t)
         edges_new.append(edge_t)
     else:
       edges_new.append(edge)
