@@ -270,7 +270,7 @@ class NativeOp(theano.Op, NativeOpBaseMixin):
     :param dict[str] kwargs: all passed to NativeOpBaseMixin
     """
     theano.Op.__init__(self)
-    NativeOpBaseMixin.__init__(**kwargs)
+    NativeOpBaseMixin.__init__(self, **kwargs)
     self.custom_grad = custom_grad
 
   def __str__(self):
