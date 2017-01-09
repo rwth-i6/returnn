@@ -467,7 +467,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
-               mask="unity", dropout=0.0, batch_norm=False, layer_drop=0.0, residual=False,
+               mask="unity", dropout=0.0, batch_drop=True, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
                sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
                dtype='float32',
@@ -552,7 +552,10 @@ class Layer(Container):
       if self.depth > 1:
         self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
       else:
-        self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
+        if batch_drop:
+          self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=s.output.shape), theano.config.floatX) for s in self.sources]
+        else:
+          self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
       #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
       #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
 
