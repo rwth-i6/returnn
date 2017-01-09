@@ -251,15 +251,18 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
   :returns (num_states, edges) like above
   """
   print("Word sequence:", word_seq)
+  sil = 'sil'
   print("Silence: sil")
   print("Place holder: epsilon")
   depth = int(depth)
   if depth == 1:
     print("Lemma acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
   elif depth == 2:
     print("Phoneme acceptor chosen.")
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_seq)
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
   elif depth == 3:
     print("Triphone acceptor chosen.")
     num_states, edges = __triphone_acceptor_for_hmm_fsa(word_seq)
@@ -281,12 +284,11 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
   return num_states, edges
 
 
-def __lemma_acceptor_for_hmm_fsa(word_seq):
+def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
   """
   :param word_seq:
   :return: num_states, edges
   """
-  sil = 'sil'
   edges = []
   if type(word_seq) is str:
     word_seq_len = 1
@@ -316,10 +318,46 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   return num_states, edges
 
 
-def __phoneme_acceptor_for_hmm_fsa(word_seq):
-  num_states = 0
-  edges = []
-  return num_states, edges
+def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
+  allo_len = len(allo_seq)
+  num_states_new = num_states + 4 * (allo_len - 1)
+  edges_new = []
+  state_idx = 2
+
+  for edge in edges:
+    if edge[2] == sil and edge[1] == num_states - 1:
+      lst = list(edge)
+      lst[0] = num_states_new - 2
+      lst[1] = num_states_new - 1
+      edge = tuple(lst)
+      edges_new.append(edge)
+    elif edge[2] == word_seq:
+      for allo_idx in range(allo_len):
+        print(edge[0])
+        print(edge[1])
+        print(state_idx)
+        if allo_idx == 0:
+          idx1 = edge[0]
+          idx2 = state_idx
+        elif allo_idx == allo_len - 1:
+          idx1 = state_idx
+          if edge[1] == 3:
+            edge_idx_t = 1
+          elif edge[1] == 2:
+            edge_idx_t = 2
+          idx2 = num_states_new - edge_idx_t
+          state_idx += 1
+        else:
+          idx1 = state_idx
+          state_idx += 1
+          idx2 = state_idx
+        edge_t = (idx1, idx2, allo_seq[allo_idx], 1.)
+        print(edge_t)
+        edges_new.append(edge_t)
+    else:
+      edges_new.append(edge)
+
+  return num_states_new, edges_new
 
 
 def __triphone_acceptor_for_hmm_fsa(word_seq):
