@@ -22,9 +22,9 @@ class CNN(_NoOpLayer):
   recurrent = True
 
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
-               conv_stride=(1,1), pool_size=(2,2), filter_dilation=(1,1), ignore_border=1,
+               conv_stride=(1,1), pool_size=(1,1), filter_dilation=(1,1), ignore_border=1,
                pool_stride=0, pool_padding=(0,0), mode="max",
-               activation="tanh", dropout=0.0, factor=0.5,
+               activation="tanh", dropout=0.0, factor=0.5, base = None,
                force_sample=False, **kwargs):
     """
       :param n_features: integer
@@ -53,7 +53,7 @@ class CNN(_NoOpLayer):
 
       :param pool_size: tuple of length 2
         factor by which to downscale in pooling layer.
-        this is writen in (rows,columns).
+        this is written in (rows,columns).
         the default value is (2,2), it will halve the input in each dimension.
 
       :param filter_dilation: tuple of length 2
@@ -86,7 +86,7 @@ class CNN(_NoOpLayer):
     """
 
     super(CNN, self).__init__(**kwargs)
-
+    self.base = base
     src = self.sources
     self.status = self.get_status(src)  # [is_conv_layer, n_sources]
     self.is_1d = self.layer_class == "conv_1d"
@@ -244,17 +244,20 @@ class CNN(_NoOpLayer):
     #         (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
-    W = self.add_param(
-      self.shared(
-        value=numpy.asarray(
-          self.rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
-          dtype='float32'
-        ),
-        borrow=True,
-        name="W_conv_" + self.name
+    if self.base:
+      W = self.add_param(self.base[0].W)
+    else:
+      W = self.add_param(
+        self.shared(
+          value=numpy.asarray(
+            self.rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+            dtype='float32'
+          ),
+          borrow=True,
+          name="W_conv_" + self.name
+        )
       )
-    )
-
+    self.W = W
     conv_out = conv2d(
       input=inputs,
       filters=W,
@@ -298,14 +301,17 @@ class CNN(_NoOpLayer):
     return pool_out
 
   def bias_term(self, inputs, n_features, activation):
-    b = self.add_param(
-      self.shared(
-        value=numpy.zeros((n_features,), dtype='float32'),
-        borrow=True,
-        name="b_conv_" + self.name
+    if self.base:
+      b = self.add_param(self.base[0].b)
+    else:
+      b = self.add_param(
+        self.shared(
+          value=numpy.zeros((n_features,), dtype='float32'),
+          borrow=True,
+          name="b_conv_" + self.name
+        )
       )
-    )
-
+    self.b = b
     act = strtoact('identity') if activation == 'maxout' else strtoact(activation)
     output = act(inputs + b.dimshuffle("x", 0, "x", "x"))  # (time*batch, filter, out-row, out-col)
     output.name = "output_bias_term_"+self.name
