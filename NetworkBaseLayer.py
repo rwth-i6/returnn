@@ -467,7 +467,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
-               mask="unity", dropout=0.0, batch_drop=True, batch_norm=False, layer_drop=0.0, residual=False,
+               mask="unity", dropout=0.0, batch_drop=False, batch_norm=False, layer_drop=0.0, residual=False,
                carry=False,
                sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
                dtype='float32',
