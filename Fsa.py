@@ -153,7 +153,7 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
-def __make_single_final_state_for_ctc(final_states, num_states, edges):
+def __make_single_final_state(final_states, num_states, edges):
   """
   takes the graph and merges all final nodes into one single final node
   idea:
