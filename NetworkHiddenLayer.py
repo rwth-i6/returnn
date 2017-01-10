@@ -1099,7 +1099,8 @@ class EnergyNormalization(_NoOpLayer):
     # normalization matrix
     inputVec = self.sources[0].output
     normFactor = 1.0 / T.sqrt(T.dot(inputVec.T, inputVec))
-    outputVec = normFactor * inputVec 
+#    outputVec = normFactor * inputVec 
+    outputVec = inputVec 
     self.make_output(outputVec)
 
 class DftLayer(_NoOpLayer):
