@@ -573,8 +573,8 @@ class RecurrentUnitLayer(Layer):
       self.params = {}
       self.W_in = [ self.add_param(W) for W in base[0].W_in ]
       self.b = self.add_param(base[0].b)
-      #self.masks = base[0].masks
-      #self.mass = base[0].mass
+      self.masks = base[0].masks
+      self.mass = base[0].mass
     else:
       for s in self.sources:
         W = self.create_forward_weights(s.attrs['n_out'], unit.n_in, name="W_in_%s_%s" % (s.name, self.name))
