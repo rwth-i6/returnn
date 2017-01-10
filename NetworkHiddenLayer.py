@@ -1091,7 +1091,7 @@ class EnergyNormalization(_NoOpLayer):
   layer_class = "energy_normalization_layer"
   recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
 
-  def __init__(self):
+  def __init__(self, **kwargs):
     """
     """
     super(EnergyNormalization, self).__init__(**kwargs)
