@@ -111,6 +111,7 @@ class OpMaker(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/pad_op.cc
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h  CopyOp...
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
@@ -134,12 +135,6 @@ class OpMaker(object):
       return name
     def map_type(v, is_out=False):
       t = v.get("dtype", "float32")
-      if is_out:
-        if v["name"] in out_is_ref:
-          t = "Ref(%s)" % t
-      else:
-        if v.get("want_inplace", -1) >= 0:
-          t = "Ref(%s)" % t
       return t
     code_register_op_io = ""
     for v in in_info:
@@ -151,15 +146,42 @@ class OpMaker(object):
       out_idx = v.get("want_inplace", -1)
       if out_idx >= 0:
         code_forward_io += "context->forward_ref_input_to_ref_output(%i, %i);\n" % (in_idx, out_idx)
-    code_set_io = """
+    code_set_io = ""
+    for in_idx, v in enumerate(in_info):
+      ndim = len(v["shape"])
+      code_set_io += """
+      OP_REQUIRES(
+        context, context->input(%i).dims() == %i,
+        errors::InvalidArgument("shape ndim is not %i, got shape ",
+                                context->input(%i).shape().DebugString()));
+      """ % (in_idx, ndim, ndim, in_idx)
+      for axis, d in enumerate(v["shape"]):
+        if isinstance(d, int):
+          code_set_io += """
+          OP_REQUIRES(
+            context, context->input(%i).dim_size(%i) == %i,
+            errors::InvalidArgument("shape[%i] != %i, got shape ",
+                                    context->input(%i).shape().DebugString()));
+          """ % (in_idx, axis, d, axis, d, in_idx)
+    code_set_io += """
     Ndarray* inputs[n_inputs];
     Ndarray** outputs[n_outputs];
     """
     for in_idx, v in enumerate(in_info):
-      if v.get("want_inplace", -1) >= 0:  # is ref
-        code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
-        code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+      out_idx = v.get("want_inplace", -1)
+      if out_idx >= 0:  # is ref
+        # mutable_input if it is a ref-type, i.e. a Variable.
+        #code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
+        #code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+        # but a normal tensor is never mutable, thus create a copy of the input now.
+        code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
+        cshape = "TensorShape({%s})" % ", ".join(["context->input(%i).dim_size(%i)" % (in_idx, in_dim)
+                                                  for in_dim in range(len(v["shape"]))])
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "inputs[%i] = output_%i;\n" % (in_idx, out_idx)
+        code_set_io += "make_copy(context, inputs[%i], &context->input(%i));\n" % (in_idx, in_idx)
       else:  # no ref
+        # TODO: if not on GPU but GPU requested, move to GPU first, maybe via allocate_temp?
         code_set_io += "inputs[%i] = const_cast<Ndarray*>(&context->input(%i));\n" % (in_idx, in_idx)
     for out_idx, v in enumerate(out_info):
       out_name = out_info[out_idx]["name"]
@@ -171,7 +193,7 @@ class OpMaker(object):
         code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
-        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
     code_user = self.description.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
       code_forward_io,
@@ -208,6 +230,7 @@ class OpMaker(object):
 
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
       //#include "tensorflow/core/platform/stream_executor.h"
+      //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
       """
     code_header += """
     using namespace tensorflow;
@@ -377,6 +400,8 @@ class NativeLstmCell(RecSeqCellOp):
     assert Z.get_shape().ndims == 3
     assert V_h.get_shape().ndims == 2
     assert i.get_shape().ndims == 2
+    if i.dtype != tf.float32:
+      i = tf.cast(i, dtype=tf.float32)
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
     c = tf.zeros((n_batch, n_out), dtype=tf.float32)
