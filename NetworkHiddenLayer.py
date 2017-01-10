@@ -1084,6 +1084,23 @@ class MfccLayer(_NoOpLayer):
       return filterMatrix
 
 
+class EnergyNormalization(_NoOpLayer):
+  """
+  This layer expects a (chunkted) time signal at the input. It normalizes the signal energy of the input chunk.
+  """
+  layer_class = "energy_normalization_layer"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+
+  def __init__(self):
+    """
+    """
+    super(EnergyNormalization, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    # normalization matrix
+    inputVec = self.sources[0].output
+    normFactor = 1.0 / T.sqrt(T.dot(inputVec.T, inputVec))
+    outputVec = normFactor * inputVec 
+    self.make_output(outputVec)
 
 class DftLayer(_NoOpLayer):
   """
