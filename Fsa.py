@@ -153,6 +153,30 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   return num_states, edges
 
 
+def __make_single_final_state_for_ctc(final_states, num_states, edges):
+  """
+  takes the graph and merges all final nodes into one single final node
+  idea:
+  - add new single final node
+  - for all edge which ended in a former final node:
+    - create new edge from stating node to new single final node with the same label
+  :param list[int] final_states: list of index numbers of the final states
+  :param int num_states: number of states
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return: num_states, edges
+  """
+  if len(final_states) == 1 and final_states[0] == num_states - 1:  # nothing to change
+    return num_states, edges
+
+  num_states += 1
+  for fstate in final_states:
+    edges_fstate = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == fstate)]
+    for fstate_edge in edges_fstate:
+      edges.append((fstate, num_states - 1, fstate_edge[2], 1.))
+
+  return num_states, edges
+
+
 def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   """
   :param int num_labels: number of labels
@@ -274,7 +298,10 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq)
   elif depth == 5:
     print("HMM acceptor chosen.")
-    num_states, edges = __hmm_acceptor_for_hmm_fsa()
+    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+    num_states, edges = __hmm_acceptor_for_hmm_fsa(num_states, edges)
   elif depth == 6:
     print("State tying chosen.")
     num_states, edges = __state_tying_for_hmm_fsa()
@@ -404,9 +431,11 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq):
   return num_states, edges
 
 
-def __hmm_acceptor_for_hmm_fsa():
-  num_states = 0
-  edges = []
+def __hmm_acceptor_for_hmm_fsa(num_states, edges):
+  for state in range(1, num_states):
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
+    edges.append((state, state, edges[edges_included[0]][2], 1.
+                  ))
   return num_states, edges
 
 
