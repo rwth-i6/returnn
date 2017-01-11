@@ -73,20 +73,26 @@ class Batch:
                                    batch_slice=self.num_slices - 1,
                                    batch_frame_offset=0)]
 
-  def add_frames(self, seq_idx, seq_start_frame, length):
+  def add_frames(self, seq_idx, seq_start_frame, length, frame_dim_corresponds=True):
     """
     Adds frames to all data-batches.
     Will add one data-batch if we don't have one yet.
-    :type seq_start_frame: NumbersDict | int
+    :param int seq_idx:
+    :param NumbersDict|int seq_start_frame:
     :param NumbersDict length: number of (time) frames
+    :param bool frame_dim_corresponds: if the batch frame offset should always be the same (max value) for all keys
     """
+    batch_frame_offset = self.max_num_frames_per_slice
+    if frame_dim_corresponds:
+      batch_frame_offset = NumbersDict(batch_frame_offset.max_value())
+      self.max_num_frames_per_slice = NumbersDict(self.max_num_frames_per_slice.max_value())
     self.max_num_frames_per_slice += length
     self.num_slices = max(self.num_slices, 1)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
-                                   batch_frame_offset=self.max_num_frames_per_slice - length)]
+                                   batch_frame_offset=batch_frame_offset)]
 
   def get_all_slices_num_frames(self):
     """

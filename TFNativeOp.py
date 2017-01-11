@@ -199,12 +199,20 @@ class OpMaker(object):
         # mutable_input if it is a ref-type, i.e. a Variable.
         #code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
         #code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+        # Maybe we could use a TemporaryVariable or so but not sure if the gradient will flow through tf.assign().
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/state_ops.cc
         # but a normal tensor is never mutable, thus create a copy of the input now.
         code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
         cshape = "TensorShape({%s})" % ", ".join(["context->input(%i).dim_size(%i)" % (in_idx, in_dim)
                                                   for in_dim in range(len(v["shape"]))])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
         code_set_io += "inputs[%i] = output_%i;\n" % (in_idx, out_idx)
+        # We always make a copy for now.
+        # I'm not sure if inplace is an option for TF because we don't know if any other operation in the graph
+        # wants to access it. Maybe we can check the reference count or so?
+        # Some references for inplace operations:
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/inplace_ops.cc
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/strided_slice_op.cc
         code_set_io += "make_copy(context, inputs[%i], &context->input(%i));\n" % (in_idx, in_idx)
       else:  # no ref
         # TODO: if not on GPU but GPU requested, move to GPU first, maybe via allocate_temp?
