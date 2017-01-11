@@ -80,16 +80,13 @@ class Batch:
     :type seq_start_frame: NumbersDict | int
     :param NumbersDict length: number of (time) frames
     """
-    if not isinstance(length,NumbersDict):
-      length = NumbersDict(length)
-
-    self.max_num_frames_per_slice += length.max_value()
+    self.max_num_frames_per_slice += length
     self.num_slices = max(self.num_slices, 1)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
-                                   batch_frame_offset=self.max_num_frames_per_slice - length.max_value())]
+                                   batch_frame_offset=self.max_num_frames_per_slice - length)]
 
   def get_all_slices_num_frames(self):
     """
