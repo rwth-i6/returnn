@@ -171,7 +171,7 @@ def __make_single_final_state(final_states, num_states, edges):
   :param list[int] final_states: list of index numbers of the final states
   :param int num_states: number of states
   :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
-  :return: num_states, edges
+  :return num_states, edges:
   """
   if len(final_states) == 1 and final_states[0] == num_states - 1:  # nothing to change
     return num_states, edges
@@ -183,6 +183,38 @@ def __make_single_final_state(final_states, num_states, edges):
       edges.append((fstate, num_states - 1, fstate_edge[2], 1.))
 
   return num_states, edges
+
+
+def __determine_edges(num_states, edges):
+  """
+  transforms the graph from non-deterministic to deterministic
+  specifically removing epsilon edges
+  :param int num_states: number of states
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return num_states, edges:
+  """
+  new_states = []  # type: list[set[int]]
+  start_states = __discover_eps([0], num_states, edges)
+  todo = [start_states]
+
+
+  return num_states, edges
+
+
+def __discover_eps(node, num_states, edges):
+  """
+  starting at a specific node, the nodes connected via epsilon are found
+  :param list[int] node:
+    list of nodes in the graph which are starting points for epsilon edge search
+  :param int num_states: number of states
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return list[tuples(start[int], end[int], label, weight)] eps_edges:
+    all edges from specific node with label epsilon
+  """
+  eps_edges = []
+
+  return eps_edges
+
 
 
 def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
