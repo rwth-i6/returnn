@@ -366,7 +366,7 @@ class OpMaker(object):
         """
         assert len(bwd_grads) == len(fwd_op.outputs)
 
-        grad_inputs = fwd_op.inputs + fwd_op.outputs + bwd_grads
+        grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
         grad_inputs = self.description._filter_grad_inputs(grad_inputs)
         grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
         if grad_description.num_dummy_outs > 0:
