@@ -536,6 +536,8 @@ static void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, 
     // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
     //   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/assign_op.h
     // also see Ndarray_Copy above
+    OP_REQUIRES(context, tgt_tensor, "tgt_tensor not set");
+    OP_REQUIRES(context, src_tensor, "src_tensor not set");
     OP_REQUIRES(context, Ndarray_SIZE(tgt_tensor) == Ndarray_SIZE(src_tensor),
         errors::InvalidArgument("shape sizes do not match, got shapes ",
                                 src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
