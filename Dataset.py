@@ -469,7 +469,7 @@ class Dataset(object):
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
         # In case that some length is 0 or 1,
-        # we treat it special and always return the full seq repeated for every chunk.
+        # we treat it special and always return the full seq repeated for every chunk. <- Willi: Why do we do this?
         keys_with_full_seqs = []
         for key in length.keys():
           if length[key] == length[default_key]:
@@ -483,8 +483,8 @@ class Dataset(object):
           chunk_start = NumbersDict(t)
           chunk_len = NumbersDict(l)
           for key in keys_with_full_seqs:
-            chunk_start[key] = 0
-            chunk_len[key] = length[key]
+            chunk_start[key] = t #0
+            chunk_len[key] = t #length[key]
           yield (s, chunk_start, chunk_len)
           t += chunk_step
       s += 1
