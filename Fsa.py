@@ -2,6 +2,14 @@
 
 from __future__ import print_function
 
+"""
+TODO
+- tuple -> sets
+- allophone acceptor
+- state tying acceptor
+- class num_states, edges, first and last char
+"""
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
