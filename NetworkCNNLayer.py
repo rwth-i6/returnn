@@ -24,7 +24,7 @@ class CNN(_NoOpLayer):
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
                conv_stride=(1,1), pool_size=(1,1), filter_dilation=(1,1), ignore_border=1,
                pool_stride=0, pool_padding=(0,0), mode="max",
-               activation="tanh", dropout=0.0, factor=0.5, base = None,
+               activation="tanh", dropout=0.0, factor=1.0, base = None,
                force_sample=False, **kwargs):
     """
       :param n_features: integer
@@ -446,18 +446,36 @@ class ConcatConv(CNN):
       others=self.other_params
     ) # (batch, nb feature maps, out-row, time)
 
+    self.Output = self.Output / T.cast(self.Output.shape[1],'float32')
+
     if self.attrs['batch_norm']:
-      self.Output = self.batch_norm(
-        h=self.Output.dimshuffle(0, 2, 3, 1).reshape(
-          (self.Output.shape[0] * self.Output.shape[2] * self.Output.shape[3],
-           self.Output.shape[1])
-        ),
-        dim=self.attrs['n_features'],
-        force_sample=self.force_sample
-      ).reshape((self.Output.shape[0],
-                 self.Output.shape[2],
-                 self.Output.shape[3],
-                 self.Output.shape[1])).dimshuffle(0, 3, 1, 2)
+      if self.base is None:
+        self.Output = self.batch_norm(
+          h=self.Output.dimshuffle(0, 2, 3, 1).reshape(
+            (self.Output.shape[0] * self.Output.shape[2] * self.Output.shape[3],
+             self.Output.shape[1])
+          ),
+          dim=self.attrs['n_features'],
+          force_sample=self.force_sample
+        ).reshape((self.Output.shape[0],
+                   self.Output.shape[2],
+                   self.Output.shape[3],
+                   self.Output.shape[1])).dimshuffle(0, 3, 1, 2)
+      else:
+        self.Output = self.batch_norm(
+          h=self.Output.dimshuffle(0, 2, 3, 1).reshape(
+            (self.Output.shape[0] * self.Output.shape[2] * self.Output.shape[3],
+             self.Output.shape[1])
+          ),
+          dim=self.attrs['n_features'],
+          force_sample=self.force_sample,
+          sample_mean=self.base[0].sample_mean,
+          gamma=self.base[0].gamma,
+          beta=self.base[0].beta
+        ).reshape((self.Output.shape[0],
+                   self.Output.shape[2],
+                   self.Output.shape[3],
+                   self.Output.shape[1])).dimshuffle(0, 3, 1, 2)
 
     # our CRNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
