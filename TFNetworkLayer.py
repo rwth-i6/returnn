@@ -470,7 +470,13 @@ class RecLayer(_ConcatInputLayer):
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     if unit in ["lstmp", "lstm"]:
-      unit = "LSTMBlockFused"
+      # Some possible LSTM implementations are:
+      # * BasicLSTM, via official TF, pure TF implementation
+      # * LSTMBlockFused, via tf.contrib.rnn (both CPU and GPU). should be much faster than BasicLSTM
+      # * NativeLSTM, our own native LSTM (both CPU and GPU). should be faster than LSTMBlockFused
+      # We default to the fastest one, i.e. NativeLSTM.
+      # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
+      unit = "nativelstm"
     if direction is not None:
       assert not bidirectional
       assert direction in [-1, 1]
