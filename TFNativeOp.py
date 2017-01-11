@@ -357,16 +357,13 @@ class OpMaker(object):
       grad_op = grad_op_maker.make_op()
 
       from tensorflow.python.framework import ops
-      def grad_wrapper(fwd_op, bwd_grads):
+      def grad_wrapper(fwd_op, *bwd_grads):
         """
         :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
-        :param list[tf.Tensor]|tf.Tensor bwd_grads: list if len(fwd_op.outputs) > 1
+        :param list[tf.Tensor] bwd_grads:
         :return: list of tensors of gradients for each input
         :rtype: list[tf.Tensor]
         """
-        if len(fwd_op.outputs) == 1:
-          assert isinstance(bwd_grads, tf.Tensor)
-          bwd_grads = [bwd_grads]
         assert len(bwd_grads) == len(fwd_op.outputs)
 
         grad_inputs = fwd_op.inputs + fwd_op.outputs + bwd_grads
