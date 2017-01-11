@@ -536,12 +536,15 @@ static void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, 
     // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
     //   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/assign_op.h
     // also see Ndarray_Copy above
-    OP_REQUIRES(context, tgt_tensor, "tgt_tensor not set");
-    OP_REQUIRES(context, src_tensor, "src_tensor not set");
+    OP_REQUIRES(context, tgt_tensor, errors::InvalidArgument("tgt_tensor not set"));
+    OP_REQUIRES(context, src_tensor, errors::InvalidArgument("src_tensor not set"));
+    if(!tgt_tensor || !src_tensor) return;
     OP_REQUIRES(context, Ndarray_SIZE(tgt_tensor) == Ndarray_SIZE(src_tensor),
         errors::InvalidArgument("shape sizes do not match, got shapes ",
                                 src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
-    Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
+    //Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
+    auto dev = context->eigen_device<Eigen::GpuDevice>();
+    tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
 #endif
 #endif
