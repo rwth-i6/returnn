@@ -382,17 +382,11 @@ class FramewiseOutputLayer(OutputLayer):
       if self.y_data_flat.type == T.ivector().type:
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
-        if self.attrs.get("auto_fix_target_length"):
-          from TheanoUtil import pad
-          xx = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_m[self.i],0,1), self.y_m[self.i])
-          yy = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_data_flat[self.i],0,1), self.y_data_flat[self.i])
-          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=xx, y_idx=yy)
-        else:
-          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+        nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
         nll = -T.dot(T.log(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
       if self.attrs.get("auto_fix_target_length"):
-        return self.norm * theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), 0.0, T.sum(nll)), known_grads
+        return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:
         return self.norm * T.sum(nll), known_grads
     elif self.loss == 'entropy':
