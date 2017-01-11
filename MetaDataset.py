@@ -388,7 +388,7 @@ class CombinedDataset(CachedDataset2):
     target_lookup_table = {}
     for dataset_key in self.dataset_keys:
       target_lookup_table[dataset_key] = {datamap_maps: datamap_keys[1] for datamap_keys,datamap_maps in data_map.iteritems() if datamap_keys[0]==dataset_key}
-      for key in self.data_keys:
+      for key in self.dataset_keys:
         target_lookup_table[dataset_key].setdefault(key,None)
 
     self.target_lookup_table = target_lookup_table
@@ -597,7 +597,10 @@ class CombinedDataset(CachedDataset2):
     dataset_idx, dataset_seq_idx = self.dataset_seq_idxs[seq_idx]
     dataset_key = self.dataset_idxs[dataset_idx]
     dataset = self.datasets[dataset_key]
+#    print "Want to give out seq ", seq_idx, " which is internally numbered ",dataset_seq_idx," in Dataset ",dataset_key
+#    print "This Dataset containes ",dataset.added_data
 
+#    seq_tag = dataset_key + "-" + dataset.get_tag(dataset_seq_idx)
     seq_tag = dataset.get_tag(dataset_seq_idx)
     features = self._get_data(dataset_key, dataset_seq_idx, "data")
     targets = {target: self._get_data(dataset_key, dataset_seq_idx, target) for target in self.target_list}
@@ -621,10 +624,6 @@ class CombinedDataset(CachedDataset2):
     if self.added_data:
       assert super(CombinedDataset, self).get_data_dtype(key) == dtype
     return dtype
-
-  def get_data_dim(self, key):
-    assert key in self.data_dims
-    return self.data_dims[key][0]
 
 
 class ChunkShuffleDataset(CachedDataset2):
