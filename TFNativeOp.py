@@ -141,6 +141,32 @@ class OpMaker(object):
       code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
     for v in out_info:
       code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v, is_out=True), map_type(v, is_out=True))
+    code_set_out_shape = ""
+    def make_dim_str(c):
+      if isinstance(c, tuple):
+        in_idx, in_dim = c
+        return "c->Dim(c->input(%i), %i)" % (in_idx, in_dim)
+      elif isinstance(c, int):
+        return str(c)
+      else:
+        raise Exception("type: %s" % type(c))
+    for i, v in enumerate(out_info):
+      code_set_out_shape += "c->set_output(%i, c->MakeShape({%s}));\n" % (
+        i, ", ".join([make_dim_str(c) for c in v["shape"]]))
+    code_register_op_io += """
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      if(c->num_inputs() != %(num_inputs)i)
+        return errors::InvalidArgument("wrong number of inputs. required %(num_inputs)i but got ", c->num_inputs());
+      if(c->num_outputs() != %(num_outputs)i)
+        return errors::InvalidArgument("wrong number of outputs. required %(num_outputs)i but got ", c->num_outputs());
+      %(code_set_out_shape)s
+      return Status::OK();
+    })
+    """ % {
+      "num_inputs": len(in_info),
+      "num_outputs": len(out_info),
+      "code_set_out_shape": code_set_out_shape
+    }
     code_forward_io = ""
     for in_idx, v in enumerate(in_info):
       out_idx = v.get("want_inplace", -1)
