@@ -2526,6 +2526,7 @@ class AlignmentLayer(ForwardLayer):
         search = 'align'
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    self.p_y_given_x = p_in
     y_in = self.y_in[target].reshape(self.index.shape)
     if train_skips:
       W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
