@@ -2482,7 +2482,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, search='search', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, min_skip=0, search='search', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
@@ -2513,6 +2513,8 @@ class AlignmentLayer(ForwardLayer):
     for i in range(len(tdps)):
       if i % nstep != 0:
         tdps[i] = 1e30
+    if min_skip > 0:
+      tdps[:min_skip] = [1e30] * min_skip
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2535,14 +2537,14 @@ class AlignmentLayer(ForwardLayer):
       q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
     if search == 'linear':
       max_length_y = self.z.shape[0] / y_in.shape[0] #+ T.mod(self.z.shape[0], y_in.shape[0])
-      y_out = y_in.reshape((y_in.shape[0]*y_in.shape[1],y_in.shape[2]))
-      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1],y_in.shape[2]))
+      y_out = y_in.flatten() #reshape((y_in.shape[0]*y_in.shape[1]))
+      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1]))
       y_out = T.concatenate([y_out,y_out[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
       self.y_out = y_out
-      rindex = self.index.reshape(self.index.shape[0]*self.index.shape[1])
-      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1],y_in.shape[2]))
+      rindex = self.index.flatten() #reshape(self.index.shape[0]*self.index.shape[1])
+      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1]))
       rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
-      norm = T.cast(T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32'))
+      norm = T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32')
       self.index = rindex
       self.output = x_in
       idx = (self.index.flatten() > 0).nonzero()
