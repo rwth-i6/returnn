@@ -141,6 +141,32 @@ class OpMaker(object):
       code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
     for v in out_info:
       code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v, is_out=True), map_type(v, is_out=True))
+    code_set_out_shape = ""
+    def make_dim_str(c):
+      if isinstance(c, tuple):
+        in_idx, in_dim = c
+        return "c->Dim(c->input(%i), %i)" % (in_idx, in_dim)
+      elif isinstance(c, int):
+        return str(c)
+      else:
+        raise Exception("type: %s" % type(c))
+    for i, v in enumerate(out_info):
+      code_set_out_shape += "c->set_output(%i, c->MakeShape({%s}));\n" % (
+        i, ", ".join([make_dim_str(c) for c in v["shape"]]))
+    code_register_op_io += """
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      if(c->num_inputs() != %(num_inputs)i)
+        return errors::InvalidArgument("wrong number of inputs. required %(num_inputs)i but got ", c->num_inputs());
+      if(c->num_outputs() != %(num_outputs)i)
+        return errors::InvalidArgument("wrong number of outputs. required %(num_outputs)i but got ", c->num_outputs());
+      %(code_set_out_shape)s
+      return Status::OK();
+    })
+    """ % {
+      "num_inputs": len(in_info),
+      "num_outputs": len(out_info),
+      "code_set_out_shape": code_set_out_shape
+    }
     code_forward_io = ""
     for in_idx, v in enumerate(in_info):
       out_idx = v.get("want_inplace", -1)
@@ -173,12 +199,20 @@ class OpMaker(object):
         # mutable_input if it is a ref-type, i.e. a Variable.
         #code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
         #code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+        # Maybe we could use a TemporaryVariable or so but not sure if the gradient will flow through tf.assign().
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/state_ops.cc
         # but a normal tensor is never mutable, thus create a copy of the input now.
         code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
         cshape = "TensorShape({%s})" % ", ".join(["context->input(%i).dim_size(%i)" % (in_idx, in_dim)
                                                   for in_dim in range(len(v["shape"]))])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
         code_set_io += "inputs[%i] = output_%i;\n" % (in_idx, out_idx)
+        # We always make a copy for now.
+        # I'm not sure if inplace is an option for TF because we don't know if any other operation in the graph
+        # wants to access it. Maybe we can check the reference count or so?
+        # Some references for inplace operations:
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/inplace_ops.cc
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/strided_slice_op.cc
         code_set_io += "make_copy(context, inputs[%i], &context->input(%i));\n" % (in_idx, in_idx)
       else:  # no ref
         # TODO: if not on GPU but GPU requested, move to GPU first, maybe via allocate_temp?
@@ -331,19 +365,16 @@ class OpMaker(object):
       grad_op = grad_op_maker.make_op()
 
       from tensorflow.python.framework import ops
-      def grad_wrapper(fwd_op, bwd_grads):
+      def grad_wrapper(fwd_op, *bwd_grads):
         """
         :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
-        :param list[tf.Tensor]|tf.Tensor bwd_grads: list if len(fwd_op.outputs) > 1
+        :param list[tf.Tensor] bwd_grads:
         :return: list of tensors of gradients for each input
         :rtype: list[tf.Tensor]
         """
-        if len(fwd_op.outputs) == 1:
-          assert isinstance(bwd_grads, tf.Tensor)
-          bwd_grads = [bwd_grads]
         assert len(bwd_grads) == len(fwd_op.outputs)
 
-        grad_inputs = fwd_op.inputs + fwd_op.outputs + bwd_grads
+        grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
         grad_inputs = self.description._filter_grad_inputs(grad_inputs)
         grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
         if grad_description.num_dummy_outs > 0:

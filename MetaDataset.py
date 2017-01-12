@@ -388,7 +388,7 @@ class CombinedDataset(CachedDataset2):
     target_lookup_table = {}
     for dataset_key in self.dataset_keys:
       target_lookup_table[dataset_key] = {datamap_maps: datamap_keys[1] for datamap_keys,datamap_maps in data_map.iteritems() if datamap_keys[0]==dataset_key}
-      for key in self.dataset_keys:
+      for key in self.data_keys:
         target_lookup_table[dataset_key].setdefault(key,None)
 
     self.target_lookup_table = target_lookup_table
@@ -487,7 +487,6 @@ class CombinedDataset(CachedDataset2):
           # Build Probabillity table
           expected_remaining_seqs = [estimated - used for estimated, used in zip(self.estimated_num_seq_per_subset, self.used_num_seqs_per_subset)]
           total_remaining = float(sum(expected_remaining_seqs))
-#          print "Expect to find the following segments remaining ",expected_remaining_seqs # TODO remove print statements after debugging
 
           if total_remaining < 0.1: # We expect no more data, but try anyway
             nonempty_datasets = []
@@ -495,25 +494,18 @@ class CombinedDataset(CachedDataset2):
               if ds.is_less_than_num_seqs(self.used_num_seqs_per_subset[j]):
                 nonempty_datasets.append(j)
             if nonempty_datasets == []:
-#              print "all datasets are empty"
               return False # No more data to add
-#            print "found following nonempty datasets",nonempty_datasets
             dataset_idx = numpy.random.choice(nonempty_datasets)
             self.estimated_num_seq_per_subset[dataset_idx]+=1
-#            print "chose ",dataset_idx
             break
 
           else: # We sample from all sets which should contain more data
             prob_table = [remaining / total_remaining for remaining in expected_remaining_seqs]
-#            print "Random choice from range(",len(self.datasets),") with prob. ",prob_table
             dataset_idx = numpy.random.choice(len(self.datasets),p=prob_table)
-#            print "Chose ",dataset_idx
             if self.datasets[self.dataset_idxs[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
-#              print "this is good"
               break # Found good Data
             else:
               self.estimated_num_seq_per_subset[dataset_idx] = self.used_num_seqs_per_subset[dataset_idx]
-#              print "not so good idea, set estimation to ",self.used_num_seqs_per_subset[dataset_idx]
 
       elif self.seq_ordering == "in-order":
         dataset_idx = 0
@@ -549,14 +541,11 @@ class CombinedDataset(CachedDataset2):
     if not self.know_num_seqs_beforehand and end > len(self.dataset_seq_idxs):
       self._expand_dataset_sec_idxs(end-len(self.dataset_seq_idxs))
 
-#    print self.dataset_seq_idxs,start,end
     requested_seqs = self.dataset_seq_idxs[start:end]
 
     for i in range(len(self.datasets)):
       dataset = self.datasets[self.dataset_idxs[i]]
       sub_requested_seqs = [s[1] for s in requested_seqs if s[0]==i]
-#      print i, sub_requested_seqs
-#      print dataset.added_data
       if sub_requested_seqs == []:
         continue
       sub_start, sub_end = min(sub_requested_seqs), max(sub_requested_seqs)
@@ -597,10 +586,7 @@ class CombinedDataset(CachedDataset2):
     dataset_idx, dataset_seq_idx = self.dataset_seq_idxs[seq_idx]
     dataset_key = self.dataset_idxs[dataset_idx]
     dataset = self.datasets[dataset_key]
-#    print "Want to give out seq ", seq_idx, " which is internally numbered ",dataset_seq_idx," in Dataset ",dataset_key
-#    print "This Dataset containes ",dataset.added_data
 
-#    seq_tag = dataset_key + "-" + dataset.get_tag(dataset_seq_idx)
     seq_tag = dataset.get_tag(dataset_seq_idx)
     features = self._get_data(dataset_key, dataset_seq_idx, "data")
     targets = {target: self._get_data(dataset_key, dataset_seq_idx, target) for target in self.target_list}
@@ -624,6 +610,10 @@ class CombinedDataset(CachedDataset2):
     if self.added_data:
       assert super(CombinedDataset, self).get_data_dtype(key) == dtype
     return dtype
+
+  def get_data_dim(self, key):
+    assert key in self.data_dims
+    return self.data_dims[key][0]
 
 
 class ChunkShuffleDataset(CachedDataset2):

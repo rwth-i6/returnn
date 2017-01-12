@@ -2533,6 +2533,19 @@ class AlignmentLayer(ForwardLayer):
       b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
       t_in = T.dot(x_in,W_skip) + b_skip
       q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
+    if search == 'linear':
+      max_length_y = self.z.shape[0] / y_in.shape[0] #+ T.mod(self.z.shape[0], y_in.shape[0])
+      y_out = y_in.reshape((y_in.shape[0]*y_in.shape[1],y_in.shape[2]))
+      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1],y_in.shape[2]))
+      y_out = T.concatenate([y_out,y_out[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      self.y_out = y_out
+      rindex = self.index.reshape(self.index.shape[0]*self.index.shape[1])
+      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1],y_in.shape[2]))
+      rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      self.index = rindex
+      self.output = x_in
+      return
+
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]

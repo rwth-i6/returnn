@@ -481,11 +481,11 @@ class Dataset(object):
         while t < length[default_key]:
           l = min(t + chunk_size, length[default_key])
           chunk_start = NumbersDict(t)
-          chunk_len = NumbersDict(l)
+          chunk_end = NumbersDict(l)
           for key in keys_with_full_seqs:
             chunk_start[key] = 0
-            chunk_len[key] = length[key]
-          yield (s, chunk_start, chunk_len)
+            chunk_end[key] = length[key]
+          yield (s, chunk_start, chunk_end)
           t += chunk_step
       s += 1
 

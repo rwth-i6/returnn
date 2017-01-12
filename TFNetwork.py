@@ -400,6 +400,10 @@ class TFNetwork(object):
 
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
+    # If we want to check for existence of variables in the checkpoint:
+    # http://stackoverflow.com/questions/38218174/how-can-find-the-variable-names-that-saved-in-tensorflow-checkpoint
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/framework/python/framework/checkpoint_utils.py
+    # http://stackoverflow.com/questions/38944238/tensorflow-list-variables-in-the-checkpoint
     with tf.name_scope("saver"):
       self.saver = tf.train.Saver(
         var_list=self.get_params_list() + self.get_auxiliary_params(), max_to_keep=2 ** 31 - 1)
