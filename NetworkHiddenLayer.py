@@ -2542,8 +2542,14 @@ class AlignmentLayer(ForwardLayer):
       rindex = self.index.reshape(self.index.shape[0]*self.index.shape[1])
       rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1],y_in.shape[2]))
       rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      norm = T.cast(T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32'))
       self.index = rindex
       self.output = x_in
+      idx = (self.index.flatten() > 0).nonzero()
+
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_in[idx], y_idx=y_out.flatten()[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_in[idx], axis=1), y_out.flatten()[idx]))
       return
 
     if self.train_flag or search == 'align':
