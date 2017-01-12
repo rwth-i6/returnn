@@ -2647,7 +2647,7 @@ class AlignmentLayer(ForwardLayer):
 class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
 
-  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, **kwargs):
+  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, loss='ce', **kwargs):
     kwargs['n_out'] = 2
     super(DiscriminatorLayer, self).__init__(**kwargs)
     if not base:
@@ -2675,9 +2675,12 @@ class DiscriminatorLayer(ForwardLayer):
       z = T.dot(src.output, W) + b
       z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
       pcx = T.nnet.softmax(z[idx])
-      nll = -T.log(pcx[:,0])
       ratio = lng / T.sum(src.index, dtype='float32')
-      self.cost_val += ratio * preal * T.sum(nll)
+      if loss == 'ce':
+        err = -T.log(pcx[:,0])
+      elif loss == 'se':
+        err = T.sum(T.sqr(pcx[:,0] - numpy.float32(1)))
+      self.cost_val += ratio * preal * T.sum(err)
       self.error_val += ratio * T.sum(T.lt(pcx[:,0],numpy.float32(0.5)))
     if base:
       pgen = numpy.float32(pgen / float(len(base)))
@@ -2686,13 +2689,15 @@ class DiscriminatorLayer(ForwardLayer):
         z = T.dot(src.output, W) + b
         z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
         pcx = T.nnet.softmax(z[idx])
-        nll = -T.log(pcx[:, 1])
+        if loss == 'ce':
+          err = -T.log(pcx[:, 1])
+        elif loss == 'se':
+          err = T.sum(T.sqr(pcx[:, 1] - numpy.float32(1)))
         ratio = lng / T.sum(src.index, dtype='float32')
-        self.cost_val += ratio * pgen * T.sum(nll)
+        self.cost_val += ratio * pgen * T.sum(err)
         self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
 
     self.error_val /= numpy.float32(len(self.sources + base))
-    #self.cost_val *= numpy.float32(len(self.sources + base))
     if forge:
       if dynamic_scaling:
         self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.5), numpy.float32(2.0))
