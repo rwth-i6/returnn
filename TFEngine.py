@@ -64,6 +64,7 @@ class DataProvider(object):
     if not self.thread:
       return
     self.coord.request_stop()
+    self._flush_all_data()
     self.thread.join()
 
   def _get_next_batch(self):
@@ -151,8 +152,23 @@ class DataProvider(object):
         # The thread is alive and working. Wait for a change.
         self.state_change_cond.wait()
 
+  def _flush_all_data(self):
+    """
+    This is supposed to be called by the consumer thread after a call to coord.request_stop().
+    The data provider thread (self.thread_main()) could currently block in the queue put if it was full.
+    """
+    while self.have_more_data():
+      if self.queue:
+        self.queue.get()
+      else:
+        raise NotImplementedError
+
   def get_feed_dict(self, previous_feed_dict):
     """
+    Gets the feed dict for TF session run().
+    Note that this will block if there is nothing in the queue.
+    The queue gets filled by the other thread, via self.thread_main().
+
     :param dict[tf.Tensor,tf.Tensor]|None previous_feed_dict:
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
@@ -411,6 +427,7 @@ class Runner(object):
     finally:
       coord.request_stop()
       coord.join(threads)
+      self.data_provider.stop_thread()
       self.elapsed = time.time() - self.start_time
 
 
@@ -761,17 +778,25 @@ class Engine(object):
           rebatch = True
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
-      rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
+      if self.train_data.init_seq_order(epoch=epoch):
+        rebatch = True
       if epoch % self.seq_drop_freq == 0:
-        rebatch = self.seq_drop > 0.0 or rebatch
+        if self.seq_drop > 0.0:
+          rebatch = True
       self.epoch = epoch
 
+      if 'train' in self.dataset_batches:
+        if rebatch:
+          del self.dataset_batches['train']
+        else:
+          print("keeping previous dataset batch order for 'train' dataset", file=log.v4)
       for dataset_name, dataset in self.get_eval_datasets().items():
-        if dataset.init_seq_order(self.epoch) and dataset_name in self.dataset_batches:
-          del self.dataset_batches[dataset_name]
-
-      if rebatch and 'train' in self.dataset_batches:
-        del self.dataset_batches['train']
+        if dataset.init_seq_order(epoch=self.epoch):
+          if dataset_name in self.dataset_batches:
+            del self.dataset_batches[dataset_name]
+        else:
+          if dataset_name in self.dataset_batches:
+            print("keeping previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
 
       self.init_train_epoch()
       self.train_epoch()
@@ -820,7 +845,7 @@ class Engine(object):
     if self.is_pretrain_epoch():
       self.print_network_info()
 
-    if not 'train' in self.dataset_batches:
+    if 'train' not in self.dataset_batches:
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
@@ -862,7 +887,7 @@ class Engine(object):
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      if not dataset_name in self.dataset_batches:
+      if dataset_name not in self.dataset_batches:
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size,
                                                                       max_seqs=self.max_seqs,
