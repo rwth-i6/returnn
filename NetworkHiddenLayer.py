@@ -215,7 +215,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", padding=False, **kwargs):
+  def __init__(self, factor, axis, method="average", padding=True, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -235,6 +235,8 @@ class DownsampleLayer(_NoOpLayer):
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
+      if f == 1:
+        continue
       if a == 0:
         if padding:
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
