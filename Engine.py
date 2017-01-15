@@ -208,6 +208,7 @@ class Engine:
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
     self.max_seq_length = config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
+    self.output_precision = config.int('output_precision', 12)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxsize
     if config.is_typed("seq_train_parallel"):
@@ -491,9 +492,16 @@ class Engine:
 
   def format_score(self, score):
     if len(score) == 1:
-      return str(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
-                     for key in sorted(score.keys())])
+      if self.output_precision < 12:
+        return ("%." + str(self.output_precision) + "g") % float(list(score.values())[0])
+      else:
+        return str(list(score.values())[0])
+    if self.output_precision < 12:
+      return " ".join([("%s %." + str(self.output_precision) + "g") % (key.split(':')[-1], float(score[key]))
+                for key in sorted(score.keys())])
+    else:
+      return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
+                       for key in sorted(score.keys())])
 
   def eval_model(self):
     eval_dump_str = []

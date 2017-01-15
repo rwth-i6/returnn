@@ -605,13 +605,20 @@ class RecurrentUnitLayer(Layer):
       if not 'target' in self.attrs:
         self.attrs['target'] = 'classes'
       if self.attrs['droplm'] > 0.0 or not (self.train_flag or force_lm):
-        l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
-        values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
-        self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
-        self.b_lm_in = self.create_bias(self.y_in[self.attrs['target']].n_out, 'b_lm_in')
+        if copy_weights_from_base:
+          self.W_lm_in = base[0].W_lm_in
+          self.b_lm_in = base[0].b_lm_in
+        else:
+          l = sqrt(6.) / sqrt(unit.n_out + self.y_in[self.attrs['target']].n_out)
+          values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(unit.n_out, self.y_in[self.attrs['target']].n_out)), dtype=theano.config.floatX)
+          self.W_lm_in = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_in_"+self.name))
+          self.b_lm_in = self.create_bias(self.y_in[self.attrs['target']].n_out, 'b_lm_in')
       l = sqrt(6.) / sqrt(unit.n_in + self.y_in[self.attrs['target']].n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(self.y_in[self.attrs['target']].n_out, unit.n_in)), dtype=theano.config.floatX)
-      self.W_lm_out = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
+      if copy_weights_from_base:
+        self.W_lm_out = base[0].W_lm_out
+      else:
+        self.W_lm_out = self.add_param(self.shared(value=values, borrow=True, name = "W_lm_out_"+self.name))
       if self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         self.lmmask = 1
         #if recurrent_transform != 'none':

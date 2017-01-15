@@ -721,11 +721,13 @@ def layer_normalization(x, bias=None, scale=None, eps=1e-5):
   return output
 
 
-def print_to_file(filename, x, argmax=False):
+def print_to_file(filename, x, argmax=False, shape=False):
   def theano_print_to_file(op,x):
     with open(filename, 'a') as f:
       if argmax:
         f.write(str(x.argmax(axis=-1)) + '\n')
+      elif shape:
+        f.write(str(x.shape) + '\n')
       else:
         f.write(str(x) + '\n')
   return theano.printing.Print(global_fn=theano_print_to_file)(x)

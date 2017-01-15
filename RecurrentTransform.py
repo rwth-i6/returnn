@@ -513,7 +513,7 @@ class AttentionList(AttentionBase):
         values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(self.attrs['filters'], n_tmp)), dtype=theano.config.floatX)
         self.add_param(self.layer.shared(value=values, borrow=True, name="U_%d" % i))
       elif self.attrs['momentum'] == 'conv2d':
-        context = 9
+        context = 3
         values = numpy.ones((self.attrs['filters'], 1, 2, context), 'float32')
         self.add_param(self.layer.shared(value=values, borrow=True, name="F_%d" % i))
         l = sqrt(6.) / sqrt(self.attrs['filters'] + 1)
@@ -637,7 +637,7 @@ class AttentionList(AttentionBase):
     if self.attrs['loss']:
       for i in range(len(self.base)):
         val += T.sum(self.get_state_vars_seq(self.state_vars['catt_%d' % i]))
-    return 0
+    return val
 
 
 class AttentionTime(AttentionList):

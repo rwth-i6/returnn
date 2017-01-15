@@ -67,6 +67,21 @@ class ForwardLayer(HiddenLayer):
     self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+
+class SharedForwardLayer(HiddenLayer):
+  layer_class = "hidden_shared"
+
+  def __init__(self, base = None, sparse_window = 1, **kwargs):
+    kwargs['n_out'] = base[0].b.get_value().shape[0]
+    super(SharedForwardLayer, self).__init__(**kwargs)
+    self.params = {}
+    self.W_in = base[0].W_in
+    self.b = base[0].b
+    self.set_attr('sparse_window', sparse_window) # TODO this is ugly
+    self.attrs['n_out'] = sparse_window * kwargs['n_out']
+    self.z = self.get_linear_forward_output()
+    self.make_output(self.z if self.activation is None else self.activation(self.z))
+
 class ClippingLayer(HiddenLayer):
   layer_class = "clip"
 
@@ -200,7 +215,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", **kwargs):
+  def __init__(self, factor, axis, method="average", padding=False, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -221,13 +236,15 @@ class DownsampleLayer(_NoOpLayer):
     import theano.ifelse
     for f, a in zip(factor, axis):
       if a == 0:
-        z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
+        if padding:
+          z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       if a == 0:
         self.index = self.sources[0].index
-        self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
+        if padding:
+          self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
@@ -279,7 +296,6 @@ class DownsampleLayer(_NoOpLayer):
       #z = theano.printing.Print("d", attrs=['shape'])(z)
     self.set_attr('n_out', n_out)
     self.make_output(output)
-
 
 class UpsampleLayer(_NoOpLayer):
   layer_class = "upsample"
@@ -1651,10 +1667,21 @@ class SplitBatchLayer(_NoOpLayer):
 
   def __init__(self, n_parts=1, part=0, **kwargs):
     super(SplitBatchLayer, self).__init__(**kwargs)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
     chunk = self.index.shape[1] / n_parts
-    self.output = self.sources[0].output[:,part*chunk:(part+1)*chunk]
+    self.output = T.concatenate([s.output for s in self.sources],axis=2)
+    self.output = self.output[:,part*chunk:(part+1)*chunk]
     self.index = self.sources[0].index[:,part*chunk:(part+1)*chunk]
+
+
+class DuplicateIndexBatchLayer(_NoOpLayer): # TODO: this is a hack
+  layer_class = "duplicate_index_batch"
+
+  def __init__(self, **kwargs):
+    super(DuplicateIndexBatchLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = 1
+    self.index = T.concatenate([self.index] * 2, axis=1)
+    self.output = T.zeros(self.index.shape,'float32').dimshuffle(0,1,'x')
 
 
 class LengthLayer(HiddenLayer):
@@ -2704,7 +2731,7 @@ class DiscriminatorLayer(ForwardLayer):
       else:
         self.cost_scale_val = numpy.float32(1.0)
     else:
-      self.cost_scale_val = numpy.float32(len(self.sources + base))
+      self.cost_scale_val = numpy.float32(1.0) #numpy.float32(len(self.sources + base))
 
   def cost(self):
     return self.cost_val, self.known_grads

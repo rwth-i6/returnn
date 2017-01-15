@@ -446,7 +446,7 @@ class ConcatConv(CNN):
       others=self.other_params
     ) # (batch, nb feature maps, out-row, time)
 
-    self.Output = self.Output / T.cast(self.Output.shape[1],'float32')
+    self.Output = self.Output #/ T.cast(self.Output.shape[1],'float32')
 
     if self.attrs['batch_norm']:
       if self.base is None:

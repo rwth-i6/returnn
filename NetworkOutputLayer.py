@@ -65,8 +65,8 @@ class OutputLayer(Layer):
     if not copy_input or copy_weights:
       if copy_weights:
         self.params = {}
-        self.b = copy_input.b
-        self.W_in = copy_input.W_in
+        self.b = self.add_param(copy_input.b)
+        self.W_in = [ self.add_param(W) for W in copy_input.W_in ]
         self.masks = copy_input.masks
         self.mass = copy_input.mass
       else:
@@ -293,6 +293,7 @@ class OutputLayer(Layer):
                                   custom_update_normalized=True)
       }
 
+
   def create_bias(self, n, prefix='b', name=""):
     if not name:
       name = "%s_%s" % (prefix, self.name)
@@ -313,7 +314,7 @@ class OutputLayer(Layer):
     """
     if self.attrs.get("target", "") == "null":
       return None
-    if self.loss == "sse":
+    if self.loss in [ "sse", "entropy" ]:
       return None
     if self.y_data_flat.dtype.startswith('int'):
       if self.y_data_flat.type == T.ivector().type:
@@ -396,10 +397,15 @@ class FramewiseOutputLayer(OutputLayer):
       else:
         return self.norm * T.sum(nll), known_grads
     elif self.loss == 'entropy':
-      h_e = T.exp(self.y_m)  # (TB)
+      he = T.nnet.softmax(self.y_m[self.i])  # (TB)
+      ee = -T.sum(he * T.log(T.clip(he,numpy.float32(1e-6),numpy.float32(1.-1e-6))))
+      #q = numpy.float32(0.1)
+      #ee = (-T.sum(T.log(T.max(he,axis=1))) - q)**2
+      return ee, known_grads
       pcx = T.clip((h_e / T.sum(h_e, axis=1, keepdims=True)).reshape(
         (self.index.shape[0], self.index.shape[1], self.attrs['n_out'])), 1.e-6, 1.e6)  # TBD
       ee = -T.sum(pcx[self.i] * T.log(pcx[self.i]))  # TB
+      return ee, known_grads
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)  # TB
       ce = nll.reshape(self.index.shape) * self.index  # TB
       y = self.y_data_flat.reshape(self.index.shape) * self.index  # TB
