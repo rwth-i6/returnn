@@ -452,7 +452,7 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    if not 'train' in self.dataset_batches:
+    if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
@@ -506,7 +506,7 @@ class Engine:
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      if not dataset_name in self.dataset_batches:
+      if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size,
                                                                       max_seqs=self.max_seqs,
