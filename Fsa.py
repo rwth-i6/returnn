@@ -42,30 +42,38 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
       weight is a float, in -log space
   """
   edges = []
+  final_states = []
   # calculate number of states
   num_states = 2 * (len(label_seq) + 1) - 1
 
   # create edges from the label sequence without loops and no empty labels
-  num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges)
+  final_states, num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds blank labels to fsa
-  num_states, edges = __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges)
+  final_states, num_states, edges = __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges)
+
+  # creates end state
+  final_states, num_states, edges = __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds loops to fsa
   num_states, edges = __adds_loop_edges(num_states, edges)
 
-  # creates end state
-  num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
+  # makes one single final state
+  num_states, edges = __make_single_final_state(final_states, num_states, edges)
+
+  #state tying
+  #num_states, edges = __state_tying()
 
   return num_states, edges
 
 
-def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges):
+def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_states: number of states
   :param int num_labels: number of labels
-  :param list edges: list of edges
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
+  :param list[tuple] edges: list of edges
   :returns (num_states, edges)
   where:
     num_states: int, number of states.
@@ -83,15 +91,15 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
       n = 2 * label_index
       edges.append((n, n + 2, label_seq[label_index], 1.))
 
-  return num_states, edges
+  return final_states, num_states, edges
 
 
-def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
+def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
-  :param int num_states: number of states
   :param int num_labels: number of labels
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
   where:
@@ -105,11 +113,13 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
 
   # adds blank labels to fsa
   for label_index in range(0, len(label_seq)):
-    label_blank = 2 * label_index + 1
-    edges.append((label_blank - 1, label_blank, num_labels + 1, 1.))
-    edges.append((label_blank, label_blank + 1, label_seq[label_index], 1.))
+    label_blank_idx = 2 * label_index + 1
+    label_blank = 'blank' #  num_labels + 1
+    edges.append((label_blank_idx - 1, label_blank_idx, label_blank, 1.))
+    edges.append((label_blank_idx, label_blank_idx + 1, label_seq[label_index], 1.))
+  final_states.append(label_blank_idx + 1)
 
-  return num_states, edges
+  return final_states, num_states, edges
 
 
 def __adds_loop_edges(num_states, edges):
@@ -125,7 +135,6 @@ def __adds_loop_edges(num_states, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
   # adds loops to fsa
   for state in range(1, num_states):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
@@ -134,12 +143,12 @@ def __adds_loop_edges(num_states, edges):
   return num_states, edges
 
 
-def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
+def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
-  :param int num_states: number of states
   :param int num_labels: number of labels
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
   where:
@@ -152,13 +161,14 @@ def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
   """
 
   i = num_states
-  edges.append((i, i, num_labels + 1, 1.))
-  edges.append((i - 1, i, num_labels + 1, 1.))
-  edges.append((i - 2, i, label_seq[-1], 1.))
-  edges.append((i - 3, i, label_seq[-1], 1.))
-  num_states += 1
+  label_blank = 'blank' #  num_labels + 1
+  edges.append((i - 3, i, label_blank, 1.))
+  edges.append((i, i + 1, label_seq[-1], 1.))
+  edges.append((i + 1, i + 2, label_blank, 1.))
+  num_states += 3
+  final_states.append(num_states - 1)
 
-  return num_states, edges
+  return final_states, num_states, edges
 
 
 def __make_single_final_state(final_states, num_states, edges):
@@ -180,7 +190,7 @@ def __make_single_final_state(final_states, num_states, edges):
   for fstate in final_states:
     edges_fstate = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == fstate)]
     for fstate_edge in edges_fstate:
-      edges.append((fstate, num_states - 1, fstate_edge[2], 1.))
+      edges.append((edges[fstate_edge][0], num_states - 1, edges[fstate_edge][2], 1.))
 
   return num_states, edges
 
@@ -608,12 +618,10 @@ def main():
   arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
 
-  label_indices = convert_label_seq_to_indices(num_labels=int(args.num_labels),
-                                               label_seq=args.label_seq)
+  #label_indices = convert_label_seq_to_indices(num_labels=int(args.num_labels), label_seq=args.label_seq)
 
   if (args.fsa.lower() == 'ctc'):
-    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=label_indices)
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels), label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
