@@ -198,35 +198,6 @@ def __make_single_final_state(final_states, num_states, edges):
   return num_states, edges
 
 
-def __state_tying(num_states, edges):
-  """
-  idea: take file with mapping char to number and apply to edge labels
-  :param int num_states:
-  :param list[tuples(start[int], end[int], label, weight)] edges:
-  :return: num_states, edges
-  """
-  print("State tying...(not implemented)")
-  return num_states, edges
-
-
-def __load_state_tying_file(stFile):
-  '''
-  loads a lexicon from a file, loads the xml and returns its conent
-  :param lexFile: lexicon file with xml structure
-  :return lex: variable with xml structure
-  where:
-    lex.lemmas and lex.phonemes important
-  '''
-  from os.path import isfile
-  from LmDataset import StateTying
-
-  assert isfile(stFile), "State tying file does not exists"
-
-  statetying = StateTying(stFile)
-
-  return statetying
-
-
 def __determine_edges(num_states, edges):
   """
   transforms the graph from non-deterministic to deterministic
@@ -517,6 +488,58 @@ def __hmm_acceptor_for_hmm_fsa(num_states, edges):
                   ))
   return num_states, edges
 
+
+def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
+  """
+  idea: take file with mapping char to number and apply to edge labels
+  :param int num_states:
+  :param list[tuples(start[int], end[int], label, weight)] edges:
+  :return: num_states, edges
+  """
+  print("State tying...(not done)")
+
+  statetying = __load_state_tying_file(state_tying_file)
+  lexicon = __load_lexicon(lexicon_file)
+
+  for edge in edges:
+    if (edge[2] == 'blank' or edge[2] == '') and isinstance(edge[2], str):
+      label = '#'
+    else:
+      label = edge[2]
+
+    allo, allo_score, phons = __find_allo_seq_in_lex(label, lexicon)
+    print(edge[2])
+    print(allo)
+
+    allo_syntax = __build_allo_syntax_for_mapping(allo)
+
+    #allo = 'b{f+ao}.0'
+
+    print("allo:", allo_syntax, "maps to", statetying.allo_map[allo_syntax])
+
+  return num_states, edges
+
+
+def __load_state_tying_file(stFile):
+  '''
+  loads a state tying map from a file, loads the file and returns its content
+  :param stFile: state tying map file (allo_syntax int)
+  :return state_tying: variable with state tying mapping
+  where:
+    statetying.allo_map important
+  '''
+  from os.path import isfile
+  from LmDataset import StateTying
+
+  print("Loading state tying file:", stFile)
+
+  assert isfile(stFile), "State tying file does not exists"
+
+  statetying = StateTying(stFile)
+
+  print("Finished state tying mapping:", len(statetying.allo_map), "allos to int")
+
+  return statetying
 
 def __load_lexicon(lexFile):
   '''
