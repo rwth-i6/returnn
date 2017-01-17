@@ -62,7 +62,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states, edges = __make_single_final_state(final_states, num_states, edges)
 
   #state tying
-  #num_states, edges = __state_tying()
+  num_states, edges = __state_tying(num_states, edges)
 
   return num_states, edges
 
@@ -194,6 +194,17 @@ def __make_single_final_state(final_states, num_states, edges):
     for fstate_edge in edges_fstate:
       edges.append((edges[fstate_edge][0], num_states - 1, edges[fstate_edge][2], 1.))
 
+  return num_states, edges
+
+
+def __state_tying(num_states, edges):
+  """
+  idea: take file with mapping char to number and apply to edge labels
+  :param int num_states:
+  :param list[tuples(start[int], end[int], label, weight)] edges:
+  :return: num_states, edges
+  """
+  print("State tying...(not implemented)")
   return num_states, edges
 
 
