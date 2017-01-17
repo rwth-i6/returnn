@@ -217,12 +217,10 @@ def __load_state_tying_file(stFile):
     lex.lemmas and lex.phonemes important
   '''
   from os.path import isfile
-  #from Log import log
   from LmDataset import StateTying
 
   assert isfile(stFile), "State tying file does not exists"
 
-  #log.initialize(verbosity=[5])
   statetying = StateTying(stFile)
 
   return statetying
