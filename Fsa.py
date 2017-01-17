@@ -8,6 +8,8 @@ TODO
 - allophone acceptor
 - state tying acceptor
 - class num_states, edges, first and last char
+- description
+- cleaner structure of code (classes)?
 """
 
 
