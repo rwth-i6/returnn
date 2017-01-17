@@ -28,7 +28,7 @@ def convert_label_seq_to_indices(num_labels, label_seq):
   return label_indices
 
 
-def ctc_fsa_for_label_seq(state_tying_file, num_labels, label_seq):
+def ctc_fsa_for_label_seq(num_labels, label_seq):
   """
   :param int num_labels: number of labels without blank
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
@@ -61,14 +61,12 @@ def ctc_fsa_for_label_seq(state_tying_file, num_labels, label_seq):
   # makes one single final state
   num_states, edges = __make_single_final_state(final_states, num_states, edges)
 
-  #state tying
-  num_states, edges = __state_tying(state_tying_file, num_states, edges)
-
   return num_states, edges
 
 
 def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
+  creates states from label sequence, skips repetitions
   :param list[int] label_seq: sequence of labels (normally some kind of word)
   :param int num_labels: number of labels
   :param list[int] final_states: list of final states
@@ -96,6 +94,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, 
 
 def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
+  adds blank edges and repetitions to ctc
   :param list[int] label_seq: sequence of labels (normally some kind of word)
   :param int num_labels: number of labels
   :param list[int] final_states: list of final states
@@ -122,8 +121,12 @@ def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states,
   return final_states, num_states, edges
 
 
-def __adds_loop_edges(num_states, edges):
+def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
+  adds last states for ctc
+  :param list[int] label_seq: sequence of labels (normally some kind of word)
+  :param int num_labels: number of labels
+  :param list[int] final_states: list of final states
   :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
@@ -146,9 +149,7 @@ def __adds_loop_edges(num_states, edges):
 
 def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
-  :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_labels: number of labels
-  :param list[int] final_states: list of final states
+  for every node loops with edge label pointing to node
   :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
@@ -238,7 +239,6 @@ def __determine_edges(num_states, edges):
   start_states = __discover_eps([0], num_states, edges)
   todo = [start_states]
 
-
   return num_states, edges
 
 
@@ -255,7 +255,6 @@ def __discover_eps(node, num_states, edges):
   eps_edges = []
 
   return eps_edges
-
 
 
 def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
@@ -283,13 +282,12 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   return num_states, edges
 
 
-def __check_for_repetitions(num_labels, label_indices, repetitions):
+def __check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
   """
   checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
   :param list[int] label_indices: sequence of label indices
   :return: list[int] reps: list of indices of label repetitions
   """
-
   reps = []
   rep_count = 0
   index_old = None
@@ -638,16 +636,14 @@ def main():
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
-  arg_parser.add_argument("--state_tying_file")
+  arg_parser.add_argument("--state_tying")
   arg_parser.add_argument("--lexicon")
   arg_parser.add_argument("--depth")
   arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
-    assert args.state_tying_file, "Specify state tying file in argument options: --state_tying_file [path]"
-    num_states, edges = ctc_fsa_for_label_seq(state_tying_file=args.state_tying_file,
-                                              num_labels=int(args.num_labels),
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
                                               label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
