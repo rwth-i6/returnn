@@ -486,17 +486,39 @@ def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
   return num_states_new, edges_new
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_seq):
-  num_states = 0
-  edges = []
+def __triphone_from_phon(word_seq):
+  '''
+  :param word_seq: sequence of allophones
+  :return tri_seq: list of three phonemes
+  uses the sequence of allophones and splits into a list of triphones.
+  triphones are composed of the current phon and the left and right phons
+  '''
+  tri_seq = []
+
+  for allo_index in range(0, len(word_seq)):
+    if allo_index <= 0:
+      tri_l = ''
+    else:
+      tri_l = word_seq[allo_index - 1]
+    if allo_index >= len(word_seq) - 1:
+      tri_r = ''
+    else:
+      tri_r = word_seq[allo_index + 1]
+    tri_c = word_seq[allo_index]
+    tri = (tri_l, tri_c, tri_r)
+    tri_seq.append(tri)
+
+  return tri_seq
+
+
+def __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges):
   return num_states, edges
 
 
 def __hmm_acceptor_for_hmm_fsa(num_states, edges):
   for state in range(1, num_states):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
-    edges.append((state, state, edges[edges_included[0]][2], 1.
-                  ))
+    edges.append((state, state, edges[edges_included[0]][2], 1.))
   return num_states, edges
 
 
@@ -591,31 +613,6 @@ def __find_allo_seq_in_lex(lemma, lex):
   allo_seq_score = phons_sorted[0]['score']
 
   return allo_seq, allo_seq_score, phons
-
-
-def __triphone_from_phon(word_seq):
-  '''
-  :param word_seq: sequence of allophones
-  :return tri_seq: list of three phonemes
-  uses the sequence of allophones and splits into a list of triphones.
-  triphones are composed of the current phon and the left and right phons
-  '''
-  tri_seq = []
-
-  for allo_index in range(0, len(word_seq)):
-    if allo_index <= 0:
-      tri_l = ''
-    else:
-      tri_l = word_seq[allo_index - 1]
-    if allo_index >= len(word_seq) - 1:
-      tri_r = ''
-    else:
-      tri_r = word_seq[allo_index + 1]
-    tri_c = word_seq[allo_index]
-    tri = (tri_l, tri_c, tri_r)
-    tri_seq.append(tri)
-
-  return tri_seq
 
 
 def fsa_to_dot_format(file, num_states, edges):
