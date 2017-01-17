@@ -380,7 +380,7 @@ def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
   :return: num_states, edges
   """
   edges = []
-  if type(word_seq) is str:
+  if isinstance(word_seq, str):
     word_seq_len = 1
     num_states = 4
     num_states_start = 0
@@ -393,7 +393,7 @@ def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
 
   edges.append((num_states_start, num_states_start + 1, sil, 1.))
   edges.append((num_states_end - 1, num_states_end, sil, 1.))
-  if type(word_seq) is str:
+  if isinstance(word_seq, str):
     for i in range(num_states_start, num_states):
       for j in range(i, num_states):
         edges_included = [m for m, n in enumerate(edges) if
