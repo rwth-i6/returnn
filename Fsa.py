@@ -28,7 +28,7 @@ def convert_label_seq_to_indices(num_labels, label_seq):
   return label_indices
 
 
-def ctc_fsa_for_label_seq(num_labels, label_seq):
+def ctc_fsa_for_label_seq(state_tying_file, num_labels, label_seq):
   """
   :param int num_labels: number of labels without blank
   :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
@@ -62,7 +62,7 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states, edges = __make_single_final_state(final_states, num_states, edges)
 
   #state tying
-  num_states, edges = __state_tying(num_states, edges)
+  num_states, edges = __state_tying(state_tying_file, num_states, edges)
 
   return num_states, edges
 
@@ -626,15 +626,17 @@ def main():
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
+  arg_parser.add_argument("--state_tying_file")
   arg_parser.add_argument("--lexicon")
   arg_parser.add_argument("--depth")
   arg_parser.add_argument("--asg_repetition")
   args = arg_parser.parse_args()
 
-  #label_indices = convert_label_seq_to_indices(num_labels=int(args.num_labels), label_seq=args.label_seq)
-
   if (args.fsa.lower() == 'ctc'):
-    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels), label_seq=args.label_seq)
+    assert args.state_tying_file, "Specify state tying file in argument options: --state_tying_file [path]"
+    num_states, edges = ctc_fsa_for_label_seq(state_tying_file=args.state_tying_file,
+                                              num_labels=int(args.num_labels),
+                                              label_seq=args.label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
