@@ -320,7 +320,9 @@ def finalize():
     if engine:
       for device in engine.devices:
         device.terminate()
-
+  elif BackendEngine.is_tensorflow_selected():
+    if engine:
+      engine.finalize()
 
 def needData():
   task = config.value('task', 'train')

@@ -251,6 +251,19 @@ def hdf5_strings(handle, name, data):
     dset = handle.create_dataset(name, (len(data),), dtype=dt)
     dset[...] = data
 
+def model_epoch_from_filename(filename):
+  if BackendEngine.is_theano_selected():
+    return hdf5_dimension(filename, 'epoch')
+  else:
+    # We could check via:
+    # tf.contrib.framework.python.framework.checkpoint_utils.load_variable()
+    # once we save that in the model.
+    # See TFNetwork.Network._create_saver().
+    # For now, just parse it from filename.
+    m = re.match(".*\.([0-9]+)", filename)
+    assert m, "no match for %r" % filename
+    return int(m.groups()[0])
+
 
 def terminal_size(): # this will probably work on linux only
   import os, sys

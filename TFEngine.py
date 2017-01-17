@@ -584,6 +584,13 @@ class Engine(object):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
+    self.train_data = None; " :type: Dataset.Dataset "
+    self.start_epoch = None
+
+  def finalize(self):
+    if self.tf_session:
+      self.tf_session.close()
+      self.tf_session = None
 
   def _get_devices_config(self):
     """
