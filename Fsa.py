@@ -502,12 +502,6 @@ def __hmm_acceptor_for_hmm_fsa(num_states, edges):
   return num_states, edges
 
 
-def __state_tying_for_hmm_fsa():
-  num_states = 0
-  edges = []
-  return num_states, edges
-
-
 def __load_lexicon(lexFile):
   '''
   loads a lexicon from a file, loads the xml and returns its conent
