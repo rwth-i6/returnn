@@ -242,10 +242,9 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
   edges = []
 
-  rep_seq = __check_for_repetitions(num_labels, label_seq, repetitions)
+  rep_seq = __check_for_repetitions_for_asg(num_labels, label_seq, repetitions)
 
   num_states, edges = __create_states_from_label_for_asg(rep_seq, edges)
   num_states, edges = __adds_loop_edges(num_states, edges)
@@ -310,9 +309,8 @@ def __create_states_from_label_for_asg(rep_seq, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=5,
                          allo_num_states=3, allo_context_len=1,
-                         state_tying_file=None,
                          tdps=None  # ...
                          ):
   """
@@ -561,17 +559,15 @@ def __load_lexicon(lexFile):
   return lex
 
 
-def __find_allo_seq_in_lex(lemma, lexi):
+def __find_allo_seq_in_lex(lemma, lex):
   '''
   searches a lexicon xml structure for a watching word and
   returns the matching allophone sequence as a list
   :param lemma: the word to search for in the lexicon
-  :param lexi: the lexicon
+  :param lex: the lexicon
   :return allo_seq: allophone sequence with the highest score as a list
   :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
   '''
-  lex = __load_lexicon(lexi)
-
   assert lex.lemmas[lemma], "Lemma not in lexicon"
 
   phons = lex.lemmas[lemma]['phons']
