@@ -574,6 +574,38 @@ def __load_state_tying_file(stFile):
 
   return statetying
 
+
+def __build_allo_syntax_for_mapping(label, pos_seq='', pos_allo=0):
+  """
+  builds a conforming allo syntax for mapping
+  :param str pos_seq:
+  :param int pos_allo:
+  :param str or tuple(str, str, str) label: a allo either string or tuple
+  :return str allo_map: a allo syntax ready for mapping
+  """
+  assert isinstance(label, str) or isinstance(label, tuple), "Something went wrong while building allo syntax for mapping"
+
+  if isinstance(label, str):
+    allo_start = "%s{#+#}" % (label)
+  elif isinstance(label, tuple):
+    allo_start = "%s{%s+%s}" % (label[1], label[0], label[1])
+  else:
+    allo_start = "WRONG"
+
+  if len(pos_seq) == 1:
+    allo_middle = "@%s" % (pos_seq)
+  elif len(pos_seq) > 1:
+    allo_middle = "@%s@%s" % (pos_seq[0], pos_seq[1])
+  else:
+    allo_middle = ''
+
+  allo_end = ".%i" %(pos_allo)
+
+  allo_map = "%s%s%s" % (allo_start, allo_middle, allo_end)
+
+  return allo_map
+
+
 def __load_lexicon(lexFile):
   '''
   loads a lexicon from a file, loads the xml and returns its conent
