@@ -717,9 +717,11 @@ def main():
       print("Repetition label:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
+    assert args.state_tying, "Specify state tying file in argument options: --state_tying [path]"
     assert args.depth, "Specify the depth in argument options: --depth [int]"
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
                                              lexicon_file=args.lexicon,
+                                             state_tying_file=args.state_tying,
                                              depth=int(args.depth))
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
