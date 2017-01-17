@@ -518,7 +518,7 @@ def forward(segmentName, features):
     posteriors = result[0]
 
   elif BackendEngine.is_tensorflow_selected():
-    raise NotImplementedError  # TODO
+    posteriors = engine.forward_single(dataset=sprintDataset, seq_idx=seq)
 
   else:
     raise NotImplementedError("unknown backend engine")

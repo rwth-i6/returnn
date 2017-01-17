@@ -16,7 +16,7 @@ from TFNetwork import TFNetwork, ExternData
 from Util import hms, NumbersDict
 from threading import Thread, Condition
 from Queue import Queue
-from Dataset import BatchSetGenerator
+from Dataset import Batch, BatchSetGenerator
 
 
 class DataProvider(object):
@@ -951,3 +951,41 @@ class Engine(object):
         print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
+
+  def forward_single(self, dataset, seq_idx):
+    """
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :return: numpy array, output in time major format (time,batch,dim)
+    :rtype: numpy.ndarray
+    """
+    # No Runner instance here but a very simplified version of Runner.run().
+    # First we need a custom DataProvider with a custom BatchSetGenerator
+    # which will yield only one single batch for the provided sequence idx.
+    batch = Batch()
+    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    data_provider = DataProvider(
+      tf_session=self.tf_session, extern_data=self.network.extern_data,
+      dataset=dataset, batches=batches)
+
+    coord = data_provider.coord
+    threads = tf.train.start_queue_runners(sess=self.tf_session, coord=coord)
+    data_provider.start_thread()
+
+    try:
+      assert data_provider.have_more_data()
+
+      # Maybe some new uninitialized vars. Last check.
+      self.check_uninitialized_vars()
+
+      feed_dict = data_provider.get_feed_dict(previous_feed_dict=None)
+      output_data = self.network.layers["output"].output
+      output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
+      return output_value
+
+    finally:
+      coord.request_stop()
+      coord.join(threads)
+      data_provider.stop_thread()
