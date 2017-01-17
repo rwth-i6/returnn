@@ -94,7 +94,10 @@ class Engine:
 
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename)
+      fn_postfix = ""
+      if BackendEngine.is_tensorflow_selected():
+        fn_postfix = ".meta"
+      assert os.path.exists(load_model_epoch_filename + fn_postfix)
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1:
@@ -106,7 +109,10 @@ class Engine:
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
     # In all other cases, we use the model specified by 'load'.
     if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
-      epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      if BackendEngine.is_theano_selected():
+        epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      else:
+        epoch = None  # not implemented yet
       if config.value('task', 'train') == 'train' and start_epoch is not None:
         # Ignore the epoch. To keep it consistent with the case below.
         epoch = None

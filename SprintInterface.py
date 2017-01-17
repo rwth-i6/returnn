@@ -28,9 +28,8 @@ from Device import get_gpu_names
 import rnn
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
-from Network import LayerNetwork
 import Debug
-from Util import interrupt_main, to_bool
+from Util import interrupt_main, to_bool, BackendEngine
 import TaskSystem
 
 DefaultSprintCrnnConfig = "config/crnn.config"
@@ -46,11 +45,6 @@ Task = "train"
 config = None; """ :type: rnn.Config """
 sprintDataset = None; """ :type: SprintDataset """
 engine = None; """ :type: Engine """
-
-
-rnn.initBetterExchook()
-Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
-rnn.initThreadJoinHack()
 
 
 # Start Sprint PythonSegmentOrder interface. {
@@ -316,17 +310,34 @@ def initBase(configfile=None, targetMode=None, epoch=None):
   isInitialized = True
   # Run through in any case. Maybe just to set targetMode.
 
+  if not getattr(sys, "argv", None):
+     # Set some dummy. Some code might want this (e.g. TensorFlow).
+     sys.argv = [__file__]
+
   global config
   if not config:
+    # Some subset of what we do in rnn.init().
+
+    rnn.initBetterExchook()
+    rnn.initThreadJoinHack()
+
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-
-    rnn.initThreadJoinHack()
     rnn.initConfig(configfile, [])
     config = rnn.config
+
     rnn.initLog()
+    rnn.crnnGreeting()
+    rnn.initBackendEngine()
+    rnn.initFaulthandler(sigusr1_chain=True)
     rnn.initConfigJsonNetwork()
+
+    if BackendEngine.is_tensorflow_selected():
+      # Use TFEngine.Engine class instead of Engine.Engine.
+      import TFEngine
+      global Engine
+      Engine = TFEngine.Engine
 
   if targetMode:
     setTargetMode(targetMode)
@@ -336,7 +347,10 @@ def initBase(configfile=None, targetMode=None, epoch=None):
   if targetMode and targetMode == "forward" and epoch:
     model_filename = config.value('model', '')
     fns = [Engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
-    fns_existing = [fn for fn in fns if os.path.exists(fn)]
+    fn_postfix = ""
+    if BackendEngine.is_tensorflow_selected():
+      fn_postfix += ".meta"
+    fns_existing = [fn for fn in fns if os.path.exists(fn + fn_postfix)]
     assert len(fns_existing) == 1, "%s not found" % fns
     model_epoch_filename = fns_existing[0]
     config.set('load', model_epoch_filename)
@@ -408,7 +422,8 @@ def prepareForwarding():
   engine.init_network_from_config(config)
 
   # Copy over net params.
-  engine.devices[0].prepare(engine.network)
+  if BackendEngine.is_theano_selected():
+    engine.devices[0].prepare(engine.network)
 
 
 def initDataset():
@@ -489,17 +504,24 @@ def forward(segmentName, features):
   sprintDataset.init_seq_order()
   seq = sprintDataset.addNewData(features, segmentName=segmentName)
 
-  # Prepare data for device.
-  device = engine.devices[0]
-  success = assign_dev_data_single_seq(device, sprintDataset, seq)
-  assert success, "failed to allocate & assign data for seq %i, %s" % (seq, segmentName)
+  if BackendEngine.is_theano_selected():
+    # Prepare data for device.
+    device = engine.devices[0]
+    success = assign_dev_data_single_seq(device, sprintDataset, seq)
+    assert success, "failed to allocate & assign data for seq %i, %s" % (seq, segmentName)
 
-  # Do the actual forwarding and collect result.
-  device.run("extract")
-  result, _ = device.result()
-  assert result is not None, "Device crashed."
-  assert len(result) == 1
-  posteriors = result[0]
+    # Do the actual forwarding and collect result.
+    device.run("extract")
+    result, _ = device.result()
+    assert result is not None, "Device crashed."
+    assert len(result) == 1
+    posteriors = result[0]
+
+  elif BackendEngine.is_tensorflow_selected():
+    raise NotImplementedError  # TODO
+
+  else:
+    raise NotImplementedError("unknown backend engine")
 
   # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
   if posteriors.ndim == 3:
