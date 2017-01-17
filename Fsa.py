@@ -138,16 +138,19 @@ def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, e
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  print("Adding loops...")
-  # adds loops to fsa
-  for state in range(1, num_states):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
-    edges.append((state, state, edges[edges_included[0]][2], 1.))
+  print("Adds final states and edges...")
+  i = num_states
+  label_blank = 'blank' #  num_labels + 1
+  edges.append((i - 3, i, label_blank, 1.))
+  edges.append((i, i + 1, label_seq[-1], 1.))
+  edges.append((i + 1, i + 2, label_blank, 1.))
+  num_states += 3
+  final_states.append(num_states - 1)
 
-  return num_states, edges
+  return final_states, num_states, edges
 
 
-def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
+def __adds_loop_edges(num_states, edges):
   """
   for every node loops with edge label pointing to node
   :param int num_states: number of states
@@ -161,16 +164,13 @@ def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, e
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  print("Adds final states and edges...")
-  i = num_states
-  label_blank = 'blank' #  num_labels + 1
-  edges.append((i - 3, i, label_blank, 1.))
-  edges.append((i, i + 1, label_seq[-1], 1.))
-  edges.append((i + 1, i + 2, label_blank, 1.))
-  num_states += 3
-  final_states.append(num_states - 1)
+  print("Adding loops...")
+  # adds loops to fsa
+  for state in range(1, num_states):
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
+    edges.append((state, state, edges[edges_included[0]][2], 1.))
 
-  return final_states, num_states, edges
+  return num_states, edges
 
 
 def __make_single_final_state(final_states, num_states, edges):
