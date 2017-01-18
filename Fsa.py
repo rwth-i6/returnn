@@ -523,6 +523,15 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
   num_states_asa = num_states + 2 * edges_count
 
   """
+  idea: go to edge. do not change start node. take end node. search in edges at position start
+  node (only if ![sil], no change propagates from [sil]). add 2 to start and end node for all
+  following nodes (add nodes with index 1, 2 while traversing)
+
+  recursive function:
+  returns (current node, edges to traverse (double entries allowed)(with last one add nodes), edges)
+  """
+
+  """
   edges_node = []
   states_count = 0
 
