@@ -523,6 +523,30 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
   num_states_asa = num_states + 2 * edges_count
 
   """
+  edges_node = []
+  states_count = 0
+
+  for edge in edges:
+    if edge[0] == 0:
+      if states_count < edge[1]:
+        node_t = edge[1]
+      elif states_count > edge[1] and states_count < edge[1] + edges_count:
+        node_t = edge[1] + edges_count
+      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
+      edge_t = (0, node_t, tuple_t, 1.)
+      edges_node.append(edge_t)
+      states_count += 1
+    elif edge[1] == num_states - 1 and edge[2] == sil:
+        edges_node.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
+        states_count += 1
+    else:
+      node_t = edge[0] + 2 * edges_count
+      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
+      edge_t = (node_t, node_t + 1, tuple_t, 1.)
+      edges_node.append(edge_t)
+      states_count += 1
+  """
+  """
   edges_asa = []
 
   for edge in edges:
