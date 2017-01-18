@@ -522,6 +522,42 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
 
   num_states_asa = num_states + 2 * edges_count
 
+  """
+  edges_asa = []
+
+  for edge in edges:
+    if edge[0] == 0:
+      if edge[2] == sil:
+        edges_asa.append(edge)
+        states_count += 1
+      else:
+        for index in range(0, 3):
+          if index == 0:
+            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+            edge_t = (edge[0], states_count, tuple_t, edge[3])
+          else:
+            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+            edge_t = (states_count - 1, states_count, tuple_t, edge[3])
+          edges_asa.append(edge_t)
+          states_count += 1
+    elif  edge[1] == num_states - 1:
+      if edge[2] == sil:
+        edges_asa.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
+        states_count += 1
+      else:
+        pass
+    else:
+      for index in range(0, 3):
+        tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+        edge_t = (states_count - 1, states_count, tuple_t, edge[3])
+        edges_asa.append(edge_t)
+        states_count += 1
+
+  assert states_count == num_states_asa, "Number of states: %i != %i"\
+                                         % (states_count, num_states_asa)
+                                         """
+
+  return num_states_asa, edges
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
