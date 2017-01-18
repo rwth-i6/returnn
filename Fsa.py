@@ -500,8 +500,28 @@ def __triphone_from_phon(word_seq):
   return tri_seq
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges):
-  return num_states, edges
+def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
+  """
+  the edges which are not sil or eps are split into three allophone states / components
+    marked with 0, 1, 2
+  :param str sil: placeholder for silence
+  :param int num_states: number of states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  :return int num_states, list[tuples(int, int, tuple(str, str, str, int), float)] edges_asa:
+  """
+  allo_len = len(allo_seq)
+  allo_count = 4 * allo_len
+  edges_count = 0
+
+  for edge in edges:
+    if edge[2] != sil:
+      edges_count += 1
+
+  assert edges_count == allo_count, "the count for the non-sil, non-eps edges varies: %i != %i"\
+                                    % (edges_count, allo_count)
+
+  num_states_asa = num_states + 2 * edges_count
+
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
