@@ -138,6 +138,14 @@ class Data(object):
     """
     return self.time_dim_axis == 0
 
+  def get_placeholder_as_time_major(self):
+    if self.is_time_major:
+      return self.placeholder
+    assert self.batch_dim_axis == 0
+    assert self.time_dim_axis == 1
+    from TFUtil import swapaxes
+    return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+
   @property
   def default_broadcast_noise_shape(self):
     """

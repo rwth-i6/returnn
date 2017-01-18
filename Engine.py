@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms, hdf5_dimension, BackendEngine
+from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename
 import errno
 import time
 try:
@@ -94,7 +94,10 @@ class Engine:
 
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename)
+      fn_postfix = ""
+      if BackendEngine.is_tensorflow_selected():
+        fn_postfix = ".meta"
+      assert os.path.exists(load_model_epoch_filename + fn_postfix)
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1:
@@ -106,7 +109,7 @@ class Engine:
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
     # In all other cases, we use the model specified by 'load'.
     if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
-      epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      epoch = model_epoch_from_filename(load_model_epoch_filename)
       if config.value('task', 'train') == 'train' and start_epoch is not None:
         # Ignore the epoch. To keep it consistent with the case below.
         epoch = None
@@ -127,7 +130,7 @@ class Engine:
     elif load_model_epoch_filename:
       # Don't use the model epoch as the start epoch in training.
       # We use this as an import for training.
-      epoch_model = (hdf5_dimension(load_model_epoch_filename, 'epoch'), load_model_epoch_filename)
+      epoch_model = (model_epoch_from_filename(load_model_epoch_filename), load_model_epoch_filename)
 
     else:
       epoch_model = (None, None)
