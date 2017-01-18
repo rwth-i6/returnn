@@ -352,14 +352,12 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges)
   if depth >= 5:
     print("HMM acceptor...")
     num_states, edges = __adds_loop_edges(num_states, edges)
   if depth >= 6:
     print("State tying...")
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
-    num_states, edges = __adds_loop_edges(num_states, edges)
     num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
 
   return num_states, edges
