@@ -327,9 +327,12 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   """
   print("Word sequence:", word_seq)
   sil = 'sil'
-  print("Silence: sil")
-  print("Place holder: epsilon")
-  depth = int(depth)
+  print("Silence:", sil)
+  eps = 'eps'
+  print("Place holder epsilon:", eps)
+  if depth is None:
+    depth = 6
+  print("Depth level is", depth)
   if depth == 1:
     print("Lemma acceptor chosen.")
     num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
@@ -368,7 +371,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
     num_states, edges = __adds_loop_edges(num_states, edges)
-    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges)
+    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
@@ -723,7 +726,6 @@ def main():
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.state_tying, "Specify state tying file in argument options: --state_tying [path]"
-    assert args.depth, "Specify the depth in argument options: --depth [int]"
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
                                              lexicon_file=args.lexicon,
                                              state_tying_file=args.state_tying,
