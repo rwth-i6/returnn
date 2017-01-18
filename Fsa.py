@@ -311,7 +311,7 @@ def __create_states_from_label_for_asg(rep_seq, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=5,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
                          allo_num_states=3, allo_context_len=1,
                          tdps=None  # ...
                          ):
@@ -321,6 +321,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=5,
   :param int allo_num_states: hom much HMM states per allophone
   :param int allo_context_len: how much context to store left and tight. 1 -> triphone
   :param str | None state_tying_file: for state-tying, if you want that
+  :param int depth: depth / level of the algorithm
   ... (like in LmDataset.PhoneSeqGenerator)
   :returns (num_states, edges) like above
   """
