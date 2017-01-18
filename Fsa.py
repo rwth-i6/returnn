@@ -333,49 +333,34 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   if depth is None:
     depth = 6
   print("Depth level is", depth)
-  if depth == 1:
-    print("Lemma acceptor chosen.")
+  if depth >= 1:
+    print("Lemma acceptor...")
     num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-  elif depth == 2:
-    print("Phoneme acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    lexicon = __load_lexicon(lexicon_file)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-  elif depth == 3:
-    print("Triphone acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    lexicon = __load_lexicon(lexicon_file)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-  elif depth == 4:
-    print("Allophone state acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    lexicon = __load_lexicon(lexicon_file)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
-  elif depth == 5:
-    print("HMM acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    lexicon = __load_lexicon(lexicon_file)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
-    num_states, edges = __adds_loop_edges(num_states, edges)
-  elif depth == 6:
-    print("State tying level chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    lexicon = __load_lexicon(lexicon_file)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
-    num_states, edges = __adds_loop_edges(num_states, edges)
-    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
     edges = []
+  if depth >= 2:
+    lexicon = __load_lexicon(lexicon_file)
+    print("Getting allophone sequence...")
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
+  if depth == 2:
+    print("Phoneme acceptor...")
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+  if depth >= 3:
+    print("Triphone acceptor...")
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+  if depth >= 4:
+    print("Allophone state acceptor...")
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
+  if depth >= 5:
+    print("HMM acceptor...")
+    num_states, edges = __adds_loop_edges(num_states, edges)
+  if depth >= 6:
+    print("State tying...")
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, num_states, edges)
+    num_states, edges = __adds_loop_edges(num_states, edges)
+    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
 
   return num_states, edges
 
