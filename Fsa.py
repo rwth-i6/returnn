@@ -703,11 +703,16 @@ def main():
   arg_parser.add_argument("--lexicon")
   arg_parser.add_argument("--depth")
   arg_parser.add_argument("--asg_repetition")
+  arg_parser.add_argument("--label_conversion")
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
+    if bool(args.label_conversion):
+      label_seq = convert_label_seq_to_indices(int(args.num_labels), args.label_seq)
+    else:
+      label_seq = args.label_seq
     num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=args.label_seq)
+                                              label_seq=label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
