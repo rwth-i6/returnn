@@ -1860,15 +1860,16 @@ class ReverseAttentionLayer(_NoOpLayer):
   def __init__(self, base = None, **kwargs):
     super(ReverseAttentionLayer, self).__init__(**kwargs)
     self.attention = []
-    T = base[0].attention.shape[2]
+    T = base[0].attention[0].shape[2]
     B = self.index.shape[1]
     N = self.index.shape[0]
-    D = self.sources[0].shape[2]
+    D = self.sources[0].output.shape[2]
     att = base[0].attention[0] # NBT
     att = att / att.sum(axis=0,keepdims=True)
     res = att.dimshuffle(0,1,2,'x').repeat(D,axis=3) * self.sources[0].output.dimshuffle(0,1,'x',2).repeat(T,axis=2) # NBTD
     self.output = res.sum(axis=0).dimshuffle(1,0,2) # TBD
     self.index = base[0].index # TB
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
 
 
 
