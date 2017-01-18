@@ -695,17 +695,17 @@ def main():
   arg_parser.add_argument("--fsa", required=True)
   arg_parser.add_argument("--state_tying")
   arg_parser.add_argument("--lexicon")
-  arg_parser.add_argument("--depth")
-  arg_parser.add_argument("--asg_repetition")
-  arg_parser.add_argument("--label_conversion")
+  arg_parser.add_argument("--depth", type=int)
+  arg_parser.add_argument("--asg_repetition", type=int)
+  arg_parser.add_argument("--label_conversion", type=bool)
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
-    if bool(args.label_conversion):
-      label_seq = convert_label_seq_to_indices(int(args.num_labels), args.label_seq)
+    if args.label_conversion:
+      label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
     else:
       label_seq = args.label_seq
-    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels,
                                               label_seq=label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
@@ -714,8 +714,8 @@ def main():
                                               repetitions=int(args.asg_repetition))
     print("Number of labels (a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
-    for rep in range(1, int(args.asg_repetition) + 1):
-      print("Repetition label:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
+    for rep in range(1, args.asg_repetition + 1):
+      print("Repetition label:", args.num_labels + rep, "meaning", rep, "repetitions")
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.state_tying, "Specify state tying file in argument options: --state_tying [path]"
@@ -723,7 +723,7 @@ def main():
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
                                              lexicon_file=args.lexicon,
                                              state_tying_file=args.state_tying,
-                                             depth=int(args.depth))
+                                             depth=args.depth)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
