@@ -119,6 +119,36 @@ def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
   return False
 
 
+def installNativeSignalHandler():
+  try:
+    import ctypes
+    # TODO: Move C code here, automatically compile it on-the-fly or so.
+    # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
+    # Maybe not needed because on Linux there is libSegFault.so anyway (installLibSigSegfault()).
+    lib = ctypes.CDLL("/u/zeyer/code/playground/signal_handler.so")
+    lib.install_signal_handler.return_type = None
+    lib.install_signal_handler()
+    print("Installed signal_handler.so.")
+
+  except Exception as exc:
+    print("installNativeSignalHandler exception: %s" % exc)
+
+
+def installLibSigSegfault():
+  try:
+    import ctypes
+    import ctypes.util
+    # libSegFault on Unix/Linux, not on MacOSX
+    libfn = ctypes.util.find_library("SegFault")
+    assert libfn
+    # Nothing more needed than loading it, it will automatically register itself.
+    ctypes.CDLL(libfn)
+    print("Installed libSegFault.so.")
+
+  except Exception as exc:
+    print("installLibSigSegfault exception: %s" % exc)
+
+
 def initFaulthandler(sigusr1_chain=False):
   """
   Maybe installs signal handlers, SIGUSR1 and SIGUSR2 and others.
@@ -140,12 +170,14 @@ def initFaulthandler(sigusr1_chain=False):
     import faulthandler
   except ImportError as e:
     print("faulthandler import error. %s" % e)
-    return
-  # Only enable if not yet enabled -- otherwise, leave it in its current state.
-  if not faulthandler.is_enabled():
-    faulthandler.enable()
-    if os.name != 'nt':
-      faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+  else:
+    # Only enable if not yet enabled -- otherwise, leave it in its current state.
+    if not faulthandler.is_enabled():
+      faulthandler.enable()
+      if os.name != 'nt':
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+  installLibSigSegfault()
+  installNativeSignalHandler()
 
 
 @auto_exclude_all_new_threads
