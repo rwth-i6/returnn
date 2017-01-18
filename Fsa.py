@@ -709,10 +709,14 @@ def main():
                                               label_seq=label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
-    num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=label_indices,
-                                              repetitions=int(args.asg_repetition))
-    print("Number of labels (a-z == 27 labels):", args.num_labels)
+    if args.label_conversion:
+      label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
+    else:
+      label_seq = args.label_seq
+    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels,
+                                              label_seq=label_seq,
+                                              repetitions=args.asg_repetition)
+    print("Number of labels (ex.: a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
     for rep in range(1, args.asg_repetition + 1):
       print("Repetition label:", args.num_labels + rep, "meaning", rep, "repetitions")
