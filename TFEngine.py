@@ -643,6 +643,8 @@ class Engine(object):
     opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
     opts = opts.copy()
+    # See options here:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
     num_threads = self._guess_requested_max_num_threads()
