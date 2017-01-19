@@ -103,16 +103,20 @@ class DataProvider(object):
           seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
     return data, seq_lens
 
+  def get_next_batch(self):
+    data, seq_lens = self._get_next_batch()
+    enqueue_args = data.copy()
+    for k in data.keys():
+      enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+    return enqueue_args
+
   def thread_main(self):
     try:
       import better_exchook
       better_exchook.install()
 
       while self.batches.has_more() and not self.coord.should_stop():
-        data, seq_lens = self._get_next_batch()
-        enqueue_args = data.copy()
-        for k in data.keys():
-          enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+        enqueue_args = self.get_next_batch()
         if self.queue:
           self.queue.put(enqueue_args)
         else:
@@ -163,13 +167,14 @@ class DataProvider(object):
       else:
         raise NotImplementedError
 
-  def get_feed_dict(self, previous_feed_dict):
+  def get_feed_dict(self, previous_feed_dict, single_threaded=False):
     """
     Gets the feed dict for TF session run().
     Note that this will block if there is nothing in the queue.
     The queue gets filled by the other thread, via self.thread_main().
 
     :param dict[tf.Tensor,tf.Tensor]|None previous_feed_dict:
+    :param bool single_threaded: whether to not use the queue
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
     """
@@ -178,7 +183,11 @@ class DataProvider(object):
       # It is based on the tf_queue.dequeue() which is symbolic.
       assert self.tf_queue and not self.queue
       return previous_feed_dict
-    output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
+    if single_threaded:
+      assert self.batches.has_more()
+      output = self.get_next_batch()
+    else:
+      output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
     assert isinstance(output, dict)
     # The data itself.
     d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
@@ -970,22 +979,11 @@ class Engine(object):
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       dataset=dataset, batches=batches)
 
-    coord = data_provider.coord
-    threads = tf.train.start_queue_runners(sess=self.tf_session, coord=coord)
-    data_provider.start_thread()
+    # Maybe some new uninitialized vars. Last check.
+    self.check_uninitialized_vars()
 
-    try:
-      assert data_provider.have_more_data()
+    feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+    output_data = self.network.layers["output"].output
+    output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
+    return output_value
 
-      # Maybe some new uninitialized vars. Last check.
-      self.check_uninitialized_vars()
-
-      feed_dict = data_provider.get_feed_dict(previous_feed_dict=None)
-      output_data = self.network.layers["output"].output
-      output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
-      return output_value
-
-    finally:
-      coord.request_stop()
-      coord.join(threads)
-      data_provider.stop_thread()
