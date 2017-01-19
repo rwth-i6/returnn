@@ -251,6 +251,9 @@ class OpMaker(object):
       #define EIGEN_USE_GPU 1
       """
     code_header += """
+    // For Eigen::ThreadPoolDevice.
+    #define EIGEN_USE_THREADS 1
+
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"

@@ -528,10 +528,23 @@ void _affine_global(
 
 };
 
-
 #if TENSORFLOW
 #if !CUDA  // only do in main namespace
-static void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const tensorflow::Tensor* src_tensor) {
+//typedef Eigen::ThreadPoolDevice CPUDevice;
+//typedef Eigen::GpuDevice GPUDevice;
+#endif
+
+#if CUDA
+#undef EigenDev
+#define EigenDev Eigen::GpuDevice
+#else
+#define EigenDev Eigen::ThreadPoolDevice
+#endif
+
+#endif
+
+#if TENSORFLOW
+void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const tensorflow::Tensor* src_tensor) {
     // also check https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h, CopyOp
     // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
     //   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/assign_op.h
@@ -543,8 +556,7 @@ static void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, 
         errors::InvalidArgument("shape sizes do not match, got shapes ",
                                 src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
     //Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
-    auto dev = context->eigen_device<Eigen::GpuDevice>();
+    auto dev = context->eigen_device<EigenDev>();
     tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
-#endif
 #endif
