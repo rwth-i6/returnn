@@ -629,6 +629,14 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
+  @classmethod
+  def _guess_requested_max_num_threads(cls):
+    omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+    if omp_num_threads:
+      # Minimum of 2 threads, should not hurt.
+      return max(omp_num_threads, 2)
+    return None
+
   def _make_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
@@ -637,6 +645,10 @@ class Engine(object):
     opts = opts.copy()
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    num_threads = self._guess_requested_max_num_threads()
+    if num_threads:
+      opts.setdefault("intra_op_parallelism_threads", num_threads)
+      opts.setdefault("inter_op_parallelism_threads", num_threads)
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
