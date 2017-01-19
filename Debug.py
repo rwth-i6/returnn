@@ -176,8 +176,10 @@ def initFaulthandler(sigusr1_chain=False):
       faulthandler.enable()
       if os.name != 'nt':
         faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
-  installLibSigSegfault()
-  installNativeSignalHandler()
+  from Util import to_bool
+  if os.environ.get("DEBUG") and to_bool(os.environ.get("DEBUG")):
+    installLibSigSegfault()
+    installNativeSignalHandler()
 
 
 @auto_exclude_all_new_threads
