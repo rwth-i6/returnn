@@ -1675,7 +1675,6 @@ class SplitBatchLayer(_NoOpLayer):
     self.output = self.output[:,part*chunk:(part+1)*chunk]
     self.index = self.sources[0].index[:,part*chunk:(part+1)*chunk]
 
-
 class DuplicateIndexBatchLayer(_NoOpLayer): # TODO: this is a hack
   layer_class = "duplicate_index_batch"
 
