@@ -150,10 +150,11 @@ class ClusteringDataset(CachedDataset2):
   We will read the cluster-map (seq-name -> cluster-idx) here directly.
   """
 
-  def __init__(self, dataset, cluster_map_file, n_clusters, **kwargs):
+  def __init__(self, dataset, cluster_map_file, n_clusters, single_cluster=False, **kwargs):
     super(CachedDataset2, self).__init__(**kwargs)
     self.dataset = init_dataset(dataset)
     self.n_clusters = n_clusters
+    self.single_cluster = single_cluster
     self.cluster_map = self._load_cluster_map(cluster_map_file)
     self.cluster_idx_dtype = "int32"
     self.num_inputs = self.dataset.num_inputs
@@ -223,13 +224,14 @@ class ClusteringDataset(CachedDataset2):
     batch = Batch()
     last_seq_idx = None
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
-      if last_seq_idx is not None and last_seq_idx != seq_idx:
-        last_seq_name = self.get_tag(last_seq_idx)
-        seq_name = self.get_tag(seq_idx)
-        if self.cluster_map[last_seq_name] != self.cluster_map[seq_name]:
-          print >> log.v5, "ClusteringDataset::_generate_batches", last_seq_idx, "is not", seq_idx
-          yield batch
-          batch = Batch()
+      if self.single_cluster:
+        if last_seq_idx is not None and last_seq_idx != seq_idx:
+          last_seq_name = self.get_tag(last_seq_idx)
+          seq_name = self.get_tag(seq_idx)
+          if self.cluster_map[last_seq_name] != self.cluster_map[seq_name]:
+            print >> log.v5, "ClusteringDataset::_generate_batches", last_seq_idx, "is not", seq_idx
+            yield batch
+            batch = Batch()
       length = t_end - t_start
       if max_seq_length < 0 and length['classes'] > -max_seq_length:
         continue

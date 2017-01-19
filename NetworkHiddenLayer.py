@@ -680,6 +680,61 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.ref.set_value(self.cluster_dict(seq_tag))
 
 
+class IndexToVecLayer(_NoOpLayer):
+  # IndexToVec convert a running index to a vektor like onehot
+  # source: [time][batch][1]
+  # out: [time][batch][n_out]
+  layer_class = "idx_to_vec"
+
+  def __init__(self, n_out, **kwargs):
+    super(IndexToVecLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+
+    printed_index = theano.printing.Print('index')(self.sources[0].output)
+    z = TheanoUtil.class_idx_seq_to_1_of_k(printed_index, n_out)
+    #z = TheanoUtil.class_idx_seq_to_1_of_k(self.sources[0].output, n_out)
+    printed_z_shape_0 = theano.printing.Print('i_vec 0')(z.shape[0])
+    printed_z_shape_1 = theano.printing.Print('i_vec 1')(z.shape[1])
+    printed_z_shape_2 = theano.printing.Print('i_vec 2')(z.shape[2])
+    self.output = z * printed_z_shape_0 * printed_z_shape_1 * printed_z_shape_2
+    #self.output = z  # (batch, n_out)
+
+
+class InterpolationLayer(_NoOpLayer):
+  # InterpolationLayer interpolates between several layers given an interpolation vector
+  # source: (n-1) sources[n_out] 1 source[n-1]
+  # out: [time][batch][n_out]
+  layer_class = "interp"
+
+  def __init__(self, n_out, **kwargs):
+    super(InterpolationLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+
+    dict_s = []
+    for s, m in zip(self.sources[:-1], self.masks[:-1]):
+      assert s.attrs['n_out'] == n_out
+      if m is None:
+        s_data = s.output
+      else:
+        s_data = self.mass * m * s.output
+      s_shuffled = s_data.dimshuffle(0, 1, 2, 'x')
+      dict_s += [s_shuffled]
+      Y = T.concatenate(dict_s, axis=3)  # [time][batch][n_out][n-1]
+
+    interp_vec = self.sources[-1].output
+
+    # if only one interpolation vector for the whole time is given, extens vector along time axis
+    import theano.ifelse
+    x = theano.ifelse.ifelse(T.eq(interp_vec.shape[0],1), T.extra_ops.repeat(interp_vec, Y.shape[0], axis=0), interp_vec)
+
+    i, j, m, k = Y.shape  # time, batch, n_out, interp
+    x_ = x.reshape((i * j, k))
+    Y_ = Y.reshape((i * j, m, k))
+    z_ = T.batched_tensordot(x_, Y_, (1, 2))
+    z = z_.reshape((i, j, m))
+
+    self.output = z
+
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
   recurrent = True  # we don't know
