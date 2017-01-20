@@ -2660,6 +2660,8 @@ class AlignmentLayer(ForwardLayer):
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
+      if blank:
+        norm = self.index.sum(dtype='float32') / self.sources[0].index.sum(dtype='float32')
       ratt = att
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
@@ -2720,7 +2722,7 @@ class AlignmentLayer(ForwardLayer):
         z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
         y_out = self.y_out.flatten()
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-        self.cost_val = norm * T.sum(nll)
+        self.cost_val = T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
         if blank:
           jdx = self.sources[0].index.flatten()
@@ -2730,6 +2732,7 @@ class AlignmentLayer(ForwardLayer):
           rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
                                                      y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
           self.cost_val += T.sum(bnll) - T.sum(rnll)
+        self.cost_val *= norm
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
