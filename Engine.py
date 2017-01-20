@@ -15,7 +15,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms, hdf5_dimension, BackendEngine
+from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename
 import errno
 import time
 try:
@@ -94,7 +94,10 @@ class Engine:
 
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename)
+      fn_postfix = ""
+      if BackendEngine.is_tensorflow_selected():
+        fn_postfix = ".meta"
+      assert os.path.exists(load_model_epoch_filename + fn_postfix)
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1:
@@ -106,7 +109,7 @@ class Engine:
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
     # In all other cases, we use the model specified by 'load'.
     if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
-      epoch = hdf5_dimension(load_model_epoch_filename, 'epoch')
+      epoch = model_epoch_from_filename(load_model_epoch_filename)
       if config.value('task', 'train') == 'train' and start_epoch is not None:
         # Ignore the epoch. To keep it consistent with the case below.
         epoch = None
@@ -127,7 +130,7 @@ class Engine:
     elif load_model_epoch_filename:
       # Don't use the model epoch as the start epoch in training.
       # We use this as an import for training.
-      epoch_model = (hdf5_dimension(load_model_epoch_filename, 'epoch'), load_model_epoch_filename)
+      epoch_model = (model_epoch_from_filename(load_model_epoch_filename), load_model_epoch_filename)
 
     else:
       epoch_model = (None, None)
@@ -208,6 +211,7 @@ class Engine:
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
     self.max_seq_length = config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
+    self.output_precision = config.int('output_precision', 12)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxsize
     if config.is_typed("seq_train_parallel"):
@@ -451,7 +455,7 @@ class Engine:
       self.print_network_info()
 
     training_devices = self.devices
-    if not 'train' in self.dataset_batches:
+    if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
@@ -491,14 +495,21 @@ class Engine:
 
   def format_score(self, score):
     if len(score) == 1:
-      return str(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
-                     for key in sorted(score.keys())])
+      if self.output_precision < 12:
+        return ("%." + str(self.output_precision) + "g") % float(list(score.values())[0])
+      else:
+        return str(list(score.values())[0])
+    if self.output_precision < 12:
+      return " ".join([("%s %." + str(self.output_precision) + "g") % (key.split(':')[-1], float(score[key]))
+                for key in sorted(score.keys())])
+    else:
+      return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
+                       for key in sorted(score.keys())])
 
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      if not dataset_name in self.dataset_batches:
+      if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size,
                                                                       max_seqs=self.max_seqs,

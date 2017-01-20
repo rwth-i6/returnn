@@ -64,12 +64,18 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
   layer_class = "1Dto2D_fixed_size"
   recurrent = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, pad_x=0, pad_y=0, **kwargs):
     super(OneDToTwoDFixedSizeLayer, self).__init__(1, **kwargs)
     assert len(self.sources) == 1
     X = self.sources[0].output
     assert X.ndim == 3
     assert X.dtype == "float32"
+
+    if pad_x + pad_y > 0:
+      tmp = T.zeros((X.shape[0] + 2 * pad_x, X.shape[1]), 'int8')
+      self.index = T.set_subtensor(tmp[pad_x: pad_x + X.shape[0]], self.sources[0].index)
+      tmp = T.zeros((X.shape[0] + 2 * pad_x, X.shape[1], X.shape[2] + 2 * pad_y), 'float32')
+      X = T.set_subtensor(tmp[pad_x:pad_x + X.shape[0], :, pad_y:pad_y + X.shape[2]], X)
 
     height = X.shape[2]
     width = T.maximum(T.sum(self.index, axis=0), T.ones_like(self.index[0]))
@@ -87,7 +93,7 @@ class TwoDToOneDLayer(TwoDBaseLayer):
   layer_class = "2Dto1D"
   recurrent = False
 
-  def __init__(self, collapse='mean', transpose=False,**kwargs):
+  def __init__(self, collapse='mean', maxout=False, transpose=False, **kwargs):
     super(TwoDToOneDLayer, self).__init__(1, **kwargs)
     self.set_attr('collapse', collapse)
     self.set_attr('transpose', transpose)
@@ -102,6 +108,9 @@ class TwoDToOneDLayer(TwoDBaseLayer):
     self.index, _ = theano.scan(index_fn, [index_init, T.cast(self.sources[0].output_sizes[:,1],"int32")])
     self.index = self.index.dimshuffle(1, 0)
     n_out = self.sources[0].attrs['n_out']
+
+    if maxout:
+      Y = Y.max(axis=3).dimshuffle(0,1,2,'x')
 
     if collapse == 'sum' or collapse == True:
       Y = Y.sum(axis=0)
@@ -232,8 +241,8 @@ class TwoDLSTMLayer(TwoDBaseLayer):
       #if directions >= 1:
       #  self.W3, self.V_h3, self.V_v3 = base[0].W3, base[0].V_h3, base[0].V_v3
       #  self.W4, self.V_h4, self.V_v4 = base[0].W4, base[0].V_h4, base[0].V_v4
-      #self.mass = base[0].mass
-      #self.masks = base[0].masks
+      self.mass = base[0].mass
+      self.masks = base[0].masks
     else:
       self.b1 = self.create_and_add_bias(n_out, "1")
       self.b2 = self.create_and_add_bias(n_out, "2")

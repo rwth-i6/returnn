@@ -481,11 +481,11 @@ class Dataset(object):
         while t < length[default_key]:
           l = min(t + chunk_size, length[default_key])
           chunk_start = NumbersDict(t)
-          chunk_len = NumbersDict(l)
+          chunk_end = NumbersDict(l)
           for key in keys_with_full_seqs:
             chunk_start[key] = 0
-            chunk_len[key] = length[key]
-          yield (s, chunk_start, chunk_len)
+            chunk_end[key] = length[key]
+          yield (s, chunk_start, chunk_end)
           t += chunk_step
       s += 1
 
@@ -538,6 +538,21 @@ class Dataset(object):
     if batch.get_all_slices_num_frames() > 0:
       yield batch
 
+  def batch_set_generator_cache_whole_epoch(self):
+    """
+    The BatchSetGenerator can cache the list of batches which we generated across epochs.
+    See self.generate_batches() and self._generate_batches().
+    In many cases, the dataset does not support this, and in that case,
+    it is not needed to enable this cache and waste memory.
+    Caching it together with option shuffle_batches could also mean that
+    there will be self.load_seqs() calls with non-monotonic seq-idxs.
+    The only dataset currently which enables this is CachedDataset and thus HDFDataset.
+
+    :return: whether we should enable this cache
+    :rtype: bool
+    """
+    return False
+
   def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, shuffle_batches=False):
     """
     :type recurrent_net: bool
@@ -546,7 +561,11 @@ class Dataset(object):
     :type shuffle_batches: bool
     :rtype: BatchSetGenerator
     """
-    return BatchSetGenerator(self, self._generate_batches(recurrent_net, batch_size, max_seqs, seq_drop, max_seq_length), shuffle_batches)
+    return BatchSetGenerator(
+      dataset=self,
+      generator=self._generate_batches(recurrent_net, batch_size, max_seqs, seq_drop, max_seq_length),
+      shuffle_batches=shuffle_batches,
+      cache_whole_epoch=self.batch_set_generator_cache_whole_epoch())
 
   def shapes_for_batches(self, batches, data_keys, batch_dim_first=False):
     """

@@ -123,11 +123,16 @@ def initDevices():
   """
   :rtype: list[Device]
   """
+  oldDeviceConfig = ",".join(config.list('device', ['default']))
+  if BackendEngine.is_tensorflow_selected():
+    if os.environ.get("TF_DEVICE"):
+      config.set("device", os.environ.get("TF_DEVICE"))
+      print >> log.v4, "Devices: Use %s via TF_DEVICE instead of %s." % \
+                       (os.environ.get("TF_DEVICE"), oldDeviceConfig)
   if not BackendEngine.is_theano_selected():
     return None
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
-    oldDeviceConfig = ",".join(config.list('device', ['default']))
     config.set("device", TheanoFlags["device"])
     print >> log.v4, "Devices: Use %s via THEANO_FLAGS instead of %s." % \
                      (TheanoFlags["device"], oldDeviceConfig)
@@ -270,12 +275,11 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def init(configFilename=None, commandLineOptions=()):
-  initBetterExchook()
-  initThreadJoinHack()
-  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
-  initLog()
+def crnnGreeting():
   print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
+
+
+def initBackendEngine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print >> log.v3, "Theano:", describe_theano_version()
@@ -283,6 +287,15 @@ def init(configFilename=None, commandLineOptions=()):
     print >> log.v3, "TensorFlow:", describe_tensorflow_version()
   else:
     raise NotImplementedError
+
+
+def init(configFilename=None, commandLineOptions=()):
+  initBetterExchook()
+  initThreadJoinHack()
+  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  initLog()
+  crnnGreeting()
+  initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
     if config.value('task', 'train') == "theano_graph":
@@ -307,7 +320,9 @@ def finalize():
     if engine:
       for device in engine.devices:
         device.terminate()
-
+  elif BackendEngine.is_tensorflow_selected():
+    if engine:
+      engine.finalize()
 
 def needData():
   task = config.value('task', 'train')

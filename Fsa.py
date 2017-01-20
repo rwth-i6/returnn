@@ -2,6 +2,16 @@
 
 from __future__ import print_function
 
+"""
+TODO
+- tuple -> sets
+- allophone acceptor
+- state tying acceptor
+- class num_states, edges, first and last char
+- description
+- cleaner structure of code (classes)?
+"""
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
@@ -34,30 +44,36 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
       weight is a float, in -log space
   """
   edges = []
+  final_states = []
   # calculate number of states
   num_states = 2 * (len(label_seq) + 1) - 1
 
   # create edges from the label sequence without loops and no empty labels
-  num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges)
+  final_states, num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds blank labels to fsa
-  num_states, edges = __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges)
+  final_states, num_states, edges = __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges)
+
+  # creates end state
+  final_states, num_states, edges = __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds loops to fsa
   num_states, edges = __adds_loop_edges(num_states, edges)
 
-  # creates end state
-  num_states, edges = __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges)
+  # makes one single final state
+  num_states, edges = __make_single_final_state(final_states, num_states, edges)
 
   return num_states, edges
 
 
-def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, edges):
+def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
+  creates states from label sequence, skips repetitions
   :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_states: number of states
   :param int num_labels: number of labels
-  :param list edges: list of edges
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
+  :param list[tuple] edges: list of edges
   :returns (num_states, edges)
   where:
     num_states: int, number of states.
@@ -67,7 +83,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
+  print("Creating nodes and edges from label sequence...")
   # go through the whole label sequence and create the state for each label
   for label_index in range(0, len(label_seq)):
     # if to remove skips if two equal labels follow each other
@@ -75,15 +91,16 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_states, num_labels, ed
       n = 2 * label_index
       edges.append((n, n + 2, label_seq[label_index], 1.))
 
-  return num_states, edges
+  return final_states, num_states, edges
 
 
-def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
+def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
+  adds blank edges and repetitions to ctc
   :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
-  :param int num_states: number of states
   :param int num_labels: number of labels
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
   where:
@@ -94,18 +111,50 @@ def __adds_blank_states_for_ctc(label_seq, num_states, num_labels, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
+  print("Adding blank states and edges...")
   # adds blank labels to fsa
   for label_index in range(0, len(label_seq)):
-    label_blank = 2 * label_index + 1
-    edges.append((label_blank - 1, label_blank, num_labels + 1, 1.))
-    edges.append((label_blank, label_blank + 1, label_seq[label_index], 1.))
+    label_blank_idx = 2 * label_index + 1
+    label_blank = 'blank' #  num_labels + 1
+    edges.append((label_blank_idx - 1, label_blank_idx, label_blank, 1.))
+    edges.append((label_blank_idx, label_blank_idx + 1, label_seq[label_index], 1.))
+  final_states.append(label_blank_idx + 1)
 
-  return num_states, edges
+  return final_states, num_states, edges
+
+
+def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
+  """
+  adds last states for ctc
+  :param list[int] label_seq: sequence of labels (normally some kind of word)
+  :param int num_labels: number of labels
+  :param list[int] final_states: list of final states
+  :param int num_states: number of states
+  :param list edges: list of edges
+  :returns (num_states, edges)
+  where:
+    num_states: int, number of states.
+      per convention, state 0 is start state, state (num_states - 1) is single final state
+    edges: list[(from,to,label_idx,weight)]
+      from and to are state_idx >= 0 and < num_states,
+      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+      weight is a float, in -log space
+  """
+  print("Adds final states and edges...")
+  i = num_states
+  label_blank = 'blank' #  num_labels + 1
+  edges.append((i - 3, i, label_blank, 1.))
+  edges.append((i, i + 1, label_seq[-1], 1.))
+  edges.append((i + 1, i + 2, label_blank, 1.))
+  num_states += 3
+  final_states.append(num_states - 1)
+
+  return final_states, num_states, edges
 
 
 def __adds_loop_edges(num_states, edges):
   """
+  for every node loops with edge label pointing to node
   :param int num_states: number of states
   :param list edges: list of edges
   :returns (num_states, edges)
@@ -117,7 +166,7 @@ def __adds_loop_edges(num_states, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
+  print("Adding loops...")
   # adds loops to fsa
   for state in range(1, num_states):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
@@ -126,31 +175,59 @@ def __adds_loop_edges(num_states, edges):
   return num_states, edges
 
 
-def __adds_last_state_for_ctc(label_seq, num_states, num_labels, edges):
+def __make_single_final_state(final_states, num_states, edges):
   """
-  :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int label: label number
+  takes the graph and merges all final nodes into one single final node
+  idea:
+  - add new single final node
+  - for all edge which ended in a former final node:
+    - create new edge from stating node to new single final node with the same label
+  :param list[int] final_states: list of index numbers of the final states
   :param int num_states: number of states
-  :param int num_labels: number of labels
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return num_states, edges:
   """
+  print("Creates single final state...")
+  if len(final_states) == 1 and final_states[0] == num_states - 1:  # nothing to change
+    return num_states, edges
 
-  i = num_states
-  edges.append((i, i, num_labels + 1, 1.))
-  edges.append((i - 1, i, num_labels + 1, 1.))
-  edges.append((i - 2, i, label_seq[-1], 1.))
-  edges.append((i - 3, i, label_seq[-1], 1.))
   num_states += 1
+  for fstate in final_states:
+    edges_fstate = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == fstate)]
+    for fstate_edge in edges_fstate:
+      edges.append((edges[fstate_edge][0], num_states - 1, edges[fstate_edge][2], 1.))
 
   return num_states, edges
+
+
+def __determine_edges(num_states, edges):
+  """
+  transforms the graph from non-deterministic to deterministic
+  specifically removing epsilon edges
+  :param int num_states: number of states
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return num_states, edges:
+  """
+  new_states = []  # type: list[set[int]]
+  start_states = __discover_eps([0], num_states, edges)
+  todo = [start_states]
+
+  return num_states, edges
+
+
+def __discover_eps(node, num_states, edges):
+  """
+  starting at a specific node, the nodes connected via epsilon are found
+  :param list[int] node:
+    list of nodes in the graph which are starting points for epsilon edge search
+  :param int num_states: number of states
+  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
+  :return list[tuples(start[int], end[int], label, weight)] eps_edges:
+    all edges from specific node with label epsilon
+  """
+  eps_edges = []
+
+  return eps_edges
 
 
 def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
@@ -167,10 +244,9 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-
   edges = []
 
-  rep_seq = __check_for_repetitions(num_labels, label_seq, repetitions)
+  rep_seq = __check_for_repetitions_for_asg(num_labels, label_seq, repetitions)
 
   num_states, edges = __create_states_from_label_for_asg(rep_seq, edges)
   num_states, edges = __adds_loop_edges(num_states, edges)
@@ -178,13 +254,12 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   return num_states, edges
 
 
-def __check_for_repetitions(num_labels, label_indices, repetitions):
+def __check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
   """
   checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
   :param list[int] label_indices: sequence of label indices
   :return: list[int] reps: list of indices of label repetitions
   """
-
   reps = []
   rep_count = 0
   index_old = None
@@ -236,9 +311,8 @@ def __create_states_from_label_for_asg(rep_seq, edges):
   return num_states, edges
 
 
-def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
+def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
                          allo_num_states=3, allo_context_len=1,
-                         state_tying_file=None,
                          tdps=None  # ...
                          ):
   """
@@ -247,41 +321,44 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, depth=5,
   :param int allo_num_states: hom much HMM states per allophone
   :param int allo_context_len: how much context to store left and tight. 1 -> triphone
   :param str | None state_tying_file: for state-tying, if you want that
+  :param int depth: depth / level of the algorithm
   ... (like in LmDataset.PhoneSeqGenerator)
   :returns (num_states, edges) like above
   """
   print("Word sequence:", word_seq)
   sil = 'sil'
-  print("Silence: sil")
-  print("Place holder: epsilon")
-  depth = int(depth)
-  if depth == 1:
-    print("Lemma acceptor chosen.")
+  print("Silence:", sil)
+  eps = 'eps'
+  print("Place holder epsilon:", eps)
+  if depth is None:
+    depth = 6
+  print("Depth level is", depth)
+  if depth >= 1:
+    print("Lemma acceptor...")
     num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-  elif depth == 2:
-    print("Phoneme acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-  elif depth == 3:
-    print("Triphone acceptor chosen.")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
-  elif depth == 4:
-    print("Allophone state acceptor chosen.")
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon_file)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq)
-  elif depth == 5:
-    print("HMM acceptor chosen.")
-    num_states, edges = __hmm_acceptor_for_hmm_fsa()
-  elif depth == 6:
-    print("State tying chosen.")
-    num_states, edges = __state_tying_for_hmm_fsa()
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
     edges = []
+  if depth >= 2:
+    lexicon = __load_lexicon(lexicon_file)
+    print("Getting allophone sequence...")
+    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
+  if depth == 2:
+    print("Phoneme acceptor...")
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+  if depth >= 3:
+    print("Triphone acceptor...")
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+  if depth >= 4:
+    print("Allophone state acceptor...")
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges)
+  if depth >= 5:
+    print("HMM acceptor...")
+    num_states, edges = __adds_loop_edges(num_states, edges)
+  if depth >= 6:
+    print("State tying...")
+    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
 
   return num_states, edges
 
@@ -292,7 +369,7 @@ def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
   :return: num_states, edges
   """
   edges = []
-  if type(word_seq) is str:
+  if isinstance(word_seq, str):
     word_seq_len = 1
     num_states = 4
     num_states_start = 0
@@ -305,7 +382,7 @@ def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
 
   edges.append((num_states_start, num_states_start + 1, sil, 1.))
   edges.append((num_states_end - 1, num_states_end, sil, 1.))
-  if type(word_seq) is str:
+  if isinstance(word_seq, str):
     for i in range(num_states_start, num_states):
       for j in range(i, num_states):
         edges_included = [m for m, n in enumerate(edges) if
@@ -398,67 +475,6 @@ def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
   return num_states_new, edges_new
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_seq):
-  num_states = 0
-  edges = []
-  return num_states, edges
-
-
-def __hmm_acceptor_for_hmm_fsa():
-  num_states = 0
-  edges = []
-  return num_states, edges
-
-
-def __state_tying_for_hmm_fsa():
-  num_states = 0
-  edges = []
-  return num_states, edges
-
-
-def __load_lexicon(lexFile):
-  '''
-  loads a lexicon from a file, loads the xml and returns its conent
-  :param lexFile: lexicon file with xml structure
-  :return lex: variable with xml structure
-  where:
-    lex.lemmas and lex.phonemes important
-  '''
-  from os.path import isfile
-  from Log import log
-  from LmDataset import Lexicon
-
-  assert isfile(lexFile), "Lexicon does not exists"
-
-  log.initialize(verbosity=[5])
-  lex = Lexicon(lexFile)
-
-  return lex
-
-
-def __find_allo_seq_in_lex(lemma, lexi):
-  '''
-  searches a lexicon xml structure for a watching word and
-  returns the matching allophone sequence as a list
-  :param lemma: the word to search for in the lexicon
-  :param lexi: the lexicon
-  :return allo_seq: allophone sequence with the highest score as a list
-  :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
-  '''
-  lex = __load_lexicon(lexi)
-
-  assert lex.lemmas[lemma], "Lemma not in lexicon"
-
-  phons = lex.lemmas[lemma]['phons']
-
-  phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
-
-  allo_seq = phons_sorted[0]['phon'].split(' ')
-  allo_seq_score = phons_sorted[0]['score']
-
-  return allo_seq, allo_seq_score, phons
-
-
 def __triphone_from_phon(word_seq):
   '''
   :param word_seq: sequence of allophones
@@ -482,6 +498,224 @@ def __triphone_from_phon(word_seq):
     tri_seq.append(tri)
 
   return tri_seq
+
+
+def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
+  """
+  the edges which are not sil or eps are split into three allophone states / components
+    marked with 0, 1, 2
+  :param str sil: placeholder for silence
+  :param int num_states: number of states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  :return int num_states, list[tuples(int, int, tuple(str, str, str, int), float)] edges_asa:
+  """
+  allo_len = len(allo_seq)
+  allo_count = 4 * allo_len
+  edges_count = 0
+
+  for edge in edges:
+    if edge[2] != sil:
+      edges_count += 1
+
+  assert edges_count == allo_count, "the count for the non-sil, non-eps edges varies: %i != %i"\
+                                    % (edges_count, allo_count)
+
+  num_states_asa = num_states + 2 * edges_count
+
+  """
+  idea: go to edge. do not change start node. take end node. search in edges at position start
+  node (only if ![sil], no change propagates from [sil]). add 2 to start and end node for all
+  following nodes (add nodes with index 1, 2 while traversing)
+
+  recursive function:
+  returns (current node, edges to traverse (double entries allowed)(with last one add nodes), edges)
+  """
+
+  """
+  edges_node = []
+  states_count = 0
+
+  for edge in edges:
+    if edge[0] == 0:
+      if states_count < edge[1]:
+        node_t = edge[1]
+      elif states_count > edge[1] and states_count < edge[1] + edges_count:
+        node_t = edge[1] + edges_count
+      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
+      edge_t = (0, node_t, tuple_t, 1.)
+      edges_node.append(edge_t)
+      states_count += 1
+    elif edge[1] == num_states - 1 and edge[2] == sil:
+        edges_node.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
+        states_count += 1
+    else:
+      node_t = edge[0] + 2 * edges_count
+      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
+      edge_t = (node_t, node_t + 1, tuple_t, 1.)
+      edges_node.append(edge_t)
+      states_count += 1
+  """
+  """
+  edges_asa = []
+
+  for edge in edges:
+    if edge[0] == 0:
+      if edge[2] == sil:
+        edges_asa.append(edge)
+        states_count += 1
+      else:
+        for index in range(0, 3):
+          if index == 0:
+            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+            edge_t = (edge[0], states_count, tuple_t, edge[3])
+          else:
+            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+            edge_t = (states_count - 1, states_count, tuple_t, edge[3])
+          edges_asa.append(edge_t)
+          states_count += 1
+    elif  edge[1] == num_states - 1:
+      if edge[2] == sil:
+        edges_asa.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
+        states_count += 1
+      else:
+        pass
+    else:
+      for index in range(0, 3):
+        tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
+        edge_t = (states_count - 1, states_count, tuple_t, edge[3])
+        edges_asa.append(edge_t)
+        states_count += 1
+
+  assert states_count == num_states_asa, "Number of states: %i != %i"\
+                                         % (states_count, num_states_asa)
+                                         """
+
+  return num_states_asa, edges
+
+
+def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
+  """
+  idea: take file with mapping char to number and apply to edge labels
+  :param int num_states:
+  :param list[tuples(start[int], end[int], label, weight)] edges:
+  :return: num_states, edges
+  """
+  print("State tying...(not done)")
+
+  statetying = __load_state_tying_file(state_tying_file)
+  lexicon = __load_lexicon(lexicon_file)
+
+  for edge in edges:
+    if (edge[2] == 'blank' or edge[2] == '') and isinstance(edge[2], str):
+      label = '#'
+    else:
+      label = edge[2]
+
+    allo, allo_score, phons = __find_allo_seq_in_lex(label, lexicon)
+    print(edge[2])
+    print(allo)
+
+    allo_syntax = __build_allo_syntax_for_mapping(allo)
+
+    #allo = 'b{f+ao}.0'
+
+    print("allo:", allo_syntax, "maps to", statetying.allo_map[allo_syntax])
+
+  return num_states, edges
+
+
+def __load_state_tying_file(stFile):
+  '''
+  loads a state tying map from a file, loads the file and returns its content
+  :param stFile: state tying map file (allo_syntax int)
+  :return state_tying: variable with state tying mapping
+  where:
+    statetying.allo_map important
+  '''
+  from os.path import isfile
+  from LmDataset import StateTying
+
+  print("Loading state tying file:", stFile)
+
+  assert isfile(stFile), "State tying file does not exists"
+
+  statetying = StateTying(stFile)
+
+  print("Finished state tying mapping:", len(statetying.allo_map), "allos to int")
+
+  return statetying
+
+
+def __build_allo_syntax_for_mapping(label, pos_seq='', pos_allo=0):
+  """
+  builds a conforming allo syntax for mapping
+  :param str pos_seq:
+  :param int pos_allo:
+  :param str or tuple(str, str, str) label: a allo either string or tuple
+  :return str allo_map: a allo syntax ready for mapping
+  """
+  assert isinstance(label, str) or isinstance(label, tuple), "Something went wrong while building allo syntax for mapping"
+
+  if isinstance(label, str):
+    allo_start = "%s{#+#}" % (label)
+  elif isinstance(label, tuple):
+    allo_start = "%s{%s+%s}" % (label[1], label[0], label[1])
+  else:
+    allo_start = "WRONG"
+
+  if len(pos_seq) == 1:
+    allo_middle = "@%s" % (pos_seq)
+  elif len(pos_seq) > 1:
+    allo_middle = "@%s@%s" % (pos_seq[0], pos_seq[1])
+  else:
+    allo_middle = ''
+
+  allo_end = ".%i" %(pos_allo)
+
+  allo_map = "%s%s%s" % (allo_start, allo_middle, allo_end)
+
+  return allo_map
+
+
+def __load_lexicon(lexFile):
+  '''
+  loads a lexicon from a file, loads the xml and returns its conent
+  :param lexFile: lexicon file with xml structure
+  :return lex: variable with xml structure
+  where:
+    lex.lemmas and lex.phonemes important
+  '''
+  from os.path import isfile
+  from Log import log
+  from LmDataset import Lexicon
+
+  assert isfile(lexFile), "Lexicon does not exists"
+
+  log.initialize(verbosity=[5])
+  lex = Lexicon(lexFile)
+
+  return lex
+
+
+def __find_allo_seq_in_lex(lemma, lex):
+  '''
+  searches a lexicon xml structure for a watching word and
+  returns the matching allophone sequence as a list
+  :param lemma: the word to search for in the lexicon
+  :param lex: the lexicon
+  :return allo_seq: allophone sequence with the highest score as a list
+  :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
+  '''
+  assert lex.lemmas[lemma], "Lemma not in lexicon"
+
+  phons = lex.lemmas[lemma]['phons']
+
+  phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
+
+  allo_seq = phons_sorted[0]['phon'].split(' ')
+  allo_seq_score = phons_sorted[0]['score']
+
+  return allo_seq, allo_seq_score, phons
 
 
 def fsa_to_dot_format(file, num_states, edges):
@@ -534,32 +768,40 @@ def main():
   arg_parser.add_argument("--num_labels", type=int, required=True)
   arg_parser.add_argument("--label_seq", required=True)
   arg_parser.add_argument("--fsa", required=True)
+  arg_parser.add_argument("--state_tying")
   arg_parser.add_argument("--lexicon")
-  arg_parser.add_argument("--depth")
-  arg_parser.add_argument("--asg_repetition")
+  arg_parser.add_argument("--depth", type=int)
+  arg_parser.add_argument("--asg_repetition", type=int)
+  arg_parser.add_argument("--label_conversion", type=bool)
   args = arg_parser.parse_args()
 
-  label_indices = convert_label_seq_to_indices(num_labels=int(args.num_labels),
-                                               label_seq=args.label_seq)
-
   if (args.fsa.lower() == 'ctc'):
-    num_states, edges = ctc_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=label_indices)
+    if args.label_conversion:
+      label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
+    else:
+      label_seq = args.label_seq
+    num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels,
+                                              label_seq=label_seq)
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
-    num_states, edges = asg_fsa_for_label_seq(num_labels=int(args.num_labels),
-                                              label_seq=label_indices,
-                                              repetitions=int(args.asg_repetition))
-    print("Number of labels (a-z == 27 labels):", args.num_labels)
+    if args.label_conversion:
+      label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
+    else:
+      label_seq = args.label_seq
+    num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels,
+                                              label_seq=label_seq,
+                                              repetitions=args.asg_repetition)
+    print("Number of labels (ex.: a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
-    for rep in range(1, int(args.asg_repetition) + 1):
-      print("Repetition label:", int(args.num_labels) + rep, "meaning", rep, "repetitions")
+    for rep in range(1, args.asg_repetition + 1):
+      print("Repetition label:", args.num_labels + rep, "meaning", rep, "repetitions")
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
-    assert args.depth, "Specify the depth in argument options: --depth [int]"
+    assert args.state_tying, "Specify state tying file in argument options: --state_tying [path]"
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
                                              lexicon_file=args.lexicon,
-                                             depth=int(args.depth))
+                                             state_tying_file=args.state_tying,
+                                             depth=args.depth)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 

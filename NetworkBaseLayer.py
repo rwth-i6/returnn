@@ -682,7 +682,8 @@ class Layer(Container):
     else:
       assert False, "consensus method unknown: " + cns
 
-  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False, index=None):
+  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False, index=None,
+                 sample_mean=None, gamma=None, beta=None):
     x = h
     if h.ndim == 3:
       if index is None: index = self.index
@@ -693,9 +694,11 @@ class Layer(Container):
       #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
     mean = T.mean(x,axis=0)
     std = T.sqrt(T.mean((x - mean)**2,axis=0))
-    sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
-                                 custom_update=mean,
-                                 custom_update_normalized=True)
+    if sample_mean is None:
+      sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
+                                   custom_update=mean,
+                                   custom_update_normalized=True)
+    self.sample_mean = sample_mean
     sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
     if not self.train_flag and not force_sample:
       use_sample = 1.0
@@ -712,7 +715,9 @@ class Layer(Container):
       std = std.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
     bn = (h - mean) / (std + numpy.float32(1e-10))
     if use_std:
-      gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
+      if gamma is None:
+        gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
+      self.gamma = gamma
       if h.ndim == 3:
         bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
       elif h.ndim == 4:
@@ -720,7 +725,9 @@ class Layer(Container):
       else:
         bn *= gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
     if use_shift:
-      beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_%s_beta" % (self.name,h.name)))
+      if beta is None:
+        beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_%s_beta" % (self.name,h.name)))
+      self.beta = beta
       bn += beta
     return bn
 

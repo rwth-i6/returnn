@@ -79,6 +79,9 @@ class CachedDataset(Dataset):
         return False
     return True
 
+  def batch_set_generator_cache_whole_epoch(self):
+    return True
+
   def _init_alloc_intervals(self):
     assert self.num_seqs > 0
     assert self.num_inputs > 0

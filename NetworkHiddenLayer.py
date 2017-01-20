@@ -67,6 +67,21 @@ class ForwardLayer(HiddenLayer):
     self.z = self.get_linear_forward_output()
     self.make_output(self.z if self.activation is None else self.activation(self.z))
 
+
+class SharedForwardLayer(HiddenLayer):
+  layer_class = "hidden_shared"
+
+  def __init__(self, base = None, sparse_window = 1, **kwargs):
+    kwargs['n_out'] = base[0].b.get_value().shape[0]
+    super(SharedForwardLayer, self).__init__(**kwargs)
+    self.params = {}
+    self.W_in = base[0].W_in
+    self.b = base[0].b
+    self.set_attr('sparse_window', sparse_window) # TODO this is ugly
+    self.attrs['n_out'] = sparse_window * kwargs['n_out']
+    self.z = self.get_linear_forward_output()
+    self.make_output(self.z if self.activation is None else self.activation(self.z))
+
 class ClippingLayer(HiddenLayer):
   layer_class = "clip"
 
@@ -200,7 +215,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", **kwargs):
+  def __init__(self, factor, axis, method="average", padding=True, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -220,14 +235,18 @@ class DownsampleLayer(_NoOpLayer):
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
+      if f == 1:
+        continue
       if a == 0:
-        z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
+        if padding:
+          z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
       if a == 0:
         self.index = self.sources[0].index
-        self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
+        if padding:
+          self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
@@ -279,7 +298,6 @@ class DownsampleLayer(_NoOpLayer):
       #z = theano.printing.Print("d", attrs=['shape'])(z)
     self.set_attr('n_out', n_out)
     self.make_output(output)
-
 
 class UpsampleLayer(_NoOpLayer):
   layer_class = "upsample"
@@ -661,6 +679,61 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
   def update_cluster_target(self, seq_tag):
     self.ref.set_value(self.cluster_dict(seq_tag))
 
+
+class IndexToVecLayer(_NoOpLayer):
+  # IndexToVec convert a running index to a vektor like onehot
+  # source: [time][batch][1]
+  # out: [time][batch][n_out]
+  layer_class = "idx_to_vec"
+
+  def __init__(self, n_out, **kwargs):
+    super(IndexToVecLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+
+    printed_index = theano.printing.Print('index')(self.sources[0].output)
+    z = TheanoUtil.class_idx_seq_to_1_of_k(printed_index, n_out)
+    #z = TheanoUtil.class_idx_seq_to_1_of_k(self.sources[0].output, n_out)
+    printed_z_shape_0 = theano.printing.Print('i_vec 0')(z.shape[0])
+    printed_z_shape_1 = theano.printing.Print('i_vec 1')(z.shape[1])
+    printed_z_shape_2 = theano.printing.Print('i_vec 2')(z.shape[2])
+    self.output = z * printed_z_shape_0 * printed_z_shape_1 * printed_z_shape_2
+    #self.output = z  # (batch, n_out)
+
+
+class InterpolationLayer(_NoOpLayer):
+  # InterpolationLayer interpolates between several layers given an interpolation vector
+  # source: (n-1) sources[n_out] 1 source[n-1]
+  # out: [time][batch][n_out]
+  layer_class = "interp"
+
+  def __init__(self, n_out, **kwargs):
+    super(InterpolationLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', n_out)
+
+    dict_s = []
+    for s, m in zip(self.sources[:-1], self.masks[:-1]):
+      assert s.attrs['n_out'] == n_out
+      if m is None:
+        s_data = s.output
+      else:
+        s_data = self.mass * m * s.output
+      s_shuffled = s_data.dimshuffle(0, 1, 2, 'x')
+      dict_s += [s_shuffled]
+      Y = T.concatenate(dict_s, axis=3)  # [time][batch][n_out][n-1]
+
+    interp_vec = self.sources[-1].output
+
+    # if only one interpolation vector for the whole time is given, extens vector along time axis
+    import theano.ifelse
+    x = theano.ifelse.ifelse(T.eq(interp_vec.shape[0],1), T.extra_ops.repeat(interp_vec, Y.shape[0], axis=0), interp_vec)
+
+    i, j, m, k = Y.shape  # time, batch, n_out, interp
+    x_ = x.reshape((i * j, k))
+    Y_ = Y.reshape((i * j, m, k))
+    z_ = T.batched_tensordot(x_, Y_, (1, 2))
+    z = z_.reshape((i, j, m))
+
+    self.output = z
 
 class ChunkingSublayer(_NoOpLayer):
   layer_class = "chunking_sublayer"
@@ -1669,10 +1742,20 @@ class SplitBatchLayer(_NoOpLayer):
 
   def __init__(self, n_parts=1, part=0, **kwargs):
     super(SplitBatchLayer, self).__init__(**kwargs)
-    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in self.sources])
     chunk = self.index.shape[1] / n_parts
-    self.output = self.sources[0].output[:,part*chunk:(part+1)*chunk]
+    self.output = T.concatenate([s.output for s in self.sources],axis=2)
+    self.output = self.output[:,part*chunk:(part+1)*chunk]
     self.index = self.sources[0].index[:,part*chunk:(part+1)*chunk]
+
+class DuplicateIndexBatchLayer(_NoOpLayer): # TODO: this is a hack
+  layer_class = "duplicate_index_batch"
+
+  def __init__(self, **kwargs):
+    super(DuplicateIndexBatchLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = 1
+    self.index = T.concatenate([self.index] * 2, axis=1)
+    self.output = T.zeros(self.index.shape,'float32').dimshuffle(0,1,'x')
 
 
 class LengthLayer(HiddenLayer):
@@ -1840,6 +1923,26 @@ class AttentionLayer(_NoOpLayer):
     self.act = [ att, T.zeros_like(att) ]
     #attention = attention.dimshuffle(0,1,'x',2).repeat(base.shape[2],axis=2) # NBDT
     #self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
+
+
+
+class ReverseAttentionLayer(_NoOpLayer):
+  layer_class = 'reverse_attention'
+
+  def __init__(self, base = None, **kwargs):
+    super(ReverseAttentionLayer, self).__init__(**kwargs)
+    self.attention = []
+    T = base[0].attention[0].shape[2]
+    B = self.index.shape[1]
+    N = self.index.shape[0]
+    D = self.sources[0].output.shape[2]
+    att = base[0].attention[0] # NBT
+    att = att / att.sum(axis=0,keepdims=True)
+    res = att.dimshuffle(0,1,2,'x').repeat(D,axis=3) * self.sources[0].output.dimshuffle(0,1,'x',2).repeat(T,axis=2) # NBTD
+    self.output = res.sum(axis=0).dimshuffle(1,0,2) # TBD
+    self.index = base[0].index # TB
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+
 
 
 class AttentionVectorLayer(_NoOpLayer):
@@ -2500,7 +2603,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, search='search', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, min_skip=0, search='search', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
@@ -2531,6 +2634,8 @@ class AlignmentLayer(ForwardLayer):
     for i in range(len(tdps)):
       if i % nstep != 0:
         tdps[i] = 1e30
+    if min_skip > 0:
+      tdps[:min_skip] = [1e30] * min_skip
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2544,12 +2649,32 @@ class AlignmentLayer(ForwardLayer):
         search = 'align'
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    self.p_y_given_x = p_in
     y_in = self.y_in[target].reshape(self.index.shape)
     if train_skips:
       W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
       b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
       t_in = T.dot(x_in,W_skip) + b_skip
       q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
+    if search == 'linear':
+      max_length_y = self.z.shape[0] / y_in.shape[0] #+ T.mod(self.z.shape[0], y_in.shape[0])
+      y_out = y_in.flatten() #reshape((y_in.shape[0]*y_in.shape[1]))
+      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1]))
+      y_out = T.concatenate([y_out,y_out[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      self.y_out = y_out
+      rindex = self.index.flatten() #reshape(self.index.shape[0]*self.index.shape[1])
+      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1]))
+      rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      norm = T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32')
+      self.index = rindex
+      self.output = x_in
+      idx = (self.index.flatten() > 0).nonzero()
+
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_in[idx], y_idx=y_out.flatten()[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_in[idx], axis=1), y_out.flatten()[idx]))
+      return
+
     if self.train_flag or search == 'align':
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
@@ -2643,7 +2768,7 @@ class AlignmentLayer(ForwardLayer):
 class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
 
-  def __init__(self, base = None, pgen=0.5, forge=False, copy_input = None, **kwargs):
+  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, loss='ce', **kwargs):
     kwargs['n_out'] = 2
     super(DiscriminatorLayer, self).__init__(**kwargs)
     if not base:
@@ -2671,9 +2796,12 @@ class DiscriminatorLayer(ForwardLayer):
       z = T.dot(src.output, W) + b
       z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
       pcx = T.nnet.softmax(z[idx])
-      nll = -T.log(pcx[:,0])
       ratio = lng / T.sum(src.index, dtype='float32')
-      self.cost_val += ratio * preal * T.sum(nll)
+      if loss == 'ce':
+        err = -T.log(pcx[:,0])
+      elif loss == 'se':
+        err = T.sum(T.sqr(pcx[:,0] - numpy.float32(1)))
+      self.cost_val += ratio * preal * T.sum(err)
       self.error_val += ratio * T.sum(T.lt(pcx[:,0],numpy.float32(0.5)))
     if base:
       pgen = numpy.float32(pgen / float(len(base)))
@@ -2682,17 +2810,22 @@ class DiscriminatorLayer(ForwardLayer):
         z = T.dot(src.output, W) + b
         z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
         pcx = T.nnet.softmax(z[idx])
-        nll = -T.log(pcx[:, 1])
+        if loss == 'ce':
+          err = -T.log(pcx[:, 1])
+        elif loss == 'se':
+          err = T.sum(T.sqr(pcx[:, 1] - numpy.float32(1)))
         ratio = lng / T.sum(src.index, dtype='float32')
-        self.cost_val += ratio * pgen * T.sum(nll)
+        self.cost_val += ratio * pgen * T.sum(err)
         self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
 
     self.error_val /= numpy.float32(len(self.sources + base))
-    self.cost_val *= numpy.float32(len(self.sources + base))
     if forge:
-      self.cost_scale_val = numpy.float32(1.0)
+      if dynamic_scaling:
+        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.5), numpy.float32(2.0))
+      else:
+        self.cost_scale_val = numpy.float32(1.0)
     else:
-      self.cost_scale_val = numpy.float32(2.0)
+      self.cost_scale_val = numpy.float32(1.0) #numpy.float32(len(self.sources + base))
 
   def cost(self):
     return self.cost_val, self.known_grads

@@ -396,6 +396,71 @@ def swapaxes(x, axis1, axis2):
     return tf.transpose(x, perm=perm)
 
 
+def sequence_mask(lengths, **kwargs):
+  """
+  Wraps around tf.sequence_mask().
+  It will cache the value inside the passed object so that we don't recompute it multiple times.
+
+  :param tf.Tensor lengths: shape (batch,)
+  :param dict[str] kwargs: passed on to tf.sequence_mask
+  :return: mask of shape (batch,maxlen/time)
+  """
+  if hasattr(lengths, "_sequence_mask"):
+    return lengths._sequence_mask
+  mask = tf.sequence_mask(lengths, **kwargs)
+  lengths._sequence_mask = mask
+  return mask
+
+
+def sequence_mask_time_major(lengths, **kwargs):
+  """
+  Wraps around tf.transpose(tf.sequence_mask(), (1,0)).
+  It will cache the value inside the passed object so that we don't recompute it multiple times.
+
+  :param tf.Tensor lengths: shape (batch,)
+  :param dict[str] kwargs: passed on to tf.sequence_mask
+  :return: mask of shape (maxlen/time,batch)
+  """
+  if hasattr(lengths, "_sequence_mask_time_major"):
+    return lengths._sequence_mask_time_major
+  mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
+  mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
+  lengths._sequence_mask_time_major = mask
+  return mask
+
+
+def directed(x, direction):
+  """
+  If direction == 1 or direction is None, returns just x.
+  If direction == -1, returns reversed(x).
+
+  :param tf.Tensor x:
+  :param int|None direction: -1 or 1 (or None)
+  :rtype: tf.Tensor
+  """
+  if direction == 1 or direction is None:
+    return x
+  if direction == -1:
+    return reversed(x)
+  raise ValueError("invalid direction: %r" % direction)
+
+
+def reversed(x):
+  """
+  Just returns x[::-1].
+  It will cache the value inside the passed object so that we don't recompute it multiple times.
+
+  :param tf.Tensor x:
+  :rtype: tf.Tensor
+  """
+  if hasattr(x, "_reversed_dim0"):
+    return x._reversed_dim0
+  y = x[::-1]
+  x._reversed_dim0 = y
+  y._reversed_dim0 = x
+  return y
+
+
 def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
   """
   :param tf.Tensor x: shape (batch,time,...s...) with time_major=False or otherwise shape (time,batch,...s....)
@@ -410,7 +475,7 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
       x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
     x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
-    mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
     mask = check_dim_equal(mask, 0, x, 0)
     mask = check_dim_equal(mask, 1, x, 1)
@@ -430,7 +495,7 @@ def sparse_labels(x, seq_lens):
     x = check_input_ndim(x, ndim=2)
     x = check_dim_equal(x, 0, seq_lens, 0)
     batch_size = tf.shape(x)[0]
-    mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     flat_x = tf.boolean_mask(x, mask)  # (time', ...s...)
     idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
     flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
@@ -643,9 +708,13 @@ class OpCodeCompiler(object):
         continue  # ignore for now
       info_path = "%s/info.py" % full_dir_path
       if not os.path.exists(info_path):
-        self._cleanup_old_path(full_dir_path, reason="corrupt dir")
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
         continue
-      dt = time.time() - os.path.getmtime()
+      so_path = "%s/%s.so" % (full_dir_path, self.base_name)
+      if not os.path.exists(so_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing so")
+        continue
+      dt = time.time() - os.path.getmtime(so_path)
       if dt > cleanup_time_limit_secs:
         self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
 

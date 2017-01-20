@@ -111,6 +111,7 @@ class OpMaker(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/pad_op.cc
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h  CopyOp...
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
@@ -134,32 +135,87 @@ class OpMaker(object):
       return name
     def map_type(v, is_out=False):
       t = v.get("dtype", "float32")
-      if is_out:
-        if v["name"] in out_is_ref:
-          t = "Ref(%s)" % t
-      else:
-        if v.get("want_inplace", -1) >= 0:
-          t = "Ref(%s)" % t
       return t
     code_register_op_io = ""
     for v in in_info:
       code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
     for v in out_info:
       code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v, is_out=True), map_type(v, is_out=True))
+    code_set_out_shape = ""
+    def make_dim_str(c):
+      if isinstance(c, tuple):
+        in_idx, in_dim = c
+        return "c->Dim(c->input(%i), %i)" % (in_idx, in_dim)
+      elif isinstance(c, int):
+        return str(c)
+      else:
+        raise Exception("type: %s" % type(c))
+    for i, v in enumerate(out_info):
+      code_set_out_shape += "c->set_output(%i, c->MakeShape({%s}));\n" % (
+        i, ", ".join([make_dim_str(c) for c in v["shape"]]))
+    code_register_op_io += """
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      if(c->num_inputs() != %(num_inputs)i)
+        return errors::InvalidArgument("wrong number of inputs. required %(num_inputs)i but got ", c->num_inputs());
+      if(c->num_outputs() != %(num_outputs)i)
+        return errors::InvalidArgument("wrong number of outputs. required %(num_outputs)i but got ", c->num_outputs());
+      %(code_set_out_shape)s
+      return Status::OK();
+    })
+    """ % {
+      "num_inputs": len(in_info),
+      "num_outputs": len(out_info),
+      "code_set_out_shape": code_set_out_shape
+    }
     code_forward_io = ""
     for in_idx, v in enumerate(in_info):
       out_idx = v.get("want_inplace", -1)
       if out_idx >= 0:
         code_forward_io += "context->forward_ref_input_to_ref_output(%i, %i);\n" % (in_idx, out_idx)
-    code_set_io = """
+    code_set_io = ""
+    for in_idx, v in enumerate(in_info):
+      ndim = len(v["shape"])
+      code_set_io += """
+      OP_REQUIRES(
+        context, context->input(%i).dims() == %i,
+        errors::InvalidArgument("shape ndim is not %i, got shape ",
+                                context->input(%i).shape().DebugString()));
+      """ % (in_idx, ndim, ndim, in_idx)
+      for axis, d in enumerate(v["shape"]):
+        if isinstance(d, int):
+          code_set_io += """
+          OP_REQUIRES(
+            context, context->input(%i).dim_size(%i) == %i,
+            errors::InvalidArgument("shape[%i] != %i, got shape ",
+                                    context->input(%i).shape().DebugString()));
+          """ % (in_idx, axis, d, axis, d, in_idx)
+    code_set_io += """
     Ndarray* inputs[n_inputs];
     Ndarray** outputs[n_outputs];
     """
     for in_idx, v in enumerate(in_info):
-      if v.get("want_inplace", -1) >= 0:  # is ref
-        code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
-        code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+      out_idx = v.get("want_inplace", -1)
+      if out_idx >= 0:  # is ref
+        # mutable_input if it is a ref-type, i.e. a Variable.
+        #code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
+        #code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+        # Maybe we could use a TemporaryVariable or so but not sure if the gradient will flow through tf.assign().
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/state_ops.cc
+        # but a normal tensor is never mutable, thus create a copy of the input now.
+        code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
+        cshape = "TensorShape({%s})" % ", ".join(["context->input(%i).dim_size(%i)" % (in_idx, in_dim)
+                                                  for in_dim in range(len(v["shape"]))])
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "inputs[%i] = output_%i;\n" % (in_idx, out_idx)
+        # We always make a copy for now.
+        # I'm not sure if inplace is an option for TF because we don't know if any other operation in the graph
+        # wants to access it. Maybe we can check the reference count or so?
+        # Some references for inplace operations:
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/inplace_ops.cc
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/strided_slice_op.cc
+        code_set_io += "make_copy(context, inputs[%i], &context->input(%i));\n" % (in_idx, in_idx)
       else:  # no ref
+        # TODO: if not on GPU but GPU requested, move to GPU first, maybe via allocate_temp?
         code_set_io += "inputs[%i] = const_cast<Ndarray*>(&context->input(%i));\n" % (in_idx, in_idx)
     for out_idx, v in enumerate(out_info):
       out_name = out_info[out_idx]["name"]
@@ -171,7 +227,7 @@ class OpMaker(object):
         code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
-        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, outputs[%i]));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
     code_user = self.description.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
       code_forward_io,
@@ -195,6 +251,9 @@ class OpMaker(object):
       #define EIGEN_USE_GPU 1
       """
     code_header += """
+    // For Eigen::ThreadPoolDevice.
+    #define EIGEN_USE_THREADS 1
+
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
@@ -208,6 +267,7 @@ class OpMaker(object):
 
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
       //#include "tensorflow/core/platform/stream_executor.h"
+      //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
       """
     code_header += """
     using namespace tensorflow;
@@ -308,19 +368,16 @@ class OpMaker(object):
       grad_op = grad_op_maker.make_op()
 
       from tensorflow.python.framework import ops
-      def grad_wrapper(fwd_op, bwd_grads):
+      def grad_wrapper(fwd_op, *bwd_grads):
         """
         :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
-        :param list[tf.Tensor]|tf.Tensor bwd_grads: list if len(fwd_op.outputs) > 1
+        :param list[tf.Tensor] bwd_grads:
         :return: list of tensors of gradients for each input
         :rtype: list[tf.Tensor]
         """
-        if len(fwd_op.outputs) == 1:
-          assert isinstance(bwd_grads, tf.Tensor)
-          bwd_grads = [bwd_grads]
         assert len(bwd_grads) == len(fwd_op.outputs)
 
-        grad_inputs = fwd_op.inputs + fwd_op.outputs + bwd_grads
+        grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
         grad_inputs = self.description._filter_grad_inputs(grad_inputs)
         grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
         if grad_description.num_dummy_outs > 0:
@@ -338,10 +395,65 @@ def make_lstm_op(**kwargs):
   """
   Demo.
   :return: op
-  :rtype: (tf.Tensor) -> tf.Tensor
+  :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
   maker = OpMaker(OpDescription.from_gen_base(NativeOp.LstmGenericBase), **kwargs)
   return maker.make_op()
+
+
+class RecSeqCellOp(object):
+  def __init__(self, n_hidden):
+    self.n_hidden = n_hidden
+    self.n_input_dim = n_hidden
+
+  def __call__(self, inputs, index):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor index: shape (time,batch)
+    :returns: shape (time,batch,n_hidden)
+    :rtype: tf.Tensor
+    """
+    raise NotImplementedError
+
+
+class NativeLstmCell(RecSeqCellOp):
+  def __init__(self, n_hidden):
+    super(NativeLstmCell, self).__init__(n_hidden=n_hidden)
+    self.n_input_dim = n_hidden * 4
+    self.op = make_lstm_op()
+
+  @classmethod
+  def map_layer_inputs_to_op(cls, Z, V_h, i):
+    """
+    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
+    :param tf.Tensor Z: inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor V_h: W_re: shape (n_hidden,n_hidden*4)
+    :param tf.Tensor i: index: shape (time,batch)
+    :rtype: (tf.Tensor,tf.Tensor,tf.Tensor,tf.Tensor)
+    """
+    assert Z.get_shape().ndims == 3
+    assert V_h.get_shape().ndims == 2
+    assert i.get_shape().ndims == 2
+    if i.dtype != tf.float32:
+      i = tf.cast(i, dtype=tf.float32)
+    n_batch = tf.shape(Z)[1]
+    n_out = tf.shape(V_h)[0]
+    c = tf.zeros((n_batch, n_out), dtype=tf.float32)
+    return Z, V_h, c, i
+
+  def __call__(self, inputs, index):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor index: shape (time,batch)
+    :returns: shape (time,batch,n_hidden)
+    :rtype: tf.Tensor
+    """
+    W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
+    lstm_op = make_lstm_op()
+    op_out = lstm_op(*self.map_layer_inputs_to_op(inputs, W_re, index))
+    from TheanoUtil import make_var_tuple
+    out = NativeOp.LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
+    return out
 
 
 def demo():

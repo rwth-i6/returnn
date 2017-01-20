@@ -73,20 +73,26 @@ class Batch:
                                    batch_slice=self.num_slices - 1,
                                    batch_frame_offset=0)]
 
-  def add_frames(self, seq_idx, seq_start_frame, length):
+  def add_frames(self, seq_idx, seq_start_frame, length, frame_dim_corresponds=True):
     """
     Adds frames to all data-batches.
     Will add one data-batch if we don't have one yet.
-    :type seq_start_frame: NumbersDict | int
+    :param int seq_idx:
+    :param NumbersDict|int seq_start_frame:
     :param NumbersDict length: number of (time) frames
+    :param bool frame_dim_corresponds: if the batch frame offset should always be the same (max value) for all keys
     """
+    batch_frame_offset = self.max_num_frames_per_slice
+    if frame_dim_corresponds:
+      batch_frame_offset = NumbersDict(batch_frame_offset.max_value())
+      self.max_num_frames_per_slice = NumbersDict(self.max_num_frames_per_slice.max_value())
     self.max_num_frames_per_slice += length
     self.num_slices = max(self.num_slices, 1)
     self.seqs += [BatchSeqCopyPart(seq_idx=seq_idx,
                                    seq_start_frame=seq_start_frame,
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
-                                   batch_frame_offset=self.max_num_frames_per_slice - length)]
+                                   batch_frame_offset=batch_frame_offset)]
 
   def get_all_slices_num_frames(self):
     """
@@ -127,7 +133,7 @@ class BatchSetGenerator:
   you call self.advance() explicitly to go forward to next batches.
   """
 
-  def __init__(self, dataset, generator, shuffle_batches=True):
+  def __init__(self, dataset, generator, shuffle_batches=True, cache_whole_epoch=True):
     """
     :type dataset: Dataset.Dataset
     :type generator: iter[Batch]
@@ -135,19 +141,28 @@ class BatchSetGenerator:
     self.dataset = dataset
     self.generator = generator
     self.shuffle_batches = shuffle_batches
-    self.cache = []; " :type: list[Batch] "
+    # In some cases, it might be faster to cache the list of batches.
+    self.cache_whole_epoch = cache_whole_epoch
+    self.cache = []  # type: list[Batch]
     self.reached_end = False
     random.seed(1234)
-    self.reset()
+    self._reset()
 
-  def reset(self):
+  def _reset(self):
     self.buffer = self.cache[:]
     if self.shuffle_batches:
       random.shuffle(self.buffer)
     self.cache_active = self.reached_end
     self.reached_end = False
-    self.last_batch = None; " :type: Batch "
+    self.last_batch = None  # type: Batch
     self.current_batch_idx = 0
+
+  def reset(self):
+    """
+    Call this after one epoch to reuse the previously cached batches.
+    """
+    assert self.cache_whole_epoch
+    self._reset()
 
   def _read_next(self):
     if self.reached_end:
@@ -159,7 +174,7 @@ class BatchSetGenerator:
       return False
     else:
       self.buffer += [batch]
-      if not self.cache_active:
+      if self.cache_whole_epoch and not self.cache_active:
         self.cache += [batch]
       return True
 

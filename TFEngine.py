@@ -16,7 +16,7 @@ from TFNetwork import TFNetwork, ExternData
 from Util import hms, NumbersDict
 from threading import Thread, Condition
 from Queue import Queue
-from Dataset import BatchSetGenerator
+from Dataset import Batch, BatchSetGenerator
 
 
 class DataProvider(object):
@@ -64,6 +64,7 @@ class DataProvider(object):
     if not self.thread:
       return
     self.coord.request_stop()
+    self._flush_all_data()
     self.thread.join()
 
   def _get_next_batch(self):
@@ -102,16 +103,20 @@ class DataProvider(object):
           seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
     return data, seq_lens
 
+  def get_next_batch(self):
+    data, seq_lens = self._get_next_batch()
+    enqueue_args = data.copy()
+    for k in data.keys():
+      enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+    return enqueue_args
+
   def thread_main(self):
     try:
       import better_exchook
       better_exchook.install()
 
       while self.batches.has_more() and not self.coord.should_stop():
-        data, seq_lens = self._get_next_batch()
-        enqueue_args = data.copy()
-        for k in data.keys():
-          enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+        enqueue_args = self.get_next_batch()
         if self.queue:
           self.queue.put(enqueue_args)
         else:
@@ -151,9 +156,25 @@ class DataProvider(object):
         # The thread is alive and working. Wait for a change.
         self.state_change_cond.wait()
 
-  def get_feed_dict(self, previous_feed_dict):
+  def _flush_all_data(self):
     """
+    This is supposed to be called by the consumer thread after a call to coord.request_stop().
+    The data provider thread (self.thread_main()) could currently block in the queue put if it was full.
+    """
+    while self.have_more_data():
+      if self.queue:
+        self.queue.get()
+      else:
+        raise NotImplementedError
+
+  def get_feed_dict(self, previous_feed_dict, single_threaded=False):
+    """
+    Gets the feed dict for TF session run().
+    Note that this will block if there is nothing in the queue.
+    The queue gets filled by the other thread, via self.thread_main().
+
     :param dict[tf.Tensor,tf.Tensor]|None previous_feed_dict:
+    :param bool single_threaded: whether to not use the queue
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
     """
@@ -162,7 +183,11 @@ class DataProvider(object):
       # It is based on the tf_queue.dequeue() which is symbolic.
       assert self.tf_queue and not self.queue
       return previous_feed_dict
-    output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
+    if single_threaded:
+      assert self.batches.has_more()
+      output = self.get_next_batch()
+    else:
+      output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
     assert isinstance(output, dict)
     # The data itself.
     d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
@@ -411,6 +436,7 @@ class Runner(object):
     finally:
       coord.request_stop()
       coord.join(threads)
+      self.data_provider.stop_thread()
       self.elapsed = time.time() - self.start_time
 
 
@@ -567,6 +593,13 @@ class Engine(object):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
+    self.train_data = None; " :type: Dataset.Dataset "
+    self.start_epoch = None
+
+  def finalize(self):
+    if self.tf_session:
+      self.tf_session.close()
+      self.tf_session = None
 
   def _get_devices_config(self):
     """
@@ -596,14 +629,28 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
+  @classmethod
+  def _guess_requested_max_num_threads(cls):
+    omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+    if omp_num_threads:
+      # Minimum of 2 threads, should not hurt.
+      return max(omp_num_threads, 2)
+    return None
+
   def _make_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
     opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
     opts = opts.copy()
+    # See options here:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    num_threads = self._guess_requested_max_num_threads()
+    if num_threads:
+      opts.setdefault("intra_op_parallelism_threads", num_threads)
+      opts.setdefault("inter_op_parallelism_threads", num_threads)
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
@@ -761,17 +808,25 @@ class Engine(object):
           rebatch = True
         self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
-      rebatch = self.train_data.init_seq_order(epoch=epoch) or rebatch
+      if self.train_data.init_seq_order(epoch=epoch):
+        rebatch = True
       if epoch % self.seq_drop_freq == 0:
-        rebatch = self.seq_drop > 0.0 or rebatch
+        if self.seq_drop > 0.0:
+          rebatch = True
       self.epoch = epoch
 
+      if 'train' in self.dataset_batches:
+        if rebatch:
+          del self.dataset_batches['train']
+        else:
+          print("keeping previous dataset batch order for 'train' dataset", file=log.v4)
       for dataset_name, dataset in self.get_eval_datasets().items():
-        if dataset.init_seq_order(self.epoch) and dataset_name in self.dataset_batches:
-          del self.dataset_batches[dataset_name]
-
-      if rebatch and 'train' in self.dataset_batches:
-        del self.dataset_batches['train']
+        if dataset.init_seq_order(epoch=self.epoch):
+          if dataset_name in self.dataset_batches:
+            del self.dataset_batches[dataset_name]
+        else:
+          if dataset_name in self.dataset_batches:
+            print("keeping previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
 
       self.init_train_epoch()
       self.train_epoch()
@@ -820,7 +875,7 @@ class Engine(object):
     if self.is_pretrain_epoch():
       self.print_network_info()
 
-    if not 'train' in self.dataset_batches:
+    if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
@@ -862,7 +917,7 @@ class Engine(object):
   def eval_model(self):
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
-      if not dataset_name in self.dataset_batches:
+      if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size,
                                                                       max_seqs=self.max_seqs,
@@ -919,3 +974,30 @@ class Engine(object):
         print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
+
+  def forward_single(self, dataset, seq_idx):
+    """
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :return: numpy array, output in time major format (time,batch,dim)
+    :rtype: numpy.ndarray
+    """
+    # No Runner instance here but a very simplified version of Runner.run().
+    # First we need a custom DataProvider with a custom BatchSetGenerator
+    # which will yield only one single batch for the provided sequence idx.
+    batch = Batch()
+    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    data_provider = DataProvider(
+      tf_session=self.tf_session, extern_data=self.network.extern_data,
+      dataset=dataset, batches=batches)
+
+    # Maybe some new uninitialized vars. Last check.
+    self.check_uninitialized_vars()
+
+    feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+    output_data = self.network.layers["output"].output
+    output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
+    return output_value
+

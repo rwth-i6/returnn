@@ -716,6 +716,8 @@ class HDFForwardTaskThread(TaskThread):
       assert isinstance(batch, Batch)
       if "inputs" not in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None))
+      if features.shape[-1] > self.inputs.shape[1]:
+        self.inputs.resize(features.shape[-1],axis=1)
       tt = 0
       feats = []
       self.num_seqs += batch.get_num_seqs()
@@ -750,7 +752,7 @@ class HDFForwardTaskThread(TaskThread):
           self.inputs.resize(seqfeats.shape[1], axis=1)
       if self.inputs.shape[0] < self.toffset + tt:
         self.inputs.resize(self.toffset + tt, axis = 0)
-      self.inputs[self.toffset:self.toffset + tt] = numpy.concatenate(feats,axis=0)
+      self.inputs[self.toffset:self.toffset + tt,:feats[0].shape[1]] = numpy.concatenate(feats,axis=0)
       self.cache.attrs['inputPattSize'] = self.inputs.shape[1]
       self.toffset += tt
 

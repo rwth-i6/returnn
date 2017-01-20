@@ -161,11 +161,11 @@ static void tf_cuda_sgemm(
 #endif  // GOOGLE_CUDA
 }
 
-
 #if CUDA
 #if !GOOGLE_CUDA
 #error "GOOGLE_CUDA not defined"
 #endif
+
 
 #define Ndarray_sgemm( \
 	transpose_A, transpose_B, \
@@ -204,7 +204,13 @@ static void tf_cuda_sgemm(
 
 #if CUDA
 
-#if !TENSORFLOW  // Theano
+#if TENSORFLOW
+// Ndarray and friends already declared above, they are same for CUDA and non-CUDA
+#define CUDA_CUR_STREAM  (context->eigen_gpu_device().stream())
+
+#else  // TENSORFLOW, thus Theano here
+#define CUDA_CUR_STREAM  (0)  // default stream
+
 // Defined here: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
 // See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
 #define Ndarray CudaNdarray
@@ -245,21 +251,16 @@ static void tf_cuda_sgemm(
 
 #endif
 
-#define Ndarray_memcpy(y, x, size) (cudaMemcpy(y, x, size, cudaMemcpyDeviceToDevice))
-#define Ndarray_memset(s, c, size) (cudaMemset(s, c, size))
+#define Ndarray_memcpy(y, x, size) (cudaMemcpyAsync(y, x, size, cudaMemcpyDeviceToDevice, CUDA_CUR_STREAM))
+#define Ndarray_memset(s, c, size) (cudaMemsetAsync(s, c, size, CUDA_CUR_STREAM))
 
 #define DIM_GRID 128
 #define DIM_BLOCK 512
 
 #define DEF_KERNEL __global__
 // <<<DimGrid,DimBlock,ShmemSize|0,Stream|0>>>. http://docs.nvidia.com/cuda/cuda-c-programming-guide/#execution-configuration
-#if TENSORFLOW
 #define start_dev_kernel(kernel, args) \
-	(kernel<<<DIM_GRID,DIM_BLOCK,0,context->eigen_gpu_device().stream()>>>  args);
-#else
-#define start_dev_kernel(kernel, args) \
-	(kernel<<<DIM_GRID,DIM_BLOCK>>>  args);
-#endif
+	(kernel<<<DIM_GRID,DIM_BLOCK,0,CUDA_CUR_STREAM>>>  args);
 
 static const char *_cudaGetErrorEnum(cublasStatus_t error) {
 	switch (error) {
@@ -415,11 +416,6 @@ long Ndarray_get_n_total_elements(Ndarray* a) {
 	return c;
 }
 
-void Ndarray_set_zero(Ndarray* a) {
-	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
-	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
-}
-
 //if nd is 2 then assume a weight matrix and just return beginning of data
 //else nd should be 3 and we pick the x part
 float* data_ptr(Ndarray* a, int x) {
@@ -460,6 +456,14 @@ struct Context  {
 #else
     Context() {}
 #endif
+
+
+void _Ndarray_set_zero(Ndarray* a) {
+	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
+	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
+}
+#define Ndarray_set_zero Context(CONTEXT_ARGS)._Ndarray_set_zero
+
 
 //C[x] += A[x]*B[x]
 //(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
@@ -523,3 +527,36 @@ void _affine_global(
 #define affine_global Context(CONTEXT_ARGS)._affine_global
 
 };
+
+#if TENSORFLOW
+#if !CUDA  // only do in main namespace
+//typedef Eigen::ThreadPoolDevice CPUDevice;
+//typedef Eigen::GpuDevice GPUDevice;
+#endif
+
+#if CUDA
+#undef EigenDev
+#define EigenDev Eigen::GpuDevice
+#else
+#define EigenDev Eigen::ThreadPoolDevice
+#endif
+
+#endif
+
+#if TENSORFLOW
+void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const tensorflow::Tensor* src_tensor) {
+    // also check https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h, CopyOp
+    // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
+    //   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/assign_op.h
+    // also see Ndarray_Copy above
+    OP_REQUIRES(context, tgt_tensor, errors::InvalidArgument("tgt_tensor not set"));
+    OP_REQUIRES(context, src_tensor, errors::InvalidArgument("src_tensor not set"));
+    if(!tgt_tensor || !src_tensor) return;
+    OP_REQUIRES(context, Ndarray_SIZE(tgt_tensor) == Ndarray_SIZE(src_tensor),
+        errors::InvalidArgument("shape sizes do not match, got shapes ",
+                                src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
+    //Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
+    auto dev = context->eigen_device<EigenDev>();
+    tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
+}
+#endif

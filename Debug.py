@@ -1,6 +1,12 @@
 
 import os
 import sys
+import signal
+
+
+signum_to_signame = {
+  k: v for v, k in reversed(sorted(signal.__dict__.items()))
+  if v.startswith('SIG') and not v.startswith('SIG_')}
 
 
 global_exclude_thread_ids = set()
@@ -75,21 +81,105 @@ def initBetterExchook():
   sys.excepthook = excepthook
 
 
+def format_signum(signum):
+  """
+  :param int signum:
+  :return: string "signum (signame)"
+  :rtype: str
+  """
+  return "%s (%s)" % (signum, signum_to_signame.get(signum, "unknown"))
+
+
+def signal_handler(signum, frame):
+  """
+  Prints a message on stdout and dump all thread stacks.
+
+  :param int signum: e.g. signal.SIGUSR1
+  :param frame: ignored, will dump all threads
+  """
+  print("Signal handler: got signal %s" % format_signum(signum))
+  dumpAllThreadTracebacks()
+
+
+def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
+  """
+  :param int signum: e.g. signal.SIGUSR1
+  :param bool exceptions_are_fatal: if True, will reraise any exceptions. if False, will just print a message
+  :return: True iff no exception, False otherwise. not necessarily that we registered our own handler
+  :rtype: bool
+  """
+  try:
+    if signal.getsignal(signum) == signal.SIG_DFL:
+      signal.signal(signum, signal_handler)
+    return True
+  except Exception as exc:
+    if exceptions_are_fatal:
+      raise
+    print("Cannot install signal handler for signal %s, exception %s" % (format_signum(signum), exc))
+  return False
+
+
+def installNativeSignalHandler():
+  try:
+    import ctypes
+    # TODO: Move C code here, automatically compile it on-the-fly or so.
+    # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
+    # Maybe not needed because on Linux there is libSegFault.so anyway (installLibSigSegfault()).
+    lib = ctypes.CDLL("/u/zeyer/code/playground/signal_handler.so")
+    lib.install_signal_handler.return_type = None
+    lib.install_signal_handler()
+    print("Installed signal_handler.so.")
+
+  except Exception as exc:
+    print("installNativeSignalHandler exception: %s" % exc)
+
+
+def installLibSigSegfault():
+  try:
+    import ctypes
+    import ctypes.util
+    # libSegFault on Unix/Linux, not on MacOSX
+    libfn = ctypes.util.find_library("SegFault")
+    assert libfn
+    # Nothing more needed than loading it, it will automatically register itself.
+    ctypes.CDLL(libfn)
+    print("Installed libSegFault.so.")
+
+  except Exception as exc:
+    print("installLibSigSegfault exception: %s" % exc)
+
+
 def initFaulthandler(sigusr1_chain=False):
   """
+  Maybe installs signal handlers, SIGUSR1 and SIGUSR2 and others.
+  If no signals handlers are installed yet for SIGUSR1/2, we try to install our own Python handler.
+  This also tries to install the handler from the fauldhandler module,
+  esp for SIGSEGV and others.
+
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
+  # In case that sigusr1_chain, we expect that there is already some handler
+  # for SIGUSR1, and then this will not overwrite this handler.
+  if install_signal_handler_if_default(signal.SIGUSR1):
+    # There is already some handler or we installed our own handler now,
+    # so in any case, it's save that we chain then handler.
+    sigusr1_chain = True
+  # Why not also SIGUSR2... SGE can also send this signal.
+  install_signal_handler_if_default(signal.SIGUSR2)
   try:
     import faulthandler
   except ImportError as e:
     print("faulthandler import error. %s" % e)
-    return
-  # Only enable if not yet enabled -- otherwise, leave it in its current state.
-  if not faulthandler.is_enabled():
-    faulthandler.enable()
-    if os.name != 'nt':
-      import signal
-      faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+  else:
+    # Only enable if not yet enabled -- otherwise, leave it in its current state.
+    if not faulthandler.is_enabled():
+      faulthandler.enable()
+      if os.name != 'nt':
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+  from Util import to_bool
+  if os.environ.get("DEBUG") and to_bool(os.environ.get("DEBUG")):
+    installLibSigSegfault()
+    installNativeSignalHandler()
 
 
 @auto_exclude_all_new_threads
