@@ -2586,7 +2586,7 @@ class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
   def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, min_skip=0, search='search', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=True, **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
@@ -2597,7 +2597,7 @@ class AlignmentLayer(ForwardLayer):
       nskips = len(tdps) - 2
     if base is None:
       base = []
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
     n_cls = kwargs['y_in'][target].n_out
     super(AlignmentLayer, self).__init__(**kwargs)
     if base:
@@ -2651,7 +2651,6 @@ class AlignmentLayer(ForwardLayer):
       self.index = rindex
       self.output = x_in
       idx = (self.index.flatten() > 0).nonzero()
-
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_in[idx], y_idx=y_out.flatten()[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_in[idx], axis=1), y_out.flatten()[idx]))
@@ -2686,7 +2685,6 @@ class AlignmentLayer(ForwardLayer):
       assert search == 'time'
 
     self.att = att
-
     if output_attention:
       self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
       self.attrs['n_out'] = 1
@@ -2724,6 +2722,14 @@ class AlignmentLayer(ForwardLayer):
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+        if blank:
+          jdx = self.sources[0].index.flatten()
+          z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
+          bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
+                                                     y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
+          rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
+                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
+          self.cost_val += T.sum(bnll) - T.sum(rnll)
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
