@@ -613,6 +613,8 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
 
   return current_node, edges_traverse, edges_expanded, num_states_new, num_states, edges
 
+
+def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   """
   search for all edges with a start node >= current_edge[end node] and add to edges_traverse
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
@@ -620,41 +622,22 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   :return list[tuples(int, int, tuple(str, str, str), float)] edges_included: list of edges where
     start node >= current_edge[end node]
   """
-  edges_asa = []
+  edges_gequal_cur = [edge_index for edge_index, edge in enumerate(edges)
+                      if (edge[0] >= current_edge[1] or edge[1] >= current_edge[1])]
 
-  for edge in edges:
-    if edge[0] == 0:
-      if edge[2] == sil:
-        edges_asa.append(edge)
-        states_count += 1
-      else:
-        for index in range(0, 3):
-          if index == 0:
-            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-            edge_t = (edge[0], states_count, tuple_t, edge[3])
-          else:
-            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-            edge_t = (states_count - 1, states_count, tuple_t, edge[3])
-          edges_asa.append(edge_t)
-          states_count += 1
-    elif  edge[1] == num_states - 1:
-      if edge[2] == sil:
-        edges_asa.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
-        states_count += 1
-      else:
-        pass
-    else:
-      for index in range(0, 3):
-        tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-        edge_t = (states_count - 1, states_count, tuple_t, edge[3])
-        edges_asa.append(edge_t)
-        states_count += 1
+  edges_included = []
+  for edge_idx in edges_gequal_cur:
+    edges_included.append(edges[edge_idx])
 
-  assert states_count == num_states_asa, "Number of states: %i != %i"\
-                                         % (states_count, num_states_asa)
-                                         """
+  return edges_included
 
-  return num_states_asa, edges
+
+def __change_edge_to_higher_node_num_for_hmm_fsa():
+  return
+
+
+def __expand_tri_edge_for_hmm_fsa():
+  return
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
