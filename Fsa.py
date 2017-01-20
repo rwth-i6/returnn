@@ -512,14 +512,21 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
   """
   allo_len = len(allo_seq)
   allo_count = 4 * allo_len
+def __count_all_edges_non_sil_or_eps(edges, sil = 'sil', eps = 'eps'):
+  """
+  count all edges in a grpah which are NOT silence or placeholders (epsilon)
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  :param str sil: silence
+  :param str eps: epsilon placeholder / skip edge
+  :return int edges_count: number of edges where NOT silence or skips
+  """
   edges_count = 0
 
   for edge in edges:
-    if edge[2] != sil:
+    if edge[2] != sil and edge[2] != eps:
       edges_count += 1
 
-  assert edges_count == allo_count, "the count for the non-sil, non-eps edges varies: %i != %i"\
-                                    % (edges_count, allo_count)
+  return edges_count
 
   num_states_asa = num_states + 2 * edges_count
 
