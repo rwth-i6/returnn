@@ -260,8 +260,16 @@ class SprintDataset(Dataset):
         del targets[key]
 
     # Check if all targets are valid.
-    for key, v in sorted(targets.items()):
-      if isinstance(v, numpy.ndarray): continue  # ok
+    for key, v in sorted(list(targets.items())):
+      if isinstance(v, numpy.ndarray):
+        continue  # ok
+      if isinstance(v, unicode):
+        v = v.encode("utf8")
+      if isinstance(v, (str, bytes)):
+        v = map(ord, v)
+        v = numpy.array(v, dtype="uint8")
+        targets[key] = v
+        continue
       print >> log.v3, "SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v)
       self._target_black_list += [key]
       del targets[key]
