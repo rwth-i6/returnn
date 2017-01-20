@@ -1084,7 +1084,7 @@ class MfccLayer(_NoOpLayer):
     dctIndMatrix = numpy.reshape(numpy.asarray(range(nrOfFilters)), (nrOfFilters, 1)) * numpy.reshape((numpy.asarray(range(nrOfFilters)) + 1), (1, nrOfFilters))
     dctMatrix = T.cos(numpy.pi/nrOfFilters * dctIndMatrix)
     mfccs = T.dot(filtered, dctMatrix)
-    self.attrs['n_out'] = nrOfMfccCoefficients
+    self.set_attr('n_out', nrOfMfccCoefficients)
     self.make_output(mfccs[:,:,0:nrOfMfccCoefficients])
 
   def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None):
@@ -1156,6 +1156,29 @@ class MfccLayer(_NoOpLayer):
       filterMatrix = numpy.divide(filterMatrixNumerator, filterMatrixDenominator)
       return filterMatrix
 
+class Preemphasis(_NoOpLayer):
+  """
+  This layer is expecting a time signal as input and applying the preemphasis to the segment.
+  (This is not completely correct application of preemphasis, since the first element of the segment does not
+  know its predecessor in the time signal, therefore the effect is different than applying preemphasis on the 
+  complete signal beforehand)
+  """
+  layer_class = "preemphasis_layer"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+
+  def __init__(self, alpha=1.0, **kwargs):
+    """
+    """
+    super(Preemphasis, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    inputVec = self.sources[0].output
+    n_in = self.sources[0].attrs["n_out"]
+    self.set_attr('n_out', n_in)
+    preemphMatrix = numpy.zeros((n_in, n_in)) 
+    numpy.fill_diagonal(preemphMatrix, 1)
+    preemphMatrix[numpy.arange(n_in-1)+1, numpy.arange(n_in-1)] = -1 * alpha
+    outputVec = T.dot(inputVec, preemphMatrix)
+    self.make_output(outputVec)
 
 class EnergyNormalization(_NoOpLayer):
   """
@@ -1171,9 +1194,9 @@ class EnergyNormalization(_NoOpLayer):
     self.set_attr('target', 'classes')
     # normalization matrix
     inputVec = self.sources[0].output
+    self.set_attr('n_out', self.sources[0].attrs["n_out"])
     normFactor = 1.0 / T.sqrt(T.dot(inputVec.T, inputVec))
-#    outputVec = normFactor * inputVec 
-    outputVec = inputVec 
+    outputVec = normFactor * inputVec 
     self.make_output(outputVec)
 
 class DftLayer(_NoOpLayer):
@@ -1204,7 +1227,7 @@ class DftLayer(_NoOpLayer):
     dftImagMatrix = numpy.cos(2*numpy.pi*indexMatrix/(float(dftLength)))
     # apply DFT matrix
     dftAbsCoeff = T.sqrt(T.dot(windowedInput, numpy.transpose(dftRealMatrix))**2 + T.dot(windowedInput, numpy.transpose(dftImagMatrix))**2)
-    self.attrs['n_out'] = kVec.shape[0]
+    self.set_attr('n_out', kVec.shape[0])
     self.make_output(dftAbsCoeff)
 
 class GaussianFilter1DLayer(_NoOpLayer):
