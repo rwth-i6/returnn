@@ -504,10 +504,11 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
+  :param allo_seq: sequence of allophones
   :param str sil: placeholder for silence
   :param int num_states: number of states
   :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
-  :return int num_states, list[tuples(int, int, tuple(str, str, str, int), float)] edges_asa:
+  :return int num_states_asa, list[tuples(int, int, tuple(str, str, str, int), float)] edges_asa:
   """
   allo_len = len(allo_seq)
   allo_count = 4 * allo_len
@@ -555,6 +556,11 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
       edges_node.append(edge_t)
       states_count += 1
   """
+  search for all edges with a start node >= current_edge[end node] and add to edges_traverse
+  :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: list of edges
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_included: list of edges where
+    start node >= current_edge[end node]
   """
   edges_asa = []
 
