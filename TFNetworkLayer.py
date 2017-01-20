@@ -168,6 +168,7 @@ class LayerBase(object):
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources:
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
+      alternatively, this also can be a layer name.
     :param str|None loss: if set, via get_loss
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
@@ -268,10 +269,15 @@ class LayerBase(object):
 
   def _get_target_value(self):
     """
-    :rtype: Data
+    :rtype: Data | None
     """
-    target = self.network.extern_data.get_data(self.target)
-    return target
+    if not self.target or self.target == "none":
+      return None
+    if self.network.extern_data.has_data(self.target):
+      return self.network.extern_data.get_data(self.target)
+    if self.target in self.network.layers:
+      return self.network.layers[self.target].output
+    raise Exception("target %r unknown" % self.target)
 
   def _init_loss(self):
     if self.loss.output is self.output:

@@ -67,6 +67,9 @@ class ExternData(object):
     assert data.name not in self.data
     self.data[data.name] = data
 
+  def has_data(self, name):
+    return name in self.data
+
   def get_data(self, name):
     return self.data[name]
 
