@@ -24,7 +24,7 @@ class CNN(_NoOpLayer):
   def __init__(self, n_features=1, filter=1, d_row=-1, border_mode="valid",
                conv_stride=(1,1), pool_size=(1,1), filter_dilation=(1,1), ignore_border=1,
                pool_stride=0, pool_padding=(0,0), mode="max",
-               activation="tanh", dropout=0.0, factor=1.0, base = None,
+               activation="tanh", dropout=0.0, factor=1.0, base = None, transpose=False,
                force_sample=False, **kwargs):
     """
       :param n_features: integer
@@ -88,6 +88,7 @@ class CNN(_NoOpLayer):
     super(CNN, self).__init__(**kwargs)
     self.base = base
     src = self.sources
+    self.transpose = transpose
     self.status = self.get_status(src)  # [is_conv_layer, n_sources]
     self.is_1d = self.layer_class == "conv_1d"
     is_resnet = self.layer_class == "resnet"
@@ -258,14 +259,22 @@ class CNN(_NoOpLayer):
         )
       )
     self.W = W
-    conv_out = conv2d(
-      input=inputs,
-      filters=W,
-      filter_shape=filter_shape,
-      filter_dilation=filter_dilation,
-      subsample=stride,
-      border_mode=border_mode
-    )
+    if self.transpose:
+      op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(
+        imshp=inputs.shape,
+        kshp=W.shape,
+        subsample=stride, border_mode=border_mode,
+        filter_flip=False)
+      conv_out = op(W, inputs, inputs[2:])
+    else:
+      conv_out = conv2d(
+        input=inputs,
+        filters=W,
+        filter_shape=filter_shape,
+        filter_dilation=filter_dilation,
+        subsample=stride,
+        border_mode=border_mode
+      )
 
     conv_out.name = "conv_out_" + self.name
     conv_out = self.calculate_index(conv_out)

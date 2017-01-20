@@ -2654,8 +2654,6 @@ class AlignmentLayer(ForwardLayer):
       y_out, att, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
       max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
-      if blank:
-        norm = self.index.sum(dtype='float32') / self.sources[0].index.sum(dtype='float32')
       ratt = att
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
@@ -2720,6 +2718,7 @@ class AlignmentLayer(ForwardLayer):
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
         if blank:
           jdx = self.sources[0].index.flatten()
+          norm = self.index.sum(dtype='float32') / self.sources[0].index.sum(dtype='float32')
           z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
           bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
                                                      y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
