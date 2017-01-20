@@ -690,14 +690,8 @@ class IndexToVecLayer(_NoOpLayer):
     super(IndexToVecLayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
 
-    printed_index = theano.printing.Print('index')(self.sources[0].output)
-    z = TheanoUtil.class_idx_seq_to_1_of_k(printed_index, n_out)
-    #z = TheanoUtil.class_idx_seq_to_1_of_k(self.sources[0].output, n_out)
-    printed_z_shape_0 = theano.printing.Print('i_vec 0')(z.shape[0])
-    printed_z_shape_1 = theano.printing.Print('i_vec 1')(z.shape[1])
-    printed_z_shape_2 = theano.printing.Print('i_vec 2')(z.shape[2])
-    self.output = z * printed_z_shape_0 * printed_z_shape_1 * printed_z_shape_2
-    #self.output = z  # (batch, n_out)
+    z = T.cast(TheanoUtil.class_idx_seq_to_1_of_k(self.sources[0].output, n_out), dtype="float32")
+    self.output = z  # (time, batch, n_out)
 
 
 class InterpolationLayer(_NoOpLayer):
