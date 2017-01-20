@@ -557,40 +557,62 @@ def __count_all_edges_non_sil_or_eps(edges, sil = 'sil', eps = 'eps'):
 
   return edges_count
 
-  num_states_asa = num_states + 2 * edges_count
 
+def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                             edges_traverse,
+                                             edges_expanded,
+                                             sil,
+                                             num_states_new,
+                                             num_states,
+                                             edges):
   """
   idea: go to edge. do not change start node. take end node. search in edges at position start
   node (only if ![sil], no change propagates from [sil]). add 2 to start and end node for all
   following nodes (add nodes with index 1, 2 while traversing)
 
-  recursive function:
-  returns (current node, edges to traverse (double entries allowed)(with last one add nodes), edges)
-  """
+  algorithm idea:
+  - take current_edge
+  - search for all edges with a start and end node >= current_edge[end node] and add to edges_traverse
+  - expand current_edge and add three edges to edges_expand
+  - take all edges from edges_traverse and add =+2 to start and end node in edges
 
+  :param int current_node:
+  :param list [tuples(int, int, tuple(str, str, str), float)] edges_traverse:
+    edges to traverse and expand from one triphone into three allophone states,
+    double entries are allowed, with the last entry the edge should be expanded (triphone
+    to allophone states
+  :param list [tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+    list of edges with triphones expanded into three allophone states
+  :param str sil: placeholder for silence
+  :param int num_states_new: expanded number of states
+  :param int num_states: number of states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  :return int current_node:
+  :return list [tuples(int, int, tuple(str, str, str), float)] edges_to_traverse:
+    edges to traverse and expand from one triphone into three allophone states,
+    double entries are allowed, with the last entry the edge should be expanded (triphone
+    to allophone states
+  :return list [tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+    list of edges with triphones expanded into three allophone states
+  :return int num_states_new: expanded number of states
+  :return int num_states: number of states
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
   """
-  edges_node = []
-  states_count = 0
+  edges_traverse.sort()
+  edges_expanded.sort()
+  edges.sort()
+  current_edge = edges.pop(0)
 
-  for edge in edges:
-    if edge[0] == 0:
-      if states_count < edge[1]:
-        node_t = edge[1]
-      elif states_count > edge[1] and states_count < edge[1] + edges_count:
-        node_t = edge[1] + edges_count
-      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
-      edge_t = (0, node_t, tuple_t, 1.)
-      edges_node.append(edge_t)
-      states_count += 1
-    elif edge[1] == num_states - 1 and edge[2] == sil:
-        edges_node.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
-        states_count += 1
-    else:
-      node_t = edge[0] + 2 * edges_count
-      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
-      edge_t = (node_t, node_t + 1, tuple_t, 1.)
-      edges_node.append(edge_t)
-      states_count += 1
+  edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges)
+
+  if current_edge[2] == sil:
+    edges_expanded.append(current_edge)
+    num_states_new += 1
+  else:
+    pass
+
+  return current_node, edges_traverse, edges_expanded, num_states_new, num_states, edges
+
   """
   search for all edges with a start node >= current_edge[end node] and add to edges_traverse
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
