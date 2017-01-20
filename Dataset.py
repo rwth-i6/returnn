@@ -746,14 +746,16 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   return data
 
 
-def convert_data_dims(data_dims):
+def convert_data_dims(data_dims, leave_dict_as_is=False):
   """
   This converts what we called num_outputs originally,
   from the various formats which were allowed in the past
   (just an int, or dict[str,int]) into the format which we currently expect.
-  :param int | dict[str,int|(int,int)] data_dims: what we called num_outputs originally
-  :rtype: dict[str,(int,int)]
-  :returns dict from data-key to (data-dimension, len(shape) (1 ==> sparse))
+  :param int | dict[str,int|(int,int)|dict] data_dims: what we called num_outputs originally
+  :param bool leave_dict_as_is:
+  :rtype: dict[str,(int,int)|dict]
+  :returns dict data-key -> (data-dimension, len(shape) (1 ==> sparse))
+   (or potentially data-key -> dict, if leave_dict_as_is is True; for TensorFlow)
   """
   if isinstance(data_dims, int):
     data_dims = {"classes": data_dims}
@@ -762,6 +764,8 @@ def convert_data_dims(data_dims):
     if isinstance(v, int):
       v = [v, 2 if k == "data" else 1]
       data_dims[k] = v
+    if isinstance(v, dict) and leave_dict_as_is:
+      continue
     assert isinstance(v, (tuple, list))
     assert len(v) == 2
     assert isinstance(v[0], int)

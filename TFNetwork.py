@@ -30,22 +30,8 @@ class ExternData(object):
     :param Config.Config config:
     """
     from NetworkDescription import LayerNetworkDescription
-    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-    data_dims = num_outputs.copy()
-    data_dims.setdefault("data", (num_inputs, 2))
-    sparse_input = config.bool("sparse_input", False)
-    for key, (dim, ndim) in data_dims.items():
-      init_args = {"dim": dim}
-      if ndim == 1:
-        init_args["shape"] = (None,)
-        init_args["sparse"] = True
-      elif ndim == 2:
-        init_args["shape"] = (None, dim)
-      else:
-        assert ndim >= 3
-        init_args["shape"] = (None,) * (ndim - 1) + (dim,)
-      if key == "data":
-        init_args["sparse"] = sparse_input
+    data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
+    for key, init_args in data_dims.items():
       # In Returnn with Theano, we usually have the shape (time,batch,feature).
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:

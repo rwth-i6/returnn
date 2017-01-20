@@ -129,9 +129,54 @@ class LayerNetworkDescription:
     return config.value('loss', 'ce')
 
   @classmethod
-  def num_inputs_outputs_from_config(cls, config):
+  def tf_extern_data_types_from_config(cls, config):
+    """
+    :param Config.Config config:
+    :return: dict data_key -> kwargs of Data
+    :rtype: dict[str,dict[str]]
+    """
+    num_inputs, num_outputs = cls.num_inputs_outputs_from_config(
+      config=config, leave_dict_as_is=True)
+    data_dims = num_outputs.copy()
+    data_dims.setdefault("data", (num_inputs, 2))
+    sparse_input = config.bool("sparse_input", False)
+    data = {}
+    for key, data_type in data_dims.items():
+      if isinstance(data_type, dict):
+        data[key] = data_type
+        continue
+      assert isinstance(data_type, (list, tuple))
+      dim, ndim = data_type
+      init_args = {"dim": dim}
+      if ndim == 1:
+        init_args["shape"] = (None,)
+        init_args["sparse"] = True
+      elif ndim == 2:
+        init_args["shape"] = (None, dim)
+      else:
+        assert ndim >= 3
+        init_args["shape"] = (None,) * (ndim - 1) + (dim,)
+      if key == "data":
+        init_args["sparse"] = sparse_input
+      # In Returnn with Theano, we usually have the shape (time,batch,feature).
+      # In TensorFlow, the default is (batch,time,feature).
+      # This is also what we use here, i.e.:
+      # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
+      data[key] = init_args
+    return data
+
+  @classmethod
+  def num_inputs_outputs_from_config(cls, config, leave_dict_as_is=False):
     """
     :type config: Config.Config
+    :param bool leave_dict_as_is: forwarded to Dataset.convert_data_dims(). used for TensorFlow
+    :returns (num_inputs, num_outputs),
+       where num_inputs is like num_outputs["data"][0],
+       and num_outputs is a dict of data_key -> (dim, ndim),
+         where data_key is e.g. "classes" or "data",
+         dim is the feature dimension or the number of classes,
+         and ndim is the ndim counted without batch-dim,
+         i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
     :rtype: (int,dict[str,(int,int)])
     """
     num_inputs = config.int('num_inputs', 0)
@@ -142,7 +187,7 @@ class LayerNetworkDescription:
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
       from Dataset import convert_data_dims
-      num_outputs = convert_data_dims(num_outputs)
+      num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=leave_dict_as_is)
       if "data" in num_outputs:
         num_inputs = num_outputs["data"][0]
     elif config.has('num_outputs'):
