@@ -179,7 +179,7 @@ class LayerBase(object):
       target = self.network.extern_data.default_target
     self.target = target
     if out_type is None and n_out is None and target:
-      n_out = self.network.extern_data.get_data(target).dim
+      n_out = self._get_target_value(mark_data_key_as_used=False).dim
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -267,14 +267,15 @@ class LayerBase(object):
       d[param_name] = param.eval(session)
     return d
 
-  def _get_target_value(self):
+  def _get_target_value(self, mark_data_key_as_used=True):
     """
+    :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :rtype: Data | None
     """
     if not self.target or self.target == "none":
       return None
     if self.network.extern_data.has_data(self.target):
-      return self.network.extern_data.get_data(self.target)
+      return self.network.get_extern_data(self.target, mark_data_key_as_used=mark_data_key_as_used)
     if self.target in self.network.layers:
       return self.network.layers[self.target].output
     raise Exception("target %r unknown" % self.target)
@@ -333,7 +334,7 @@ class SourceLayer(LayerBase):
     if data_key is None:
       data_key = network.extern_data.default_input
     assert not sources, "source layer does not expect sources"
-    data = network.extern_data.get_data(data_key)
+    data = network.get_extern_data(data_key)
     super(SourceLayer, self).__init__(out_type=data.get_kwargs(), network=network, **kwargs)
     self.output = data
 
@@ -566,6 +567,16 @@ class SoftmaxLayer(LinearLayer):
 
   def __init__(self, activation="softmax", **kwargs):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
+
+
+class FsaLayer(LayerBase):
+  layer_class = "fsa"
+
+  def __init__(self, **kwargs):
+    """
+    """
+    super(FsaLayer, self).__init__(**kwargs)
+    # TODO...
 
 
 class Loss(object):

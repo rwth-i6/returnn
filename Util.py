@@ -774,6 +774,9 @@ class NumbersDict:
     self.value = broadcast_value
     self.max = self.__max_error
 
+  def copy(self):
+    return NumbersDict(self)
+
   @property
   def keys_set(self):
     return set(self.dict.keys())
@@ -784,8 +787,14 @@ class NumbersDict:
   def __setitem__(self, key, value):
     self.dict[key] = value
 
+  def __delitem__(self, key):
+    del self.dict[key]
+
   def get(self, key, default=None):
     return self.dict.get(key, default)
+
+  def pop(self, key, *args):
+    return self.dict.pop(key, *args)
 
   def __iter__(self):
     # This can potentially cause confusion. So enforce explicitness.

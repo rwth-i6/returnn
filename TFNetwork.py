@@ -119,6 +119,7 @@ class TFNetwork(object):
         config = get_global_config()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
+    self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
@@ -213,6 +214,17 @@ class TFNetwork(object):
     if layer.recurrent:
       self.recurrent = True
     return layer
+
+  def get_extern_data(self, key, mark_data_key_as_used=True):
+    """
+    Returns Data and add the key to self.used_data_keys if mark_data_key_as_used.
+    :param str key:
+    :param bool mark_data_key_as_used:
+    :rtype: Data
+    """
+    if mark_data_key_as_used:
+      self.used_data_keys.add(key)
+    return self.extern_data.get_data(key)
 
   def construct_objective(self):
     with tf.name_scope("objective"):
@@ -449,7 +461,8 @@ class TFNetwork(object):
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
-    print("  extern data #:", self.extern_data.get_data_description(), file=log.v2)
+    print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
+    print("  used data keys: %s" % list(sorted(self.used_data_keys)))
     for layer_name, layer in sorted(self.layers.items()):
       print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
     if not self.layers:

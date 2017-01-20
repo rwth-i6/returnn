@@ -461,7 +461,8 @@ class Engine:
                                                                        max_seqs=self.max_seqs,
                                                                        max_seq_length=int(self.max_seq_length),
                                                                        seq_drop=self.seq_drop,
-                                                                       shuffle_batches=self.shuffle_batches)
+                                                                       shuffle_batches=self.shuffle_batches,
+                                                                       used_data_keys=self.network.get_used_data_keys())
     else:
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']

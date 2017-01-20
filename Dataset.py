@@ -450,11 +450,12 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
 
-  def _iterate_seqs(self, chunk_size, chunk_step):
+  def _iterate_seqs(self, chunk_size, chunk_step, used_data_keys):
     """
     Takes chunking into consideration.
     :type chunk_size: int
     :type chunk_step: int
+    :param set(str)|None used_data_keys:
     :return: index, and seq start, seq end
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
@@ -464,6 +465,11 @@ class Dataset(object):
       if chunk_size == 0:
         yield (s, NumbersDict(0), length)
       else:
+        if used_data_keys is not None:
+          length = length.copy()
+          for key in list(length.keys()):
+            if key not in used_data_keys:
+              del length[key]
         t = 0
         default_key = "data"
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
@@ -489,12 +495,13 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
+    :param set(str)|None used_data_keys:
     """
     if batch_size == 0: batch_size = sys.maxsize
     assert batch_size > 0
@@ -508,7 +515,7 @@ class Dataset(object):
         print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
         chunk_size = 0
     batch = Batch()
-    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
+    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:
@@ -553,17 +560,31 @@ class Dataset(object):
     """
     return False
 
-  def generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, shuffle_batches=False):
+  def generate_batches(self,
+                       recurrent_net,
+                       batch_size,
+                       max_seqs=-1,
+                       seq_drop=0.0,
+                       max_seq_length=sys.maxsize,
+                       shuffle_batches=False,
+                       used_data_keys=None):
     """
     :type recurrent_net: bool
     :type batch_size: int
     :type max_seqs: int
     :type shuffle_batches: bool
+    :param set(str)|None used_data_keys:
     :rtype: BatchSetGenerator
     """
     return BatchSetGenerator(
       dataset=self,
-      generator=self._generate_batches(recurrent_net, batch_size, max_seqs, seq_drop, max_seq_length),
+      generator=self._generate_batches(
+        recurrent_net=recurrent_net,
+        batch_size=batch_size,
+        max_seqs=max_seqs,
+        seq_drop=seq_drop,
+        max_seq_length=max_seq_length,
+        used_data_keys=used_data_keys),
       shuffle_batches=shuffle_batches,
       cache_whole_epoch=self.batch_set_generator_cache_whole_epoch())
 
