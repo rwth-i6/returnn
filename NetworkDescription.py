@@ -135,8 +135,7 @@ class LayerNetworkDescription:
     :return: dict data_key -> kwargs of Data
     :rtype: dict[str,dict[str]]
     """
-    num_inputs, num_outputs = cls.num_inputs_outputs_from_config(
-      config=config, leave_dict_as_is=True)
+    num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
     data_dims = num_outputs.copy()
     data_dims.setdefault("data", (num_inputs, 2))
     sparse_input = config.bool("sparse_input", False)
@@ -166,10 +165,9 @@ class LayerNetworkDescription:
     return data
 
   @classmethod
-  def num_inputs_outputs_from_config(cls, config, leave_dict_as_is=False):
+  def num_inputs_outputs_from_config(cls, config):
     """
     :type config: Config.Config
-    :param bool leave_dict_as_is: forwarded to Dataset.convert_data_dims(). used for TensorFlow
     :returns (num_inputs, num_outputs),
        where num_inputs is like num_outputs["data"][0],
        and num_outputs is a dict of data_key -> (dim, ndim),
@@ -187,7 +185,8 @@ class LayerNetworkDescription:
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
       from Dataset import convert_data_dims
-      num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=leave_dict_as_is)
+      from Util import BackendEngine
+      num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=BackendEngine.is_tensorflow_selected())
       if "data" in num_outputs:
         num_inputs = num_outputs["data"][0]
     elif config.has('num_outputs'):
