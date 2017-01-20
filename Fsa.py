@@ -605,12 +605,6 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
 
   edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges)
 
-  if current_edge[2] == sil:
-    edges_expanded.append(current_edge)
-    num_states_new += 1
-  else:
-    pass
-
   return current_node, edges_traverse, edges_expanded, num_states_new, num_states, edges
 
 
