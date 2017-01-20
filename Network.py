@@ -518,7 +518,7 @@ class LayerNetwork(object):
       self.j[target].tag.test_value = numpy.ones((3,2), dtype="int8")
 
   def get_used_data_keys(self):
-    return self.y.keys()
+    return [k for k in sorted(self.j.keys()) if not k.endswith("[sparse:coo]")]
 
   def get_layer(self, layer_name):
     if layer_name in self.hidden:
