@@ -3,7 +3,7 @@ import six
 import h5py
 import numpy as np
 
-from .BundleFile import BundleFile
+from BundleFile import BundleFile
 
 
 class NormalizationData(object):

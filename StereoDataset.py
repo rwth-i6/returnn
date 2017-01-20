@@ -5,12 +5,13 @@
 __author__ = 'menne'
 
 import os
-from collections import deque
 import numpy as np
 import h5py
-
+from collections import deque
 from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
+from BundleFile import BundleFile
+from NormalizationData import NormalizationData
 
 
 class StereoDataset(CachedDataset2):
@@ -55,48 +56,45 @@ class StereoHdfDataset(StereoDataset):
   """
 
   def __init__(self, hdfFile, num_outputs=None, normalizationFile=None,
+               flag_normalizeInputs=True, flag_normalizeTargets=True,
                **kwargs):
-    """constructor
+    """Constructor
 
-    :type hdfFile: string
-    :param hdfFile: path to the hdf file if a bundle file is given (*.bundle)
+    :type hdfFile: str
+    :param hdfFile: path to the hdf file. if a bundle file is given (*.bundle)
                     all hdf files listed in the bundle file will be used for
-                    the dataset. It is assumed that a *.bundle file contains
-                    an absolute path to one hdf file per line.
+                    the dataset.
+                    :see: BundleFile.BundleFile
     :type num_outputs: int
     :param num_outputs: this needs to be set if the stereo data hdf file
                         only contains 'inputs' data (e.g. for the extraction
                         process). Only if no 'outputs' data exists in the hdf
                         file num_outputs is used.
-    :type normalizationFile: string
+    :type normalizationFile: str | None
     :param normalizationFile: path to a HDF file with normalization data.
                               The file is optional: if it is not provided then
                               no normalization is performed.
-                              The file should contain two datasets: "mean" and
-                              "variance".
-                              Both datasets are optional e.g. if only "mean" is
-                              provided then only mean normalization will be
-                              made or e.g. if only "variance" is provided then
-                              only variance normalization i.e. scaling will be
-                              made.
-                              The datasets "mean" and "variance" should have
-                              the same dimensionality as a feature in the
-                              dataset. E.g. an input dataset has a shape
-                              (TimeFrames, FrequencyBins) which means that a
-                              feature has a shape (FrequencyBins) and therefore
-                              "mean" and "variance" must have the same shape
-                              (FrequencyBins).
+                              :see: NormalizationData.NormalizationData
+    :type flag_normalizeInputs: bool
+    :param flag_normalizeInputs: if True then inputs will be normalized
+                                 provided that the normalization HDF file has
+                                 necessary datasets (i.e. mean and variance)
+    :type flag_normalizeTargets: bool
+    :param flag_normalizeTargets: if True then targets will be normalized
+                                 provided that the normalization HDF file has
+                                 necessary datasets (i.e. mean and variance)
     """
     super(StereoHdfDataset, self).__init__(**kwargs)
 
+    self._flag_normalizeInputs = flag_normalizeInputs
+    self._flag_normalizeTargets = flag_normalizeTargets
     # properties of the object which will be set further
     self.num_inputs = None
     self.num_outputs = None
     self._filePaths = None
     self._fileHandlers = None
     self._seqMap = None
-    self._mean = None
-    self._variance = None
+    self._normData = None
 
     if not os.path.isfile(hdfFile):
       raise IOError(hdfFile + ' does not exits')
@@ -113,21 +111,19 @@ class StereoHdfDataset(StereoDataset):
   def _initHdfFileHandlers(self, hdfFile):
     """Initialize HDF file handlers
 
-    :type hdfFile: string
+    :type hdfFile: str
     :param hdfFile: path to an HDF file with sequences or to a bundle file
                     which should contain one path to an HDF file per line
+                    :see: BundleFile.BundleFile
     """
     self._filePaths = []
     self._fileHandlers = []
     if hdfFile.endswith('.bundle'):
       # a bundle file containing a list of hdf files is given
-      with open(hdfFile, 'r') as f:
-        for l in f:
-          hdfFilePath = l.strip()
-          if not hdfFilePath:
-            continue
-          self._filePaths.append(hdfFilePath)
-          self._fileHandlers.append(h5py.File(hdfFilePath, 'r'))
+      bundle = BundleFile(hdfFile)
+      for hdfFilePath in bundle.datasetFilePaths:
+        self._filePaths.append(hdfFilePath)
+        self._fileHandlers.append(h5py.File(hdfFilePath, 'r'))
     else:
       # only a single hdf file is given
       self._filePaths.append(hdfFile)
@@ -160,14 +156,11 @@ class StereoHdfDataset(StereoDataset):
     :type normalizationFile: string
     :param normalizationFile: path to an HDF normalization file which contains
                               optional datasets "mean" and "variance".
+                              :see: NormalizationData.NormalizationData
     """
     if not os.path.isfile(normalizationFile):
       raise IOError(normalizationFile + ' does not exist')
-    with h5py.File(normalizationFile, mode='r') as f:
-      if 'mean' in f:
-        self._mean = f['mean'][...]
-      if 'variance' in f:
-        self._variance = f['variance'][...]
+    self._normData = NormalizationData(normalizationFile)
 
   def _setInputAndOutputDimensions(self, num_outputs):
     """Set properties which correspond to input and output dimensions.
@@ -225,13 +218,12 @@ class StereoHdfDataset(StereoDataset):
   def num_seqs(self):
     """Returns the number of sequences of the dataset
 
-    :rtype: (int)
+    :rtype: int
     :return: the number of sequences of the dataset.
     """
     # has been set during initialization of dataset ...
     if self._num_seqs is not None:
       return self._num_seqs
-
     # ... but for some reason _num_seqs is not set at specific points in the
     # execution of rnn.py therefore the following is a saveguard to fall back on
     self._num_seqs = self._calculateNumberOfSequences()
@@ -259,12 +251,46 @@ class StereoHdfDataset(StereoDataset):
       targets = fileHandler['outputs'][datasetName][...]
 
     # optional normalization
-    if self._mean is not None:
-      inputFeatures -= self._mean
-    if self._variance is not None:
-      inputFeatures /= np.sqrt(self._variance)
+    if self._normData is not None:
+      assert isinstance(self._normData, NormalizationData)
+      # inputs
+      if self._flag_normalizeInputs:
+        inputFeatures = StereoHdfDataset._normalizeVector(
+          inputFeatures,
+          self._normData.inputMean,
+          self._normData.inputVariance,
+        )
+      # outputs
+      if self._flag_normalizeTargets:
+        targets = StereoHdfDataset._normalizeVector(
+          targets,
+          self._normData.outputMean,
+          self._normData.outputVariance,
+        )
 
     return DatasetSeq(seq_idx, inputFeatures, targets)
+
+  @staticmethod
+  def _normalizeVector(v, mean, variance):
+    """Helper method.
+    Applies optional normalization to the given vector.
+
+    :type v: numpy.ndarray | None
+    :param v: vector if available or None otherwise
+    :type mean: numpy.ndarray | None
+    :param mean: mean
+    :type variance: numpy.ndarray | None
+    :param variance: variance
+    :rtype: numpy.ndarray | None
+    :return: normalized vector or None if it was None
+    """
+    if v is None:
+      return v
+    if mean is not None:
+      v -= mean
+    if variance is not None:
+      v /= np.sqrt(variance)
+    return v
 
 
 class DatasetWithTimeContext(StereoHdfDataset):
