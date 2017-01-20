@@ -1186,13 +1186,15 @@ class DftLayer(_NoOpLayer):
   layer_class = "dft_layer_abs"
   recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
 
-  def __init__(self, dftLength=512, **kwargs):
+  def __init__(self, dftLength=512, windowName='hamming', flag_useSqrtWindow=False, **kwargs):
     super(DftLayer, self).__init__(**kwargs)
     self.set_attr('target', 'classes')
     # DFT properties
     nrOfFreqBins=int(numpy.floor(dftLength/2.0) + 1)
     # windowing
-    win = scipy.signal.get_window('hamming', dftLength)
+    win = scipy.signal.get_window(windowName, dftLength)
+    if flag_useSqrtWindow:
+        win = numpy.sqrt(win)
     windowedInput = self.sources[0].output * win
     # create DFT matrix
     nVec = numpy.asarray(range(dftLength))
