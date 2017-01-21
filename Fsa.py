@@ -691,8 +691,34 @@ def __map_higher_node(x, y):
     return (x[0], x[1] + 2, x[2], x[3])
 
 
-def __expand_tri_edge_for_hmm_fsa():
-  return
+def __expand_tri_edge_for_hmm_fsa(current_edge, sil, num_states, edges_expanded):
+  """
+
+  :param tuple(int, int, tuple(str, str, str), float) current_edge: the current edge
+  :param str sil: placeholder for silence
+  :param int num_states: new calculation of number of states
+    where the node count has been raised by two
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_expanded: list of edges
+    where the node count has been raised by two
+  :return int num_states_new:
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+  """
+  start_node = current_edge[0]
+  end_node = current_edge[1]
+  if current_edge[2] == sil:
+    num_states_new = num_states
+  else:
+    for state_t in range(0, 3):
+      tuple_t = (current_edge[2][0], current_edge[2][1], current_edge[2][2], state_t)
+      edge_t = (start_node, end_node, tuple_t, current_edge[3])
+      edges_expanded.append(edge_t)
+      start_node = end_node
+      end_node += 1
+    num_states_new = num_states + 2
+
+  edges_expanded.sort()
+
+  return num_states_new, edges_expanded
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
