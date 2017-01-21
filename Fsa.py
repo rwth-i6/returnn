@@ -681,6 +681,14 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge, sil, edges_expand
   return edges_expanded
 
 
+def __map_higher_node(x, y):
+  assert isinstance(x, tuple), "x has to be a tuple(int, int, tuple(str, str, str), float)"
+  assert isinstance(y, tuple), "y should be a tuple(int, int, tuple(str, str, str), float)"
+  assert len(x) == len(y), "x and y have different lengths"
+  if (x[0] >= y[1]):
+    return (x[0] + 2, x[1] + 2, x[2], x[3])
+  elif (x[1] >= y[1]):
+    return (x[0], x[1] + 2, x[2], x[3])
 
 
 def __expand_tri_edge_for_hmm_fsa():
