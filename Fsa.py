@@ -599,9 +599,31 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   edges_traverse.sort()
   edges_expanded.sort()
   edges.sort()
-  current_edge = edges.pop(0)
 
-  edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges)
+  if len(edges) > 27:
+    current_edge = edges.pop(0)
+
+    edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges)
+
+    edges_expanded = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                                  sil,
+                                                                  edges_expanded,
+                                                                  edges_traverse,
+                                                                  edges)
+
+    num_states_new, edges_expanded = __expand_tri_edge_for_hmm_fsa(current_edge,
+                                                                   sil,
+                                                                   num_states_new,
+                                                                   edges_expanded)
+
+    current_node, edges_traverse, edges_expanded, num_states_new, num_states, edges = \
+      __walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                               edges_traverse,
+                                               edges_expanded,
+                                               sil,
+                                               num_states_new,
+                                               num_states,
+                                               edges)
 
   return current_node, edges_traverse, edges_expanded, num_states_new, num_states, edges
 
