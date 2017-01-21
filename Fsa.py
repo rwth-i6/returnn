@@ -646,8 +646,41 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   return edges_included
 
 
-def __change_edge_to_higher_node_num_for_hmm_fsa():
-  return
+def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge, sil, edges_expanded, edges_traverse, edges):
+  """
+  idea: change start / end node id number += 2 for edges in edges_traverse
+  :param tuples(int, int, tuple(str, str, str), float) current_edge: current edge
+  :param str sil: placeholder for silence
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+    list of edges with expanded allo states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_traverse:
+    list of edges after current edge
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: list of edges
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+   list of edges where the start and end node have been raised by two
+  """
+  edges_traverse.sort()
+  edges.sort()
+
+  print("current_edge", current_edge)
+  print("edges after current", edges_traverse)
+
+  if current_edge[2] == sil:
+    edges_expanded.append(current_edge)
+  else:
+    current_edge_list = [current_edge for n in range(len(edges_traverse))]
+
+    edges_high = map(__map_higher_node, edges_traverse, current_edge_list)
+    edges_sub = filter(lambda x: x not in edges_traverse, edges)
+
+    edges_expanded.extend(edges_high)
+    edges_expanded.extend(edges_sub)
+
+  edges_expanded.sort()
+
+  return edges_expanded
+
+
 
 
 def __expand_tri_edge_for_hmm_fsa():
