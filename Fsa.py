@@ -520,11 +520,11 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
   num_states_check = num_states + 2 * edges_count
 
   current_node = 0
-  num_states_asa = 0
+  num_states_asa = num_states
   edges_traverse = []
   edges_expanded = []
 
-  current_node, edges_traverse, edges_expanded, num_states_asa, num_states, edges = \
+  current_node, edges_traverse, edges_asa, num_states_asa, num_states, edges = \
     __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                              edges_traverse,
                                              edges_expanded,
@@ -533,10 +533,8 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
                                              num_states,
                                              edges)
 
-  edges_asa = edges_expanded
-
-  assert num_states_asa == num_states_check,\
-    "the number of states does not match: %i != %i" % (num_states_asa, num_states_check)
+  #assert num_states_asa == num_states_check,\
+  #  "the number of states does not match: %i != %i" % (num_states_asa, num_states_check)
 
   return num_states_asa, edges_asa
 
