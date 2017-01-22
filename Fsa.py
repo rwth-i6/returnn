@@ -532,13 +532,14 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states_input, edge
 
   assert id(edges_updated) != id(edges_input), "same id for edges is wrong"
 
-  current_node, num_states_input, edges_output, num_states_output, edges_input = \
+  num_states_output, edges_output = \
     __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                              sil,
                                              num_states_input,
                                              edges_input,
                                              edges_traverse,
                                              edges_expanded,
+                                             edges_updated,
                                              num_states_output,
                                              edges_output)
 
@@ -571,6 +572,7 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                              edges_input,
                                              edges_traverse,
                                              edges_expanded,
+                                             edges_updated,
                                              num_states_output,
                                              edges_output):
   """
@@ -627,17 +629,18 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                                                    num_states_input,
                                                                    edges_expanded)
 
-    current_node, num_states_input, edges_input, num_states_output, edges_output = \
+    num_states_output, edges_output = \
       __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                                sil,
                                                num_states_input,
                                                edges_input,
                                                edges_traverse,
                                                edges_expanded,
+                                               edges_updated,
                                                num_states_output,
                                                edges_output)
 
-  return current_node, num_states_input, edges_input, num_states_output, edges_output
+  return num_states_output, edges_output
 
 
 def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
