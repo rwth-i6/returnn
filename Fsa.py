@@ -527,7 +527,7 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states_input, edge
   edges_output = []
 
   edges_updated.extend(edges_input)
-  edges_updated.sort()
+  edges_updated.sort(key=lambda x: x[1])
 
   assert id(edges_updated) != id(edges_input), "same id for edges is wrong"
 
@@ -605,11 +605,11 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   :return int num_states: number of states
   :return list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
   """
-  edges_input.sort()
-  edges_traverse.sort()
-  edges_output.sort()
+  edges_input.sort(key=lambda x: x[1])
+  edges_traverse.sort(key=lambda x: x[1])
+  edges_output.sort(key=lambda x: x[1])
 
-  if len(edges_updated) > 25:
+  if len(edges_updated) > 4:
     current_edge = edges_updated.pop(0)
 
     edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
@@ -653,7 +653,7 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   for edge_idx in edges_gequal_cur:
     edges_traverse.append(edges[edge_idx])
 
-  edges_traverse.sort()
+  edges_traverse.sort(key=lambda x: x[1])
 
   return edges_traverse
 
@@ -691,7 +691,7 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
 
     edges_updated.extend(edges_high)
 
-  edges_updated.sort()
+  edges_updated.sort(key=lambda x: x[1])
 
   return edges_updated, edges_output
 
@@ -736,7 +736,7 @@ def __expand_tri_edge_for_hmm_fsa(current_edge,
     num_states_output = num_states_t + 2
 
   edges_output.extend(edges_expanded)
-  edges_output.sort()
+  edges_output.sort(key=lambda x: x[1])
 
   return num_states_output, edges_output
 
