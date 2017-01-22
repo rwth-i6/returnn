@@ -4,8 +4,6 @@ from __future__ import print_function
 
 """
 TODO
-- tuple -> sets
-- allophone acceptor
 - state tying acceptor
 - class num_states, edges, first and last char
 - description
