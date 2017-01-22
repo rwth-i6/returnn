@@ -486,8 +486,8 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
 
 def sparse_labels(x, seq_lens):
   """
-  :param tf.Tensor x: shape (batch,time)
-  :param tf.Tensor seq_lens: shape (batch,) of int32
+  :param tf.Tensor x: shape (batch,time) -> index, some int type
+  :param tf.Tensor seq_lens: shape (batch,) of int32|int64
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
   :rtype: tf.SparseTensor
   """
@@ -496,9 +496,14 @@ def sparse_labels(x, seq_lens):
     x = check_dim_equal(x, 0, seq_lens, 0)
     batch_size = tf.shape(x)[0]
     mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
-    flat_x = tf.boolean_mask(x, mask)  # (time', ...s...)
-    idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
-    flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
+    with tf.name_scope("flat_x"):
+      flat_x = tf.boolean_mask(x, mask)  # (time', ...s...)
+    with tf.name_scope("idxs"):
+      idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
+      flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
+      if flat_idxs.dtype != tf.int64:
+        # tf.SparseTensor requires int64
+        flat_idxs = tf.cast(flat_idxs, tf.int64)
     return tf.SparseTensor(flat_idxs, flat_x, [batch_size, tf.reduce_max(seq_lens)])
 
 
