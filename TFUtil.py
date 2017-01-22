@@ -502,9 +502,14 @@ def sparse_labels(x, seq_lens):
       idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
       flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
       if flat_idxs.dtype != tf.int64:
-        # tf.SparseTensor requires int64
+        # tf.SparseTensor requires int64 indices
         flat_idxs = tf.cast(flat_idxs, tf.int64)
-    return tf.SparseTensor(flat_idxs, flat_x, [batch_size, tf.reduce_max(seq_lens)])
+    with tf.name_scope("shape"):
+      shape = [batch_size, tf.reduce_max(seq_lens)]
+      # tf.SparseTensor requires int64 shape
+      shape = [tf.cast(d, tf.int64) for d in shape]
+      shape = tf.convert_to_tensor(shape)
+    return tf.SparseTensor(flat_idxs, flat_x, shape)
 
 
 class VariableAssigner(object):
