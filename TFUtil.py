@@ -484,16 +484,19 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     return res
 
 
-def sparse_labels(x, seq_lens):
+def sparse_labels(x, seq_lens, dtype=tf.int32):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
   :param tf.Tensor seq_lens: shape (batch,) of int32|int64
+  :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
   :rtype: tf.SparseTensor
   """
   with tf.name_scope("sparse_labels"):
     x = check_input_ndim(x, ndim=2)
     x = check_dim_equal(x, 0, seq_lens, 0)
+    if dtype:
+      x = tf.cast(x, dtype)
     batch_size = tf.shape(x)[0]
     max_time = tf.shape(x)[1]
     mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
