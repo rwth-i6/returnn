@@ -495,20 +495,27 @@ def sparse_labels(x, seq_lens):
     x = check_input_ndim(x, ndim=2)
     x = check_dim_equal(x, 0, seq_lens, 0)
     batch_size = tf.shape(x)[0]
-    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    max_time = tf.shape(x)[1]
+    mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
     with tf.name_scope("flat_x"):
-      flat_x = tf.boolean_mask(x, mask)  # (time', ...s...)
+      flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
-      idxs = tf.expand_dims(tf.range(tf.shape(x)[1]), 0)  # shape (batch,time)
-      flat_idxs = tf.boolean_mask(idxs, mask)  # (time',)
-      if flat_idxs.dtype != tf.int64:
-        # tf.SparseTensor requires int64 indices
-        flat_idxs = tf.cast(flat_idxs, tf.int64)
+      time_idxs = tf.expand_dims(tf.range(max_time), 0)  # shape (batch,time)
+      flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
+      batch_idxs = tf.expand_dims(tf.range(batch_size), 1)  # shape (batch,time)
+      flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
+      flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
+      # tf.SparseTensor requires int64 indices
+      flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):
       shape = [batch_size, tf.reduce_max(seq_lens)]
       # tf.SparseTensor requires int64 shape
       shape = [tf.cast(d, tf.int64) for d in shape]
       shape = tf.convert_to_tensor(shape)
+    # tf.SparseTensor args:
+    #   indices: A 2-D int64 tensor of shape `[N, ndims]`.
+    #   values: A 1-D tensor of any type and shape `[N]`.
+    #   shape: A 1-D int64 tensor of shape `[ndims]`.
     return tf.SparseTensor(flat_idxs, flat_x, shape)
 
 
