@@ -614,7 +614,7 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   edges_output.sort()
 
   if len(edges_input) > 29:
-    current_edge = edges_input.pop(0)
+    current_edge = edges_updated.pop(0)
 
     edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
 
