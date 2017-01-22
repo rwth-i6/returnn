@@ -616,18 +616,22 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   if len(edges_input) > 29:
     current_edge = edges_input.pop(0)
 
-    edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_input)
+    edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
 
-    edges_expanded = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+    edges_updated, edges_output = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
                                                                   sil,
-                                                                  edges_expanded,
+                                                                  edges_input,
                                                                   edges_traverse,
-                                                                  edges_input)
+                                                                  edges_expanded,
+                                                                  edges_updated,
+                                                                  edges_output)
 
-    num_states_input, edges_expanded = __expand_tri_edge_for_hmm_fsa(current_edge,
-                                                                   sil,
-                                                                   num_states_input,
-                                                                   edges_expanded)
+    num_states_output, edges_expanded = __expand_tri_edge_for_hmm_fsa(current_edge,
+                                                                      sil,
+                                                                      num_states_output,
+                                                                      edges_expanded,
+                                                                      edges_updated,
+                                                                      edges_output)
 
     num_states_output, edges_output = \
       __walk_graph_add_allo_states_for_hmm_fsa(current_node,
@@ -658,15 +662,23 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   for edge_idx in edges_gequal_cur:
     edges_traverse.append(edges[edge_idx])
 
+  edges_traverse.sort()
+
   return edges_traverse
 
 
-def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge, sil, edges_expanded, edges_traverse, edges):
+def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                 sil,
+                                                 edges_input,
+                                                 edges_traverse,
+                                                 edges_expanded,
+                                                 edges_updated,
+                                                 edges_output):
   """
-  idea: change start / end node id number += 2 for edges in edges_traverse
+  idea: change start / end node id number += 2 for edges
   :param tuples(int, int, tuple(str, str, str), float) current_edge: current edge
   :param str sil: placeholder for silence
-  :param list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_updated:
     list of edges with expanded allo states
   :param list[tuples(int, int, tuple(str, str, str), float)] edges_traverse:
     list of edges after current edge
@@ -703,7 +715,12 @@ def __map_higher_node(x, y):
     return (x[0], x[1] + 2, x[2], x[3])
 
 
-def __expand_tri_edge_for_hmm_fsa(current_edge, sil, num_states, edges_expanded):
+def __expand_tri_edge_for_hmm_fsa(current_edge,
+                                  sil,
+                                  num_states,
+                                  edges_expanded,
+                                  edges_updated,
+                                  edges_output):
   """
 
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the current edge
