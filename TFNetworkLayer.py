@@ -723,7 +723,7 @@ class CtcLoss(Loss):
       decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
       from TFUtil import sparse_labels
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
-      error = tf.edit_distance(hypothesis=decoded, truth=labels)
+      error = tf.edit_distance(hypothesis=decoded[0], truth=labels)
       return tf.reduce_mean(error)  # or self.reduce_func?
 
 
