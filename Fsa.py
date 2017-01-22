@@ -606,11 +606,12 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   :return int num_states: number of states
   :return list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
   """
+  edges_input.sort()
   edges_traverse.sort()
   edges_expanded.sort()
-  edges_input.sort()
+  edges_output.sort()
 
-  if len(edges_input) > 27:
+  if len(edges_input) > 29:
     current_edge = edges_input.pop(0)
 
     edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_input)
@@ -644,17 +645,17 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   search for all edges with a start node >= current_edge[end node] and add to edges_traverse
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
   :param list[tuples(int, int, tuple(str, str, str), float)] edges: list of edges
-  :return list[tuples(int, int, tuple(str, str, str), float)] edges_included: list of edges where
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_traverse: list of edges where
     start node >= current_edge[end node]
   """
   edges_gequal_cur = [edge_index for edge_index, edge in enumerate(edges)
                       if (edge[0] >= current_edge[1] or edge[1] >= current_edge[1])]
 
-  edges_included = []
+  edges_traverse = []
   for edge_idx in edges_gequal_cur:
-    edges_included.append(edges[edge_idx])
+    edges_traverse.append(edges[edge_idx])
 
-  return edges_included
+  return edges_traverse
 
 
 def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge, sil, edges_expanded, edges_traverse, edges):
