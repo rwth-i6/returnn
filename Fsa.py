@@ -686,23 +686,32 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
   :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
    list of edges where the start and end node have been raised by two
   """
-  edges_traverse.sort()
-  edges.sort()
-
   if current_edge[2] == sil:
-    edges_expanded.append(current_edge)
+    edges_output.append(current_edge)
   else:
+    # construct list of current edges
     current_edge_list = [current_edge for n in range(len(edges_traverse))]
-
+    # take all edges which have to be traversed and move them to higher nodes
     edges_high = map(__map_higher_node, edges_traverse, current_edge_list)
-    edges_sub = filter(lambda x: x not in edges_traverse, edges)
+    # create new list of edges from edges_updated which are in edges_traverse
+    edges_sub = filter(lambda x: x in edges_traverse, edges_updated)
 
-    edges_expanded.extend(edges_high)
-    edges_expanded.extend(edges_sub)
+    for edge in edges_sub:
+      if edge in edges_updated:
+        edges_updated.remove(edge)
 
-  edges_expanded.sort()
+    edges_updated.extend(edges_high)
 
-  return edges_expanded
+    #print(current_edge)
+    #print("high:", edges_high)
+    #print("sub:", edges_sub)
+    #print("traverse:", edges_traverse)
+    #print("updated:", edges_updated)
+    #print("output:", edges_output)
+
+  edges_updated.sort()
+
+  return edges_updated, edges_output
 
 
 def __map_higher_node(x, y):
