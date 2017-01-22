@@ -523,7 +523,6 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states_input, edge
   current_node = 0
 
   edges_traverse = []
-  edges_expanded = []
   edges_updated = []
   edges_output = []
 
@@ -538,7 +537,6 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states_input, edge
                                              num_states_input,
                                              edges_input,
                                              edges_traverse,
-                                             edges_expanded,
                                              edges_updated,
                                              num_states_output,
                                              edges_output)
@@ -571,7 +569,6 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                              num_states_input,
                                              edges_input,
                                              edges_traverse,
-                                             edges_expanded,
                                              edges_updated,
                                              num_states_output,
                                              edges_output):
@@ -610,27 +607,22 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   """
   edges_input.sort()
   edges_traverse.sort()
-  edges_expanded.sort()
   edges_output.sort()
 
-  if len(edges_input) > 29:
+  if len(edges_updated) > 25:
     current_edge = edges_updated.pop(0)
 
     edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
 
     edges_updated, edges_output = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
                                                                   sil,
-                                                                  edges_input,
                                                                   edges_traverse,
-                                                                  edges_expanded,
                                                                   edges_updated,
                                                                   edges_output)
 
-    num_states_output, edges_expanded = __expand_tri_edge_for_hmm_fsa(current_edge,
+    num_states_output, edges_output = __expand_tri_edge_for_hmm_fsa(current_edge,
                                                                       sil,
                                                                       num_states_output,
-                                                                      edges_expanded,
-                                                                      edges_updated,
                                                                       edges_output)
 
     num_states_output, edges_output = \
@@ -639,7 +631,6 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
                                                num_states_input,
                                                edges_input,
                                                edges_traverse,
-                                               edges_expanded,
                                                edges_updated,
                                                num_states_output,
                                                edges_output)
@@ -669,9 +660,7 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
 
 def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
                                                  sil,
-                                                 edges_input,
                                                  edges_traverse,
-                                                 edges_expanded,
                                                  edges_updated,
                                                  edges_output):
   """
@@ -702,13 +691,6 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
 
     edges_updated.extend(edges_high)
 
-    #print(current_edge)
-    #print("high:", edges_high)
-    #print("sub:", edges_sub)
-    #print("traverse:", edges_traverse)
-    #print("updated:", edges_updated)
-    #print("output:", edges_output)
-
   edges_updated.sort()
 
   return edges_updated, edges_output
@@ -726,25 +708,24 @@ def __map_higher_node(x, y):
 
 def __expand_tri_edge_for_hmm_fsa(current_edge,
                                   sil,
-                                  num_states,
-                                  edges_expanded,
-                                  edges_updated,
+                                  num_states_t,
                                   edges_output):
   """
 
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the current edge
   :param str sil: placeholder for silence
-  :param int num_states: new calculation of number of states
+  :param int num_states_t: new calculation of number of states
     where the node count has been raised by two
   :param list[tuples(int, int, tuple(str, str, str), float)] edges_expanded: list of edges
     where the node count has been raised by two
-  :return int num_states_new:
+  :return int num_states_output:
   :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
   """
+  edges_expanded = []
   start_node = current_edge[0]
   end_node = current_edge[1]
   if current_edge[2] == sil:
-    num_states_new = num_states
+    num_states_output = num_states_t
   else:
     for state_t in range(0, 3):
       tuple_t = (current_edge[2][0], current_edge[2][1], current_edge[2][2], state_t)
@@ -752,11 +733,12 @@ def __expand_tri_edge_for_hmm_fsa(current_edge,
       edges_expanded.append(edge_t)
       start_node = end_node
       end_node += 1
-    num_states_new = num_states + 2
+    num_states_output = num_states_t + 2
 
-  edges_expanded.sort()
+  edges_output.extend(edges_expanded)
+  edges_output.sort()
 
-  return num_states_new, edges_expanded
+  return num_states_output, edges_output
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
