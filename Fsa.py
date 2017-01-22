@@ -167,8 +167,8 @@ def __adds_loop_edges(num_states, edges):
       weight is a float, in -log space
   """
   print("Adding loops...")
-  # adds loops to fsa
-  for state in range(1, num_states):
+  # adds loops to fsa (loops on first and last node excluded)
+  for state in range(1, num_states - 1):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
     edges.append((state, state, edges[edges_included[0]][2], 1.))
 
@@ -778,7 +778,7 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_sta
   lexicon = __load_lexicon(lexicon_file)
 
   for edge in edges:
-    if (edge[2] == 'blank' or edge[2] == '') and isinstance(edge[2], str):
+    if (edge[2] == 'blank' or edge[2] == '' or edge[2] == sil) and isinstance(edge[2], str):
       label = '#'
     else:
       label = edge[2]
