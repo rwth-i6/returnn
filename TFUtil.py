@@ -120,6 +120,8 @@ class Data(object):
 
   def get_description(self, with_name=True, with_placeholder=False):
     keys = ["shape", "dtype", "sparse"]
+    if self.sparse:
+      keys.append("dim")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
