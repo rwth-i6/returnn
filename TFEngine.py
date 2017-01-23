@@ -691,9 +691,6 @@ class Engine(object):
       eval_datasets[name] = dataset
     return eval_datasets
 
-  def print_network_info(self):
-    self.network.print_network_info()
-
   def save_model(self, filename):
     """
     :param str filename: full filename for model
@@ -766,12 +763,12 @@ class Engine(object):
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
-    network.print_network_info()
     self.network = network
     if self.train_data:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
       self.updater = Updater(config=self.config, tf_session=self.tf_session, network=network)
       self.updater.set_trainable_vars(network.get_trainable_params())
+    network.print_network_info()
 
   def maybe_init_new_network(self, net_desc):
     if self.network.layers_desc == net_desc:
@@ -875,9 +872,6 @@ class Engine(object):
       epoch0_model_filename = self.epoch_model_filename(self.model_filename, 0, self.is_pretrain_epoch())
       print("save initial epoch1 model", epoch0_model_filename, file=log.v4)
       self.save_model(epoch0_model_filename)
-
-    if self.is_pretrain_epoch():
-      self.print_network_info()
 
     if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
