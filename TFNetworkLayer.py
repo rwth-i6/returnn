@@ -708,7 +708,7 @@ class CtcLoss(Loss):
       from TFUtil import sparse_labels
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
       loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
-      return tf.reduce_mean(loss)  # or self.reduce_func?
+      return self.reduce_func(loss)
 
   def get_error(self):
     if not self.target.sparse:
@@ -723,8 +723,8 @@ class CtcLoss(Loss):
       decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
       from TFUtil import sparse_labels
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
-      error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels)
-      return tf.reduce_mean(error)  # or self.reduce_func?
+      error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
+      return self.reduce_func(error)
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
