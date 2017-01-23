@@ -178,8 +178,16 @@ class LayerBase(object):
     if loss and not target:
       target = self.network.extern_data.default_target
     self.target = target
+    self.loss = None  # type: Loss
+    if loss:
+      loss_class = get_loss_class(loss)
+      self.loss = loss_class()
+      if self.loss.recurrent:
+        self.recurrent = True
     if out_type is None and n_out is None and target:
       n_out = self._get_target_value(mark_data_key_as_used=False).dim
+      if self.loss:
+        n_out = self.loss.get_auto_output_layer_dim(n_out)
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -205,12 +213,6 @@ class LayerBase(object):
     self.output_before_softmax = None  # type: None|tf.Tensor
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
-    self.loss = None
-    if loss:
-      loss_class = get_loss_class(loss)
-      self.loss = loss_class()
-      if self.loss.recurrent:
-        self.recurrent = True
     self.L2 = L2
     self._is_output_layer = is_output_layer
 
@@ -647,6 +649,14 @@ class Loss(object):
     """
     raise NotImplementedError
 
+  def get_auto_output_layer_dim(self, target_dim):
+    """
+    :param int target_dim:
+    :return: normally just the same as target_dim. e.g. for CTC, we would add 1 for the blank label
+    :rtype: int
+    """
+    return target_dim
+
 
 class CrossEntropyLoss(Loss):
   class_name = "ce"
@@ -704,6 +714,8 @@ class CtcLoss(Loss):
       logits = self.output_before_softmax
       if logits is None:
         logits = tf.log(self.output)
+      assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
+      assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
       seq_lens = self.output_seq_lens
       from TFUtil import sparse_labels
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
@@ -725,6 +737,9 @@ class CtcLoss(Loss):
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
       error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
+
+  def get_auto_output_layer_dim(self, target_dim):
+    return target_dim + 1  # one added for blank
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
