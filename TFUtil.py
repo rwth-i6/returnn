@@ -654,11 +654,12 @@ def expand_dims_unbroadcast(x, axis, dim):
     return x
 
 
-def sparse_labels(x, seq_lens, dtype=tf.int32):
+def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
   :param tf.Tensor seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
+  :param bool collapse_repeated: like uniq() behavior
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
   :rtype: tf.SparseTensor
   """
@@ -670,6 +671,11 @@ def sparse_labels(x, seq_lens, dtype=tf.int32):
     batch_size = tf.shape(x)[0]
     max_time = tf.shape(x)[1]
     mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    if collapse_repeated:
+      with tf.name_scope("collapse_repeated"):
+        diffs = tf.concat(1, [tf.ones_like(x[:, :1]), x[:, 1:] - x[:, :-1]])  # shape (batch,time)
+        zero = diffs.dtype.as_numpy_dtype()
+        mask = tf.logical_and(tf.not_equal(diffs, zero), mask)
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
@@ -690,6 +696,19 @@ def sparse_labels(x, seq_lens, dtype=tf.int32):
     #   values: A 1-D tensor of any type and shape `[N]`.
     #   shape: A 1-D int64 tensor of shape `[ndims]`.
     return tf.SparseTensor(flat_idxs, flat_x, shape)
+
+
+def uniq(x):
+  """
+  :param tf.Tensor x: 1D shape (time,) -> index, some int type
+  :return: like numpy.uniq. unlike tf.unique which will never repeat entries.
+  Example: uniq([0, 0, 1, 1, 0, 0]) == [0, 1, 0], tf.unique([0, 0, 1, 1, 0, 0]) == [0, 1].
+  For a batched variant, see sparse_labels() with option collapse_repeated.
+  """
+  diffs = tf.concat(0, [tf.ones_like(x[:1]), x[1:] - x[:-1]])
+  nonzero_idx = tf.where(diffs)
+  x_uniq = tf.gather_nd(x, nonzero_idx)
+  return x_uniq
 
 
 class VariableAssigner(object):
@@ -1046,4 +1065,3 @@ def make_var_tuple(v):
     return tuple(v)
   assert isinstance(v, tuple)
   return v
-
