@@ -556,9 +556,34 @@ class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
 
-  def __init__(self, target_collapse_repeated=False):
+  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False):
+    """
+    :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
+    :param bool auto_clip_target_len: see self._get_target_sparse_labels().
+    """
     super(CtcLoss, self).__init__()
     self.target_collapse_repeated = target_collapse_repeated
+    self.auto_clip_target_len = auto_clip_target_len
+    self._target_sparse_labels = None
+
+  def init(self, **kwargs):
+    self._target_sparse_labels = None
+    super(CtcLoss, self).init(**kwargs)
+
+  def _get_target_sparse_labels(self):
+    if self._target_sparse_labels is not None:
+      return self._target_sparse_labels
+    from TFUtil import sparse_labels
+    target_seq_lens = self.target_seq_lens
+    if self.auto_clip_target_len:
+      # Not more than output_seq_lens, otherwise we can get an exception by the CTC algorithm
+      # "Not enough time for target transition sequence".
+      # One less to allow for at least one blank somewhere.
+      target_seq_lens = tf.minimum(target_seq_lens, tf.maximum(self.output_seq_lens - 1, 0))
+    labels = sparse_labels(self.target.placeholder, target_seq_lens,
+                           collapse_repeated=self.target_collapse_repeated)
+    self._target_sparse_labels = labels
+    return labels
 
   def get_value(self):
     if not self.target.sparse:
@@ -570,8 +595,7 @@ class CtcLoss(Loss):
       assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
       assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
       seq_lens = self.output_seq_lens
-      from TFUtil import sparse_labels
-      labels = sparse_labels(self.target.placeholder, self.target_seq_lens, collapse_repeated=self.target_collapse_repeated)
+      labels = self._get_target_sparse_labels()
       loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
       return self.reduce_func(loss)
 
@@ -586,8 +610,7 @@ class CtcLoss(Loss):
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens
       decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
-      from TFUtil import sparse_labels
-      labels = sparse_labels(self.target.placeholder, self.target_seq_lens, collapse_repeated=self.target_collapse_repeated)
+      labels = self._get_target_sparse_labels()
       error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
 
