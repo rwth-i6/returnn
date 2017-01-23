@@ -614,9 +614,9 @@ class Loss(object):
       self.output_flat = None
       self.output_before_softmax_flat = None
       if output_before_softmax is not None:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.target_seq_lens, time_major=output.is_time_major)
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.output_seq_lens, time_major=output.is_time_major)
       else:
-        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.target_seq_lens, time_major=output.is_time_major)
+        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
 
   def get_error(self):
