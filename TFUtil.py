@@ -484,6 +484,22 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     return res
 
 
+def expand_dims_unbroadcast(x, axis, dim):
+  """
+  :param tf.Tensor x:
+  :param int|tf.Tensor axis: new axis
+  :param int|tf.Tensor dim: dimension for axis
+  :return: if x is of shape (a,b,c) and axis=0, then we return (dim,a,b,c)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("expand_dims_unbroadcast"):
+    x = tf.expand_dims(x, axis)
+    new_ndim = x.get_shape().ndims
+    assert new_ndim is not None
+    x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
+    return x
+
+
 def sparse_labels(x, seq_lens, dtype=tf.int32):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
@@ -503,9 +519,9 @@ def sparse_labels(x, seq_lens, dtype=tf.int32):
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
-      time_idxs = tf.expand_dims(tf.range(max_time), 0)  # shape (batch,time)
+      time_idxs = expand_dims_unbroadcast(tf.range(max_time), 0, batch_size)  # shape (batch,time)
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
-      batch_idxs = tf.expand_dims(tf.range(batch_size), 1)  # shape (batch,time)
+      batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
       flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
       flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
       # tf.SparseTensor requires int64 indices
