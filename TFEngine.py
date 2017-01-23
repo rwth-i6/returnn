@@ -302,7 +302,7 @@ class Runner(object):
       layer = self.engine.network.layers[key.split(':')[-1]]
       if layer.target:
         return layer.target
-    return self.data_provider.extern_data.default_target  # e.g. "classes"
+    return self.engine.network.get_default_target()  # e.g. "classes"
 
   def _epoch_norm_factor_for_result(self, key):
     target = self._get_target_for_key(key)
