@@ -7,7 +7,8 @@ class LayerBase(object):
   layer_class = None
   recurrent = False
 
-  def __init__(self, name, network, n_out=None, out_type=None, sources=(), target=None, loss=None, L2=None, is_output_layer=None):
+  def __init__(self, name, network, n_out=None, out_type=None, sources=(),
+               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -17,6 +18,7 @@ class LayerBase(object):
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
       alternatively, this also can be a layer name.
     :param str|None loss: if set, via get_loss
+    :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
     """
@@ -28,7 +30,7 @@ class LayerBase(object):
     self.loss = None  # type: Loss
     if loss:
       loss_class = get_loss_class(loss)
-      self.loss = loss_class()
+      self.loss = loss_class(**(loss_opts or {}))
       if self.loss.recurrent:
         self.recurrent = True
     if out_type is None and n_out is None and target:
@@ -554,6 +556,10 @@ class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
 
+  def __init__(self, target_collapse_repeated=False):
+    super(CtcLoss, self).__init__()
+    self.target_collapse_repeated = target_collapse_repeated
+
   def get_value(self):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
@@ -565,7 +571,7 @@ class CtcLoss(Loss):
       assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
       seq_lens = self.output_seq_lens
       from TFUtil import sparse_labels
-      labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
+      labels = sparse_labels(self.target.placeholder, self.target_seq_lens, collapse_repeated=self.target_collapse_repeated)
       loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
       return self.reduce_func(loss)
 
@@ -581,7 +587,7 @@ class CtcLoss(Loss):
       seq_lens = self.output_seq_lens
       decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
       from TFUtil import sparse_labels
-      labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
+      labels = sparse_labels(self.target.placeholder, self.target_seq_lens, collapse_repeated=self.target_collapse_repeated)
       error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
 
