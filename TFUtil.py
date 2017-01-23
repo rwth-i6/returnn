@@ -1065,3 +1065,28 @@ def make_var_tuple(v):
     return tuple(v)
   assert isinstance(v, tuple)
   return v
+
+
+def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
+  """
+  Adds scaled noise from a 0-mean normal distribution to gradients.
+  Adapted from tf.contrib.layers.optimizers.
+
+  :param list[(tf.Tensor, tf.Variable)] grads_and_vars:
+  :param float gradient_noise_scale: used as stddev for tf.truncated_normal().
+  :return: adapted grads_and_vars
+  :rtype: list[(tf.Tensor, tf.Variable)]
+  """
+  gradients, variables = zip(*grads_and_vars)
+  noisy_gradients = []
+  for gradient in gradients:
+    if gradient is None:
+      noisy_gradients.append(None)
+      continue
+    if isinstance(gradient, tf.IndexedSlices):
+      gradient_shape = gradient.dense_shape
+    else:
+      gradient_shape = gradient.get_shape()
+    noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale)
+    noisy_gradients.append(gradient + noise)
+  return list(zip(noisy_gradients, variables))

@@ -507,10 +507,6 @@ class Updater(object):
     lr = self.learning_rate_var
     epsilon = 1e-16
     momentum = self.config.float("momentum", 0.0)
-    if self.config.float("gradient_clip", 0.0):
-      raise NotImplementedError("gradient_clip not implemented yet")
-    if self.config.float("gradient_noise", 0.0):
-      raise NotImplementedError("gradient_noise not implemented yet")
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
       assert isinstance(optim_config, dict)
@@ -556,12 +552,29 @@ class Updater(object):
 
     assert self.loss is not None
     with tf.variable_scope("optimize"):
+      # AccumulateN might not be deterministic but should be faster and should require less memory.
+      # We might want to make this configurable.
       aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-      self.optim_op = self.optimizer.minimize(
+      grad_noise = self.config.float("gradient_noise", 0.0)
+      grad_clip = self.config.float("gradient_clip", 0.0)
+
+      # Extended self.optimizer.minimize() to optinally modify gradients.
+      grads_and_vars = self.optimizer.compute_gradients(
         self.loss, var_list=self.trainable_vars,
         aggregation_method=aggregation_method)
+      if not [v for g, v in grads_and_vars if g is not None]:
+        raise Exception("no single variable to train")
+      # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+      if grad_noise:
+        assert grad_noise > 0
+        from TFUtil import add_scaled_noise_to_gradients
+        grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
+      if grad_clip:
+        assert grad_clip > 0
+        grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+      apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
-      self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
+      self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
