@@ -434,7 +434,7 @@ class Device(object):
         self.trainnet.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = [k for k in sorted(self.trainnet.j.keys()) if not k.endswith("[sparse:coo]")]
+    self.used_data_keys = self.trainnet.get_used_data_keys()
     print >> log.v4, "Device train-network: Used data keys:", self.used_data_keys
     assert "data" in self.used_data_keys
     self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),

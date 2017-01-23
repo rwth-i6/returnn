@@ -210,7 +210,7 @@ class ClusteringDataset(CachedDataset2):
     data["cluster_idx"] = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
     return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data)
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=None):
+  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=None, used_data_keys=None):
     import sys
     if max_seq_length is None: max_seq_length = sys.maxsize
     if batch_size == 0: batch_size = sys.maxsize
@@ -223,7 +223,7 @@ class ClusteringDataset(CachedDataset2):
     from EngineBatch import Batch
     batch = Batch()
     last_seq_idx = None
-    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step):
+    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if self.single_cluster:
         if last_seq_idx is not None and last_seq_idx != seq_idx:
           last_seq_name = self.get_tag(last_seq_idx)

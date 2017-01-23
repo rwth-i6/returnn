@@ -168,6 +168,7 @@ class LayerBase(object):
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources:
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
+      alternatively, this also can be a layer name.
     :param str|None loss: if set, via get_loss
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
@@ -178,7 +179,7 @@ class LayerBase(object):
       target = self.network.extern_data.default_target
     self.target = target
     if out_type is None and n_out is None and target:
-      n_out = self.network.extern_data.get_data(target).dim
+      n_out = self._get_target_value(mark_data_key_as_used=False).dim
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -266,12 +267,18 @@ class LayerBase(object):
       d[param_name] = param.eval(session)
     return d
 
-  def _get_target_value(self):
+  def _get_target_value(self, mark_data_key_as_used=True):
     """
-    :rtype: Data
+    :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
+    :rtype: Data | None
     """
-    target = self.network.extern_data.get_data(self.target)
-    return target
+    if not self.target or self.target == "none":
+      return None
+    if self.network.extern_data.has_data(self.target):
+      return self.network.get_extern_data(self.target, mark_data_key_as_used=mark_data_key_as_used)
+    if self.target in self.network.layers:
+      return self.network.layers[self.target].output
+    raise Exception("target %r unknown" % self.target)
 
   def _init_loss(self):
     if self.loss.output is self.output:
@@ -327,7 +334,7 @@ class SourceLayer(LayerBase):
     if data_key is None:
       data_key = network.extern_data.default_input
     assert not sources, "source layer does not expect sources"
-    data = network.extern_data.get_data(data_key)
+    data = network.get_extern_data(data_key)
     super(SourceLayer, self).__init__(out_type=data.get_kwargs(), network=network, **kwargs)
     self.output = data
 
@@ -562,6 +569,16 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
+class FsaLayer(LayerBase):
+  layer_class = "fsa"
+
+  def __init__(self, **kwargs):
+    """
+    """
+    super(FsaLayer, self).__init__(**kwargs)
+    # TODO...
+
+
 class Loss(object):
   class_name = None
   recurrent = False  # if this is a frame-wise criteria, this will be False
@@ -652,6 +669,30 @@ class CrossEntropyLoss(Loss):
           return -self.reduce_func(out)
 
 
+class GenericCELoss(Loss):
+  class_name = "generic_ce"
+
+  def get_value(self):
+    # Should be generic for any activation function.
+    # (Except when the labels are not independent, such as for softmax.)
+    y = self.p_y_given_x  # Can be anything, e.g. exp or sigmoid, but not softmax.
+    y /= T.sum(y, axis=2, keepdims=True)
+    nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
+    from TheanoUtil import class_idx_seq_to_1_of_k
+    y_idx = self.y
+    assert y_idx.ndim == 2
+    bw = class_idx_seq_to_1_of_k(y_idx, num_classes=self.attrs["n_out"])
+    assert bw.ndim == 3
+    err_inner = bw * nlog_scores
+    src_index = self.sources[0].index
+    float_idx = T.cast(src_index, "float32")
+    float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
+    err = (err_inner * float_idx_bc).sum()
+    grad_f = T.grad(None, self.z, known_grads={T.log(self.p_y_given_x): T.ones(y.shape, y.dtype)})
+    known_grads = {self.z: grad_f * (y - bw) * float_idx_bc}
+    return err, known_grads
+
+
 class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
@@ -682,7 +723,7 @@ class CtcLoss(Loss):
       decoded, _ = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)
       from TFUtil import sparse_labels
       labels = sparse_labels(self.target.placeholder, self.target_seq_lens)
-      error = tf.edit_distance(hypothesis=decoded, truth=labels)
+      error = tf.edit_distance(hypothesis=decoded[0], truth=labels)
       return tf.reduce_mean(error)  # or self.reduce_func?
 
 

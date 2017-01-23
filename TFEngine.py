@@ -26,12 +26,13 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, extern_data, capacity=10, have_fixed_batch_size=False):
+  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, have_fixed_batch_size=False):
     """
     :param tf.Session tf_session:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param ExternData extern_data:
+    :param set(str)|None data_keys:
     :param int capacity:
     """
     self.tf_session = tf_session
@@ -39,7 +40,9 @@ class DataProvider(object):
     self.dataset = dataset
     self.batches = batches
     self.extern_data = extern_data
-    self.data_keys = sorted(extern_data.data.keys())
+    if data_keys is None:
+      data_keys = extern_data.data.keys()
+    self.data_keys = sorted(data_keys)
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
     self.tf_queue = None  # type: tf.FIFOQueue
@@ -216,6 +219,7 @@ class Runner(object):
     self.engine = engine
     self.data_provider = DataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
+      data_keys=engine.network.used_data_keys,
       dataset=dataset, batches=batches)
     self._should_train = train
     self._should_eval = eval
@@ -881,7 +885,8 @@ class Engine(object):
                                                                        max_seqs=self.max_seqs,
                                                                        max_seq_length=int(self.max_seq_length),
                                                                        seq_drop=self.seq_drop,
-                                                                       shuffle_batches=self.shuffle_batches)
+                                                                       shuffle_batches=self.shuffle_batches,
+                                                                       used_data_keys=self.network.used_data_keys)
     else:
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
@@ -991,6 +996,7 @@ class Engine(object):
     batches = BatchSetGenerator(dataset, generator=batch_generator)
     data_provider = DataProvider(
       tf_session=self.tf_session, extern_data=self.network.extern_data,
+      data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches)
 
     # Maybe some new uninitialized vars. Last check.

@@ -30,22 +30,8 @@ class ExternData(object):
     :param Config.Config config:
     """
     from NetworkDescription import LayerNetworkDescription
-    num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-    data_dims = num_outputs.copy()
-    data_dims.setdefault("data", (num_inputs, 2))
-    sparse_input = config.bool("sparse_input", False)
-    for key, (dim, ndim) in data_dims.items():
-      init_args = {"dim": dim}
-      if ndim == 1:
-        init_args["shape"] = (None,)
-        init_args["sparse"] = True
-      elif ndim == 2:
-        init_args["shape"] = (None, dim)
-      else:
-        assert ndim >= 3
-        init_args["shape"] = (None,) * (ndim - 1) + (dim,)
-      if key == "data":
-        init_args["sparse"] = sparse_input
+    data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
+    for key, init_args in data_dims.items():
       # In Returnn with Theano, we usually have the shape (time,batch,feature).
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:
@@ -66,6 +52,9 @@ class ExternData(object):
     """
     assert data.name not in self.data
     self.data[data.name] = data
+
+  def has_data(self, name):
+    return name in self.data
 
   def get_data(self, name):
     return self.data[name]
@@ -116,6 +105,7 @@ class TFNetwork(object):
         config = get_global_config()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
+    self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
@@ -210,6 +200,17 @@ class TFNetwork(object):
     if layer.recurrent:
       self.recurrent = True
     return layer
+
+  def get_extern_data(self, key, mark_data_key_as_used=True):
+    """
+    Returns Data and add the key to self.used_data_keys if mark_data_key_as_used.
+    :param str key:
+    :param bool mark_data_key_as_used:
+    :rtype: Data
+    """
+    if mark_data_key_as_used:
+      self.used_data_keys.add(key)
+    return self.extern_data.get_data(key)
 
   def construct_objective(self):
     with tf.name_scope("objective"):
@@ -446,7 +447,8 @@ class TFNetwork(object):
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
-    print("  extern data #:", self.extern_data.get_data_description(), file=log.v2)
+    print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
+    print("  used data keys: %s" % list(sorted(self.used_data_keys)))
     for layer_name, layer in sorted(self.layers.items()):
       print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
     if not self.layers:
