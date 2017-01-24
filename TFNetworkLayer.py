@@ -537,9 +537,13 @@ class GenericCELoss(Loss):
     super(GenericCELoss, self).__init__(**kwargs)
 
     def loss(z, y, grad_f, target):
-      y /= tf.reduce_sum(y, axis=1, keep_dims=True)
-      nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))
-      return self.reduce_func(tf.gather_nd(nlog_scores, target))
+      nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
+      nlog_scores = tf.transpose(nlog_scores, [1, 0])  # (dim,time)
+      # target is shape (time,) -> index.
+      target_exp = tf.pack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
+      # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).
+      gathered = tf.gather_nd(nlog_scores, target_exp)   # (time,)
+      return self.reduce_func(gathered)
 
     def loss_grad(op, grad):
       """
@@ -563,7 +567,7 @@ class GenericCELoss(Loss):
     # Should be generic for any activation function.
     # (Except when the labels are not independent, such as for softmax.)
     # See Theano NetworkOutputLayer.FramewiseOutputLayer.cost() with "generic_ce" loss.
-    from TFUtil import swapaxes, sequence_mask, flatten_with_seq_len_mask
+    from TFUtil import flatten_with_seq_len_mask
     # activation function can be anything, e.g. exp or sigmoid, but not softmax, must be elemwise.
     assert self.output_before_activation
     x = self.output_before_activation.x
@@ -574,6 +578,7 @@ class GenericCELoss(Loss):
     x = flatten_with_seq_len_mask(x, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
     y = flatten_with_seq_len_mask(y, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
     assert y.get_shape().ndims == 2
+    y /= tf.reduce_sum(y, axis=1, keep_dims=True)
     assert self.output.dim == self.target.dim
     assert self.target.sparse
     return self._loss_func(x, y, grad_f, self.target_flat)
