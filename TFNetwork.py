@@ -255,6 +255,33 @@ class TFNetwork(object):
       self.construct_objective()
     return self.total_objective
 
+  def get_used_targets(self):
+    """
+    :return: sorted list of targets
+    :rtype: list[str]
+    """
+    targets = set()
+    for layer in self.layers.values():
+      if layer.target:
+        targets.add(layer.target)
+    return list(sorted(targets))
+
+  def get_default_target(self):
+    """
+    :return: e.g. "classes"
+    :rtype: str
+    """
+    targets = self.get_used_targets()
+    default_target = self.extern_data.default_target
+    if not targets:
+      return default_target
+    if len(targets) == 1:
+      return targets[0]
+    if default_target in targets:
+      return default_target
+    raise Exception("multiple targets %r and default_target %r not in list. set 'target' in config" %
+                    (targets, default_target))
+
   def get_params_list(self):
     """
     :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step

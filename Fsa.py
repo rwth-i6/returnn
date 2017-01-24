@@ -4,8 +4,6 @@ from __future__ import print_function
 
 """
 TODO
-- tuple -> sets
-- allophone acceptor
 - state tying acceptor
 - class num_states, edges, first and last char
 - description
@@ -167,8 +165,8 @@ def __adds_loop_edges(num_states, edges):
       weight is a float, in -log space
   """
   print("Adding loops...")
-  # adds loops to fsa
-  for state in range(1, num_states):
+  # adds loops to fsa (loops on first and last node excluded)
+  for state in range(1, num_states - 1):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
     edges.append((state, state, edges[edges_included[0]][2], 1.))
 
@@ -500,97 +498,269 @@ def __triphone_from_phon(word_seq):
   return tri_seq
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states, edges):
+def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, num_states_input, edges_input):
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
+  :param allo_seq: sequence of allophones
   :param str sil: placeholder for silence
-  :param int num_states: number of states
-  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
-  :return int num_states, list[tuples(int, int, tuple(str, str, str, int), float)] edges_asa:
+  :param int num_states_input: number of states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_input: edges with label and weight
+  :return int num_states_output, list[tuples(int, int, tuple(str, str, str, int), float)] edges_output:
   """
   allo_len = len(allo_seq)
   allo_count = 4 * allo_len
-  edges_count = 0
-
-  for edge in edges:
-    if edge[2] != sil:
-      edges_count += 1
+  edges_count = __count_all_edges_non_sil_or_eps(edges_input, sil)
 
   assert edges_count == allo_count, "the count for the non-sil, non-eps edges varies: %i != %i"\
                                     % (edges_count, allo_count)
 
-  num_states_asa = num_states + 2 * edges_count
+  global num_states_check
+  num_states_check = num_states_input + 2 * edges_count
+  num_states_output = num_states_input
 
+  current_node = 0
+
+  edges_traverse = []
+  edges_updated = []
+  edges_output = []
+
+  edges_updated.extend(edges_input)
+  edges_updated.sort(key=lambda x: x[1])
+
+  assert id(edges_updated) != id(edges_input), "same id for edges is wrong"
+
+  num_states_output, edges_output = \
+    __walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                             sil,
+                                             num_states_input,
+                                             edges_input,
+                                             edges_traverse,
+                                             edges_updated,
+                                             num_states_output,
+                                             edges_output)
+
+  assert num_states_output == num_states_check,\
+    "the number of states does not match: %i != %i" % (num_states_output, num_states_check)
+
+  return num_states_output, edges_output
+
+
+def __count_all_edges_non_sil_or_eps(edges, sil='sil', eps='eps'):
+  """
+  count all edges in a graph which are NOT silence or placeholders (epsilon)
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  :param str sil: silence
+  :param str eps: epsilon placeholder / skip edge
+  :return int edges_count: number of edges where NOT silence or skips
+  """
+  edges_count = 0
+
+  for edge in edges:
+    if edge[2] != sil and edge[2] != eps:
+      edges_count += 1
+
+  return edges_count
+
+
+def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                             sil,
+                                             num_states_input,
+                                             edges_input,
+                                             edges_traverse,
+                                             edges_updated,
+                                             num_states_output,
+                                             edges_output):
   """
   idea: go to edge. do not change start node. take end node. search in edges at position start
   node (only if ![sil], no change propagates from [sil]). add 2 to start and end node for all
   following nodes (add nodes with index 1, 2 while traversing)
 
-  recursive function:
-  returns (current node, edges to traverse (double entries allowed)(with last one add nodes), edges)
+  algorithm idea:
+  - take current_edge
+  - search for all edges with a start and end node >= current_edge[end node] and add to edges_traverse
+  - expand current_edge and add three edges to edges_expand
+  - take all edges from edges_traverse and add =+2 to start and end node in edges
+
+  :param int current_node:
+  :param list [tuples(int, int, tuple(str, str, str), float)] edges_traverse:
+    edges to traverse and expand from one triphone into three allophone states,
+    double entries are allowed, with the last entry the edge should be expanded (triphone
+    to allophone states
+  :param list [tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+    list of edges with triphones expanded into three allophone states
+  :param str sil: placeholder for silence
+  :param int num_states_input: expanded number of states
+  :param int num_states_input: number of states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_input: edges with label and weight
+  :return int current_node:
+  :return list [tuples(int, int, tuple(str, str, str), float)] edges_to_traverse:
+    edges to traverse and expand from one triphone into three allophone states,
+    double entries are allowed, with the last entry the edge should be expanded (triphone
+    to allophone states
+  :return list [tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+    list of edges with triphones expanded into three allophone states
+  :return int num_states_input: expanded number of states
+  :return int num_states: number of states
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
+  """
+  edges_input.sort(key=lambda x: x[1])
+  edges_traverse.sort(key=lambda x: x[1])
+  edges_output.sort(key=lambda x: x[1])
+
+  if len(edges_updated) > 0:
+    current_edge = edges_updated.pop(0)
+
+    edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
+
+    edges_updated, edges_output = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                                  sil,
+                                                                  edges_traverse,
+                                                                  edges_updated,
+                                                                  edges_output)
+
+    edges_updated, num_states_output, edges_output = __expand_tri_edge_for_hmm_fsa(current_edge,
+                                                                      sil,
+                                                                      num_states_output,
+                                                                      edges_updated,
+                                                                      edges_output)
+
+    num_states_output, edges_output = \
+      __walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                               sil,
+                                               num_states_input,
+                                               edges_input,
+                                               edges_traverse,
+                                               edges_updated,
+                                               num_states_output,
+                                               edges_output)
+
+  return num_states_output, edges_output
+
+
+def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
+  """
+  search for all edges with a start node >= current_edge[end node] and add to edges_traverse
+  :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: list of edges
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_traverse: list of edges where
+    start node >= current_edge[end node]
+  """
+  edges_gequal_cur = [edge_index for edge_index, edge in enumerate(edges)
+                      if (edge[0] >= current_edge[1] or edge[1] >= current_edge[1])]
+
+  edges_traverse = []
+  for edge_idx in edges_gequal_cur:
+    edges_traverse.append(edges[edge_idx])
+
+  edges_traverse.sort(key=lambda x: x[1])
+
+  return edges_traverse
+
+
+def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                 sil,
+                                                 edges_traverse,
+                                                 edges_updated,
+                                                 edges_output):
+  """
+  idea: change start / end node id number += 2 for edges
+  :param tuples(int, int, tuple(str, str, str), float) current_edge: current edge
+  :param str sil: placeholder for silence
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_updated:
+    list of edges with expanded allo states
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_traverse:
+    list of edges after current edge
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges: list of edges
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
+   list of edges where the start and end node have been raised by two
+  """
+  if current_edge[2] == sil and current_edge[0] == 0:
+    edges_output.append(current_edge)
+  elif current_edge[2] == sil and current_edge[0] != 0:
+    edge_t = (current_edge[0] + 2 * len(edges_updated),
+              current_edge[1] + 2 * len(edges_updated),
+              current_edge[2],
+              current_edge[3])
+    edges_output.append(edge_t)
+    edges_t = []
+    for edge in edges_updated:  # necessary because sil edge is moved backwards
+      edges_t.append((edge[0], edge[1] - 1, edge[2], edge[3]))
+    edges_updated = edges_t
+  else:
+    # construct list of current edges
+    current_edge_list = [current_edge for n in range(len(edges_traverse))]
+    # take all edges which have to be traversed and move them to higher nodes
+    edges_high = map(__map_higher_node, edges_traverse, current_edge_list)
+    # create new list of edges from edges_updated which are in edges_traverse
+    edges_sub = filter(lambda x: x in edges_traverse, edges_updated)
+
+    for edge in edges_sub:
+      if edge in edges_updated:
+        edges_updated.remove(edge)
+
+    edges_updated.extend(edges_high)
+
+  edges_updated.sort(key=lambda x: x[1])
+
+  return edges_updated, edges_output
+
+
+def __map_higher_node(x, y):
+  assert isinstance(x, tuple), "x has to be a tuple(int, int, tuple(str, str, str), float)"
+  assert isinstance(y, tuple), "y should be a tuple(int, int, tuple(str, str, str), float)"
+  assert len(x) == len(y), "x and y have different lengths"
+  if (x[0] >= y[1]):
+    return (x[0] + 2, x[1] + 2, x[2], x[3])
+  elif (x[1] >= y[1]):
+    return (x[0], x[1] + 2, x[2], x[3])
+
+
+def __expand_tri_edge_for_hmm_fsa(current_edge,
+                                  sil,
+                                  num_states_t,
+                                  edges_updated,
+                                  edges_output):
   """
 
+  :param tuple(int, int, tuple(str, str, str), float) current_edge: the current edge
+  :param str sil: placeholder for silence
+  :param int num_states_t: new calculation of number of states
+    where the node count has been raised by two
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_expanded: list of edges
+    where the node count has been raised by two
+  :return int num_states_output:
+  :return list[tuples(int, int, tuple(str, str, str), float)] edges_expanded:
   """
-  edges_node = []
-  states_count = 0
+  global num_states_check
+  edges_expanded = []
+  start_node = current_edge[0]
+  if len(edges_updated) > 4 and current_edge[2] != sil:
+    end_node = current_edge[1]
+  else:
+    end_node = current_edge[1]
+  if current_edge[2] == sil:
+    num_states_output = num_states_t
+  else:
+    for state_t in range(0, 3):
+      tuple_t = (current_edge[2][0], current_edge[2][1], current_edge[2][2], state_t)
 
-  for edge in edges:
-    if edge[0] == 0:
-      if states_count < edge[1]:
-        node_t = edge[1]
-      elif states_count > edge[1] and states_count < edge[1] + edges_count:
-        node_t = edge[1] + edges_count
-      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
-      edge_t = (0, node_t, tuple_t, 1.)
-      edges_node.append(edge_t)
-      states_count += 1
-    elif edge[1] == num_states - 1 and edge[2] == sil:
-        edges_node.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
-        states_count += 1
-    else:
-      node_t = edge[0] + 2 * edges_count
-      tuple_t = (edge[2][0], edge[2][1], edge[2][2], 0)
-      edge_t = (node_t, node_t + 1, tuple_t, 1.)
-      edges_node.append(edge_t)
-      states_count += 1
-  """
-  """
-  edges_asa = []
+      if len(edges_updated) < 5 and state_t == 2:
+        end_node = num_states_check - len(edges_updated) % 2 - 1
 
-  for edge in edges:
-    if edge[0] == 0:
-      if edge[2] == sil:
-        edges_asa.append(edge)
-        states_count += 1
-      else:
-        for index in range(0, 3):
-          if index == 0:
-            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-            edge_t = (edge[0], states_count, tuple_t, edge[3])
-          else:
-            tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-            edge_t = (states_count - 1, states_count, tuple_t, edge[3])
-          edges_asa.append(edge_t)
-          states_count += 1
-    elif  edge[1] == num_states - 1:
-      if edge[2] == sil:
-        edges_asa.append((num_states_asa - 2, num_states_asa - 1, sil, 1.))
-        states_count += 1
-      else:
-        pass
-    else:
-      for index in range(0, 3):
-        tuple_t = (edge[2][0], edge[2][1], edge[2][2], index)
-        edge_t = (states_count - 1, states_count, tuple_t, edge[3])
-        edges_asa.append(edge_t)
-        states_count += 1
+      edge_t = (start_node, end_node, tuple_t, current_edge[3])
 
-  assert states_count == num_states_asa, "Number of states: %i != %i"\
-                                         % (states_count, num_states_asa)
-                                         """
+      edges_expanded.append(edge_t)
 
-  return num_states_asa, edges
+      start_node = end_node
+      end_node += 1
+
+    num_states_output = num_states_t + 2
+
+  edges_output.extend(edges_expanded)
+  edges_output.sort(key=lambda x: x[1])
+
+  return edges_updated, num_states_output, edges_output
 
 
 def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
@@ -606,7 +776,7 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_sta
   lexicon = __load_lexicon(lexicon_file)
 
   for edge in edges:
-    if (edge[2] == 'blank' or edge[2] == '') and isinstance(edge[2], str):
+    if (edge[2] == 'blank' or edge[2] == '' or edge[2] == sil) and isinstance(edge[2], str):
       label = '#'
     else:
       label = edge[2]
