@@ -1,6 +1,6 @@
 
 import tensorflow as tf
-from TFUtil import Data
+from TFUtil import Data, OutputWithActivation
 
 
 class LayerBase(object):
@@ -59,7 +59,7 @@ class LayerBase(object):
     # If you want to have it different in your layer, just overwrite it.
     if sources and sources[0].output.matches_dim_pattern(self.output):
       self.output.size_placeholder = sources[0].output.size_placeholder.copy()
-    self.output_before_softmax = None  # type: None|tf.Tensor
+    self.output_before_activation = None  # type: None|OutputWithActivation
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
@@ -136,7 +136,7 @@ class LayerBase(object):
       return
     self.loss.init(
       output=self.output,
-      output_before_softmax=self.output_before_softmax,
+      output_before_activation=self.output_before_activation,
       target=self._get_target_value())
 
   def get_loss_value(self):
@@ -295,10 +295,10 @@ class LinearLayer(_ConcatInputLayer):
     if self.activation:
       from TFUtil import get_activation_function
       act_func = get_activation_function(self.activation)
-      if act_func is tf.nn.softmax:
-        self.output_before_softmax = x
-      with tf.name_scope("activation"):
-        x = act_func(x)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(x)
+    x = self.output_before_activation.y
 
     self.output.batch_dim_axis = self.input_data.batch_dim_axis
     self.output.time_dim_axis = self.input_data.time_dim_axis
@@ -438,7 +438,7 @@ class Loss(object):
     # All are initialized in self.init().
     self.output = None  # type: Data
     self.time_major = None  # type: bool|None
-    self.output_before_softmax = None  # type: tf.Tensor
+    self.output_before_activation = None  # type: (tf.Tensor,((tf.Tensor)->tf.Tensor))|None
     self.output_seq_lens = None  # type: tf.Tensor
     self.target = None  # type: Data
     self.target_seq_lens = None  # type: tf.Tensor
@@ -448,24 +448,26 @@ class Loss(object):
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
 
-  def init(self, output, output_before_softmax=None, target=None):
+  def init(self, output, output_before_activation=None, target=None):
     """
     :param Data output: generated output
-    :param tf.Tensor|None output_before_softmax: if output is softmax(x), this will be x
+    :param OutputWithActivation|None output_before_activation:
     :param Data target: reference target from dataset
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
       self.output = output
-      self.output_before_softmax = output_before_softmax
+      self.output_before_activation = output_before_activation
       self.output_seq_lens = output.size_placeholder[0]
       self.target = target
       self.target_seq_lens = target.size_placeholder[0]
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if output_before_softmax is not None:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_softmax, self.output_seq_lens, time_major=output.is_time_major)
+      if output_before_activation:
+        assert output_before_activation.y is output.placeholder
+      if output_before_activation and output_before_activation.act_func is tf.nn.softmax:
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_activation.x, self.output_seq_lens, time_major=output.is_time_major)
       else:
         self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
@@ -531,25 +533,50 @@ class CrossEntropyLoss(Loss):
 class GenericCELoss(Loss):
   class_name = "generic_ce"
 
+  def __init__(self, **kwargs):
+    super(GenericCELoss, self).__init__(**kwargs)
+
+    def loss(z, y, grad_f, target):
+      y /= tf.reduce_sum(y, axis=1, keep_dims=True)
+      nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))
+      return self.reduce_func(tf.gather_nd(nlog_scores, target))
+
+    def loss_grad(op, grad):
+      """
+      :param tf.Operation op:
+      :param tf.Tensor grad: grad for loss
+      :return: grad for op.inputs
+      """
+      z, y, grad_f, target = op.inputs
+      num_classes = tf.shape(z)[-1]
+      bw = tf.one_hot(target, depth=num_classes)
+      grad_z = grad_f * (y - bw)
+      return grad_z, None, None, None  # for each input
+
+    # We need to create the loss func here in __init__ to register it in the default graph as early as possible,
+    # before we create the TF session.
+    from TFUtil import custom_gradient
+    self._loss_func = custom_gradient.register(
+      [tf.float32, tf.float32, tf.float32, tf.int32], op=loss, grad_op=loss_grad)
+
   def get_value(self):
     # Should be generic for any activation function.
     # (Except when the labels are not independent, such as for softmax.)
-    y = self.p_y_given_x  # Can be anything, e.g. exp or sigmoid, but not softmax.
-    y /= T.sum(y, axis=2, keepdims=True)
-    nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
-    from TheanoUtil import class_idx_seq_to_1_of_k
-    y_idx = self.y
-    assert y_idx.ndim == 2
-    bw = class_idx_seq_to_1_of_k(y_idx, num_classes=self.attrs["n_out"])
-    assert bw.ndim == 3
-    err_inner = bw * nlog_scores
-    src_index = self.sources[0].index
-    float_idx = T.cast(src_index, "float32")
-    float_idx_bc = float_idx.dimshuffle(0, 1, 'x')
-    err = (err_inner * float_idx_bc).sum()
-    grad_f = T.grad(None, self.z, known_grads={T.log(self.p_y_given_x): T.ones(y.shape, y.dtype)})
-    known_grads = {self.z: grad_f * (y - bw) * float_idx_bc}
-    return err, known_grads
+    # See Theano NetworkOutputLayer.FramewiseOutputLayer.cost() with "generic_ce" loss.
+    from TFUtil import swapaxes, sequence_mask, flatten_with_seq_len_mask
+    # activation function can be anything, e.g. exp or sigmoid, but not softmax, must be elemwise.
+    assert self.output_before_activation
+    x = self.output_before_activation.x
+    y = self.output_before_activation.y
+    grad_f, = tf.gradients(tf.log(y), x)
+    assert grad_f is not None
+    grad_f = flatten_with_seq_len_mask(grad_f, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
+    x = flatten_with_seq_len_mask(x, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
+    y = flatten_with_seq_len_mask(y, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
+    assert y.get_shape().ndims == 2
+    assert self.output.dim == self.target.dim
+    assert self.target.sparse
+    return self._loss_func(x, y, grad_f, self.target_flat)
 
 
 class CtcLoss(Loss):
@@ -589,7 +616,7 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc"):
-      logits = self.output_before_softmax
+      logits = self.output_before_activation
       if logits is None:
         logits = tf.log(self.output)
       assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
@@ -603,7 +630,7 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc_error"):
-      logits = self.output_before_softmax
+      logits = self.output_before_activation
       if logits is None:
         logits = tf.log(self.output)
       if not self.output.is_time_major:

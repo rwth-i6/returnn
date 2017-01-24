@@ -614,9 +614,7 @@ class Engine(object):
     self.start_epoch = None
 
   def finalize(self):
-    if self.tf_session:
-      self.tf_session.close()
-      self.tf_session = None
+    self._close_tf_session()
 
   def _get_devices_config(self):
     """
@@ -654,9 +652,13 @@ class Engine(object):
       return max(omp_num_threads, 2)
     return None
 
-  def _make_tf_session(self):
+  def _close_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
+    self.tf_session = None
+
+  def _make_tf_session(self):
+    self._close_tf_session()
     opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
     opts = opts.copy()
@@ -675,8 +677,6 @@ class Engine(object):
 
   def _reset_graph(self):
     tf.reset_default_graph()
-    # The new session will by default use the newly created default graph.
-    self._make_tf_session()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
 
@@ -770,7 +770,10 @@ class Engine(object):
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
       epoch = self.epoch
+    self._close_tf_session()
     self._reset_graph()
+    # The new session will by default use the newly created default graph.
+    self._make_tf_session()
     tf.set_random_seed(42)
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)

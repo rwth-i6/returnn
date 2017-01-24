@@ -161,6 +161,21 @@ class Data(object):
             for axis, dim in enumerate(self.batch_shape)]
 
 
+class OutputWithActivation(object):
+  def __init__(self, x, act_func=None):
+    """
+    :param tf.Tensor x:
+    :param None|(tf.Tensor)->tf.Tensor act_func:
+    """
+    self.x = x
+    self.act_func = act_func
+    if act_func:
+      with tf.name_scope("activation"):
+        self.y = act_func(x)
+    else:
+      self.y = x
+
+
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
   with tf.name_scope('summaries_%s' % name):
@@ -557,7 +572,8 @@ def sequence_mask(lengths, **kwargs):
 
   :param tf.Tensor lengths: shape (batch,)
   :param dict[str] kwargs: passed on to tf.sequence_mask
-  :return: mask of shape (batch,maxlen/time)
+  :return: tensor mask of shape (batch,maxlen/time). default dtype is bool unless you specify something else
+  :rtype: tf.Tensor
   """
   if hasattr(lengths, "_sequence_mask"):
     return lengths._sequence_mask
@@ -1090,3 +1106,46 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
     noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale)
     noisy_gradients.append(gradient + noise)
   return list(zip(noisy_gradients, variables))
+
+
+class CustomGradient(object):
+  def __init__(self):
+    self.num_calls = 0
+    self.registered_ops = {}  # func -> decorated func
+
+  def Defun(self, *input_types, **kwargs):
+    """
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param list[tf.DType] input_types:
+    :param dict[str] kwargs: passed to self.register()
+    :return: function decorator
+    :rtype: ((tf.Tensor) -> tf.Tensor) -> ((tf.Tensor) -> tf.Tensor)
+    """
+
+    def decorator(op):
+      return self.register(input_types=input_types, op=op, **kwargs)
+
+    return decorator
+
+  def register(self, input_types, op, grad_op, name=None):
+    """
+    :param list[tf.DType] input_types:
+    :param (tf.Tensor) -> tf.Tensor op:
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param str name: optional func_name
+    :return: op
+    :rtype: (tf.Tensor) -> tf.Tensor
+    """
+    if op in self.registered_ops:
+      return self.registered_ops[op]
+    from tensorflow.python.framework import function
+    op_with_new_grad = function.Defun(*input_types, python_grad_func=grad_op, func_name=name)(op)
+    self.registered_ops[op] = op_with_new_grad
+    # We need to add one instance of the new op to the graph now because of:
+    # https://github.com/tensorflow/tensorflow/issues/6804
+    op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
+    return op_with_new_grad
+
+
+custom_gradient = CustomGradient()
+
