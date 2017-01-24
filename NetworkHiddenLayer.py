@@ -1913,6 +1913,32 @@ class AttentionLayer(_NoOpLayer):
     #self.make_output(T.sum(base.dimshuffle('x',1,2,0).repeat(self.index.shape[0],axis=0) * attention,axis=3))
 
 
+class SourceAttentionLayer(_NoOpLayer):
+  layer_class = 'source_attention'
+
+  def __init__(self, base, n_tmp=64, **kwargs):
+    super(SourceAttentionLayer, self).__init__(**kwargs)
+    self.set_attr('base', ",".join([b.name for b in base]))
+    self.attrs['n_out'] = sum([s.attrs['n_out'] for s in base])
+    n_base = sum([s.attrs['n_out'] for s in base])
+    n_in = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = self.sources[0].output if len(self.sources) == 1 else T.concatenate([s.output for s in self.sources],axis=2)
+    B = base[0].output if len(base) == 1 else T.concatenate([b.output for b in base], axis=2)
+    self.W_base = self.add_param(self.create_forward_weights(n_base, n_tmp), 'W_base')
+    self.b_base = self.add_param(self.create_bias(n_tmp), 'b_base')
+    self.W_in = self.add_param(self.create_forward_weights(n_in, n_tmp), 'W_in')
+    self.b_in = self.add_param(self.create_bias(n_tmp), 'b_in')
+    C = T.tanh(T.dot(B,self.W_base) + self.b_base)
+    X = T.tanh(T.dot(x_in, self.W_in) + self.b_in)
+    def attmap(x,C,B):
+      D = x.dimshuffle('x',0,1).repeat(C.shape[0],axis=0)
+      e = T.exp(T.sqrt(T.sum((D-C)**2,axis=2))) # TB
+      e = e / e.sum(axis=0,keepdims=True)
+      return T.sum(B * e.dimshuffle(0,1,'x').repeat(B.shape[2],axis=2),axis=0)
+
+    x_out, _ = theano.map(attmap, sequences=[X], non_sequences=[C, B])
+    self.make_output(x_out)
+
 
 class ReverseAttentionLayer(_NoOpLayer):
   layer_class = 'reverse_attention'
