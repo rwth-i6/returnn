@@ -1861,6 +1861,18 @@ class LengthProjectionLayer(HiddenLayer):
     return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
+class LengthUnitLayer(HiddenLayer):
+  layer_class = "length_unit"
+  def __init__(self, min_len = 1, max_len = 32, **kwargs):
+    kwargs['n_out'] = 1
+    super(LengthUnitLayer, self).__init__(**kwargs)
+    q = T.nnet.sigmoid(self.get_linear_forward_output()[-1:])
+    self.length = numpy.float32(min_len) + q * numpy.float32(max_len - min_len + 1)
+    idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
+                        sequences=[self.length], non_sequences=[T.max(self.length) + 1])
+    self.index = idx.dimshuffle(1, 0)[:-1]
+    self.output = self.length.dimshuffle('x', 0, 'x')
+
 class SegmentLayer(_NoOpLayer):
   layer_class = 'segment'
 
@@ -2579,16 +2591,16 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nskips=1, nstates=1, nstep=1, min_skip=0, search='search', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=0, max_skip=30,search='align', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
       tdps = [1e10, 0., 3.]
-    if len(tdps) - 2 < nskips:
-      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
     else:
-      nskips = len(tdps) - 2
+      max_skip = len(tdps) - 2
     if base is None:
       base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
@@ -2604,9 +2616,9 @@ class AlignmentLayer(ForwardLayer):
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
     self.set_attr('n_out', n_out)
     if tdps is None:
-      tdps = [1e10, 0., 3.]
-    if len(tdps) - 2 < nskips:
-      tdps += [tdps[-1]] * (nskips - len(tdps) + 2)
+      tdps = [0.]
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
     for i in range(len(tdps)):
       if i % nstep != 0:
         tdps[i] = 1e30
@@ -2801,15 +2813,15 @@ class DiscriminatorLayer(ForwardLayer):
         ratio = lng / T.sum(src.index, dtype='float32')
         self.cost_val += ratio * pgen * T.sum(err)
         self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
-
+    #self.cost_val *= numpy.float32(len(self.sources + base))
     self.error_val /= numpy.float32(len(self.sources + base))
     if forge:
       if dynamic_scaling:
-        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.5), numpy.float32(2.0))
+        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.25), numpy.float32(4.0))
       else:
         self.cost_scale_val = numpy.float32(1.0)
     else:
-      self.cost_scale_val = numpy.float32(1.0) #numpy.float32(len(self.sources + base))
+      self.cost_scale_val = numpy.float32(len(self.sources + base))
 
   def cost(self):
     return self.cost_val, self.known_grads
@@ -2853,6 +2865,14 @@ class ScaleGradLayer(_NoOpLayer):
     else:
       self.output = ScaleGradientOp(scale)(self.sources[0].output)
 
+class SumLayer(_NoOpLayer):
+  layer_class = 'sum'
+
+  def __init__(self, **kwargs):
+    super(SumLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = self.sources[0].attrs['n_out']
+    self.output = sum([s.output for s in self.sources])
+    self.index = self.sources[1].index
 
 class RNNBlockLayer(ForwardLayer):
   recurrent = True
