@@ -324,8 +324,10 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   :returns (num_states, edges) like above
   """
   print("Word sequence:", word_seq)
+  global sil
   sil = 'sil'
   print("Silence:", sil)
+  global eps
   eps = 'eps'
   print("Place holder epsilon:", eps)
   if depth is None:
