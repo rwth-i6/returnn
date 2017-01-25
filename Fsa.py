@@ -780,6 +780,7 @@ def __state_tying_for_hmm_fsa(state_tying_file, num_states, edges):
   :return: num_states, edges
   """
   global sil
+  edges_ts = []
   edges_st = []
   statetying = __load_state_tying_file(state_tying_file)
 
@@ -790,8 +791,10 @@ def __state_tying_for_hmm_fsa(state_tying_file, num_states, edges):
 
     allo_id_num = statetying.allo_map[allo_syntax]
 
+    edges_ts.append((edge[0], edge[1], allo_syntax, edge[3]))
     edges_st.append((edge[0], edge[1], allo_id_num, edge[3]))
 
+  edges_ts.sort()
   edges_st.sort()
 
   return num_states, edges_st
