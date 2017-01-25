@@ -22,8 +22,10 @@ class NormalizationData(object):
   DATASET_TIME_DIMENSION_INDEX = 0
   DATASET_FEATURE_DIMENSION_INDEX = 1
 
+  SUMMATION_PRECISION = 1e-5
+
   @staticmethod
-  def createNormalizationFile(bundleFilePath, outputFilePath, dtype=np.float32,
+  def createNormalizationFile(bundleFilePath, outputFilePath, dtype=np.float64,
                               flag_includeOutputs=True):
     """Calculates means over inputs and outputs of datasets in the HDF files
     described by the given bundle file.
@@ -77,7 +79,7 @@ class NormalizationData(object):
 
   @staticmethod
   def _calculateNormalizationData(bundleFilePath, outputFilePath, groupName,
-                                  dtype=np.float32):
+                                  dtype=np.float64):
     """Helper method.
     Calculates and writes into the output HDF file mean, mean of squares,
     variance and total number of frames for the datasets in the given HDF
@@ -133,7 +135,7 @@ class NormalizationData(object):
       )
 
   @staticmethod
-  def _accumulateSums(f, groupName, dtype=np.float32):
+  def _accumulateSums(f, groupName, dtype=np.float64):
     """Helper method.
     Accumulate sums and sums of squares over feature vectors for a given group.
 
@@ -188,11 +190,22 @@ class NormalizationData(object):
     :rtype: numpy.ndarray | None
     :return: updated total sum if available
     """
-    if intermediateSum is None:
-      return totalSum
+    if totalSum is None and intermediateSum is None:
+      return None
     if totalSum is None:
       return intermediateSum
-    return totalSum + intermediateSum
+    if intermediateSum is None:
+      return totalSum
+    # floating point summation check
+    oldSum = totalSum
+    newSum = np.add(totalSum, intermediateSum)
+    sumErr = np.sum(np.abs(newSum - oldSum - intermediateSum))
+    if sumErr > NormalizationData.SUMMATION_PRECISION:
+      raise FloatingPointError(
+        'sums have very different orders of magnitude.'
+        ' summation error = {}'.format(sumErr)
+      )
+    return newSum
 
   @staticmethod
   def _calculateMeans(totalSum, totalSumOfSqr, totalFrames):
@@ -223,7 +236,7 @@ class NormalizationData(object):
 
   @staticmethod
   def _writeData(f, groupName, mean, meanOfSqr, variance, totalFrames,
-                 dtype=np.float32):
+                 dtype=np.float64):
     """Helper method.
     Writes means and variance for a given group.
 
@@ -264,7 +277,7 @@ class NormalizationData(object):
       )
 
   @staticmethod
-  def _writeDataset(group, datasetName, dataset, dtype=np.float32):
+  def _writeDataset(group, datasetName, dataset, dtype=np.float64):
     """Helper Method.
     Writes dataset into an HDF group if the dataset is available.
 
