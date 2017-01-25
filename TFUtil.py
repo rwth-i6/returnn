@@ -880,7 +880,8 @@ class OpCodeCompiler(object):
       and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     """
-    self.cache_dir = "/tmp/%s/returnn_tf_cache" % os.getlogin()  # TODO...?
+    from Util import get_temp_dir
+    self.cache_dir = "%s/returnn_tf_cache" % get_temp_dir()
     self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     self.base_name = base_name
     self.code_version = code_version

@@ -1234,3 +1234,26 @@ def cleanup_env_var_path(env_var, path_prefix):
     return True
   ps = filter(f, ps)
   os.environ[env_var] = ":".join(ps)
+
+
+def get_login_username():
+  """
+  :rtype: str
+  :return: the username of the current user.
+  Use this as a replacement for os.getlogin().
+  """
+  import pwd, os
+  return pwd.getpwuid(os.getuid())[0]
+
+
+def get_temp_dir():
+  """
+  :rtype: str
+  :return: e.g. "/tmp/$USERNAME"
+  """
+  username = get_login_username()
+  for envname in ['TMPDIR', 'TEMP', 'TMP']:
+    dirname = os.getenv(envname)
+    if dirname:
+      return "%s/%s" % (dirname, username)
+  return "/tmp/%s" % username
