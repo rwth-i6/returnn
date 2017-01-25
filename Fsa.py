@@ -779,9 +779,7 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon, label_seq, allo_seq, nu
   for edge in edges:
     allo_state_tying = edge[2]
 
-    allo_syntax = __build_allo_syntax_for_mapping(allo_seq[5]) # takes single allo state
-
-    #allo = 'b{f+ao}.0'
+    allo_syntax = __build_allo_syntax_for_mapping(allo_state_tying)
 
     print("allo:", allo_syntax, "maps to", statetying.allo_map[allo_syntax])
 
@@ -810,7 +808,7 @@ def __load_state_tying_file(stFile):
   return statetying
 
 
-def __build_allo_syntax_for_mapping(label, pos_seq='', pos_allo=0):
+def __build_allo_syntax_for_mapping(label):
   """
   builds a conforming allo syntax for mapping
   :param str pos_seq:
@@ -818,23 +816,31 @@ def __build_allo_syntax_for_mapping(label, pos_seq='', pos_allo=0):
   :param str or tuple(str, str, str) label: a allo either string or tuple
   :return str allo_map: a allo syntax ready for mapping
   """
+  global sil
   assert isinstance(label, str) or isinstance(label, tuple), "Something went wrong while building allo syntax for mapping"
 
-  if isinstance(label, str):
-    allo_start = "%s{#+#}" % (label)
-  elif isinstance(label, tuple):
-    allo_start = "%s{%s+%s}" % (label[1], label[0], label[1])
+  if isinstance(label, str) and label == sil:
+    allo_start = "%s{#+#}" % ('[SILENCE]')
   else:
-    allo_start = "WRONG"
+    if label[0] == '' and label[2] == '':
+      allo_start = "%s{#+#}" % (label[0])
+    elif label[0] == '':
+      allo_start = "%s{#+%s}" % (label[1], label[2])
+    elif label[2] == '':
+      allo_start = "%s{%s+#}" % (label[1], label[0])
+    else:
+      allo_start = "%s{%s+%s}" % (label[1], label[0], label[2])
 
-  if len(pos_seq) == 1:
-    allo_middle = "@%s" % (pos_seq)
-  elif len(pos_seq) > 1:
-    allo_middle = "@%s@%s" % (pos_seq[0], pos_seq[1])
+  allo_middle = ''
+  if label[0] == '':
+    allo_middle = "@%s" % ('i')
+  if label[2] == '':
+    allo_middle = "@%s" % ('f')
+
+  if label == sil:
+    allo_end = ".0"
   else:
-    allo_middle = ''
-
-  allo_end = ".%i" %(pos_allo)
+    allo_end = ".%i" % (label[3])
 
   allo_map = "%s%s%s" % (allo_start, allo_middle, allo_end)
 
