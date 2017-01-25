@@ -772,26 +772,20 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon, label_seq, allo_seq, nu
   :param list[tuples(start[int], end[int], label, weight)] edges:
   :return: num_states, edges
   """
-  print("State tying...(not done)")
-
+  global sil
+  edges_st = []
   statetying = __load_state_tying_file(state_tying_file)
 
   for edge in edges:
-    if (edge[2] == 'blank' or edge[2] == '' or edge[2] == sil) and isinstance(edge[2], str):
-      label = '#'
-    else:
-      label = edge[2]
+    allo_state_tying = edge[2]
 
-    print(edge[2])
-    print(allo)
-
-    allo_syntax = __build_allo_syntax_for_mapping(allo)
+    allo_syntax = __build_allo_syntax_for_mapping(allo_seq[5]) # takes single allo state
 
     #allo = 'b{f+ao}.0'
 
     print("allo:", allo_syntax, "maps to", statetying.allo_map[allo_syntax])
 
-  return num_states, edges
+  return num_states, edges_st
 
 
 def __load_state_tying_file(stFile):
