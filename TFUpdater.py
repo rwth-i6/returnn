@@ -40,11 +40,13 @@ class NadamOptimizer(tf.train.Optimizer):
     :param bool use_locking:
     :param str name:
 
-    Nadam is Adam with Nesterov momentum.
+    Nadam is Adam with Nesterov momentum, by Timothy Dozat (http://web.stanford.edu/~tdozat/).
     http://cs229.stanford.edu/proj2015/054_report.pdf
 
     Also see tf.train.AdamOptimizer for reference.
     For Nadam code, see also Theano Updater.
+    Also see here, from the original author of Nadam:
+    https://github.com/tdozat/Optimization/blob/master/tensorflow/nadam.py
     """
     super(NadamOptimizer, self).__init__(use_locking=use_locking, name=name)
 
