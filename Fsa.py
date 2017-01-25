@@ -358,7 +358,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = __adds_loop_edges(num_states, edges)
   if depth >= 6:
     print("State tying...")
-    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, word_seq, num_states, edges)
+    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, lexicon, word_seq, allo_seq, num_states, edges)
 
   return num_states, edges
 
@@ -765,7 +765,7 @@ def __expand_tri_edge_for_hmm_fsa(current_edge,
   return edges_updated, num_states_output, edges_output
 
 
-def __state_tying_for_hmm_fsa(state_tying_file, lexicon_file, label_seq, num_states, edges):
+def __state_tying_for_hmm_fsa(state_tying_file, lexicon, label_seq, allo_seq, num_states, edges):
   """
   idea: take file with mapping char to number and apply to edge labels
   :param int num_states:
