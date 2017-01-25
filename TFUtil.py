@@ -1150,3 +1150,29 @@ class CustomGradient(object):
 
 custom_gradient = CustomGradient()
 
+
+def debugRegisterBetterRepr():
+  """
+  Some types don't have good __repr__ implementations by default (for the current TF version).
+  For debugging, it can be helpful to give some more info.
+  """
+
+  from tensorflow.python.framework import tensor_util
+
+  def indexed_slices_repr(x):
+    """
+    :param tf.IndexedSlices x:
+    :rtype: str
+    """
+    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+  def op_repr(x):
+    """
+    :param tf.Operation x:
+    :rtype: str
+    """
+    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
+
+  tf.IndexedSlices.__repr__ = indexed_slices_repr
+  tf.Operation.__repr__ = op_repr

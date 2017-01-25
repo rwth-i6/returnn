@@ -285,6 +285,10 @@ def initBackendEngine():
     print >> log.v3, "Theano:", describe_theano_version()
   elif BackendEngine.is_tensorflow_selected():
     print >> log.v3, "TensorFlow:", describe_tensorflow_version()
+    from Util import to_bool
+    from TFUtil import debugRegisterBetterRepr
+    if os.environ.get("DEBUG_TF_BETTER_REPR") and to_bool(os.environ.get("DEBUG_TF_BETTER_REPR")):
+      debugRegisterBetterRepr()
   else:
     raise NotImplementedError
 
