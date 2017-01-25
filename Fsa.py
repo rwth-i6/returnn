@@ -775,7 +775,6 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon, label_seq, allo_seq, nu
   print("State tying...(not done)")
 
   statetying = __load_state_tying_file(state_tying_file)
-  lexicon = __load_lexicon(lexicon_file)
 
   for edge in edges:
     if (edge[2] == 'blank' or edge[2] == '' or edge[2] == sil) and isinstance(edge[2], str):
@@ -783,7 +782,6 @@ def __state_tying_for_hmm_fsa(state_tying_file, lexicon, label_seq, allo_seq, nu
     else:
       label = edge[2]
 
-    allo, allo_score, phons = __find_allo_seq_in_lex(label, lexicon)
     print(edge[2])
     print(allo)
 
