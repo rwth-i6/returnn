@@ -168,6 +168,8 @@ class TFNetwork(object):
       if name not in net_dict:
         if name == "data":
           layer_desc = {"class": "source", "from": []}
+        elif name.startswith("data:"):
+          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
         else:
           raise Exception("layer not found: %r" % name)
       else:
@@ -192,9 +194,9 @@ class TFNetwork(object):
   def _add_layer(self, name, layer_class, **layer_desc):
     """
     :param str name:
-    :param () -> LayerBase layer_class:
+    :param ()->LayerBase layer_class:
     """
-    with reuse_name_scope(name):
+    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       layer = layer_class(name=name, network=self, **layer_desc)
     self.layers[name] = layer
     if layer.recurrent:
@@ -219,8 +221,8 @@ class TFNetwork(object):
       self.loss_by_layer.clear()
       self.error_by_layer.clear()
       for name, layer in sorted(self.layers.items()):
-        with reuse_name_scope(layer.name):
-          assert isinstance(layer, LayerBase)
+        assert isinstance(layer, LayerBase)
+        with reuse_name_scope(layer.tf_scope_name):
           loss = layer.get_loss_value()
           error = layer.get_error_value()
           constraints = layer.get_constraints_value()

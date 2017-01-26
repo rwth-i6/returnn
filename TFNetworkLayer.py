@@ -69,6 +69,18 @@ class LayerBase(object):
     return "%s{class=%s, out_type=%s}" % (
       self.name, self.layer_class, self.output.get_description(with_name=False))
 
+  @classmethod
+  def cls_get_tf_scope_name(cls, name):
+    """
+    :param str name: layer name
+    :return: scope name, might be just name
+    """
+    return name.replace(":", "__")
+
+  @property
+  def tf_scope_name(self):
+    return self.cls_get_tf_scope_name(name=self.name)
+
   def is_output_layer(self):
     """
     Some code differs between an output layer and other layers.
