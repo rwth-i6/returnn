@@ -40,11 +40,13 @@ class NadamOptimizer(tf.train.Optimizer):
     :param bool use_locking:
     :param str name:
 
-    Nadam is Adam with Nesterov momentum.
+    Nadam is Adam with Nesterov momentum, by Timothy Dozat (http://web.stanford.edu/~tdozat/).
     http://cs229.stanford.edu/proj2015/054_report.pdf
 
     Also see tf.train.AdamOptimizer for reference.
     For Nadam code, see also Theano Updater.
+    Also see here, from the original author of Nadam:
+    https://github.com/tdozat/Optimization/blob/master/tensorflow/nadam.py
     """
     super(NadamOptimizer, self).__init__(use_locking=use_locking, name=name)
 
@@ -71,7 +73,7 @@ class NadamOptimizer(tf.train.Optimizer):
 
   def _create_slots(self, var_list):
     # This get's called before self.prepare().
-    t = tf.train.get_global_step() + 1
+    t = tf.cast(tf.train.get_global_step(), "float32") + 1
     # Create the beta1 and beta2 accumulators on the same device as the first variable.
     if self._beta1_power is None or self._beta1_power.graph is not var_list[0].graph:
       with ops.colocate_with(var_list[0]):
@@ -89,7 +91,7 @@ class NadamOptimizer(tf.train.Optimizer):
     self._beta2_t = ops.convert_to_tensor(self._beta2, name="beta2")
     self._epsilon_t = ops.convert_to_tensor(self._epsilon, name="epsilon")
 
-    self._t = tf.train.get_global_step() + 1
+    self._t = tf.cast(tf.train.get_global_step(), "float32") + 1
 
     # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
     nadam_decay = 0.004  # Magical 250.0 denominator in nesterov scaling of i_t
@@ -162,8 +164,9 @@ class NadamOptimizer(tf.train.Optimizer):
     v_update = v
     v_ = v / (1 - beta2_power)
 
-    grad_ = grad / (1 - mu_prod_t_next)
-    m__ = mu_t_next * m_ + (1 - mu_t) * grad_  # dense + sparse
+    m__ = tf.sparse_add(
+      mu_t_next * m_,
+      tf.IndexedSlices((1 - mu_t) * grad.values / (1 - mu_prod_t_next), grad.indices, grad.dense_shape))
 
     step = lr_t * m__ / (tf.sqrt(v_) + epsilon_t)
     var_update = tf.assign_sub(var, step, use_locking=self._use_locking)

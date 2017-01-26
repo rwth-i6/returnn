@@ -175,6 +175,19 @@ class OutputWithActivation(object):
     else:
       self.y = x
 
+  def is_softmax_act_func(self):
+    return self.act_func is tf.nn.softmax
+
+  def get_logits(self):
+    """
+    :rtype: tf.Tensor
+    :return: logits. logits are (not necessarily normalized) log probabilities, i.e. the input of softmax.
+    This call assumes that self.y is in probability space.
+    """
+    if self.is_softmax_act_func():
+      return self.x
+    return tf.log(self.y)
+
 
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
@@ -1150,3 +1163,29 @@ class CustomGradient(object):
 
 custom_gradient = CustomGradient()
 
+
+def debugRegisterBetterRepr():
+  """
+  Some types don't have good __repr__ implementations by default (for the current TF version).
+  For debugging, it can be helpful to give some more info.
+  """
+
+  from tensorflow.python.framework import tensor_util
+
+  def indexed_slices_repr(x):
+    """
+    :param tf.IndexedSlices x:
+    :rtype: str
+    """
+    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+  def op_repr(x):
+    """
+    :param tf.Operation x:
+    :rtype: str
+    """
+    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
+
+  tf.IndexedSlices.__repr__ = indexed_slices_repr
+  tf.Operation.__repr__ = op_repr

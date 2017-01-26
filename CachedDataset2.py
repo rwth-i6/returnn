@@ -85,7 +85,7 @@ class CachedDataset2(Dataset):
       return True
     try:
       return super(CachedDataset2, self).is_less_than_num_seqs(n)
-    except Exception:  # can fail
+    except Exception:  # can fail, e.g. if self.num_seqs is not defined
       assert n >= self.expected_load_seq_start
       self._load_seqs(self.expected_load_seq_start, n + 1)
       if self._get_seq(n) is not None:
