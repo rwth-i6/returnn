@@ -20,11 +20,11 @@ public:
         bt_.resize(N * S, T + max_skip - 1);
         score_.resize(N * S, T + max_skip - 1);
 
-        for(int t = 0; t < T + max_skip - 1; ++t)
+        for(int t=0; t < T + max_skip - 1; ++t)
             for(int s=0; s < N * S; ++s)
                 score_(s,t) = fwd_(s,t) = std::numeric_limits<float>::max();
 
-        for(int t = 0; t < T; ++t)
+        for(int t=0; t < T; ++t)
             for(int s=0; s < N * S; ++s)
                 score_(s,t+M-1) = activs(t, labellings(s / S));
 
@@ -39,6 +39,7 @@ public:
             int start = T - (N * S - s) * M;
             if(start < 0)
                 start = 0;
+            start = 0;
             for(int t=start; t < T; ++t)
             {
                 float score = score_(s, t + M - 1);
