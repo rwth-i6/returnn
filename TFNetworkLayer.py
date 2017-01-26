@@ -52,7 +52,7 @@ class LayerBase(object):
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
     self.output = Data(**out_type)
-    # You are not supposed to set self.output.placeholder to the value which you want to return by the layer.
+    # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
@@ -347,6 +347,7 @@ class RecLayer(_ConcatInputLayer):
     from tensorflow.python.ops import rnn, rnn_cell
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
+    from TFUtil import swapaxes
     if unit in ["lstmp", "lstm"]:
       # Some possible LSTM implementations are:
       # * BasicLSTM, via official TF, pure TF implementation
@@ -381,9 +382,10 @@ class RecLayer(_ConcatInputLayer):
       if not self.input_data.is_time_major:
         assert self.input_data.batch_dim_axis == 0
         assert self.input_data.time_dim_axis == 1
-        x = tf.transpose(x, [1, 0, 2])   # (time,batch,dim)
+        x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
       if isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+        assert not self.input_data.sparse
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
@@ -411,7 +413,10 @@ class RecLayer(_ConcatInputLayer):
         W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
         b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
         from TFUtil import dot, sequence_mask_time_major, directed
-        x = dot(x, W) + b
+        if self.input_data.sparse:
+          x = tf.nn.embedding_lookup(W, x) + b
+        else:
+          x = dot(x, W) + b
         index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
         y = cell_fw(inputs=directed(x, direction), index=directed(index, direction))
         y = directed(y, direction)
