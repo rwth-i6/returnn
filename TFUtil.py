@@ -175,6 +175,19 @@ class OutputWithActivation(object):
     else:
       self.y = x
 
+  def is_softmax_act_func(self):
+    return self.act_func is tf.nn.softmax
+
+  def get_logits(self):
+    """
+    :rtype: tf.Tensor
+    :return: logits. logits are (not necessarily normalized) log probabilities, i.e. the input of softmax.
+    This call assumes that self.y is in probability space.
+    """
+    if self.is_softmax_act_func():
+      return self.x
+    return tf.log(self.y)
+
 
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""

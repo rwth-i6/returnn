@@ -136,7 +136,7 @@ class LayerBase(object):
       return
     self.loss.init(
       output=self.output,
-      output_before_activation=self.output_before_activation,
+      output_with_activation=self.output_before_activation,
       target=self._get_target_value())
 
   def get_loss_value(self):
@@ -438,7 +438,7 @@ class Loss(object):
     # All are initialized in self.init().
     self.output = None  # type: Data
     self.time_major = None  # type: bool|None
-    self.output_before_activation = None  # type: (tf.Tensor,((tf.Tensor)->tf.Tensor))|None
+    self.output_with_activation = None  # type: OutputWithActivation
     self.output_seq_lens = None  # type: tf.Tensor
     self.target = None  # type: Data
     self.target_seq_lens = None  # type: tf.Tensor
@@ -448,26 +448,26 @@ class Loss(object):
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
 
-  def init(self, output, output_before_activation=None, target=None):
+  def init(self, output, output_with_activation=None, target=None):
     """
     :param Data output: generated output
-    :param OutputWithActivation|None output_before_activation:
+    :param OutputWithActivation|None output_with_activation:
     :param Data target: reference target from dataset
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
       self.output = output
-      self.output_before_activation = output_before_activation
+      self.output_with_activation = output_with_activation
       self.output_seq_lens = output.size_placeholder[0]
       self.target = target
       self.target_seq_lens = target.size_placeholder[0]
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if output_before_activation:
-        assert output_before_activation.y is output.placeholder
-      if output_before_activation and output_before_activation.act_func is tf.nn.softmax:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+      if output_with_activation:
+        assert output_with_activation.y is output.placeholder
+      if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
       else:
         self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
@@ -569,9 +569,9 @@ class GenericCELoss(Loss):
     # See Theano NetworkOutputLayer.FramewiseOutputLayer.cost() with "generic_ce" loss.
     from TFUtil import flatten_with_seq_len_mask
     # activation function can be anything, e.g. exp or sigmoid, but not softmax, must be elemwise.
-    assert self.output_before_activation
-    x = self.output_before_activation.x
-    y = self.output_before_activation.y
+    assert self.output_with_activation
+    x = self.output_with_activation.x
+    y = self.output_with_activation.y
     grad_f, = tf.gradients(tf.log(y), x)
     assert grad_f is not None
     grad_f = flatten_with_seq_len_mask(grad_f, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
@@ -621,9 +621,11 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc"):
-      logits = self.output_before_activation
+      logits = self.output_with_activation
+      if self.output_with_activation:
+        logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output)
+        logits = tf.log(self.output.placeholder)
       assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
       assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
       seq_lens = self.output_seq_lens
@@ -635,9 +637,11 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc_error"):
-      logits = self.output_before_activation
+      logits = None
+      if self.output_with_activation:
+        logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output)
+        logits = tf.log(self.output.placeholder)
       if not self.output.is_time_major:
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens
