@@ -2617,7 +2617,7 @@ class DumpLayer(_NoOpLayer):
 class AlignmentLayer(ForwardLayer):
   layer_class = "align"
 
-  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=0, max_skip=30,search='align', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=0, max_skip=30, search='align', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
@@ -2719,6 +2719,8 @@ class AlignmentLayer(ForwardLayer):
     self.att = att
     if output_attention:
       self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
+      self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
       self.attrs['n_out'] = 1
       return
     else:
@@ -2737,8 +2739,8 @@ class AlignmentLayer(ForwardLayer):
           self.attrs['n_out'] = n_cls
         self.index = self.sources[0].index
 
-    if self.attrs['search'] == 'time' or self.eval_flag:
-      return
+    #if self.attrs['search'] == 'time' or self.eval_flag:
+    #  return
 
     if search in ['align', 'decode', 'search']:
       idx = (rindex.flatten() > 0).nonzero()
@@ -2785,6 +2787,187 @@ class AlignmentLayer(ForwardLayer):
 
   def errors(self):
     return self.error_val
+
+
+class CAlignmentLayer(ForwardLayer):
+  layer_class = "calign"
+
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=0, max_skip=30, search='align', train_skips=False,
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    if tdps is None:
+      tdps = [1e10, 0., 3.]
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
+    else:
+      max_skip = len(tdps) - 2
+    if base is None:
+      base = []
+    kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
+    n_cls = kwargs['y_in'][target].n_out
+    super(CAlignmentLayer, self).__init__(**kwargs)
+    if base:
+      self.params = base[0].params
+      self.W_in = base[0].W_in
+      self.b = base[0].b
+      self.z = self.get_linear_forward_output()
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    if tdps is None:
+      tdps = [0.]
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
+    for i in range(len(tdps)):
+      if i % nstep != 0:
+        tdps[i] = 1e30
+    if min_skip > 0:
+      tdps[:min_skip] = [1e30] * min_skip
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search == 'time':
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+    else:
+      if search == 'time':
+        search = 'align'
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    self.p_y_given_x = p_in
+    y_in = self.y_in[target].reshape(self.index.shape)
+    if train_skips:
+      W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
+      t_in = T.dot(x_in,W_skip) + b_skip
+      q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
+    if search == 'linear':
+      max_length_y = self.z.shape[0] / y_in.shape[0] #+ T.mod(self.z.shape[0], y_in.shape[0])
+      y_out = y_in.flatten() #reshape((y_in.shape[0]*y_in.shape[1]))
+      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1]))
+      y_out = T.concatenate([y_out,y_out[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      self.y_out = y_out
+      rindex = self.index.flatten() #reshape(self.index.shape[0]*self.index.shape[1])
+      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1]))
+      rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
+      norm = T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32')
+      self.index = rindex
+      self.output = x_in
+      idx = (self.index.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_in[idx], y_idx=y_out.flatten()[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_in[idx], axis=1), y_out.flatten()[idx]))
+      return
+
+    if self.train_flag or search == 'align':
+      from theano.tensor.extra_ops import cpu_contiguous
+      from Inv import InvOp
+      att = InvOp(tdps, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      #att += T.arange(self.index.shape[1],dtype='int32') * T.constant(self.sources[0].index.shape[0], 'int32')
+      rindex = self.index.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
+      y_out = y_in.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
+      max_length_y = y_out.shape[0]
+      norm = numpy.float32(1./nstates)
+      ratt = att
+      index = theano.gradient.disconnected_grad(rindex)
+      self.y_out = y_out
+    elif search == 'search':
+      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(q_in))
+      if not self.eval_flag:
+        y_out, ratt, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
+      norm = numpy.float32(1./nstates)
+      max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
+      index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    elif search == 'decode':
+      y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
+      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
+      max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
+      index = idx[:max_length_y]
+      att = att[:max_length_y]
+      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
+      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+    else:
+      assert search == 'time'
+
+    self.att = att
+    if output_attention:
+      self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
+      self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
+      self.attrs['n_out'] = 1
+      return
+    else:
+      if reduce_output:
+        if output_z:
+          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+          self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
+        else:
+          x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+          self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+        self.index = index
+      else:
+        self.output = self.z if output_z else x_in
+        self.p_y_given_x = p_in
+        if output_z:
+          self.attrs['n_out'] = n_cls
+        self.index = self.sources[0].index
+
+    #if self.attrs['search'] == 'time' or self.eval_flag:
+    #  return
+
+    if search in ['align', 'decode', 'search']:
+      idx = (rindex.flatten() > 0).nonzero()
+      if train_skips:
+        t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[ratt.flatten()]
+        q_out = T.concatenate([T.zeros_like(ratt[:1]),ratt[1:] - ratt[:-1]],axis=0).flatten()
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
+        self.cost_val = norm * T.sum(nll)
+        self.error_val = norm * T.sum(T.neq(T.argmax(t_out[idx], axis=1), q_out[idx]))
+      else:
+        z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+        y_out = self.y_out.flatten()
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+        self.cost_val = T.sum(nll)
+        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+        if blank:
+          jdx = self.sources[0].index.flatten()
+          norm = self.index.sum(dtype='float32') / self.sources[0].index.sum(dtype='float32')
+          z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
+          bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
+                                                     y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
+          rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
+                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
+          self.cost_val += T.sum(bnll) - T.sum(rnll)
+        self.cost_val *= norm
+    elif search == 'search':
+      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
+      if train_skips:
+        y_out = self.y_out * len(tdps)
+        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
+      else:
+        y_out = self.y_out
+      idx = (rindex.flatten() > 0).nonzero()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+      self.cost_val = norm * T.sum(nll)
+      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    elif search == 'ctc':
+      from BestPathDecoder import BestPathDecodeOp
+      from theano.tensor.extra_ops import cpu_contiguous
+      return T.sum(BestPathDecodeOp()(p_in, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
 
 
 class DiscriminatorLayer(ForwardLayer):
