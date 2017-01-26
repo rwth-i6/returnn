@@ -82,6 +82,7 @@ class Data(object):
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
     self.placeholder = placeholder
+    # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
@@ -96,27 +97,27 @@ class Data(object):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     return {key: getattr(self, key) for key in keys}
 
-  def get_variable_dim_pattern(self):
+  def _get_variable_dim_pattern(self):
     """
-    :return: tuple with bools specifying which dims of the shape (including batch-dim) are of variable length.
+    :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
      e.g. (time,feature), shape=(None,128), this returns (True, False)
     :rtype: tuple[bool]
     """
-    return tuple([dim is None for dim in self.batch_shape])
+    return tuple([dim is None for dim in self.shape])
 
-  def matches_dim_pattern(self, other, check_time_and_batch_dim=True):
+  def _get_var_len_axes(self):
+    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d is None])
+
+  def matches_dim_pattern(self, other):
     """
     :param Data other:
-    :param bool check_time_and_batch_dim: whether to check if batch_dim_axis and time_dim_axis are the same
-    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time/batch dim
+    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time dim,
+      excluding batch-dim.
     :rtype: bool
     """
-    if check_time_and_batch_dim:
-      if self.batch_dim_axis != other.batch_dim_axis:
-        return False
-      if self.time_dim_axis != other.time_dim_axis:
-        return False
-    return self.get_variable_dim_pattern() == other.get_variable_dim_pattern()
+    if self._time_dim_axis_excluding_batch != other._time_dim_axis_excluding_batch:
+      return False
+    return self._get_var_len_axes() == other._get_var_len_axes()
 
   def get_description(self, with_name=True, with_placeholder=False):
     keys = ["shape", "dtype", "sparse"]
@@ -143,6 +144,14 @@ class Data(object):
     :rtype: bool
     """
     return self.time_dim_axis == 0
+
+  @property
+  def _time_dim_axis_excluding_batch(self):
+    if self.time_dim_axis is None:
+      return None
+    if self.batch_dim_axis < self.time_dim_axis:
+      return self.time_dim_axis - 1
+    return self.time_dim_axis
 
   def get_placeholder_as_time_major(self):
     if self.is_time_major:

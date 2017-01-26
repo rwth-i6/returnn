@@ -198,6 +198,9 @@ class TFNetwork(object):
     """
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       layer = layer_class(name=name, network=self, **layer_desc)
+    assert layer.output
+    assert layer.output.placeholder is not None
+    assert layer.output.size_placeholder is not None
     self.layers[name] = layer
     if layer.recurrent:
       self.recurrent = True
