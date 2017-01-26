@@ -572,6 +572,7 @@ class Device(object):
                                     name="tester")
 
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
+      output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
       source = []
       givens = self.make_input_givens(self.testnet)
@@ -585,8 +586,9 @@ class Device(object):
           source.append(T.argmax(self.testnet.get_layer('output').p_y_given_x, axis=-1).dimshuffle(0, 1, 'x'))
         elif extract == "log-posteriors":
           if not param:
-            param = 'output'
-          p_y_given_x = self.testnet.get_layer(param).p_y_given_x
+            param = output_layer_name
+          layer = self.testnet.get_layer(param)
+          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
           index = self.testnet.get_layer(param).output_index()
           if "conv_1d" in [self.testnet.hidden[s].layer_class for s in self.testnet.hidden.keys()]:
             index = self.testnet.get_layer(param).sources[0].index
@@ -596,7 +598,7 @@ class Device(object):
           source.append(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), T.log(p_y_given_x), numpy.float32(0)))
         elif extract == "log-posteriors-sum":
           if not param:
-            param = 'output'
+            param = output_layer_name
           p_y_given_x = self.testnet.get_layer(param).p_y_given_x
           index = self.testnet.get_layer(param).output_index()
           if p_y_given_x.ndim == 2:
@@ -606,7 +608,7 @@ class Device(object):
             T.sum(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), T.log(p_y_given_x), numpy.float32(0)), axis=(0, 1)))
         elif extract == "emissions":
           if not param:
-            param = 'output'
+            param = output_layer_name
           layer = self.testnet.get_layer(param)
           p_y_given_x = layer.p_y_given_x
           priors = layer.priors if 'compute_priors' in layer.attrs else 1.
@@ -621,17 +623,17 @@ class Device(object):
         elif extract == "log-posteriors-hacked":
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
-          source.append(T.log(self.testnet.output['output'].p_y_given_x))
+          source.append(T.log(self.testnet.output[output_layer_name].p_y_given_x))
         elif extract == "ctc":
-          pl = self.testnet.output['output'].p_y_given_x[:, :, 0::2]
-          pb = T.sum(self.testnet.output['output'].p_y_given_x[:, :, 1::2], axis=2).dimshuffle(0, 1, 'x')
+          pl = self.testnet.output[output_layer_name].p_y_given_x[:, :, 0::2]
+          pb = T.sum(self.testnet.output[param].p_y_given_x[:, :, 1::2], axis=2).dimshuffle(0, 1, 'x')
           pcx = T.concatenate([pl, pb], axis=2)
           #just ignore the index, is only safe with max_seqs 1
           #but makes the index handling with mdlstm work for now
           source.append(T.log(pcx))
         elif extract == "posteriors":
-          layer = self.testnet.get_layer('output')
-          p_y_given_x = layer.p_y_given_x
+          layer = self.testnet.get_layer(output_layer_name)
+          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
           index = layer.output_index()
           if p_y_given_x.ndim == 2:
             p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
@@ -639,7 +641,7 @@ class Device(object):
           source.append(
             T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)))
         elif extract == "posteriors-sum":
-          layer = self.testnet.get_layer('output')
+          layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = layer.p_y_given_x
           index = layer.output_index()
           if p_y_given_x.ndim == 2:
@@ -664,7 +666,7 @@ class Device(object):
           feat = T.log(feat)
           source.append(feat)
         elif extract == "ce-errsig":
-          feat = T.grad(self.testnet.costs, self.testnet.get_layer('output').z) #TODO
+          feat = T.grad(self.testnet.costs, self.testnet.get_layer(output_layer_name).z) #TODO
           source.append(feat)
           givens = self.make_givens(self.testnet)
         elif "log-norm-hidden_" in extract:
