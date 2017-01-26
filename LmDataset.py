@@ -31,6 +31,8 @@ class LmDataset(CachedDataset2):
                log_auto_replace_unknown_symbols=10,
                log_skipped_seqs=10,
                error_on_invalid_seq=True,
+               add_delayed_seq_data=False,
+               delayed_seq_data_start_symbol="[START]",
                **kwargs):
     """
     :param str|()->str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
@@ -48,6 +50,9 @@ class LmDataset(CachedDataset2):
     :param bool|int log_skipped_seqs: write about skipped seqs to logging, due to missing lexicon entry or so.
       if this is an int, it will only log the first N entries, and then keep quiet.
     :param bool error_on_invalid_seq: if there is a seq we would have to skip, error
+    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
+      delayed_seq_data_start_symbol + original_sequence[:-1]
+    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
     """
     super(LmDataset, self).__init__(**kwargs)
 
@@ -100,7 +105,11 @@ class LmDataset(CachedDataset2):
       assert isinstance(orth_replace_map, dict)
       self.orth_replace_map = {key: parse_orthography_into_symbols(v, word_based=self.word_based)
                                for (key, v) in orth_replace_map.items()}
-      print("  orth_replace_map: %r" % self.orth_replace_map, file=log.v5)
+      if self.orth_replace_map:
+        if len(self.orth_replace_map) <= 5:
+          print("  orth_replace_map: %r" % self.orth_replace_map, file=log.v5)
+        else:
+          print("  orth_replace_map: %i entries" % len(self.orth_replace_map), file=log.v5)
     else:
       self.orth_replace_map = {}
 
@@ -133,6 +142,10 @@ class LmDataset(CachedDataset2):
     self.add_random_phone_seqs = add_random_phone_seqs
     for i in range(add_random_phone_seqs):
       self.num_outputs["random%i" % i] = self.num_outputs["data"]
+    self.add_delayed_seq_data = add_delayed_seq_data
+    self.delayed_seq_data_start_symbol = delayed_seq_data_start_symbol
+    if add_delayed_seq_data:
+      self.num_outputs["delayed"] = self.num_outputs["data"]
 
     if _is_bliss(corpus_file):
       iter_f = _iter_bliss
@@ -260,6 +273,10 @@ class LmDataset(CachedDataset2):
         assert self.seq_gen  # not implemented atm for orths
         phones = self.seq_gen.generate_garbage_seq(target_len=data.shape[0])
         targets["random%i" % i] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
+      if self.add_delayed_seq_data:
+        targets["delayed"] = numpy.concatenate(
+          ([self.orth_symbols_map[self.delayed_seq_data_start_symbol]], data[:-1])).astype(self.dtype)
+        assert targets["delayed"].shape == data.shape
       self.next_seq_idx = seq_idx + 1
       return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
 
