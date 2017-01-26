@@ -2872,7 +2872,7 @@ class CAlignmentLayer(ForwardLayer):
       y_out = y_in.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
       max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
-      ratt = att
+      ratt = att.dimshuffle(1,0)
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':
