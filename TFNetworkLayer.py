@@ -274,9 +274,9 @@ class LinearLayer(_ConcatInputLayer):
     self.with_bias = with_bias
 
     input_data = self.input_data
-    n_in = input_data.shape[-1]
-    n_out = self.output.shape[-1]
-    assert n_in and n_out, "%r and %r" % (input_data.shape, self.output.shape)
+    n_in = input_data.dim
+    n_out = self.output.dim
+    assert n_in and n_out, "%r and %r" % (input_data, self.output)
 
     W = self.add_param(
       tf.Variable(
@@ -297,7 +297,11 @@ class LinearLayer(_ConcatInputLayer):
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
-      x = dot(x, W)
+      if self.input_data.sparse:
+        x = tf.nn.embedding_lookup(W, x)
+        ndim += 1
+      else:
+        x = dot(x, W)
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
