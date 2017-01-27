@@ -2731,6 +2731,7 @@ class AlignmentLayer(ForwardLayer):
         else:
           x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
           self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
+        self.p_y_given_x = self.output
         self.index = index
       else:
         self.output = self.z if output_z else x_in
@@ -2866,13 +2867,14 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
+      y_out = y_in.flatten().dimshuffle(0, 'x').repeat(nstates, axis=1).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1]))
       att = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
       #att += T.arange(self.index.shape[1],dtype='int32') * T.constant(self.sources[0].index.shape[0], 'int32')
       rindex = self.index.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
-      y_out = y_in.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
       max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
-      ratt = att.dimshuffle(1,0)
+      ratt = att
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':

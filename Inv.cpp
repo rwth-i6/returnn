@@ -17,9 +17,9 @@ public:
                M = 2;
             }
         }
-        if(min_skip >= M)
+        if(min_skip > M - 2)
         {
-          min_skip = M - 1;
+            min_skip = M - 2;
         }
 
         fwd_.resize(N * S, T + M - 1);
@@ -48,13 +48,13 @@ public:
             int start = T - (N * S - s) * M;
             if(start < 0)
                 start = 0;
-            //start = 0;
+            start = 0;
             for(int t=start; t < T; ++t)
             {
                 float score = score_(s, t + M - 1);
                 float min_score = INF;
-                float min_index = min_skip;
-                for(int m=t + min_skip; m < t + M; ++m)
+                int min_index = M - min_skip;
+                for(int m=t; m < t + M - min_skip; ++m)
                 {
                     float prev = fwd_(s - 1, m);
                     if(prev < min_score)
@@ -65,7 +65,7 @@ public:
                 }
 
                 if(min_score == INF)
-                  fwd_(s, t + M - 1) = score;
+                  fwd_(s, t + M - 1) = INF;
                 else
                   fwd_(s, t + M - 1) = min_score + score;
                 bt_(s, t + M - 1) = M - 1 - min_index;
@@ -74,15 +74,12 @@ public:
 
         int t = T - 1;
         attention(N*S-1) = T - 1;
-        //cout << T - 1 << endl;
         for(int s=N*S-2;s>=0;--s)
         {
             int next = t - bt_(s+1, t+M-1);
             attention(s) = next;
             t = next;
-            //cout << s << " " << t << endl;
         }
-        //cout << "---" << endl;
     }
 private:
     TwoDArray<float> fwd_;

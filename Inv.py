@@ -59,8 +59,8 @@ class InvOp(theano.Op):
     fail = sub['fail']
     return """
             Py_XDECREF(%(attention)s);
-            npy_intp dims[] = {PyArray_DIM(%(x)s,1)};
-            %(attention)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), PyArray_DIMS(%(y)s), PyArray_DescrFromType(NPY_INT32), 0);
+            npy_intp ydims[] = {PyArray_DIM(%(y)s,0) * %(nstates)s, PyArray_DIM(%(y)s,1)};
+            %(attention)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), ydims, PyArray_DescrFromType(NPY_INT32), 0);
             if (!%(attention)s)
                 %(fail)s;
             {
