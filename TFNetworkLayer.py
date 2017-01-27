@@ -463,6 +463,41 @@ class FsaLayer(LayerBase):
     # TODO...
 
 
+class CombineLayer(LayerBase):
+  layer_class = "combine"
+
+  # All ops require the same input shape and yield the same output shape. (For now)
+  @classmethod
+  def _op_kind_average(cls, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    x = sources[0].output.placeholder
+    for source in sources[1:]:
+      x += source.output.placeholder
+    x /= len(sources)
+    return x
+
+  def __init__(self, kind, sources, **kwargs):
+    """
+    :param str kind:
+    :param list[LayerBase] sources:
+    """
+    assert sources
+    kwargs = kwargs.copy()
+    if "n_out" not in kwargs and "out_type" not in kwargs:
+      kwargs["out_type"] = sources[0].output.get_kwargs()
+    super(CombineLayer, self).__init__(sources=sources, **kwargs)
+    assert not self.output.sparse
+    for source in sources:
+      assert source.output.shape == self.output.shape
+      assert source.output.batch_dim_axis == self.output.batch_dim_axis
+      assert source.output.time_dim_axis == self.output.time_dim_axis
+    op = getattr(self, "_op_kind_%s" % kind)
+    self.output.placeholder = op(sources)
+
+
 class Loss(object):
   class_name = None
   recurrent = False  # if this is a frame-wise criteria, this will be False
