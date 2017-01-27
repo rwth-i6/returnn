@@ -491,6 +491,7 @@ class CombineLayer(LayerBase):
     kwargs = kwargs.copy()
     if "n_out" not in kwargs and "out_type" not in kwargs:
       kwargs["out_type"] = sources[0].output.get_kwargs()
+      kwargs["out_type"]["name"] = "%s_output" % kwargs["name"]
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
     assert not self.output.sparse
     for source in sources:
