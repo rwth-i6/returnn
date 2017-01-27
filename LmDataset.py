@@ -53,6 +53,7 @@ class LmDataset(CachedDataset2):
     :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
       delayed_seq_data_start_symbol + original_sequence[:-1]
     :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
+    :param int partition_epoch: whether to partition the epochs into multiple parts. like epoch_split
     """
     super(LmDataset, self).__init__(**kwargs)
 
