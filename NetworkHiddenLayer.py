@@ -2622,7 +2622,7 @@ class AlignmentLayer(ForwardLayer):
     assert direction == 'inv'
     target = kwargs['target']
     if tdps is None:
-      tdps = [1e10, 0., 3.]
+      tdps = [0.]
     if len(tdps) - 2 < max_skip:
       tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
     else:
@@ -2866,7 +2866,7 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      att = InvOp(tdps, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      att = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
       #att += T.arange(self.index.shape[1],dtype='int32') * T.constant(self.sources[0].index.shape[0], 'int32')
       rindex = self.index.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
       y_out = y_in.flatten().dimshuffle(0,'x').repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
