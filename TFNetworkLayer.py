@@ -8,7 +8,8 @@ class LayerBase(object):
   recurrent = False
 
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None):
+               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
+               trainable=True):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -21,6 +22,7 @@ class LayerBase(object):
     :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
+    :param bool trainable: mostly ignored for now...
     """
     self.name = name
     self.network = network
@@ -52,7 +54,7 @@ class LayerBase(object):
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
     self.output = Data(**out_type)
-    # You are not supposed to set self.output.placeholder to the value which you want to return by the layer.
+    # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
@@ -64,10 +66,23 @@ class LayerBase(object):
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
     self._is_output_layer = is_output_layer
+    self.trainable = trainable
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
       self.name, self.layer_class, self.output.get_description(with_name=False))
+
+  @classmethod
+  def cls_get_tf_scope_name(cls, name):
+    """
+    :param str name: layer name
+    :return: scope name, might be just name
+    """
+    return name.replace(":", "__")
+
+  @property
+  def tf_scope_name(self):
+    return self.cls_get_tf_scope_name(name=self.name)
 
   def is_output_layer(self):
     """
@@ -262,9 +277,9 @@ class LinearLayer(_ConcatInputLayer):
     self.with_bias = with_bias
 
     input_data = self.input_data
-    n_in = input_data.shape[-1]
-    n_out = self.output.shape[-1]
-    assert n_in and n_out, "%r and %r" % (input_data.shape, self.output.shape)
+    n_in = input_data.dim
+    n_out = self.output.dim
+    assert n_in and n_out, "%r and %r" % (input_data, self.output)
 
     W = self.add_param(
       tf.Variable(
@@ -285,7 +300,11 @@ class LinearLayer(_ConcatInputLayer):
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
-      x = dot(x, W)
+      if self.input_data.sparse:
+        x = tf.nn.embedding_lookup(W, x)
+        ndim += 1
+      else:
+        x = dot(x, W)
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
@@ -330,11 +349,19 @@ class RecLayer(_ConcatInputLayer):
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
 
-  def __init__(self, unit="lstm", bidirectional=False, direction=None, **kwargs):
+  def __init__(self, unit="lstm", bidirectional=False, direction=None, input_projection=True, **kwargs):
+    """
+    :param str unit: the RNNCell/etc name, e.g. "nativelstm". see comment below
+    :param bool bidirectional: whether we should combine a forward and backward cell
+    :param int|None direction: None|1 -> forward, -1 -> backward
+    :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
+    :param dict[str] kwargs: passed on to base class
+    """
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn, rnn_cell
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
+    from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
     if unit in ["lstmp", "lstm"]:
       # Some possible LSTM implementations are:
       # * BasicLSTM, via official TF, pure TF implementation
@@ -369,9 +396,11 @@ class RecLayer(_ConcatInputLayer):
       if not self.input_data.is_time_major:
         assert self.input_data.batch_dim_axis == 0
         assert self.input_data.time_dim_axis == 1
-        x = tf.transpose(x, [1, 0, 2])   # (time,batch,dim)
+        x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
       if isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+        assert not self.input_data.sparse
+        assert input_projection
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
@@ -396,10 +425,17 @@ class RecLayer(_ConcatInputLayer):
           y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
         assert not bidirectional
-        W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
+        if input_projection:
+          W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
+          if self.input_data.sparse:
+            x = tf.nn.embedding_lookup(W, x)
+          else:
+            x = dot(x, W)
+        else:
+          assert not self.input_data.sparse
+          assert self.input_data.dim == cell_fw.n_input_dim
         b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
-        from TFUtil import dot, sequence_mask_time_major, directed
-        x = dot(x, W) + b
+        x += b
         index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
         y = cell_fw(inputs=directed(x, direction), index=directed(index, direction))
         y = directed(y, direction)
@@ -428,6 +464,41 @@ class FsaLayer(LayerBase):
     """
     super(FsaLayer, self).__init__(**kwargs)
     # TODO...
+
+
+class CombineLayer(LayerBase):
+  layer_class = "combine"
+
+  # All ops require the same input shape and yield the same output shape. (For now)
+  @classmethod
+  def _op_kind_average(cls, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    x = sources[0].output.placeholder
+    for source in sources[1:]:
+      x += source.output.placeholder
+    x /= len(sources)
+    return x
+
+  def __init__(self, kind, sources, **kwargs):
+    """
+    :param str kind:
+    :param list[LayerBase] sources:
+    """
+    assert sources
+    kwargs = kwargs.copy()
+    if "n_out" not in kwargs and "out_type" not in kwargs:
+      kwargs["out_type"] = sources[0].output.get_kwargs()
+    super(CombineLayer, self).__init__(sources=sources, **kwargs)
+    assert not self.output.sparse
+    for source in sources:
+      assert source.output.shape == self.output.shape
+      assert source.output.batch_dim_axis == self.output.batch_dim_axis
+      assert source.output.time_dim_axis == self.output.time_dim_axis
+    op = getattr(self, "_op_kind_%s" % kind)
+    self.output.placeholder = op(sources)
 
 
 class Loss(object):

@@ -26,6 +26,7 @@ class InvAlignOp(theano.Op):
     output_storage[0][0] = labelling
     output_storage[1][0] = attention
     output_storage[2][0] = index
+    #print attention
 
   def __init__(self, tdps, nstates):
     self.nstates = nstates
@@ -51,6 +52,7 @@ class InvAlignOp(theano.Op):
     tdps = self.tdps[:skip]
     lengthS = transcription.shape[0] * self.nstates
 
+    hmm = self._buildHmm(transcription)
     # with margins of skip at the bottom or top
     fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
     bt = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int32)
@@ -59,7 +61,7 @@ class InvAlignOp(theano.Op):
     score = np.full((lengthS, lengthT + skip - 1), inf)
     for t in range(0, lengthT):
       for s in range(0, lengthS):
-        score[s][t + skip - 1] = scores[start + t, transcription[s / self.nstates]]
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
 
     # forward
     scores = score[0, 0 + skip - 1:skip + skip - 2]
