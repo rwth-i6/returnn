@@ -8,7 +8,8 @@ class LayerBase(object):
   recurrent = False
 
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None):
+               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
+               trainable=True):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -21,6 +22,7 @@ class LayerBase(object):
     :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
+    :param bool trainable: mostly ignored for now...
     """
     self.name = name
     self.network = network
@@ -64,6 +66,7 @@ class LayerBase(object):
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
     self._is_output_layer = is_output_layer
+    self.trainable = trainable
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
