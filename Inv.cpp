@@ -48,7 +48,7 @@ public:
             int start = T - (N * S - s) * M;
             if(start < 0)
                 start = 0;
-            start = 0;
+            //start = 0;
             for(int t=start; t < T; ++t)
             {
                 float score = score_(s, t + M - 1);

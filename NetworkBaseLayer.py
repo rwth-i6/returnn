@@ -463,7 +463,7 @@ class Layer(Container):
   recurrent = False
 
   def __init__(self, sources, n_out, index, y_in=None, target=None, target_index=None,
-               sparse=False, cost_scale=1.0,
+               sparse=False, cost_scale=1.0, input_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
@@ -515,6 +515,7 @@ class Layer(Container):
     if output_entropy_exp_reg:
       self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
+    self.set_attr('input_scale', input_scale)
     if y_in is not None:
       self.y_in = {}
       for k in y_in:

@@ -54,6 +54,8 @@ class HiddenLayer(Layer):
         z += self.dot(s.output, W_in)
       else:
         z += self.dot(self.mass * m * s.output, W_in)
+    if self.attrs.get('input_scale', 1.0) != 1.0:
+      z *= numpy.float32(self.attrs['input_scale'])
     return z
 
 
