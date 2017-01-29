@@ -67,6 +67,39 @@ def constant_zero():
   return 0
 
 
+# from https://github.com/MatthieuCourbariaux/BinaryNet/blob/master/Train-time/binary_net.py
+from theano.scalar.basic import UnaryScalarOp, same_out_nocomplex
+from theano.tensor.elemwise import Elemwise
+class Round3(UnaryScalarOp):
+  def c_code(self, node, name, (x, ), (z, ), sub):
+    return "%(z)s = round(%(x)s);" % locals()
+
+  def grad(self, inputs, gout):
+    (gz,) = gout
+    return gz,
+
+
+round3_scalar = Round3(same_out_nocomplex, name='round3')
+round3 = Elemwise(round3_scalar)
+
+
+def hard_sigmoid(x):
+  return T.clip((x + 1.) / 2., 0, 1)
+
+
+# The neurons' activations binarization function
+# It behaves like the sign function during forward propagation
+# And like:
+#   hard_tanh(x) = 2*hard_sigmoid(x)-1
+# during back propagation
+def binary_tanh(x):
+  return 2. * round3(hard_sigmoid(x)) - 1.
+
+
+def binary_sigmoid(x):
+  return round3(hard_sigmoid(x))
+
+
 ActivationFunctions = {
   'logistic': T.nnet.sigmoid,
   'sigmoid': T.nnet.sigmoid,  # alias
@@ -91,6 +124,8 @@ ActivationFunctions = {
   "abs": T.abs_,
   "sqr": T.sqr,
   "sqrt": T.sqrt,
+  "binary_sigmoid" : binary_sigmoid,
+  "binary_tanh" : binary_tanh,
   "cdf": cdf
 }
 
