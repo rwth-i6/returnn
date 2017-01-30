@@ -2795,7 +2795,7 @@ class AlignmentLayer(ForwardLayer):
 class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
-  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=0, max_skip=30, search='align', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, **kwargs):
     assert direction == 'inv'
     target = kwargs['target']
@@ -2844,50 +2844,42 @@ class CAlignmentLayer(ForwardLayer):
     self.p_y_given_x = p_in
     y_in = self.y_in[target].reshape(self.index.shape)
     if train_skips:
-      W_skip = self.add_param(self.create_forward_weights(n_out, len(tdps), name="W_skip_%s" % self.name))
-      b_skip = self.add_param(self.create_bias(len(tdps), name='b_skip_%s' % self.name))
+      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
       t_in = T.dot(x_in,W_skip) + b_skip
       q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
-    if search == 'linear':
-      max_length_y = self.z.shape[0] / y_in.shape[0] #+ T.mod(self.z.shape[0], y_in.shape[0])
-      y_out = y_in.flatten() #reshape((y_in.shape[0]*y_in.shape[1]))
-      y_out = y_out.repeat(max_length_y,axis=0).reshape((y_in.shape[0] * max_length_y,y_in.shape[1]))
-      y_out = T.concatenate([y_out,y_out[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
-      self.y_out = y_out
-      rindex = self.index.flatten() #reshape(self.index.shape[0]*self.index.shape[1])
-      rindex = rindex.repeat(max_length_y,axis=0).reshape((self.index.shape[0] * max_length_y,y_in.shape[1]))
-      rindex = T.concatenate([rindex,rindex[-1:].repeat(T.mod(self.z.shape[0], y_in.shape[0]) + 1,axis=0)])[:-1]
-      norm = T.sum(self.index,dtype='float32')/T.sum(rindex,dtype='float32')
-      self.index = rindex
-      self.output = x_in
-      idx = (self.index.flatten() > 0).nonzero()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_in[idx], y_idx=y_out.flatten()[idx])
-      self.cost_val = norm * T.sum(nll)
-      self.error_val = norm * T.sum(T.neq(T.argmax(z_in[idx], axis=1), y_out.flatten()[idx]))
-      return
-
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
-      att = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-      #att += T.arange(self.index.shape[1],dtype='int32') * T.constant(self.sources[0].index.shape[0], 'int32')
-      rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates,axis=1).reshape((self.index.shape[0] * nstates, self.index.shape[1]))
+      att, emi = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1]))
+      rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1]))
       max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
       ratt = att
+      att_flat = att.flatten()
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':
-      y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(q_in))
+      from theano.tensor.extra_ops import cpu_contiguous
+      from Inv import InvOp
+      emi = T.argmax(q_in,axis=2)
+      ratt = att = att_flat = (emi.flatten() > 0).nonzero()
+      max_length_y = T.max(T.sum(emi, axis=0))
+      idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
+                          sequences=[T.sum(emi, axis=0)], non_sequences=[max_length_y + 1])
+      rindex = idx.dimshuffle(1, 0)[:-1]
       if not self.eval_flag:
-        y_out, ratt, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
-      norm = numpy.float32(1./nstates)
-      max_length_y = T.maximum(T.max(idx.sum(axis=0, acc_dtype='int32')), y_in.shape[0])
-      index = idx[:max_length_y]
-      att = att[:max_length_y]
-      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
-      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
+        ratt, emi = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+        self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+          (self.index.shape[0] * nstates, self.index.shape[1]))
+        rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+          (self.index.shape[0] * nstates, self.index.shape[1]))
+        att = att_flat = ratt.flatten()
+        max_length_y = self.y_out.shape[0]
+      index = theano.gradient.disconnected_grad(rindex)
     elif search == 'decode':
       y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
@@ -2909,10 +2901,13 @@ class CAlignmentLayer(ForwardLayer):
     else:
       if reduce_output:
         if output_z:
-          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att_flat]
           self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
         else:
-          x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
+          if not self.eval_flag:
+            x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
+          else:
+            x_out = x_in.dimshuffle(0, 1, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
           self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
         self.index = index
       else:
@@ -2928,11 +2923,12 @@ class CAlignmentLayer(ForwardLayer):
     if search in ['align', 'decode', 'search']:
       idx = (rindex.flatten() > 0).nonzero()
       if train_skips:
-        t_out = t_in.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))[ratt.flatten()]
-        q_out = T.concatenate([T.zeros_like(ratt[:1]),ratt[1:] - ratt[:-1]],axis=0).flatten()
-        nll, _ = T.nnet.crossentropy_softmax_1hot(x=t_out[idx], y_idx=q_out[idx])
+        idx = (self.sources[0].index.flatten() > 0).nonzero()
+        tt = t_in.reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=tt[idx], y_idx=emi.flatten()[idx])
+        norm = T.sum(self.index, dtype='float32') / T.sum(self.sources[0].index, dtype='float32')
         self.cost_val = norm * T.sum(nll)
-        self.error_val = norm * T.sum(T.neq(T.argmax(t_out[idx], axis=1), q_out[idx]))
+        self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
       else:
         z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
         y_out = self.y_out.flatten()
@@ -2960,10 +2956,6 @@ class CAlignmentLayer(ForwardLayer):
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
-    elif search == 'ctc':
-      from BestPathDecoder import BestPathDecodeOp
-      from theano.tensor.extra_ops import cpu_contiguous
-      return T.sum(BestPathDecodeOp()(p_in, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
 
   def cost(self):
     return self.cost_val, None

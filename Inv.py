@@ -34,7 +34,7 @@ class InvOp(theano.Op):
     assert len_y.ndim == 1  # vector of seqs lengths
     assert len_y.dtype == "int32"
 
-    return theano.Apply(self, [x, y, len_x, len_y], [T.imatrix()])
+    return theano.Apply(self, [x, y, len_x, len_y], [T.imatrix(),T.imatrix()])
     # first output: CTC error per sequence
     # second output: Derivative w.r.t. Softmax net input
 
@@ -52,7 +52,7 @@ class InvOp(theano.Op):
 
   def c_code(self, node, name, inp, out, sub):
     x, y, len_x, len_y = inp
-    attention = out[0]
+    attention, emission = out
     nstates = self.nstates
     min_skip = self.min_skip
     max_skip = self.max_skip
@@ -60,11 +60,14 @@ class InvOp(theano.Op):
     return """
             Py_XDECREF(%(attention)s);
             npy_intp ydims[] = {PyArray_DIM(%(y)s,0) * %(nstates)s, PyArray_DIM(%(y)s,1)};
+            npy_intp xdims[] = {PyArray_DIM(%(x)s,0), PyArray_DIM(%(x)s,1)};
             %(attention)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), ydims, PyArray_DescrFromType(NPY_INT32), 0);
+            %(emission)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), xdims, PyArray_DescrFromType(NPY_INT32), 0);
             if (!%(attention)s)
                 %(fail)s;
             {
               ArrayI attentionWr(%(attention)s);
+              ArrayI emissionWr(%(emission)s);
               ArrayF xWr(%(x)s);
               ArrayI yWr(%(y)s);
               CArrayI len_xWr(%(len_x)s);
@@ -76,9 +79,13 @@ class InvOp(theano.Op):
               {
                   Inv cls;
                   SArrayI attentionSWr(attentionWr, 1, i);
+                  SArrayI emissionSWr(emissionWr, 1, i);
                   cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, attentionSWr);
                   for(int j=0;j<attentionSWr.dim(0);++j)
+                  {
+                    emissionSWr(attentionSWr(j)) = 1;
                     attentionSWr(j) += xWr.dim(0) * i;
+                  }
               }
             }
         """ % locals()

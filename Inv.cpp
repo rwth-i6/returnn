@@ -81,6 +81,7 @@ public:
             t = next;
         }
     }
+
 private:
     TwoDArray<float> fwd_;
     TwoDArray<float> score_;
