@@ -249,6 +249,10 @@ def concat_sources(src_layers):
 
 class _ConcatInputLayer(LayerBase):
   def __init__(self, dropout=0, mask=None, **kwargs):
+    """
+    :param float dropout:
+    :param str|None mask: "dropout" or "unity" or None
+    """
     super(_ConcatInputLayer, self).__init__(**kwargs)
     input_data = concat_sources(self.sources)
 
@@ -265,6 +269,77 @@ class _ConcatInputLayer(LayerBase):
           seed=self.network.random.randint(2**31))
 
     self.input_data = input_data
+
+
+class CopyLayer(_ConcatInputLayer):
+  layer_class = "copy"
+
+  def __init__(self, **kwargs):
+    # Dummy out_type for now, will reset layer.
+    super(CopyLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    self.output = self.input_data
+
+
+class SliceLayer(_ConcatInputLayer):
+  layer_class = "slice"
+
+  def __init__(self, axis=None, axis_kind=None,
+               slice_start=None, slice_end=None, slice_step=None,
+               **kwargs):
+    """
+    :param int|None axis:
+    :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
+    :param int|None slice_start:
+    :param int|None slice_end:
+    :param int|None slice_step:
+    :param int|None n_out:
+    """
+    # Dummy out_type for now, will reset layer.
+    super(SliceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    if axis is not None:
+      assert not axis_kind
+      assert 0 <= axis < len(self.input_data.batch_shape)
+    else:
+      assert axis_kind
+      axis_kind = axis_kind.upper()
+      if axis_kind == "T":
+        assert self.input_data.time_dim_axis is not None
+        axis = self.input_data.time_dim_axis
+      elif axis_kind == "B":
+        assert self.input_data.batch_dim_axis is not None
+        axis = self.input_data.batch_dim_axis
+      elif axis_kind == "F":
+        axes = self.input_data.get_axes(exclude_time=True, exclude_batch=True)
+        assert len(axes) == 1
+        axis = axes[0]
+    dim_slice = slice(slice_start, slice_end, slice_step)
+    slices = [slice(None, None)] * axis + [dim_slice]
+    out_type = self.input_data.get_kwargs()
+    axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
+    if axis_wo_batch is not None:
+      out_type["shape"] = list(out_type["shape"])
+      if out_type["shape"][axis_wo_batch] is not None:
+        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
+      if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
+        out_type["dim"] = out_type["shape"][axis_wo_batch]
+    self.output = Data(**out_type)
+    self.output.size_placeholder = self.input_data.size_placeholder
+    if axis == self.input_data.time_dim_axis:
+      if slice_start:
+        assert slice_start > 0
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          tf.maximum(0, self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] - slice_start)
+      if slice_end:
+        assert slice_end > 0
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          tf.minimum(
+            tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] - slice_end,
+            self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch])
+      if slice_step:
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] //= slice_step
+    elif axis_wo_batch is not None:
+      assert axis_wo_batch not in self.output.size_placeholder
+    self.output.placeholder = self.input_data.placeholder[slices]
 
 
 class LinearLayer(_ConcatInputLayer):
@@ -322,6 +397,13 @@ class LinearLayer(_ConcatInputLayer):
     self.output.batch_dim_axis = self.input_data.batch_dim_axis
     self.output.time_dim_axis = self.input_data.time_dim_axis
     self.output.placeholder = x
+
+
+class SoftmaxLayer(LinearLayer):
+  layer_class = "softmax"
+
+  def __init__(self, activation="softmax", **kwargs):
+    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
 class RecLayer(_ConcatInputLayer):
@@ -447,13 +529,6 @@ class RecLayer(_ConcatInputLayer):
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
-
-
-class SoftmaxLayer(LinearLayer):
-  layer_class = "softmax"
-
-  def __init__(self, activation="softmax", **kwargs):
-    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
 class FsaLayer(LayerBase):

@@ -63,7 +63,7 @@ class Data(object):
         dtype = "int32"
       else:
         dtype = "float32"
-    if dim is None:
+    if dim is None and len(shape):
       assert not sparse, "need dim"
       dim = shape[-1]
     self.dim = dim
@@ -115,7 +115,7 @@ class Data(object):
       excluding batch-dim.
     :rtype: bool
     """
-    if self._time_dim_axis_excluding_batch != other._time_dim_axis_excluding_batch:
+    if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
       return False
     return self._get_var_len_axes() == other._get_var_len_axes()
 
@@ -146,12 +146,10 @@ class Data(object):
     return self.time_dim_axis == 0
 
   @property
-  def _time_dim_axis_excluding_batch(self):
+  def time_dim_axis_excluding_batch(self):
     if self.time_dim_axis is None:
       return None
-    if self.batch_dim_axis < self.time_dim_axis:
-      return self.time_dim_axis - 1
-    return self.time_dim_axis
+    return self.get_batch_axis_excluding_batch(self.time_dim_axis)
 
   def get_placeholder_as_time_major(self):
     if self.is_time_major:
@@ -159,6 +157,27 @@ class Data(object):
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
     return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+
+  def get_axes(self, exclude_time=False, exclude_batch=False):
+    """
+    :param bool exclude_time: will filter out the time-axis
+    :param bool exclude_batch: will filter out the batch-axis
+    :return: list of axes, like `range(len(self.shape))`, calculated with batch dim.
+    :rtype: list[int]
+    """
+    axes = list(range(len(self.batch_shape)))
+    if exclude_time and self.time_dim_axis is not None:
+      axes.pop(axes.index(self.time_dim_axis))
+    if exclude_batch and self.batch_dim_axis is not None:
+      axes.pop(axes.index(self.batch_dim_axis))
+    return axes
+
+  def get_batch_axis_excluding_batch(self, axis):
+    if axis == self.batch_dim_axis:
+      return None
+    if axis < self.batch_dim_axis:
+      return axis
+    return axis - 1
 
   @property
   def default_broadcast_noise_shape(self):

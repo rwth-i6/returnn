@@ -188,7 +188,7 @@ class TFNetwork(object):
       return self._add_layer(name=name, layer_class=layer_class, **layer_desc)
 
     for name, layer_desc in sorted(net_dict.items()):
-      if name == "output" or "target" in layer_desc:
+      if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
         _construct_layer(name)
 
   def _add_layer(self, name, layer_class, **layer_desc):
