@@ -843,13 +843,19 @@ class Engine(object):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
-  def forward_single(self, dataset, seq_idx):
+  def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
     :param Dataset.Dataset dataset:
     :param int seq_idx:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
     :return: numpy array, output in time major format (time,batch,dim)
     :rtype: numpy.ndarray
     """
+    if not output_layer_name:
+      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
+      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
+    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+
     # No Runner instance here but a very simplified version of Runner.run().
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
@@ -866,7 +872,7 @@ class Engine(object):
     self.check_uninitialized_vars()
 
     feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
-    output_data = self.network.layers["output"].output
+    output_data = self.network.layers[output_layer_name].output
     output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
     return output_value
 

@@ -287,6 +287,24 @@ class TFNetwork(object):
     raise Exception("multiple targets %r and default_target %r not in list. set 'target' in config" %
                     (targets, default_target))
 
+  def get_output_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [layer for (_, layer) in sorted(self.layers.items()) if layer.is_output_layer()]
+
+  def get_default_output_layer_name(self):
+    """
+    :rtype: str|None
+    :returns: default output layer name if there is one, or None
+    """
+    if "output" in self.layers:
+      return "output"
+    output_layers = self.get_output_layers()
+    if len(output_layers) == 1:
+      return output_layers[1]
+    return None  # no sensible default
+
   def get_params_list(self):
     """
     :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step
