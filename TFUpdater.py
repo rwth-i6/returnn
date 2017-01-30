@@ -283,6 +283,7 @@ class Updater(object):
       aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
       grad_noise = self.config.float("gradient_noise", 0.0)
       grad_clip = self.config.float("gradient_clip", 0.0)
+      grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
 
       # Extended self.optimizer.minimize() to optinally modify gradients.
       grads_and_vars = self.optimizer.compute_gradients(
@@ -298,6 +299,10 @@ class Updater(object):
       if grad_clip:
         assert grad_clip > 0
         grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+      if grad_clip_global_norm:
+        assert grad_clip_global_norm > 0
+        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
       apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
