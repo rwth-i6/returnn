@@ -2963,7 +2963,45 @@ class CAlignmentLayer(ForwardLayer):
   def errors(self):
     return self.error_val
 
+class InvAlignSegmentationLayer(HiddenLayer):
+  layer_class = "invalignsegment"
 
+  def __init__(self, **kwargs):
+
+    super(InvAlignSegmentationLayer, self).__init__(**kwargs)
+    self.set_attr('n_out', kwargs['n_out'])
+    assert len(self.sources) == 1
+    assert self.sources[0].att is not None
+    n_in = self.sources[0].attrs['n_out']
+    n_out = self.attrs['n_out']
+    z = self.get_linear_forward_output()
+    att = self.sources[0].att.T
+    maxlen = T.max(T.extra_ops.diff(att))
+
+    # concatenate first index in each row, i.e., if att is [[3,5,8],[15,17,20]], make it  [[0,3,5,8],[12,15,17,20]]
+    att_with_firstindex = T.concatenate([T.maximum(0,att[:,0].dimshuffle(0,'x')-maxlen),att],axis=1)
+    att_sorted = att_with_firstindex.sort() #sort the rows so that [0,3,5,8,0,0,0] becomes [0,0,0,0,3,5,8]
+    att_wo_lastcol = T.concatenate([[0],att_sorted[:,:att_sorted.shape[1]-1].flatten().nonzero_values()])
+    ind = att_wo_lastcol.shape[0] - T.sum(T.extra_ops.diff(att_with_firstindex).flatten()>0)
+    att_wo_lastcol = att_wo_lastcol[ind:]
+    att_rep = att_wo_lastcol.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).T #repeat att maxlen times
+    incr = T.arange(1,maxlen+1).repeat(att_wo_lastcol.shape[0]).reshape((T.cast(maxlen,'int32'),att_wo_lastcol.shape[0])) #range of maxlen repeated att(shape) times
+    maskarr = T.extra_ops.diff(att_with_firstindex).flatten() #diff array
+    maskarr = T.clip(maskarr,0,T.max(maskarr)).nonzero_values() #clip negative values to 0 and remove zeroes
+    # repeat maxlen times (this now contains the length of each segment)
+    maskarr = maskarr.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).dimshuffle(1,0)
+
+    #comparing incr and maskarr, you get the value to be added to att_rep at each row and column.
+    # If incr > maskarr, then cond has -att_rep-1 so that when it is subtracted from att_rep,
+    #we get -1. Later z is concatenated with a row of 0s at the end so that this is retreived when z[-1] is encountered (to simulate [3,4,0,0] for example)
+    cond     = T.switch(T.lt(incr, maskarr+1), incr, -att_rep - 1)
+    z = z.dimshuffle(1,0,2).reshape((z.shape[0]*z.shape[1],z.shape[2]))
+    #z = self.sources[0].z.dimshuffle(1, 0, 2).reshape((self.sources[0].z.shape[0] * self.sources[0].z.shape[1], self.sources[0].z.shape[2]))
+    z = T.concatenate([z,T.zeros((1,z.shape[1]))],axis=0)
+    result = z[T.cast(att_rep + cond,'int32')]
+    self.make_output(result)
+    #self.act = [self.output, T.zeros_like(self.output)]
+    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class DiscriminatorLayer(ForwardLayer):
   layer_class = 'disc'
