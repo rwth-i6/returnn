@@ -2730,6 +2730,7 @@ class AlignmentLayer(ForwardLayer):
         if output_z:
           z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
           self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
+          self.attrs['n_out'] = n_cls
         else:
           x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att.flatten()]
           self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
