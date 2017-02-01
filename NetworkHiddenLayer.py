@@ -1171,7 +1171,7 @@ class Preemphasis(_NoOpLayer):
     preemphMatrix = numpy.zeros((n_in, n_in)) 
     numpy.fill_diagonal(preemphMatrix, 1)
     preemphMatrix[numpy.arange(n_in-1)+1, numpy.arange(n_in-1)] = -1 * alpha
-    outputVec = T.dot(inputVec, preemphMatrix)
+    outputVec = T.dot(inputVec, preemphMatrix.transpose())
     self.make_output(outputVec)
 
 class EnergyNormalization(_NoOpLayer):
