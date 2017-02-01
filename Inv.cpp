@@ -21,7 +21,7 @@ public:
         {
             min_skip = M - 2;
         }
-        if(T / N * S > M)
+        if(T / (N * S) > M)
         {
             M = T / N * S + 1;
             if(M > max_skip_warning_limit)
