@@ -21,6 +21,15 @@ public:
         {
             min_skip = M - 2;
         }
+        if(T / N * S > M)
+        {
+            M = T / N * S + 1;
+            if(M > max_skip_warning_limit)
+            {
+                max_skip_warning_limit = M;
+                cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
+            }
+        }
 
         fwd_.resize(N * S, T + M - 1);
         bt_.resize(N * S, T + M - 1);
@@ -86,4 +95,5 @@ private:
     TwoDArray<float> fwd_;
     TwoDArray<float> score_;
     TwoDArray<int> bt_;
+    int max_skip_warning_limit;
 };

@@ -2872,10 +2872,10 @@ class CAlignmentLayer(ForwardLayer):
       idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
                           sequences=[T.sum(emi, axis=0)], non_sequences=[max_length_y + 1])
       rindex = idx.dimshuffle(1, 0)[:-1]
+      self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+        (self.index.shape[0] * nstates, self.index.shape[1]))
       if not self.eval_flag:
         ratt, emi = InvOp(min_skip, max_skip, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-        self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
-          (self.index.shape[0] * nstates, self.index.shape[1]))
         rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
           (self.index.shape[0] * nstates, self.index.shape[1]))
         att = att_flat = ratt.flatten()
