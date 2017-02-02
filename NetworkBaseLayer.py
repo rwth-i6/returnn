@@ -18,7 +18,7 @@ class Container(object):
 
   def __init__(self, layer_class=None, name="", network=None,
                train_flag=False, eval_flag=False, depth=1, consensus="flat",
-               forward_weights_init=None, bias_init=None,
+               forward_weights_init=None, bias_init=None, weight_clip=0.0, cost=None,
                recurrent_weights_init=None,
                substitute_param_expr=None):
     """
@@ -54,6 +54,10 @@ class Container(object):
     if substitute_param_expr:
       self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
+    if weight_clip:
+      self.set_attr('weight_clip', weight_clip)
+    if cost:
+      self.set_attr('cost', cost)
 
   def __repr__(self):
     return "<%s class:%s name:%s>" % (self.__class__, self.layer_class, self.name)

@@ -3064,7 +3064,7 @@ class DiscriminatorLayer(ForwardLayer):
       else:
         self.cost_scale_val = numpy.float32(1.0)
     else:
-      self.cost_scale_val = numpy.float32(len(self.sources + base))
+      self.cost_scale_val = numpy.float32(1.0) # numpy.float32(len(self.sources + base))
 
   def cost(self):
     return self.cost_val, self.known_grads
