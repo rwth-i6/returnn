@@ -2863,7 +2863,7 @@ class CAlignmentLayer(ForwardLayer):
       att_flat = att.flatten()
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
-    elif search == 'search':
+    elif search in ['search','decode']:
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
       emi = T.argmax(q_in,axis=2)
@@ -2881,19 +2881,16 @@ class CAlignmentLayer(ForwardLayer):
         att = att_flat = ratt.flatten()
         max_length_y = self.y_out.shape[0]
       index = theano.gradient.disconnected_grad(rindex)
-    elif search == 'decode':
-      y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
-      norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
-      max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
-      index = idx[:max_length_y]
-      att = att[:max_length_y]
-      y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
-      self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
     else:
       assert search == 'time'
 
     self.att = att
-    if output_attention:
+    if self.eval_flag and search == 'decode':
+      self.output = self.z * q_in
+      self.p_y_given_x = p_in * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
+      self.index = self.sources[0].index
+      self.attrs['n_out'] = n_cls
+    elif output_attention:
       self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
       self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
       self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
@@ -2914,6 +2911,8 @@ class CAlignmentLayer(ForwardLayer):
       else:
         self.output = self.z if output_z else x_in
         self.p_y_given_x = p_in
+        if search == 'decode':
+          self.p_y_given_x *= q_in
         if output_z:
           self.attrs['n_out'] = n_cls
         self.index = self.sources[0].index
@@ -2963,6 +2962,7 @@ class CAlignmentLayer(ForwardLayer):
 
   def errors(self):
     return self.error_val
+
 
 class InvAlignSegmentationLayer(HiddenLayer):
   layer_class = "invalignsegment"
