@@ -2886,7 +2886,7 @@ class CAlignmentLayer(ForwardLayer):
 
     self.att = att
     if self.eval_flag and search == 'decode':
-      self.output = self.z * q_in
+      self.output = self.z * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
       self.p_y_given_x = p_in * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
       self.index = self.sources[0].index
       self.attrs['n_out'] = n_cls

@@ -12,9 +12,9 @@ public:
     int T, int N, int S, int min_skip, int max_skip, int focus, SArrayI& attention)
     {
         int M = max_skip + 1;
-        if(M > T - S)
+        if(M > T - N * S)
         {
-            M = T - S + 1;
+            M = T - N * S + 1;
             if(M < 2)
             {
                M = 2;
@@ -26,7 +26,7 @@ public:
         }
         if(T / (N * S) > M)
         {
-            M = T / N * S + 1;
+            M = T / (N * S) + 1;
             if(M > max_skip_warning_limit)
             {
                 max_skip_warning_limit = M;
