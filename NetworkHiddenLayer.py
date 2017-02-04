@@ -3076,6 +3076,48 @@ class DiscriminatorLayer(ForwardLayer):
     return self.error_val
 
 
+class WassersteinDiscriminatorLayer(ForwardLayer):
+  layer_class = 'wdisc'
+
+  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, loss='ce', **kwargs):
+    kwargs['n_out'] = 1
+    super(WassersteinDiscriminatorLayer, self).__init__(**kwargs)
+    if not base:
+      base = []
+    self.params = {}
+    W = self.add_param(self.create_random_normal_weights(self.sources[0].attrs['n_out'], 1, scale=100., name="W_%s" % self.name))
+    b = self.add_param(self.create_bias(1))
+    self.W = W
+    self.b = b
+    self.cost_val = numpy.float32(0)
+    self.known_grads = {}
+    lng = T.sum(self.index, dtype='float32')
+    preal = numpy.float32((1. - pgen) / float(len(self.sources)))
+
+    if forge:
+      self.params = {}
+      W = base[0].W
+      b = base[0].b
+      basecost = base[0].cost_val
+      base = []
+      preal = numpy.float32(1.0)
+    for src in self.sources: # real
+      idx = (src.index.flatten() > 0).nonzero()
+      z = T.tanh(T.dot(src.output, W) + b)
+      ratio = lng / T.sum(src.index, dtype='float32')
+      self.cost_val -= ratio * preal * T.sum(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))[idx])
+    if base:
+      pgen = numpy.float32(pgen / float(len(base)))
+      for src in base: # gen
+        idx = (src.index.flatten() > 0).nonzero()
+        z = T.tanh(T.dot(src.output, W) + b)
+        ratio = lng / T.sum(src.index, dtype='float32')
+        self.cost_val += ratio * pgen * T.sum(z.reshape((z.shape[0] * z.shape[1], z.shape[2]))[idx])
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
 
