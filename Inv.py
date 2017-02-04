@@ -6,7 +6,7 @@ Tfloat = theano.config.floatX  # @UndefinedVariable
 
 
 class InvOp(theano.Op):
-  __props__ = ('min_skip', 'max_skip', 'nstates')
+  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus')
 
   def __eq__(self, other):
     return type(self) == type(other)
@@ -17,9 +17,10 @@ class InvOp(theano.Op):
   def __str__(self):
     return self.__class__.__name__
 
-  def __init__(self, min_skip, max_skip, nstates):
+  def __init__(self, min_skip, max_skip, nstates, focus='last'):
     self.min_skip = min_skip
     self.max_skip = max_skip
+    self.focus = ['last','max'].index(focus)
     self.nstates = nstates
 
   def make_node(self, x, y, len_x, len_y):
@@ -56,6 +57,7 @@ class InvOp(theano.Op):
     nstates = self.nstates
     min_skip = self.min_skip
     max_skip = self.max_skip
+    focus = self.focus
     fail = sub['fail']
     return """
             Py_XDECREF(%(attention)s);
@@ -80,7 +82,7 @@ class InvOp(theano.Op):
                   Inv cls;
                   SArrayI attentionSWr(attentionWr, 1, i);
                   SArrayI emissionSWr(emissionWr, 1, i);
-                  cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, attentionSWr);
+                  cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, %(focus)s, attentionSWr);
                   for(int j=0;j<attentionSWr.dim(0);++j)
                   {
                     emissionSWr(attentionSWr(j)) = 1;

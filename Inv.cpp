@@ -1,17 +1,20 @@
 #include <limits>
 
 #define INF std::numeric_limits<float>::max()
+#define FOCUS_LAST 0
+#define FOCUS_MAX 1
+
 
 class Inv
 {
 public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
-    int T, int N, int S, int min_skip, int max_skip, SArrayI& attention)
+    int T, int N, int S, int min_skip, int max_skip, int focus, SArrayI& attention)
     {
         int M = max_skip + 1;
-        if(M > T - S)
+        if(M > T - N * S)
         {
-            M = T - S + 1;
+            M = T - N * S + 1;
             if(M < 2)
             {
                M = 2;
@@ -23,7 +26,7 @@ public:
         }
         if(T / (N * S) > M)
         {
-            M = T / N * S + 1;
+            M = T / (N * S) + 1;
             if(M > max_skip_warning_limit)
             {
                 max_skip_warning_limit = M;
@@ -82,11 +85,30 @@ public:
         }
 
         int t = T - 1;
-        attention(N*S-1) = T - 1;
-        for(int s=N*S-2;s>=0;--s)
+        for(int s=N*S-2;s>=-1;--s)
         {
             int next = t - bt_(s+1, t+M-1);
-            attention(s) = next;
+            if(s < 0)
+                next = 0;
+            if(focus == FOCUS_LAST)
+                attention(s+1) = t;
+            else if(focus == FOCUS_MAX)
+            {
+                float min_score = INF;
+                int min_index = t;
+                for(int u=t;u>next;--u)
+                {
+                    for(int c=0;c<N;++c)
+                    {
+                        if(min_score > activs(u,c))
+                        {
+                            min_score = activs(u,c);
+                            min_index = u;
+                        }
+                    }
+                }
+                attention(s+1) = min_index;
+            }
             t = next;
         }
     }
