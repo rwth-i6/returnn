@@ -2288,6 +2288,8 @@ class CorruptionLayer(_NoOpLayer): # x = x + noise
     z = T.concatenate([s.output for s in self.sources], axis=2)
     if noise == 'gaussian':
       z += self.rng.normal(size=z.shape,avg=0,std=p,dtype='float32') #+ (z - T.mean(z, axis=(0,1), keepdims=True)) / T.std(z, axis=(0,1), keepdims=True)
+    elif noise == 'binomial':
+      z += self.rng.binomial(size=z.shape, p=p, dtype='float32')
     if clip:
       z = T.clip(z,numpy.float32(0),numpy.float32(1))
     self.make_output(z)
@@ -3157,7 +3159,25 @@ class SumLayer(_NoOpLayer):
     super(SumLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = self.sources[0].attrs['n_out']
     self.output = sum([s.output for s in self.sources])
-    self.index = self.sources[1].index
+    self.index = self.sources[0].index
+
+class TanhToSigmoidLayer(_NoOpLayer):
+  layer_class = 'tanh_to_sigmoid'
+
+  def __init__(self, **kwargs):
+    super(TanhToSigmoidLayer, self).__init__(**kwargs)
+    x_in, self.attrs['n_out'] = concat_sources(self.sources)
+    self.output = (x_in + numpy.float32(1)) / numpy.float32(2)
+    self.index = self.sources[0].index
+
+class SigmoidToTanhLayer(_NoOpLayer):
+  layer_class = 'sigmoid_to_tanh'
+
+  def __init__(self, **kwargs):
+    super(SigmoidToTanhLayer, self).__init__(**kwargs)
+    x_in, self.attrs['n_out'] = concat_sources(self.sources)
+    self.output = x_in * numpy.float32(2) - numpy.float32(1)
+    self.index = self.sources[0].index
 
 class RNNBlockLayer(ForwardLayer):
   recurrent = True
