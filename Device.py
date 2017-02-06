@@ -466,9 +466,9 @@ class Device(object):
             if param.layer.attrs.get('cost',''):
               keys = param.layer.attrs['cost']
               if isinstance(keys, list):
-                gparam = T.grad(T.sum([self.trainnet.costs[k] for k in keys]), param, known_grads=OrderedDict(self.trainnet.known_grads))
+                gparam = T.grad(T.sum([self.trainnet.costs[k] * param.layer.cost_scale() for k in keys]), param, known_grads=OrderedDict(self.trainnet.known_grads))
               else:
-                gparam = T.grad(self.trainnet.costs[param.layer.attrs['cost']], param, known_grads=OrderedDict(self.trainnet.known_grads))
+                gparam = T.grad(self.trainnet.costs[param.layer.attrs['cost']] * param.layer.cost_scale(), param, known_grads=OrderedDict(self.trainnet.known_grads))
             else:
               gparam = T.grad(self.trainnet.get_objective(), param, known_grads=OrderedDict(self.trainnet.known_grads))
           except theano.gradient.DisconnectedInputError:
