@@ -776,7 +776,7 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
-      known_grads = {self.z: grad}
+      known_grads = {self.z: grad * numpy.float32(self.attrs.get('cost_scale', 1))}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'hmm':
       from theano.tensor.extra_ops import cpu_contiguous

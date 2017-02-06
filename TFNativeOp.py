@@ -451,7 +451,7 @@ class NativeLstmCell(RecSeqCellOp):
     W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
     lstm_op = make_lstm_op()
     op_out = lstm_op(*self.map_layer_inputs_to_op(inputs, W_re, index))
-    from TheanoUtil import make_var_tuple
+    from TFUtil import make_var_tuple
     out = NativeOp.LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
     return out
 

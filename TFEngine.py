@@ -1,22 +1,25 @@
 
 from __future__ import print_function
 
+import os
+import sys
+import time
+from Queue import Queue
+from threading import Thread, Condition
+
+import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline
-import numpy
-import sys
-import os
-import time
-from Log import log
+
+from Dataset import Batch, BatchSetGenerator
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
-from Pretrain import pretrainFromConfig
+from Log import log
 from Network import LayerNetwork
+from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
+from TFUpdater import Updater
 from Util import hms, NumbersDict
-from threading import Thread, Condition
-from Queue import Queue
-from Dataset import Batch, BatchSetGenerator
 
 
 class DataProvider(object):
@@ -302,7 +305,7 @@ class Runner(object):
       layer = self.engine.network.layers[key.split(':')[-1]]
       if layer.target:
         return layer.target
-    return self.data_provider.extern_data.default_target  # e.g. "classes"
+    return self.engine.network.get_default_target()  # e.g. "classes"
 
   def _epoch_norm_factor_for_result(self, key):
     target = self._get_target_for_key(key)
@@ -444,143 +447,6 @@ class Runner(object):
       self.elapsed = time.time() - self.start_time
 
 
-_OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
-
-def get_optimizer_class(class_name):
-  """
-  :param str class_name: e.g. "adam"
-  :return:
-  """
-  if not _OptimizerClassesDict:
-    for name, v in vars(tf.train).items():
-      if name.endswith("Optimizer"):
-        name = name[:-len("Optimizer")]
-      else:
-        continue
-      if not issubclass(v, tf.train.Optimizer):
-        continue
-      name = name.lower()
-      assert name not in _OptimizerClassesDict
-      _OptimizerClassesDict[name] = v
-  return _OptimizerClassesDict[class_name.lower()]
-
-
-class Updater(object):
-  def __init__(self, config, tf_session, network):
-    """
-    :param Config.Config config:
-    :param tf.Session tf_session:
-    :param TFNetwork network:
-    """
-    self.config = config
-    self.tf_session = tf_session
-    self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
-    self.trainable_vars = []  # type: list[tf.Variable]
-    self.network = network
-    self.loss = network.get_objective()
-    self.optimizer = None  # type: tf.train.Optimizer
-    self.optim_op = None  # type: tf.Operation
-
-  def reset_optim_op(self):
-    """
-    Call this if sth is changed which the optim_op depends on.
-    See self.create_optim_op().
-    """
-    self.optim_op = None  # type: tf.Operation
-
-  def set_trainable_vars(self, trainable_vars):
-    """
-    :param list[tf.Variable] trainable_vars:
-    """
-    if trainable_vars == self.trainable_vars:
-      return
-    self.trainable_vars = trainable_vars
-    self.reset_optim_op()
-
-  def set_learning_rate(self, value):
-    """
-    :param float value:
-    """
-    self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
-
-  def create_optimizer(self):
-    lr = self.learning_rate_var
-    epsilon = 1e-16
-    momentum = self.config.float("momentum", 0.0)
-    if self.config.float("gradient_clip", 0.0):
-      raise NotImplementedError("gradient_clip not implemented yet")
-    if self.config.float("gradient_noise", 0.0):
-      raise NotImplementedError("gradient_noise not implemented yet")
-    optim_config = self.config.typed_value("optimizer")
-    if optim_config:
-      assert isinstance(optim_config, dict)
-      optim_config = optim_config.copy()
-      optim_class_name = optim_config.pop("class")
-      optim_class = get_optimizer_class(optim_class_name)
-      optim_config.setdefault("epsilon", epsilon)
-      if momentum:
-        optim_config.setdefault("momentum", momentum)
-      optim_config["learning_rate"] = lr
-      print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
-      optimizer = optim_class(**optim_config)
-      assert isinstance(optimizer, tf.train.Optimizer)
-    elif self.config.bool("adam", False):
-      assert not momentum
-      print("Create Adam optimizer.", file=log.v2)
-      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
-    elif self.config.bool("nadam", False):
-      raise NotImplementedError("NAdam not implemented yet.")
-    elif self.config.bool("adadelta", False):
-      assert not momentum
-      print("Create Adadelta optimizer.", file=log.v2)
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon)
-    elif self.config.bool("adagrad", False):
-      assert not momentum
-      print("Create Adagrad optimizer.", file=log.v2)
-      optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
-    elif self.config.bool("rmsprop", False):
-      print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
-    elif momentum:
-      print("Create Momentum optimizer.", file=log.v2)
-      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum)
-    else:
-      print("Create SGD optimizer.", file=log.v2)
-      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
-    self.optimizer = optimizer
-    self.reset_optim_op()
-
-  def create_optim_op(self):
-    if not self.optimizer:
-      self.create_optimizer()
-
-    assert self.loss is not None
-    with tf.variable_scope("optimize"):
-      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-      self.optim_op = self.optimizer.minimize(
-        self.loss, var_list=self.trainable_vars,
-        aggregation_method=aggregation_method)
-      incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
-      self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
-
-    print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
-    slot_vars = []
-    for slot_name in self.optimizer.get_slot_names():
-      for v in self.trainable_vars:
-        slot_var = self.optimizer.get_slot(var=v, name=slot_name)
-        assert slot_var is not None
-        slot_vars.append(slot_var)
-    self.tf_session.run(tf.variables_initializer(slot_vars, name="init_optim_slot_vars"))
-
-  def get_optim_op(self):
-    """
-    :rtype: tf.Operation
-    """
-    if self.optim_op is None:
-      self.create_optim_op()
-    return self.optim_op
-
-
 class Engine(object):
   def __init__(self, config=None):
     """
@@ -601,9 +467,7 @@ class Engine(object):
     self.start_epoch = None
 
   def finalize(self):
-    if self.tf_session:
-      self.tf_session.close()
-      self.tf_session = None
+    self._close_tf_session()
 
   def _get_devices_config(self):
     """
@@ -641,9 +505,13 @@ class Engine(object):
       return max(omp_num_threads, 2)
     return None
 
-  def _make_tf_session(self):
+  def _close_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
+    self.tf_session = None
+
+  def _make_tf_session(self):
+    self._close_tf_session()
     opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
     opts = opts.copy()
@@ -662,8 +530,6 @@ class Engine(object):
 
   def _reset_graph(self):
     tf.reset_default_graph()
-    # The new session will by default use the newly created default graph.
-    self._make_tf_session()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
 
@@ -690,9 +556,6 @@ class Engine(object):
       if not dataset: continue
       eval_datasets[name] = dataset
     return eval_datasets
-
-  def print_network_info(self):
-    self.network.print_network_info()
 
   def save_model(self, filename):
     """
@@ -760,18 +623,21 @@ class Engine(object):
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
       epoch = self.epoch
+    self._close_tf_session()
     self._reset_graph()
+    # The new session will by default use the newly created default graph.
+    self._make_tf_session()
     tf.set_random_seed(42)
     network = TFNetwork(rnd_seed=epoch)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
-    network.print_network_info()
     self.network = network
     if self.train_data:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
       self.updater = Updater(config=self.config, tf_session=self.tf_session, network=network)
       self.updater.set_trainable_vars(network.get_trainable_params())
+    network.print_network_info()
 
   def maybe_init_new_network(self, net_desc):
     if self.network.layers_desc == net_desc:
@@ -876,9 +742,6 @@ class Engine(object):
       print("save initial epoch1 model", epoch0_model_filename, file=log.v4)
       self.save_model(epoch0_model_filename)
 
-    if self.is_pretrain_epoch():
-      self.print_network_info()
-
     if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
@@ -980,13 +843,19 @@ class Engine(object):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
-  def forward_single(self, dataset, seq_idx):
+  def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
     :param Dataset.Dataset dataset:
     :param int seq_idx:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
     :return: numpy array, output in time major format (time,batch,dim)
     :rtype: numpy.ndarray
     """
+    if not output_layer_name:
+      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
+      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
+    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+
     # No Runner instance here but a very simplified version of Runner.run().
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
@@ -1003,7 +872,7 @@ class Engine(object):
     self.check_uninitialized_vars()
 
     feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
-    output_data = self.network.layers["output"].output
+    output_data = self.network.layers[output_layer_name].output
     output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
     return output_value
 

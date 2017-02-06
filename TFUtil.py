@@ -7,6 +7,216 @@ import sys
 from Util import NotSpecified
 
 
+class Data(object):
+  """
+  This class is to describe a tensor,
+  i.e. it's shape and properties like
+  whether we should consider it as sparse data (i.e. it represents indices).
+  This is used in TFNetwork to describe the dataset external data
+  as well as for every layer output.
+  """
+
+  size_dtype = "int32"
+
+  def __init__(self, name,
+               shape=None, dtype=None,
+               placeholder=None,
+               sparse=None,
+               dim=None,
+               size_placeholder=None,
+               batch_dim_axis=0,
+               time_dim_axis=NotSpecified,
+               auto_create_placeholders=False):
+    """
+    :param str name:
+    :param tuple[int|None] shape: including time-dim (can be None). excluding batch-dim. e.g. (time,feat)=(None,128)
+    :param str dtype: e.g. "float32" or "int64"
+    :param tf.Tensor|None placeholder: with added batch-dim
+    :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
+    :param None|int dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
+    :param int batch_dim_axis: where we add the batch-dim.
+      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...)
+    :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
+      this is often 1. however, can be None if there is no time-dim.
+    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size
+    """
+    self.name = name
+    if sparse is None:
+      if dtype and dtype.startswith("int"):
+        sparse = True
+      elif name == "classes":
+        sparse = True
+      elif shape is not None and len(shape) == 1:
+        sparse = True
+      if sparse is None:
+        sparse = False
+    self.sparse = sparse
+    if shape is None:
+      assert dim, "no shape specified, need dim"
+      if sparse:
+        shape = (None,)  # assume common (time,)
+      else:
+        shape = (None, dim)  # assume common (time,feat)
+    self.shape = shape  # excluding batch-dim. see self.batch_shape
+    if dtype is None:
+      if sparse:
+        dtype = "int32"
+      else:
+        dtype = "float32"
+    if dim is None and len(shape):
+      assert not sparse, "need dim"
+      dim = shape[-1]
+    self.dim = dim
+    self.batch_dim_axis = batch_dim_axis
+    if time_dim_axis is NotSpecified:
+      if (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
+        if batch_dim_axis >= 1:
+          time_dim_axis = 0
+        else:
+          time_dim_axis = 1
+      else:
+        time_dim_axis = None
+    self.time_dim_axis = time_dim_axis
+    self.dtype = dtype
+    if placeholder is None and auto_create_placeholders:
+      with tf.name_scope("extern_data/placeholders/%s/" % name):
+        placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
+    self.placeholder = placeholder
+    # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
+    if size_placeholder is None and auto_create_placeholders:
+      size_placeholder = {}  # type: dict[int,tf.Tensor]
+      with tf.name_scope("extern_data/placeholders/%s/" % name):
+        for i, dim in enumerate(shape):
+          if dim is None:
+            # For each batch a separate size.
+            size_placeholder[i] = tf.placeholder(
+              name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
+    self.size_placeholder = size_placeholder
+
+  def get_kwargs(self):
+    keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
+    return {key: getattr(self, key) for key in keys}
+
+  def _get_variable_dim_pattern(self):
+    """
+    :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
+     e.g. (time,feature), shape=(None,128), this returns (True, False)
+    :rtype: tuple[bool]
+    """
+    return tuple([dim is None for dim in self.shape])
+
+  def _get_var_len_axes(self):
+    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d is None])
+
+  def matches_dim_pattern(self, other):
+    """
+    :param Data other:
+    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time dim,
+      excluding batch-dim.
+    :rtype: bool
+    """
+    if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
+      return False
+    return self._get_var_len_axes() == other._get_var_len_axes()
+
+  def get_description(self, with_name=True, with_placeholder=False):
+    keys = ["shape", "dtype", "sparse"]
+    if self.sparse:
+      keys.append("dim")
+    if with_name:
+      keys.insert(0, "name")
+    if with_placeholder:
+      keys.append("placeholder")
+    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  @property
+  def batch_shape(self):
+    """
+    :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
+    :rtype: tuple[int|None]
+    """
+    return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+
+  @property
+  def is_time_major(self):
+    """
+    :return: whether this is in time-major format, i.e. (time,batch,...)
+    :rtype: bool
+    """
+    return self.time_dim_axis == 0
+
+  @property
+  def time_dim_axis_excluding_batch(self):
+    if self.time_dim_axis is None:
+      return None
+    return self.get_batch_axis_excluding_batch(self.time_dim_axis)
+
+  def get_placeholder_as_time_major(self):
+    if self.is_time_major:
+      return self.placeholder
+    assert self.batch_dim_axis == 0
+    assert self.time_dim_axis == 1
+    return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+
+  def get_axes(self, exclude_time=False, exclude_batch=False):
+    """
+    :param bool exclude_time: will filter out the time-axis
+    :param bool exclude_batch: will filter out the batch-axis
+    :return: list of axes, like `range(len(self.shape))`, calculated with batch dim.
+    :rtype: list[int]
+    """
+    axes = list(range(len(self.batch_shape)))
+    if exclude_time and self.time_dim_axis is not None:
+      axes.pop(axes.index(self.time_dim_axis))
+    if exclude_batch and self.batch_dim_axis is not None:
+      axes.pop(axes.index(self.batch_dim_axis))
+    return axes
+
+  def get_batch_axis_excluding_batch(self, axis):
+    if axis == self.batch_dim_axis:
+      return None
+    if axis < self.batch_dim_axis:
+      return axis
+    return axis - 1
+
+  @property
+  def default_broadcast_noise_shape(self):
+    """
+    :return: noise-shape which will broadcast along all dynamic dimensions and time/batch dim
+    :rtype: tuple[int]
+    """
+    return [1 if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis]) else dim
+            for axis, dim in enumerate(self.batch_shape)]
+
+
+class OutputWithActivation(object):
+  def __init__(self, x, act_func=None):
+    """
+    :param tf.Tensor x:
+    :param None|(tf.Tensor)->tf.Tensor act_func:
+    """
+    self.x = x
+    self.act_func = act_func
+    if act_func:
+      with tf.name_scope("activation"):
+        self.y = act_func(x)
+    else:
+      self.y = x
+
+  def is_softmax_act_func(self):
+    return self.act_func is tf.nn.softmax
+
+  def get_logits(self):
+    """
+    :rtype: tf.Tensor
+    :return: logits. logits are (not necessarily normalized) log probabilities, i.e. the input of softmax.
+    This call assumes that self.y is in probability space.
+    """
+    if self.is_softmax_act_func():
+      return self.x
+    return tf.log(self.y)
+
+
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
   with tf.name_scope('summaries_%s' % name):
@@ -403,7 +613,8 @@ def sequence_mask(lengths, **kwargs):
 
   :param tf.Tensor lengths: shape (batch,)
   :param dict[str] kwargs: passed on to tf.sequence_mask
-  :return: mask of shape (batch,maxlen/time)
+  :return: tensor mask of shape (batch,maxlen/time). default dtype is bool unless you specify something else
+  :rtype: tf.Tensor
   """
   if hasattr(lengths, "_sequence_mask"):
     return lengths._sequence_mask
@@ -484,11 +695,28 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     return res
 
 
-def sparse_labels(x, seq_lens, dtype=tf.int32):
+def expand_dims_unbroadcast(x, axis, dim):
+  """
+  :param tf.Tensor x:
+  :param int|tf.Tensor axis: new axis
+  :param int|tf.Tensor dim: dimension for axis
+  :return: if x is of shape (a,b,c) and axis=0, then we return (dim,a,b,c)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("expand_dims_unbroadcast"):
+    x = tf.expand_dims(x, axis)
+    new_ndim = x.get_shape().ndims
+    assert new_ndim is not None
+    x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
+    return x
+
+
+def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
   :param tf.Tensor seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
+  :param bool collapse_repeated: like uniq() behavior
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
   :rtype: tf.SparseTensor
   """
@@ -500,12 +728,17 @@ def sparse_labels(x, seq_lens, dtype=tf.int32):
     batch_size = tf.shape(x)[0]
     max_time = tf.shape(x)[1]
     mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    if collapse_repeated:
+      with tf.name_scope("collapse_repeated"):
+        diffs = tf.concat(1, [tf.ones_like(x[:, :1]), x[:, 1:] - x[:, :-1]])  # shape (batch,time)
+        zero = diffs.dtype.as_numpy_dtype()
+        mask = tf.logical_and(tf.not_equal(diffs, zero), mask)
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
-      time_idxs = tf.expand_dims(tf.range(max_time), 0)  # shape (batch,time)
+      time_idxs = expand_dims_unbroadcast(tf.range(max_time), 0, batch_size)  # shape (batch,time)
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
-      batch_idxs = tf.expand_dims(tf.range(batch_size), 1)  # shape (batch,time)
+      batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
       flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
       flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
       # tf.SparseTensor requires int64 indices
@@ -520,6 +753,19 @@ def sparse_labels(x, seq_lens, dtype=tf.int32):
     #   values: A 1-D tensor of any type and shape `[N]`.
     #   shape: A 1-D int64 tensor of shape `[ndims]`.
     return tf.SparseTensor(flat_idxs, flat_x, shape)
+
+
+def uniq(x):
+  """
+  :param tf.Tensor x: 1D shape (time,) -> index, some int type
+  :return: like numpy.uniq. unlike tf.unique which will never repeat entries.
+  Example: uniq([0, 0, 1, 1, 0, 0]) == [0, 1, 0], tf.unique([0, 0, 1, 1, 0, 0]) == [0, 1].
+  For a batched variant, see sparse_labels() with option collapse_repeated.
+  """
+  diffs = tf.concat(0, [tf.ones_like(x[:1]), x[1:] - x[:-1]])
+  nonzero_idx = tf.where(diffs)
+  x_uniq = tf.gather_nd(x, nonzero_idx)
+  return x_uniq
 
 
 class VariableAssigner(object):
@@ -675,7 +921,8 @@ class OpCodeCompiler(object):
       and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     """
-    self.cache_dir = "/tmp/returnn_tf_cache"  # TODO...?
+    from Util import get_temp_dir
+    self.cache_dir = "%s/returnn_tf_cache" % get_temp_dir()
     self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     self.base_name = base_name
     self.code_version = code_version
@@ -877,3 +1124,96 @@ def make_var_tuple(v):
   assert isinstance(v, tuple)
   return v
 
+
+def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
+  """
+  Adds scaled noise from a 0-mean normal distribution to gradients.
+  Adapted from tf.contrib.layers.optimizers.
+
+  :param list[(tf.Tensor, tf.Variable)] grads_and_vars:
+  :param float gradient_noise_scale: used as stddev for tf.truncated_normal().
+  :return: adapted grads_and_vars
+  :rtype: list[(tf.Tensor, tf.Variable)]
+  """
+  gradients, variables = zip(*grads_and_vars)
+  noisy_gradients = []
+  for gradient in gradients:
+    if gradient is None:
+      noisy_gradients.append(None)
+      continue
+    if isinstance(gradient, tf.IndexedSlices):
+      gradient_shape = gradient.dense_shape
+    else:
+      gradient_shape = gradient.get_shape()
+    noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale)
+    noisy_gradients.append(gradient + noise)
+  return list(zip(noisy_gradients, variables))
+
+
+class CustomGradient(object):
+  def __init__(self):
+    self.num_calls = 0
+    self.registered_ops = {}  # func -> decorated func
+
+  def Defun(self, *input_types, **kwargs):
+    """
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param list[tf.DType] input_types:
+    :param dict[str] kwargs: passed to self.register()
+    :return: function decorator
+    :rtype: ((tf.Tensor) -> tf.Tensor) -> ((tf.Tensor) -> tf.Tensor)
+    """
+
+    def decorator(op):
+      return self.register(input_types=input_types, op=op, **kwargs)
+
+    return decorator
+
+  def register(self, input_types, op, grad_op, name=None):
+    """
+    :param list[tf.DType] input_types:
+    :param (tf.Tensor) -> tf.Tensor op:
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param str name: optional func_name
+    :return: op
+    :rtype: (tf.Tensor) -> tf.Tensor
+    """
+    if op in self.registered_ops:
+      return self.registered_ops[op]
+    from tensorflow.python.framework import function
+    op_with_new_grad = function.Defun(*input_types, python_grad_func=grad_op, func_name=name)(op)
+    self.registered_ops[op] = op_with_new_grad
+    # We need to add one instance of the new op to the graph now because of:
+    # https://github.com/tensorflow/tensorflow/issues/6804
+    op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
+    return op_with_new_grad
+
+
+custom_gradient = CustomGradient()
+
+
+def debugRegisterBetterRepr():
+  """
+  Some types don't have good __repr__ implementations by default (for the current TF version).
+  For debugging, it can be helpful to give some more info.
+  """
+
+  from tensorflow.python.framework import tensor_util
+
+  def indexed_slices_repr(x):
+    """
+    :param tf.IndexedSlices x:
+    :rtype: str
+    """
+    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+  def op_repr(x):
+    """
+    :param tf.Operation x:
+    :rtype: str
+    """
+    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
+
+  tf.IndexedSlices.__repr__ = indexed_slices_repr
+  tf.Operation.__repr__ = op_repr

@@ -242,7 +242,7 @@ class SprintDataset(Dataset):
       targets = {"classes": targets}
     if "classes" in targets:
       # 'classes' is always the alignment
-      assert targets["classes"].shape == (T,)  # is in format (time,)
+      assert targets["classes"].shape == (T,), "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,))  # is in format (time,)
 
     # Maybe convert some targets.
     if self.target_maps:

@@ -628,16 +628,24 @@ def inplace_increment(x, idx, y):
 
 
 
-def parse_orthography_into_symbols(orthography, upper_case_special=True):
+def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False):
   """
   For Speech.
-  Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there ").
+  Example:
+    orthography = "hello [HESITATION] there "
+    with word_based == False: returns list("hello ") + ["[HESITATION]"] + list(" there ").
+    with word_based == True: returns ["hello", "[HESITATION]", "there"]
   No pre/post-processing such as:
   Spaces are kept as-is. No stripping at begin/end. (E.g. trailing spaces are not removed.)
   No tolower/toupper.
   Doesn't add [BEGIN]/[END] symbols or so.
   Any such operations should be done explicitly in an additional function.
+  Anything in []-brackets are meant as special-symbols.
+  Also see parse_orthography() which includes some preprocessing.
+
   :param str orthography: example: "hello [HESITATION] there "
+  :param bool upper_case_special: whether the special symbols are always made upper case
+  :param bool word_based: whether we split on space and return full words
   :rtype: list[str]
   """
   ret = []
@@ -659,7 +667,15 @@ def parse_orthography_into_symbols(orthography, upper_case_special=True):
         in_special = 1
         ret += ["["]
       else:
-        ret += c
+        if word_based:
+          if c.isspace():
+            ret += [""]
+          else:
+            if not ret:
+              ret += [""]
+            ret[-1] += c
+        else:  # not word_based
+          ret += c
   return ret
 
 
@@ -668,8 +684,19 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
                       **kwargs):
   """
   For Speech. Full processing.
-  Parses "hello [HESITATION] there " -> list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"].
+  Example:
+    orthography = "hello [HESITATION] there "
+    with word_based == False: returns list("hello ") + ["[HESITATION]"] + list(" there") + ["[END]"]
+    with word_based == True: returns ["hello", "[HESITATION]", "there", "[END]"]
+  Does some preprocessing on orthography and then passes it on to parse_orthography_into_symbols().
+
   :param str orthography: e.g. "hello [HESITATION] there "
+  :param list[str] prefix: will add this prefix
+  :param list[str] postfix: will add this postfix
+  :param str remove_chars: those chars will just be removed at the beginning
+  :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
+  :param bool final_strip: whether we strip left and right
+  :param dict[str] kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
@@ -1234,3 +1261,26 @@ def cleanup_env_var_path(env_var, path_prefix):
     return True
   ps = filter(f, ps)
   os.environ[env_var] = ":".join(ps)
+
+
+def get_login_username():
+  """
+  :rtype: str
+  :return: the username of the current user.
+  Use this as a replacement for os.getlogin().
+  """
+  import pwd, os
+  return pwd.getpwuid(os.getuid())[0]
+
+
+def get_temp_dir():
+  """
+  :rtype: str
+  :return: e.g. "/tmp/$USERNAME"
+  """
+  username = get_login_username()
+  for envname in ['TMPDIR', 'TEMP', 'TMP']:
+    dirname = os.getenv(envname)
+    if dirname:
+      return "%s/%s" % (dirname, username)
+  return "/tmp/%s" % username

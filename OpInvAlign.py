@@ -26,6 +26,7 @@ class InvAlignOp(theano.Op):
     output_storage[0][0] = labelling
     output_storage[1][0] = attention
     output_storage[2][0] = index
+    #print attention
 
   def __init__(self, tdps, nstates):
     self.nstates = nstates
@@ -44,6 +45,56 @@ class InvAlignOp(theano.Op):
     return hmm.astype('int32').flatten()
 
   def _viterbi(self, start, end, scores, transcription):
+    """Fully aligns sequence from start to end but in inverse manner"""
+    inf = 1e30
+    lengthT = end - start
+    skip = max(min(len(self.tdps), lengthT - self.nstates), 1)
+    tdps = self.tdps[:skip]
+    lengthS = transcription.shape[0] * self.nstates
+
+    hmm = self._buildHmm(transcription)
+    # with margins of skip at the bottom or top
+    fwdScore = np.full((lengthS, lengthT + skip - 1), inf)
+    bt = np.full((lengthS, lengthT + skip - 1), -1, dtype=np.int32)
+
+    # precompute all scores and densities
+    score = np.full((lengthS, lengthT + skip - 1), inf)
+    for t in range(0, lengthT):
+      for s in range(0, lengthS):
+        score[s][t + skip - 1] = scores[start + t, hmm[s] / self.nstates]
+
+    # forward
+    scores = score[0, 0 + skip - 1:skip + skip - 2]
+    scores = np.add(scores, tdps[1:])
+    fwdScore[0, 0 + skip - 1:skip + skip - 2] = scores
+    bt[0, 0 + skip - 1:skip + skip - 2] = range(1, skip)
+
+    # remaining columns
+    for s in range(1, lengthS):
+      for t in range(max(lengthT - (lengthS - s) * skip,0), lengthT):
+        previous = fwdScore[s - 1, t:t + skip]
+        scores = score[s, t + skip - 1]
+        scores = np.add(scores, np.add(previous, tdps[::-1]))
+
+        best = np.argmin(scores)
+        fwdScore[s, t + skip - 1] = scores[best]
+        bt[s, t + skip - 1] = skip - 1 - best
+
+    attention = np.full((lengthS), 0, dtype=np.int32)
+    labelling = np.full((lengthS), 0, dtype=np.int32)
+
+    # backtrack
+    t = lengthT - 1
+    attention[lengthS - 1] = lengthT - 1
+    labelling[lengthS - 1] = transcription[-1]
+    for s in range(lengthS - 2, -1, -1):
+      tnew = t - bt[s + 1][t + skip - 1]
+      attention[s] = tnew
+      labelling[s] = transcription[s / self.nstates]
+      t = tnew
+    return attention, labelling
+
+  def _viterbi2(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end but in inverse manner"""
     inf = 1e30
     # max skip transitions derived from tdps

@@ -44,7 +44,7 @@ Task = "train"
 
 config = None; """ :type: rnn.Config """
 sprintDataset = None; """ :type: SprintDataset """
-engine = None; """ :type: Engine """
+engine = None; """ :type: Engine | TFEngine.Engine """
 
 
 # Start Sprint PythonSegmentOrder interface. {

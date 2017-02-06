@@ -168,6 +168,8 @@ class TFNetwork(object):
       if name not in net_dict:
         if name == "data":
           layer_desc = {"class": "source", "from": []}
+        elif name.startswith("data:"):
+          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
         else:
           raise Exception("layer not found: %r" % name)
       else:
@@ -186,16 +188,19 @@ class TFNetwork(object):
       return self._add_layer(name=name, layer_class=layer_class, **layer_desc)
 
     for name, layer_desc in sorted(net_dict.items()):
-      if name == "output" or "target" in layer_desc:
+      if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
         _construct_layer(name)
 
   def _add_layer(self, name, layer_class, **layer_desc):
     """
     :param str name:
-    :param () -> LayerBase layer_class:
+    :param ()->LayerBase layer_class:
     """
-    with reuse_name_scope(name):
+    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       layer = layer_class(name=name, network=self, **layer_desc)
+    assert layer.output
+    assert layer.output.placeholder is not None
+    assert layer.output.size_placeholder is not None
     self.layers[name] = layer
     if layer.recurrent:
       self.recurrent = True
@@ -219,8 +224,8 @@ class TFNetwork(object):
       self.loss_by_layer.clear()
       self.error_by_layer.clear()
       for name, layer in sorted(self.layers.items()):
-        with reuse_name_scope(layer.name):
-          assert isinstance(layer, LayerBase)
+        assert isinstance(layer, LayerBase)
+        with reuse_name_scope(layer.tf_scope_name):
           loss = layer.get_loss_value()
           error = layer.get_error_value()
           constraints = layer.get_constraints_value()
@@ -254,6 +259,51 @@ class TFNetwork(object):
     if self.total_objective is None:
       self.construct_objective()
     return self.total_objective
+
+  def get_used_targets(self):
+    """
+    :return: sorted list of targets
+    :rtype: list[str]
+    """
+    targets = set()
+    for layer in self.layers.values():
+      if layer.target:
+        targets.add(layer.target)
+    return list(sorted(targets))
+
+  def get_default_target(self):
+    """
+    :return: e.g. "classes"
+    :rtype: str
+    """
+    targets = self.get_used_targets()
+    default_target = self.extern_data.default_target
+    if not targets:
+      return default_target
+    if len(targets) == 1:
+      return targets[0]
+    if default_target in targets:
+      return default_target
+    raise Exception("multiple targets %r and default_target %r not in list. set 'target' in config" %
+                    (targets, default_target))
+
+  def get_output_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [layer for (_, layer) in sorted(self.layers.items()) if layer.is_output_layer()]
+
+  def get_default_output_layer_name(self):
+    """
+    :rtype: str|None
+    :returns: default output layer name if there is one, or None
+    """
+    if "output" in self.layers:
+      return "output"
+    output_layers = self.get_output_layers()
+    if len(output_layers) == 1:
+      return output_layers[1]
+    return None  # no sensible default
 
   def get_params_list(self):
     """

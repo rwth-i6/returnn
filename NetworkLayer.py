@@ -10,6 +10,7 @@ def _initLayerClasses():
   import NetworkTwoDLayer
   import NetworkBaseLayer
   import NetworkCNNLayer
+  from NetworkOutputLayer import FramewiseOutputLayer
   mods = [NetworkHiddenLayer, NetworkRecurrentLayer, NetworkLstmLayer, NetworkTwoDLayer, NetworkBaseLayer, NetworkCNNLayer]
   for mod in mods:
     for _, clazz in vars(mod).items():
@@ -19,6 +20,7 @@ def _initLayerClasses():
       LayerClasses[layer_class] = clazz
   from NetworkHiddenLayer import ForwardLayer
   LayerClasses["forward"] = ForwardLayer  # used in crnn.config format
+  LayerClasses["softmax"] = FramewiseOutputLayer
 
 _initLayerClasses()
 
