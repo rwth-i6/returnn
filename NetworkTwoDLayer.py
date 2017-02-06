@@ -410,10 +410,10 @@ class ConvBaseLayer(TwoDBaseLayer):
     self.filter_width = filter[1]
     self.activation = strtoact(activation)
     if base:
-      self.W = self.add_param(base[0].W)
-      self.b = self.add_param(base[0].b)
-      #self.W = base[0].W
-      #self.b = base[0].b
+      #self.W = self.add_param(base[0].W)
+      #self.b = self.add_param(base[0].b)
+      self.W = base[0].W
+      self.b = base[0].b
     else:
       self.W = self.create_conv_weights(n_features, self.n_in, self.filter_height, self.filter_width)
       self.b = self.create_and_add_bias(n_features)
@@ -461,7 +461,8 @@ class ConvPoolLayer2(ConvBaseLayer):
     if not padding:
       padding = T.min(self.output_sizes) <= 0
       padding = theano.printing.Print(global_fn=maybe_print_pad_warning)(padding)
-
+    else:
+      padding = int(padding)
     fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
     sizes = ifelse(padding, fixed_sizes, sizes_raw)
     X_size = T.cast(T.max(sizes, axis=0), "int32")
