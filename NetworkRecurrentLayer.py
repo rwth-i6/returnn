@@ -535,6 +535,9 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", unit.n_out)
     n_out = unit.n_out
     self.set_attr('n_out', unit.n_out)
+    if n_dec < 0:
+      source_index = self.index
+      n_dec *= -1
     if n_dec != 0:
       self.target_index = self.index
       if isinstance(n_dec,float):
