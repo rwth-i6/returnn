@@ -12,17 +12,17 @@ public:
     int T, int N, int S, int min_skip, int max_skip, int focus, SArrayI& attention)
     {
         int M = max_skip + 1;
-        if(M > T - N * S)
+        if(M > T - S)
         {
-            M = T - N * S + 1;
-            if(M < 2)
+            M = T - S + 1;
+            if(M < 1)
             {
-               M = 2;
+               M = 1;
             }
         }
-        if(min_skip > M - 2)
+        if(min_skip > M)
         {
-            min_skip = M - 2;
+            min_skip = M;
         }
         if(T / (N * S) > M)
         {
