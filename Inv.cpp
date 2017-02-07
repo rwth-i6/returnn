@@ -96,7 +96,10 @@ public:
             {
                 float min_score = INF;
                 int min_index = t;
-                for(int u=t;u>next;--u)
+                int upper = T;
+                if(s < N*S-2)
+                    upper = t + bt_(s+2, t+M-1);
+                for(int u=upper;u>next;--u)
                 {
                     for(int c=0;c<N;++c)
                     {
