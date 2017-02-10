@@ -316,10 +316,13 @@ class Updater(object):
         slot_vars.append(slot_var)
     self.tf_session.run(tf.variables_initializer(slot_vars, name="init_optim_slot_vars"))
 
-  def get_optim_op(self):
+  def get_optim_op(self, callback_on_new=None):
     """
+    :param None|()->None callback_on_new:
     :rtype: tf.Operation
     """
     if self.optim_op is None:
       self.create_optim_op()
+      if callback_on_new:
+        callback_on_new()
     return self.optim_op

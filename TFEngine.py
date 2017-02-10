@@ -262,7 +262,10 @@ class Runner(object):
         d["error:%s" % layer_name] = error
     if self._should_train:
       assert self.engine.updater
-      d["optim_op"] = self.engine.updater.get_optim_op()
+      def callback_on_new():
+        # Force a new check.
+        self.engine._checked_uninitialized_vars = True
+      d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
     d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
