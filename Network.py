@@ -547,7 +547,7 @@ class LayerNetwork(object):
       self.errors[layer.name] = layer_errors
     if is_output_layer:
       if getattr(layer, "p_y_given_x", None) is None and layer.output:
-        # Small little hack for layers which we use as output-layers which don't set this.
+        # Small little hack for layers which we use as output-layers whicgh don't set this.
         from TheanoUtil import time_batch_make_flat
         layer.p_y_given_x = layer.output
         layer.p_y_given_x_flat = time_batch_make_flat(layer.output)

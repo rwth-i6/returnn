@@ -3006,119 +3006,6 @@ class InvAlignSegmentationLayer(HiddenLayer):
     #self.act = [self.output, T.zeros_like(self.output)]
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
-class DiscriminatorLayer(ForwardLayer):
-  layer_class = 'disc'
-
-  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, loss='ce', **kwargs):
-    kwargs['n_out'] = 2
-    super(DiscriminatorLayer, self).__init__(**kwargs)
-    if not base:
-      base = []
-    self.params = {}
-    W = self.add_param(self.create_random_normal_weights(self.sources[0].attrs['n_out'], 2, scale=100., name="W_%s" % self.name))
-    b = self.add_param(self.create_bias(2))
-    self.W = W
-    self.b = b
-    self.cost_val = numpy.float32(0)
-    self.error_val = numpy.float32(0)
-    self.known_grads = {}
-    lng = T.sum(self.index, dtype='float32')
-    preal = numpy.float32((1. - pgen) / float(len(self.sources)))
-
-    if forge:
-      self.params = {}
-      W = base[0].W
-      b = base[0].b
-      basecost = base[0].cost_val
-      base = []
-      preal = numpy.float32(1.0)
-    for src in self.sources: # real
-      idx = (src.index.flatten() > 0).nonzero()
-      z = T.dot(src.output, W) + b
-      z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
-      pcx = T.nnet.softmax(z[idx])
-      ratio = lng / T.sum(src.index, dtype='float32')
-      if loss == 'ce':
-        err = -T.log(pcx[:,0])
-      elif loss == 'se':
-        err = T.sum(T.sqr(pcx[:,0] - numpy.float32(1)))
-      self.cost_val += ratio * preal * T.sum(err)
-      self.error_val += ratio * T.sum(T.lt(pcx[:,0],numpy.float32(0.5)))
-    if base:
-      pgen = numpy.float32(pgen / float(len(base)))
-      for src in base: # gen
-        idx = (src.index.flatten() > 0).nonzero()
-        z = T.dot(src.output, W) + b
-        z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
-        pcx = T.nnet.softmax(z[idx])
-        if loss == 'ce':
-          err = -T.log(pcx[:, 1])
-        elif loss == 'se':
-          err = T.sum(T.sqr(pcx[:, 1] - numpy.float32(1)))
-        ratio = lng / T.sum(src.index, dtype='float32')
-        self.cost_val += ratio * pgen * T.sum(err)
-        self.error_val += ratio * T.sum(T.lt(pcx[:,1], numpy.float32(0.5)))
-    #self.cost_val *= numpy.float32(len(self.sources + base))
-    self.error_val /= numpy.float32(len(self.sources + base))
-    if forge:
-      if dynamic_scaling:
-        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.25), numpy.float32(4.0))
-      else:
-        self.cost_scale_val = numpy.float32(1.0)
-    else:
-      self.cost_scale_val = numpy.float32(1.0) # numpy.float32(len(self.sources + base))
-
-  def cost(self):
-    return self.cost_val, self.known_grads
-
-  def cost_scale(self):
-    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-  def errors(self):
-    return self.error_val
-
-
-class WassersteinDiscriminatorLayer(ForwardLayer):
-  layer_class = 'wdisc'
-
-  def __init__(self, base = None, pgen=0.5, forge=False, dynamic_scaling=False, loss='ce', **kwargs):
-    kwargs['n_out'] = 1
-    super(WassersteinDiscriminatorLayer, self).__init__(**kwargs)
-    if not base:
-      base = []
-    self.params = {}
-    W = self.add_param(self.create_random_normal_weights(self.sources[0].attrs['n_out'], 1, scale=100., name="W_%s" % self.name))
-    b = self.add_param(self.create_bias(1))
-    self.W = W
-    self.b = b
-    self.cost_val = numpy.float32(0)
-    self.known_grads = {}
-    lng = T.sum(self.index, dtype='float32')
-    preal = numpy.float32((1. - pgen) / float(len(self.sources)))
-
-    if forge:
-      self.params = {}
-      W = base[0].W
-      b = base[0].b
-      basecost = base[0].cost_val
-      base = []
-      preal = numpy.float32(1.0)
-    for src in self.sources: # real
-      idx = (src.index.flatten() > 0).nonzero()
-      z = T.tanh(T.dot(src.output, W) + b)
-      ratio = lng / T.sum(src.index, dtype='float32')
-      self.cost_val -= ratio * preal * T.sum(z.reshape((z.shape[0]*z.shape[1],z.shape[2]))[idx])
-    if base:
-      pgen = numpy.float32(pgen / float(len(base)))
-      for src in base: # gen
-        idx = (src.index.flatten() > 0).nonzero()
-        z = T.tanh(T.dot(src.output, W) + b)
-        ratio = lng / T.sum(src.index, dtype='float32')
-        self.cost_val += ratio * pgen * T.sum(z.reshape((z.shape[0] * z.shape[1], z.shape[2]))[idx])
-
-  def cost(self):
-    return self.cost_val, self.known_grads
-
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
@@ -3152,6 +3039,105 @@ class ScaleGradLayer(_NoOpLayer):
     else:
       self.output = ScaleGradientOp(scale)(self.sources[0].output)
 
+
+class DiscriminatorLayer(ForwardLayer):
+  layer_class = 'disc'
+
+  def __init__(self, base = None, pgen=0.5, alpha=1, forge=False, ncritic=10, n_tmp=10, dynamic_scaling=False, error_scaling=False, loss='ce', **kwargs):
+    kwargs['n_out'] = 2
+    super(DiscriminatorLayer, self).__init__(**kwargs)
+    if not base:
+      base = []
+    self.params = {}
+    W = self.add_param(self.create_random_normal_weights(self.sources[0].attrs['n_out'], n_tmp, scale=1000., name="W_%s" % self.name))
+    b = self.add_param(self.create_bias(n_tmp))
+    self.W = W
+    self.b = b
+    self.cost_val = numpy.float32(0)
+    self.error_val = numpy.float32(0)
+    self.known_grads = {}
+    lng = T.sum(self.index, dtype='float32')
+    preal = numpy.float32((1. - pgen) / float(len(self.sources)))
+    batch_idx = self.add_param(theano.shared(numpy.zeros((1,),'float32'), 'batch_idx'), 'batch_idx',
+                               custom_update=numpy.ones((1,),'float32'))
+    iscritic = T.neq(T.mod(T.cast(batch_idx,'int32')[0], numpy.int32(ncritic + 1)), 0)
+    #iscritic = T.cast(self.rng.binomial(n=1, p=1.0 - 1.0 / (ncritic + 1), size=(1,)), 'float32')[0]
+    if forge:
+      self.params = {}
+      W = base[0].W
+      b = base[0].b
+      basecost = base[0].cost_val
+      base = []
+      preal = numpy.float32(1.0)
+    for src in self.sources: # real
+      idx = (src.index.flatten() > 0).nonzero()
+      z = T.dot(src.output, W) + b
+      #z = T.sum(T.nnet.relu(T.dot(src.output, W) + b, 0.9), axis=2)
+      z = T.nnet.relu(z, alpha)
+      z = T.sum(z,axis=2)
+      z = z.flatten()[idx]
+      pcx = T.nnet.sigmoid(z)
+      ratio = lng / T.sum(src.index, dtype='float32')
+      if loss == 'ce':
+        err = -T.log(pcx + numpy.float32(1e-10))
+        self.error_val += ratio * T.sum(T.lt(pcx, numpy.float32(0.5)))
+      elif loss == 'se':
+        err = T.sum(T.sqr(numpy.float32(1) - pcx))
+        self.error_val += ratio * T.sum(T.lt(pcx, numpy.float32(0.5)))
+      elif loss == 'emd':
+        err = T.sum(z)
+        self.error_val += ratio * T.sum(T.lt(z, numpy.float32(0.0)))
+      self.cost_val += ratio * preal * T.sum(err)
+    if base:
+      pgen = numpy.float32(pgen / float(len(base)))
+      for src in base: # gen
+        idx = (src.index.flatten() > 0).nonzero()
+        z = T.dot(src.output, W) + b
+        #z = T.sum(T.nnet.relu(T.dot(src.output, W) + b,0.9), axis=2)
+        z = T.nnet.relu(z, alpha)
+        z = T.sum(z, axis=2)
+        z = z.flatten()[idx]
+        pcx = T.nnet.sigmoid(z)
+        ratio = lng / T.sum(src.index, dtype='float32')
+        if loss == 'ce':
+          err = -T.log(numpy.float32(1) - pcx + numpy.float32(1e-10))
+          self.error_val += ratio * T.sum(T.gt(pcx, numpy.float32(0.5)))
+        elif loss == 'se':
+          err = T.sum(T.sqr(pcx))
+          self.error_val += ratio * T.sum(T.gt(pcx, numpy.float32(0.5)))
+        elif loss == 'emd':
+          err = T.sum(-z)
+          self.error_val += ratio * T.sum(T.gt(z, numpy.float32(0.0)))
+        self.cost_val += ratio * pgen * T.sum(err)
+    #self.cost_val *= numpy.float32(len(self.sources + base))
+    self.error_val /= numpy.float32(len(self.sources + base))
+    if forge:
+      if dynamic_scaling:
+        self.cost_scale_val = T.clip(self.cost_val / basecost, numpy.float32(0.25), numpy.float32(4.0))
+      else:
+        self.cost_scale_val = numpy.float32(1.0)
+      if ncritic:
+        self.cost_val = ifelse(iscritic, ScaleGradientOp(0)(self.cost_val), self.cost_val)
+    else:
+      if error_scaling:
+        self.cost_scale_val = numpy.float32(1.0)
+        self.cost_val *= self.error_val / lng
+      else:
+        self.cost_scale_val = numpy.float32(1.0) # numpy.float32(len(self.sources + base))
+      if ncritic:
+        self.cost_val = ifelse(iscritic, self.cost_val, ScaleGradientOp(0)(self.cost_val))
+
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  def cost_scale(self):
+    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    return self.error_val
+
+
 class SumLayer(_NoOpLayer):
   layer_class = 'sum'
 
@@ -3159,6 +3145,17 @@ class SumLayer(_NoOpLayer):
     super(SumLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = self.sources[0].attrs['n_out']
     self.output = sum([s.output for s in self.sources])
+    self.index = self.sources[0].index
+
+class BlurLayer(_NoOpLayer):
+  layer_class = "blur"
+
+  def __init__(self, ctx=5, **kwargs):
+    super(BlurLayer, self).__init__(**kwargs)
+    x_in, self.attrs['n_out'] = concat_sources(self.sources)
+    kernel = numpy.ones((1, 1, ctx, ctx), 'float32') / numpy.float32(ctx ** 2)
+    from theano.sandbox.cuda.dnn import dnn_conv
+    self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2)
     self.index = self.sources[0].index
 
 class TanhToSigmoidLayer(_NoOpLayer):
