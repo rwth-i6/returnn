@@ -16,7 +16,7 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
 from cuda_implementation.FractionalMaxPoolingOp import fmp
-
+from theano.sandbox.cuda import dnn
 
 class CNN(_NoOpLayer):
   recurrent = True
@@ -527,4 +527,3 @@ class ResNet(CNN):
 
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, nb feature maps)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-
