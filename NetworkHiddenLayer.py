@@ -3100,13 +3100,22 @@ class FAlignmentLayer(ForwardLayer):
         self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
       else:
         z_out = p_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2) # TBDN
+        x_out = x_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2)
         att = att.dimshuffle(2,1,'x',0).repeat(z_out.shape[2],axis=2) # TBDN
         att = att / att.sum(axis=0,keepdims=True)
-        out = T.sum(att * z_out,axis=0).dimshuffle(2,0,1) # NBD
+        att = theano.gradient.disconnected_grad(att)
+        z_out = T.sum(att * z_out,axis=0).dimshuffle(2,0,1) # NBD
+        x_out = T.sum(att * x_out,axis=0).dimshuffle(2,0,1) # NBD
         if reduce_output:
-          self.output = out
-        self.cost_val = norm #* -T.sum(a_out[idx] * T.log(z_out[idx]))
-        self.error_val = norm #* T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+          if output_z:
+            self.output = z_out
+          else:
+            self.output = x_out
+        z_out = z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))
+        x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=x_out[idx], y_idx=y_out.flatten()[idx])
+        self.cost_val = norm * T.sum(nll)
+        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:

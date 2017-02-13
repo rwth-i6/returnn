@@ -166,7 +166,7 @@ public:
             fwd_(0, m) = score_(0, m);
         }
 
-    		for(int s=1; s < N * S; ++s)
+    	for(int s=1; s < N * S; ++s)
         {
             int start = T - (N * S - s) * M;
             if(start < 0)
@@ -174,14 +174,15 @@ public:
             start = 0;
             for(int t=start; t < T; ++t)
             {
-                float score = exp(-score_(s, t + M - 1));
+                //float score = exp(-score_(s, t + M - 1));
+                float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                    score += exp(-fwd_(s - 1, m));
-                fwd_(s, t + M - 1) = -log(score);
+                    sum += exp(-fwd_(s - 1, m + M - 1));
+                fwd_(s, t + M - 1) = -log(sum) - score_(s, t + M - 1);
             }
         }
 
-        bwd_(N * S - 1, T - 1) = score_(N * S - 1, T - 1);
+        bwd_(N * S - 1, T - 1) = 1.0; //score_(N * S - 1, T - 1);
 
         for(int s=N*S-2;s>=0; --s)
         {
@@ -192,9 +193,19 @@ public:
             for(int t=start; t < T; ++t)
             {
                 float score = exp(-score_(s, t));
+                float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                    score += exp(-bwd_(s + 1, m));
-                bwd_(s, t) = -log(score);
+                    sum += exp(-bwd_(s + 1, m));
+                bwd_(s, t) = score_(s, t) - log(sum);
+                /*
+                float sum = 0;
+                for(int i = s; i <= end; ++i)
+                {
+                    myLog y = score_(s, t + 1)
+                    sum += bwdTable_(t+1,i) + y;
+                }
+                bwdTable_(t,n) = sum;
+                */
             }
         }
 
@@ -202,7 +213,7 @@ public:
         {
             for(int t=0; t < T; ++t)
             {
-                attention(s, t) = exp(-(fwd_(s, t) + bwd_(s, t)));
+                attention(s, t) = exp(-fwd_(s, t)); // + exp(-bwd_(s, t)));
             }
         }
         /*
