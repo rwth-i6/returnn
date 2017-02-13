@@ -380,9 +380,9 @@ def executeMainTask():
       theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
                                  outfile = "%s.png" % prefix)
   elif task == 'analyze':  # anything based on the network + Device
-    statistics = config.list('statistics', ['confusion_matrix'])
+    statistics = config.list('statistics', None)
     engine.init_network_from_config(config)
-    engine.analyze(engine.devices[0], eval_data, statistics)
+    engine.analyze(data=eval_data or dev_data, statistics=statistics)
   elif task == "analyze_data":  # anything just based on the data
     analyze_data(config)
   elif task == "classify":
