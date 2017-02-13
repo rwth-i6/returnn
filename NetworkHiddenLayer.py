@@ -2961,6 +2961,8 @@ class CAlignmentLayer(ForwardLayer):
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
   def cost(self):
+    iv = 3
+    lmb = T.cast(T.eq(T.mod(self.network.epoch,iv),0),'float32')
     return self.cost_val, None
 
   def errors(self):
@@ -3303,11 +3305,14 @@ class SumLayer(_NoOpLayer):
 
 class BlurLayer(_NoOpLayer):
   layer_class = "blur"
+  from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+  rng = RandomStreams(hash(layer_class) % 2147462579)
 
-  def __init__(self, ctx=5, **kwargs):
+  def __init__(self, ctx=5, p=1.0, **kwargs):
     super(BlurLayer, self).__init__(**kwargs)
     x_in, self.attrs['n_out'] = concat_sources(self.sources)
-    kernel = numpy.ones((1, 1, ctx, ctx), 'float32') / numpy.float32(ctx ** 2)
+    kernel = self.rng.binomial(size=(1, 1, ctx, ctx), p=p, dtype='float32')
+    kernel = kernel / kernel.sum()
     from theano.sandbox.cuda.dnn import dnn_conv
     self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2)
     self.index = self.sources[0].index
