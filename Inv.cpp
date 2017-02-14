@@ -153,9 +153,7 @@ public:
 
         for(int t=0; t < T + M - 1; ++t)
             for(int s=0; s < N * S; ++s)
-            {
                 score_(s,t) = fwd_(s,t) = bwd_(s,t) = INF;
-            }
 
         for(int t=0; t < T; ++t)
             for(int s=0; s < N * S; ++s)
@@ -177,12 +175,13 @@ public:
                 //float score = exp(-score_(s, t + M - 1));
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                    sum += exp(-fwd_(s - 1, m + M - 1));
-                fwd_(s, t + M - 1) = -log(sum) - score_(s, t + M - 1);
+                    sum += exp(-fwd_(s - 1, m));
+                //cout << "sum:" << sum << endl;
+                fwd_(s, t + M - 1) = -log(sum) + score_(s, t + M - 1);
             }
         }
-
-        bwd_(N * S - 1, T - 1) = 1.0; //score_(N * S - 1, T - 1);
+        /*
+        bwd_(N * S - 1, T - 1) = 0.0; //score_(N * S - 1, T - 1);
 
         for(int s=N*S-2;s>=0; --s)
         {
@@ -196,40 +195,25 @@ public:
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
                     sum += exp(-bwd_(s + 1, m));
-                bwd_(s, t) = score_(s, t) - log(sum);
-                /*
-                float sum = 0;
-                for(int i = s; i <= end; ++i)
-                {
-                    myLog y = score_(s, t + 1)
-                    sum += bwdTable_(t+1,i) + y;
-                }
-                bwdTable_(t,n) = sum;
-                */
-            }
-        }
+                bwd_(s, t) = -log(sum) + score_(s, t + M - 1);
 
-        for(int s=0;s < N * S;++s)
-        {
-            for(int t=0; t < T; ++t)
-            {
-                attention(s, t) = exp(-fwd_(s, t)); // + exp(-bwd_(s, t)));
-            }
-        }
-        /*
-        for(int s=0;s < N * S;++s)
-        {
-            int chr = labellings(s/S);
-            for(int t=0;t<T;++t)
-            {
-                attention(chr, t) += exp(-(fwd_(s, t) + bwd_(s, t)));
             }
         }
         */
 
         for(int s=0;s < N * S;++s)
+        {
+            for(int t=0; t < T; ++t)
+            {
+                attention(s, t) = exp(-fwd_(s, t + M - 1)); // + exp(-bwd_(s, t)));
+            }
+        }
+
+        /*for(int s=0;s < N * S;++s)
             for(int t=0;t<T;++t)
-                cout << labellings(s/S) << " " << t << " " << attention(labellings(s/S), t) << endl;
+                cout << labellings(s/S) << " " << t << " " << attention(s, t) << endl;
+        */
+
     }
 
 private:

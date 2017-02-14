@@ -3065,26 +3065,6 @@ class FAlignmentLayer(ForwardLayer):
       self.output = T.cast(att, 'float32')
       self.attrs['n_out'] = 1
       return
-    else:
-      if reduce_output:
-        if output_z:
-          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att_flat]
-          self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
-        else:
-          if not self.eval_flag:
-            x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          else:
-            x_out = x_in.dimshuffle(0, 1, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
-        self.index = index
-      else:
-        self.output = self.z if output_z else x_in
-        self.p_y_given_x = p_in
-        if search == 'decode':
-          self.p_y_given_x *= q_in
-        if output_z:
-          self.attrs['n_out'] = n_cls
-        self.index = self.sources[0].index
 
     #if self.attrs['search'] == 'time' or self.eval_flag:
     #  return
@@ -3101,11 +3081,15 @@ class FAlignmentLayer(ForwardLayer):
       else:
         z_out = p_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2) # TBDN
         x_out = x_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2)
-        att = att.dimshuffle(2,1,'x',0).repeat(z_out.shape[2],axis=2) # TBDN
-        att = att / att.sum(axis=0,keepdims=True)
-        att = theano.gradient.disconnected_grad(att)
-        z_out = T.sum(att * z_out,axis=0).dimshuffle(2,0,1) # NBD
-        x_out = T.sum(att * x_out,axis=0).dimshuffle(2,0,1) # NBD
+        z_att = att.dimshuffle(2,1,'x',0).repeat(z_out.shape[2],axis=2) # TBDN
+        z_att = z_att / z_att.sum(axis=0,keepdims=True)
+        z_att = theano.gradient.disconnected_grad(z_att)
+        x_att = att.dimshuffle(2, 1, 'x', 0).repeat(x_out.shape[2], axis=2)  # TBDN
+        x_att = x_att / x_att.sum(axis=0, keepdims=True)
+        x_att = theano.gradient.disconnected_grad(x_att)
+
+        z_out = T.sum(z_att * z_out,axis=0).dimshuffle(2,0,1) # NBD
+        x_out = T.sum(x_att * x_out,axis=0).dimshuffle(2,0,1) # NBD
         if reduce_output:
           if output_z:
             self.output = z_out
