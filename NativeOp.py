@@ -2049,18 +2049,18 @@ class FastBaumWelchOp(NativeOpGenBase):
     static unsigned batch_idx  = 0u;
     float           pruning    = 10.f;
 
-    unsigned* d_from              = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 0 * CudaNdarray_HOST_STRIDES(edges)[0]);
-    unsigned* d_to                = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 1 * CudaNdarray_HOST_STRIDES(edges)[0]);
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 2 * CudaNdarray_HOST_STRIDES(edges)[0]);
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(edges) + 3 * CudaNdarray_HOST_STRIDES(edges)[0]);
-    float*    d_weights           = CudaNdarray_DEV_DATA(weights);
-    float*    d_am_scores         = CudaNdarray_DEV_DATA(am_scores);
-    unsigned* d_start_states      = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 0 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
-    unsigned* d_end_states        = reinterpret_cast<unsigned*>(CudaNdarray_DEV_DATA(start_end_states) + 1 * CudaNdarray_HOST_STRIDES(start_end_states)[0]);
-    float*    d_index             = CudaNdarray_DEV_DATA(index);
-    float*    d_state_buffer_prev = CudaNdarray_DEV_DATA(state_buffer) + 0 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
-    float*    d_state_buffer_next = CudaNdarray_DEV_DATA(state_buffer) + 1 * CudaNdarray_HOST_STRIDES(state_buffer)[0];
-    float*    d_out               = CudaNdarray_DEV_DATA(out);
+    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 3 * Ndarray_STRIDE(edges, 0));
+    float*    d_weights           = Ndarray_DEV_DATA(weights);
+    float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
+    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
+    float*    d_index             = Ndarray_DEV_DATA(index);
+    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
+    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
+    float*    d_out               = Ndarray_DEV_DATA(out);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
@@ -2070,9 +2070,9 @@ class FastBaumWelchOp(NativeOpGenBase):
     unsigned n_threads   = 1024u;
     unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
 
-    unsigned frame_stride    = CudaNdarray_HOST_STRIDES(am_scores)[0];
-    unsigned sequence_stride = CudaNdarray_HOST_STRIDES(am_scores)[1];
-    unsigned index_stride    = CudaNdarray_HOST_STRIDES(index)[0];
+    unsigned frame_stride    = Ndarray_STRIDE(am_scores, 0);
+    unsigned sequence_stride = Ndarray_STRIDE(am_scores, 1);
+    unsigned index_stride    = Ndarray_STRIDE(index, 0);
 
     assert(n_frames > 0);
 
@@ -2168,8 +2168,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
     HANDLE_ERROR(cudaGetLastError());
 
-    frame_stride    = CudaNdarray_HOST_STRIDES(out)[0];
-    sequence_stride = CudaNdarray_HOST_STRIDES(out)[1];
+    frame_stride    = Ndarray_STRIDE(out, 0);
+    sequence_stride = Ndarray_STRIDE(out, 1);
     n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
     compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
