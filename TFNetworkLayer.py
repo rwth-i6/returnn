@@ -685,7 +685,6 @@ class GenericCELoss(Loss):
 
     def loss(z, y, grad_f, target):
       nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
-      nlog_scores = tf.transpose(nlog_scores, [1, 0])  # (dim,time)
       # target is shape (time,) -> index.
       target_exp = tf.pack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
       # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).
