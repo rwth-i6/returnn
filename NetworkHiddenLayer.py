@@ -3231,7 +3231,7 @@ class DiscriminatorLayer(ForwardLayer):
     def make_cost(src, real):
       ratio = lng / T.sum(src.index, dtype='float32')
       idx = (src.index.flatten() > 0).nonzero()
-      eps = T.constant(1e-5)
+      eps = T.constant(1e-3)
       z = T.dot(src.output, W) + b
       if loss == 'exp':
         pcx = T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1], z.shape[2])))[idx, 0]
@@ -3241,7 +3241,8 @@ class DiscriminatorLayer(ForwardLayer):
       elif loss == 'ce':
         pcx = T.nnet.sigmoid(T.sum(z, axis=2)).flatten()[idx]
         if not real: pcx = numpy.float32(1.) - pcx
-        lss = -T.sum(T.log(pcx + eps))
+        pcx = T.clip(pcx,eps,numpy.float32(1)-eps)
+        lss = -T.sum(T.log(pcx))
         err = T.sum(T.lt(pcx, numpy.float32(0.5)))
       elif loss == 'sse':
         pcx = T.nnet.sigmoid(T.sum(z, axis=2)).flatten()[idx]
@@ -3265,7 +3266,7 @@ class DiscriminatorLayer(ForwardLayer):
     self.error_val /= numpy.float32(len(self.sources + base))
     self.cost_val /= numpy.float32(len(self.sources + base))
 
-    self.cost_val += numpy.float32(1000.) * (T.sum(W**2) + T.sum(b**2)) / numpy.float32(self.sources[0].attrs['n_out'] * n_tmp)
+    self.cost_val += numpy.float32(10.) * (T.sum(W**2) + T.sum(b**2)) / numpy.float32(self.sources[0].attrs['n_out'] * n_tmp)
 
     if forge:
       if dynamic_scaling:
