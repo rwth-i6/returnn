@@ -2092,12 +2092,12 @@ class FastBaumWelchOp(NativeOpGenBase):
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
     set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
 
     // initialize full state buffer (only used to dump the alignment)
@@ -2110,11 +2110,11 @@ class FastBaumWelchOp(NativeOpGenBase):
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_ERROR(cudaGetLastError());
+      HANDLE_LAST_ERROR();
       next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
-      HANDLE_ERROR(cudaGetLastError());
+      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
       }
@@ -2125,20 +2125,20 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // bwd pass
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
       init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
-      HANDLE_ERROR(cudaGetLastError());
+      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
         HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_ERROR(cudaGetLastError());
+      HANDLE_LAST_ERROR();
       next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
                                           d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
-      HANDLE_ERROR(cudaGetLastError());
+      HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
     if (dump_alignment and batch_idx %% dump_every == 0) {
@@ -2152,7 +2152,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     dim3 blocks(n_frames, n_seqs);
     //normalize<<<blocks, n_threads, n_threads * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, d_debug_sum);
     normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
 
     //std::cerr << "normalize finished" << std::endl;
 
@@ -2166,14 +2166,14 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
     n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
     compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
-    HANDLE_ERROR(cudaGetLastError());
+    HANDLE_LAST_ERROR();
 
     if (dump_output and batch_idx %% dump_every == 0) {
       write_output_to_file(d_out, d_index, index_stride, pruning, n_frames, n_seqs, n_emissions, batch_idx);
