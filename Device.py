@@ -468,7 +468,7 @@ class Device(object):
               if isinstance(keys, list):
                 gparam = T.grad(T.sum([self.trainnet.costs[k] * param.layer.cost_scale() for k in keys]), param, known_grads=OrderedDict(self.trainnet.known_grads))
               else:
-                gparam = T.grad(self.trainnet.costs[param.layer.attrs['cost']] * param.layer.cost_scale(), param, known_grads=OrderedDict(self.trainnet.known_grads))
+                gparam = T.grad((self.trainnet.costs[param.layer.attrs['cost']] + param.layer.make_constraints()) * param.layer.cost_scale(), param, known_grads=OrderedDict(self.trainnet.known_grads))
             else:
               gparam = T.grad(self.trainnet.get_objective(), param, known_grads=OrderedDict(self.trainnet.known_grads))
           except theano.gradient.DisconnectedInputError:
@@ -589,8 +589,7 @@ class Device(object):
           param = extract.split(':')[1]
           extract = extract.split(':')[0]
         if extract == "classification":
-          #source.append(T.argmax(self.testnet.get_layer('output').p_y_given_x, axis=-1).reshape(self.testnet.get_layer('output').index.shape).dimshuffle(0,1,'x'))
-          source.append(T.argmax(self.testnet.get_layer('output').p_y_given_x, axis=-1).dimshuffle(0, 1, 'x'))
+          source.append(T.argmax(self.testnet.get_layer(output_layer_name).p_y_given_x, axis=-1).dimshuffle(0, 1, 'x'))
         elif extract == "log-posteriors":
           if not param:
             param = output_layer_name
@@ -917,6 +916,7 @@ class Device(object):
     if device[0:3] == 'gpu':
       import theano.sandbox.cuda
       if device == 'gpuX': device = 'gpu'
+      device = device.replace('gpu', 'cuda')
       #print "Use CUDA in device proc %s" % device
       assert theano.sandbox.cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
       if not theano.sandbox.cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
