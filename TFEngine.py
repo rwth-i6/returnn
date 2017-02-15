@@ -268,7 +268,7 @@ class Runner(object):
       assert self.engine.updater
       def callback_on_new():
         # Force a new check.
-        self.engine._checked_uninitialized_vars = True
+        self.engine._checked_uninitialized_vars = False
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
     d["summary"] = self.engine.get_all_merged_summaries()
     return d
