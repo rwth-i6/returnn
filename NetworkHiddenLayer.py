@@ -3315,7 +3315,7 @@ class BlurLayer(_NoOpLayer):
     kernel = self.rng.binomial(size=(1, 1, ctx, ctx), p=p, dtype='float32')
     kernel = kernel / kernel.sum()
     from theano.sandbox.cuda.dnn import dnn_conv
-    self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2)
+    self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2,1)[:,:,:,0]
     self.index = self.sources[0].index
 
 class TanhToSigmoidLayer(_NoOpLayer):
