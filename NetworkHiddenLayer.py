@@ -3134,6 +3134,65 @@ class FAlignmentLayer(ForwardLayer):
     return self.error_val
 
 
+class FStdAlignmentLayer(ForwardLayer):
+  layer_class = "fstdalign"
+
+  def __init__(self, direction='inv', base=None, nstates=3, skip_tdp=0, **kwargs):
+    assert direction == 'inv'
+    target = kwargs['target']
+    if base is None:
+      base = []
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    n_cls = kwargs['y_in'][target].n_out
+    super(FStdAlignmentLayer, self).__init__(**kwargs)
+    if base:
+      self.params = base[0].params
+      self.W_in = base[0].W_in
+      self.b = base[0].b
+      self.z = self.get_linear_forward_output()
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.set_attr('n_out', n_out)
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    self.p_y_given_x = p_in
+    y_in = self.y_in[target].reshape(self.index.shape)
+
+    from theano.tensor.extra_ops import cpu_contiguous
+    from Inv import StdOpFull
+    att = StdOpFull(skip_tdp, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in),
+                                        T.sum(self.sources[0].index, axis=0, dtype='int32'),
+                                        T.sum(self.index, axis=0, dtype='int32'))
+    y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    norm = numpy.float32(1. / nstates)
+    self.y_out = y_out
+    idx = (rindex.flatten() > 0).nonzero()
+    att = theano.gradient.disconnected_grad(att)  # TB(NS)
+    x_out, _ = theano.map(lambda x, a: T.sum(
+      x.dimshuffle(0, 1, 'x').repeat(a.shape[1], axis=2) * a.dimshuffle(0, 'x', 1).repeat(x.shape[1], axis=1), axis=0),
+                          sequences=[x_in.dimshuffle(1, 0, 2), att.dimshuffle(1, 2, 0)])  # BDN
+    x_out = x_out.dimshuffle(2, 0, 1)  # NBD
+
+    z_out = T.dot(x_out, self.W_in[0]) + self.b
+    self.output = x_out
+    z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))
+    x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out.flatten()[idx])
+    self.cost_val = norm * T.sum(nll)
+    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out.flatten()[idx]))
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.error_val
+
+
 
 class InvAlignSegmentationLayer(HiddenLayer):
   layer_class = "invalignsegment"
