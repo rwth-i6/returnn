@@ -343,7 +343,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   if depth >= 2:
     lexicon = __load_lexicon(lexicon_file)
     print("Getting allophone sequence...")
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
+    phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
   if depth == 2:
     print("Phoneme acceptor...")
     num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
@@ -883,25 +883,28 @@ def __load_lexicon(lexFile):
   return lex
 
 
-def __find_allo_seq_in_lex(lemma, lex):
+def __find_allo_seq_in_lex(lemma_list, lex):
   '''
   searches a lexicon xml structure for a watching word and
   returns the matching allophone sequence as a list
-  :param lemma: the word to search for in the lexicon
+  :param lemma_list: the word / lemma sequence to search for in the lexicon
   :param lex: the lexicon
-  :return allo_seq: allophone sequence with the highest score as a list
-  :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
+  :return dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
   '''
-  assert lex.lemmas[lemma], "Lemma not in lexicon"
+  if isinstance(lemma_list, str):
+    lemma_list = lemma_list.split(" ")
 
-  phons = lex.lemmas[lemma]['phons']
+  assert isinstance(lemma_list, list), " word list is not list"
 
-  phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
+  phon_dict = {}
 
-  allo_seq = phons_sorted[0]['phon'].split(' ')
-  allo_seq_score = phons_sorted[0]['score']
+  for lemma in lemma_list:
+    assert isinstance(lemma, str), "word is not str"
+    phon_dict[lemma] = lex.lemmas[lemma]['phons']
 
-  return allo_seq, allo_seq_score, phons
+  return phon_dict
 
 
 def fsa_to_dot_format(file, num_states, edges):
