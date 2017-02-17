@@ -259,112 +259,7 @@ public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
     int T, int N, int S, int skip_tdp, SArrayI& attention)
     {
-        int M = max_skip + 1;
-        if(M > T - S)
-        {
-            M = T - S + 1;
-            if(M < 1)
-            {
-               M = 1;
-            }
-        }
-        if(min_skip > M)
-        {
-            min_skip = M;
-        }
-        if((T - M) / (N * S) > M)
-        {
-            M = (T - M) / (N * S) + 1;
-            static int max_skip_warning_limit = 0;
-            if(M > max_skip_warning_limit)
-            {
-                max_skip_warning_limit = M;
-                cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
-            }
-        }
 
-        fwd_.resize(N * S, T + M - 1);
-        bt_.resize(N * S, T + M - 1);
-        score_.resize(N * S, T + M - 1);
-
-        for(int t=0; t < T + M - 1; ++t)
-            for(int s=0; s < N * S; ++s)
-            {
-                score_(s,t) = fwd_(s,t) = INF;
-                bt_(s,t) = 1;
-            }
-
-        for(int t=0; t < T; ++t)
-            for(int s=0; s < N * S; ++s)
-                score_(s,t+M-1) = activs(t, labellings(s / S));
-
-        for(int m = M-1 + min_skip; m < 2*M-2; ++m)
-        {
-            fwd_(0, m) = score_(0, m);
-            bt_(0, m) = m - M + 2;
-        }
-
-        for(int s=1; s < N * S; ++s)
-        {
-            int start = T - (N * S - s) * M;
-            if(start < 0)
-                start = 0;
-            //start = 0;
-            for(int t=start; t < T; ++t)
-            {
-                float score = score_(s, t + M - 1);
-                float min_score = INF;
-                int min_index = M - min_skip;
-                for(int m=t; m < t + M - min_skip; ++m)
-                {
-                    float prev = fwd_(s - 1, m);
-                    if(prev < min_score)
-                    {
-                        min_score = prev;
-                        min_index = m - t;
-                    }
-                }
-
-                if(min_score == INF)
-                  fwd_(s, t + M - 1) = INF;
-                else
-                  fwd_(s, t + M - 1) = min_score + score;
-                bt_(s, t + M - 1) = M - 1 - min_index;
-            }
-        }
-
-        int t = T - 1;
-        for(int s=N*S-2;s>=-1;--s)
-        {
-            int next = t - bt_(s+1, t+M-1);
-            if(s < 0)
-                next = 0;
-            if(focus == FOCUS_LAST)
-                attention(s+1) = t;
-            else if(focus == FOCUS_MAX)
-            {
-                float min_score = INF;
-                int min_index = t;
-                int upper = T - 1;
-                if(s < N*S-2)
-                    upper = t + bt_(s+2, t+M-1);
-                upper = t;
-                //cout << upper << "--" << T-1<<endl;
-                for(int u=upper;u>next;--u)
-                {
-                    for(int c=0;c<N;++c)
-                    {
-                        if(min_score > activs(u,c))
-                        {
-                            min_score = activs(u,c);
-                            min_index = u;
-                        }
-                    }
-                }
-                attention(s+1) = min_index;
-            }
-            t = next;
-        }
     }
 
     void full(CSArrayF& activs, CSArrayI& labellings,
@@ -382,26 +277,26 @@ public:
             for(int t=0; t < T; ++t)
                 score_(t,s) = activs(t, labellings(s / S));
 
-        fwd_(0,2) = score(0,0);
+        fwd_(0,2) = score_(0,0);
         for(int t=1; t < T; ++t)
             for(int s=0; s < N * S; ++s)
             {
                 float sum = 0.0;
                 for(int m=0;m<3;++m)
                 {
-                    sum += exp(-(fwd_(t - 1, s + m) + score(t,s)));
+                    sum += exp(-(fwd_(t - 1, s + m) + score_(t,s)));
                 }
                 fwd_(t, s+2) = -log(sum);
             }
 
-        bwd_(T - 1, N * S - 1) = score(T - 1, N * S - 1);
+        bwd_(T - 1, N * S - 1) = score_(T - 1, N * S - 1);
         for(int t=T-2;t>=0;--t)
             for(int s=N * S - 1; s >= 0; --s)
             {
                 float sum = 0.0;
                 for(int m=0;m<3;++m)
                 {
-                    sum += exp(-(fwd_(t + 1, s + m) + score(t,s)));
+                    sum += exp(-(fwd_(t + 1, s + m) + score_(t,s)));
                 }
                 bwd_(t, s) = -log(sum);
             }
