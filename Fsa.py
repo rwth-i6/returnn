@@ -372,31 +372,28 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   epsil = [sil, eps]
 
   edges = []
-  if isinstance(word_seq, str):
-    word_seq_len = 1
-    num_states = 4
-    num_states_start = 0
-    num_states_end = num_states - 1
-  else:
-    word_seq_len = len(word_seq)
-    num_states = 2 + 2 + 4 * (word_seq_len)  # start/end + 2 for sil + number of states for word * 4
-    num_states_start = 0
-    num_states_end = num_states - 1
+  num_states = 0
 
-  edges.append((num_states_start, num_states_start + 1, sil, 1.))
-  edges.append((num_states_end - 1, num_states_end, sil, 1.))
   if isinstance(word_seq, str):
-    for i in range(num_states_start, num_states):
-      for j in range(i, num_states):
-        edges_included = [m for m, n in enumerate(edges) if
-                          (n[0] == i and n[1] == j and n[2] == sil)]
-        if len(edges_included) == 0 and not (i == j):
-          edges.append((i, j, word_seq, 1.))
+    word_list = word_seq.split(" ")
   else:
-    for i in range(num_states_start, num_states_end):
-      for char in word_seq:
-        print(char)
+    word_list = []
 
+  assert isinstance(word_list, list), "word list is not a list"
+
+  for word_idx in range(len(word_list)):
+    assert isinstance(word_list[word_idx], str), "word is not a str"
+    start_node = 2 * (word_idx + 1) - 1
+    end_node = start_node + 1
+    edges.append([start_node, end_node, word_list[word_idx], 1.])
+    for i in epsil:
+      if word_idx == 0:
+        edges.append([start_node - 1, end_node - 1, i, 1.])
+        num_states += 1
+      edges.append([start_node + 1, end_node + 1, i, 1.])
+      num_states += 1
+
+  print(num_states)
   return num_states, edges
 
 
