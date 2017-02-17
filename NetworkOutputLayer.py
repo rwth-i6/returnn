@@ -612,7 +612,7 @@ class SequenceOutputLayer(OutputLayer):
       #from TheanoUtil import print_to_file
       #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
       def viterbi(op,x):
         print(x.argmin(axis=-1))
       #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
@@ -627,13 +627,14 @@ class SequenceOutputLayer(OutputLayer):
       #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       scores = -T.log(emissions.reshape(self.z.shape))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
       if self.fast_bw_opts.get("bw_from"):
         out2 = self.fast_bw_opts.get("bw_from")
         bw = self.network.output[out2].baumwelch_alignment
+        obs_scores = self.network.output[out2].obs_scores
       else:
         def get_am_scores(layer):
           y = layer.p_y_given_x
@@ -722,7 +723,7 @@ class SequenceOutputLayer(OutputLayer):
           state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
-        fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+        fwdbwd, obs_scores = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
         if gamma != 1:
@@ -739,6 +740,7 @@ class SequenceOutputLayer(OutputLayer):
         if need_renorm:
           bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
       self.baumwelch_alignment = bw
+      self.obs_scores = obs_scores
       if self.ce_smoothing > 0:
         target_layer = self.attrs.get("ce_target_layer_align", None)
         assert target_layer  # we could also use self.y but so far we only want this
@@ -757,7 +759,11 @@ class SequenceOutputLayer(OutputLayer):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
       #idx = (src_index.flatten() > 0).nonzero()
       #err = T.sum(err_inner.reshape((err_inner.shape[0]*err_inner.shape[1],err_inner.shape[2]))[idx])
-      err = (err_inner * float_idx_bc).sum()
+      # use the log-likelihood of the sequence as the error output
+      if self.fast_bw_opts.get("use_obs_score_as_error"):
+        err = (obs_scores * T.cast(self.index,'float32') / T.sum(self.index, axis=0, dtype='float32', keepdims=True)).sum()
+      else:
+        err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
         known_grads[self.z] *= -2 * self.z

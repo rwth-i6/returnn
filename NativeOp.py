@@ -1778,6 +1778,7 @@ class FastBaumWelchOp(NativeOpGenBase):
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
+    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
   )
 
   c_extra_support_code = {
@@ -1917,7 +1918,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     """,
     "21_normalize_2": """
       __global__
-      void normalize_2(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs) {
+      void normalize_2(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs, float* sum_output) {
         extern __shared__ float sum[];
 
         buffer += blockIdx.x * num_edges;
@@ -1929,6 +1930,16 @@ class FastBaumWelchOp(NativeOpGenBase):
         for (unsigned e = 0u; e < num_edges; e++) {
           unsigned s = sequence_idxs[e];
           sum[s] = prob_add(sum[s], buffer[e]);
+        }
+
+        for (unsigned s = 0ul; s < num_seqs; s++) {
+          if (isinf(sum[s])) {
+            // if the frame is empty (happens due to batching of seqs with unequal length), set it to 0
+            sum_output[blockIdx.x * num_seqs + s] = 0.0;
+          }
+          else {
+            sum_output[blockIdx.x * num_seqs + s] = sum[s];
+          }
         }
 
         for (unsigned e = 0u; e < num_edges; e++) {
@@ -2029,7 +2040,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
     // output = output_names
     assert(n_inputs  == 6);
-    assert(n_outputs == 1);
+    assert(n_outputs == 2);
     Ndarray* am_scores        = inputs[0];
     Ndarray* edges            = inputs[1];
     Ndarray* weights          = inputs[2];
@@ -2037,11 +2048,15 @@ class FastBaumWelchOp(NativeOpGenBase):
     Ndarray* index            = inputs[4];
     Ndarray* state_buffer     = inputs[5];
     Ndarray* out              = *outputs[0];
+    Ndarray* sum_output       = *outputs[1];
 
     assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
     assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+
+    assert(Ndarray_DIMS(sum_output)[0] == Ndarray_DIMS(am_scores)[0]);
+    assert(Ndarray_DIMS(sum_output)[1] == Ndarray_DIMS(am_scores)[1]);
 
     bool            dump_alignment = false;
     bool            dump_output    = false;
@@ -2061,6 +2076,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
+    float*    d_sum_output        = CudaNdarray_DEV_DATA(sum_output);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
@@ -2151,7 +2167,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     // normalize at each time frame
     dim3 blocks(n_frames, n_seqs);
     //normalize<<<blocks, n_threads, n_threads * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, d_debug_sum);
-    normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs);
+    normalize_2<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output);
     HANDLE_LAST_ERROR();
 
     //std::cerr << "normalize finished" << std::endl;
@@ -2189,4 +2205,4 @@ class FastBaumWelchOp(NativeOpGenBase):
 
   c_bw_code = None
 
-  code_version = 54
+  code_version = 55
