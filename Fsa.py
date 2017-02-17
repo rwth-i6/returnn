@@ -346,7 +346,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
   if depth == 2:
     print("Phoneme acceptor...")
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+    num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
     num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
@@ -399,8 +399,18 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   return word_list, num_states, edges
 
 
-def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
-  allo_len = len(allo_seq)
+def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
+  """
+  phoneme acceptor
+  :param list word_list:
+  :param dict phon_dict:
+  :param int num_states:
+  :param list edges:
+  :return int num_states_new:
+  :return list edges_new:
+  """
+  global sil, eps
+  allo_len = len(phon_dict)
   num_states_new = num_states + 4 * (allo_len - 1)
   edges_new = []
   state_idx = 2
@@ -412,7 +422,7 @@ def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
       lst[1] = num_states_new - 1
       edge = tuple(lst)
       edges_new.append(edge)
-    elif edge[2] == word_seq:
+    elif edge[2] == word_list:
       for allo_idx in range(allo_len):
         if allo_idx == 0:
           idx1 = edge[0]
@@ -429,7 +439,7 @@ def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
           idx1 = state_idx
           state_idx += 1
           idx2 = state_idx
-        edge_t = (idx1, idx2, allo_seq[allo_idx], 1.)
+        edge_t = (idx1, idx2, phon_dict[allo_idx], 1.)
         edges_new.append(edge_t)
     else:
       edges_new.append(edge)
