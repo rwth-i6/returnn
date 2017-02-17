@@ -376,8 +376,11 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
 
   if isinstance(word_seq, str):
     word_list = word_seq.split(" ")
+  elif isinstance(word_seq, list):
+    word_list = word_seq
   else:
-    word_list = []
+    print("word sequence is not a str or a list. i will try...")
+    word_list = word_seq
 
   assert isinstance(word_list, list), "word list is not a list"
 
@@ -393,7 +396,6 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
       edges.append([start_node + 1, end_node + 1, i, 1.])
       num_states += 1
 
-  print(num_states)
   return num_states, edges
 
 
