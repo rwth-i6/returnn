@@ -162,6 +162,7 @@ public:
         for(int m = M-1; m < 2*M-2; ++m)
         {
             fwd_(0, m) = score_(0, m);
+            //bwd_(N * S - 1, T - 1 - m + M + 1) = score_(N*S-1, T - 1 - m + M + 1);
         }
 
     	for(int s=1; s < N * S; ++s)
@@ -177,11 +178,13 @@ public:
                 for(int m=t; m < t + M; ++m)
                     sum += exp(-fwd_(s - 1, m));
                 //cout << "sum:" << sum << endl;
-                fwd_(s, t + M - 1) = -log(sum) + score_(s, t + M - 1);
+                if(sum > 0 && score_(s, t + M - 1) != INF)
+                    fwd_(s, t + M - 1) = -log(sum) + score_(s, t + M - 1);
             }
         }
-        /*
-        bwd_(N * S - 1, T - 1) = 0.0; //score_(N * S - 1, T - 1);
+        
+        //bwd_(N * S - 1, T - 1) = 0.0; //score_(N * S - 1, T - 1);
+        bwd_(N * S - 1, T - 1) = score_(N * S - 1, T - 1);
 
         for(int s=N*S-2;s>=0; --s)
         {
@@ -189,31 +192,57 @@ public:
             if(start < 0)
                 start = 0;
             start = 0;
+            //start = M - 1;
             for(int t=start; t < T; ++t)
             {
-                float score = exp(-score_(s, t));
                 float sum = 0.0;
+                /*
+                for(int m=t; m >= t - M + 1; --m)
+                    if(bwd_(s + 1, m) != INF && score_(s + 1, t) != INF)
+                        sum += exp(-bwd_(s + 1, m) + score_(s + 1, m));
+                */
                 for(int m=t; m < t + M; ++m)
-                    sum += exp(-bwd_(s + 1, m));
-                bwd_(s, t) = -log(sum) + score_(s, t + M - 1);
-
+                    if(bwd_(s + 1, m) != INF && score_(s, t) != INF)
+                        sum += exp(-bwd_(s + 1, m) + score_(s, t));
+                if(sum > 0.0)
+                    bwd_(s, t) = -log(sum);
             }
         }
-        */
 
         for(int s=0;s < N * S;++s)
         {
+            float sum = 0.0;
             for(int t=0; t < T; ++t)
             {
-                attention(s, t) = exp(-fwd_(s, t + M - 1)); // + exp(-bwd_(s, t)));
+                /*
+                if(fwd_(s, t + M - 1) == INF || bwd_(s,t) == INF)
+                    attention(s, t) = 0;
+                else
+                    attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
+                */
+                // attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
+                cout << s << " " << t << " fw " << fwd_(s, t + M - 1) << " bw " << bwd_(s, t + M - 1) << endl;
+                //attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
+                //attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
+                /*
+                if(s < N*S-1)
+                {
+                    for(int m=t;m<t+M;++m)
+                    {
+                        attention(s, t) += bwd_(s+1,m);
+                    }
+                }*/
+                sum += exp(-(fwd_(s, t + M - 1)));
+                //sum += attention(s, t);
             }
+            for(int t=0; t < T; ++t)
+                attention(s, t) /= sum;
         }
 
         /*for(int s=0;s < N * S;++s)
             for(int t=0;t<T;++t)
                 cout << labellings(s/S) << " " << t << " " << attention(s, t) << endl;
         */
-
     }
 
 private:

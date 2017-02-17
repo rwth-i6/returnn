@@ -3081,17 +3081,30 @@ class FAlignmentLayer(ForwardLayer):
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
       else:
-        z_out = p_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2) # TBDN
-        x_out = x_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2)
-        z_att = att.dimshuffle(2,1,'x',0).repeat(z_out.shape[2],axis=2) # TBDN
-        z_att = z_att / z_att.sum(axis=0,keepdims=True)
-        z_att = theano.gradient.disconnected_grad(z_att)
-        x_att = att.dimshuffle(2, 1, 'x', 0).repeat(x_out.shape[2], axis=2)  # TBDN
-        x_att = x_att / x_att.sum(axis=0, keepdims=True)
-        x_att = theano.gradient.disconnected_grad(x_att)
+        #att = theano.gradient.disconnected_grad(att / att.sum(axis=2,keepdims=True))
+        att = theano.gradient.disconnected_grad(att) # NBT
+        #z_out, _ = theano.map(lambda x, a: T.sum(x.dimshuffle(0,1,'x').repeat(a.shape[1],axis=2) * a.dimshuffle(0,'x',1).repeat(x.shape[1],axis=1), axis=0),
+        #                      sequences=[p_in.dimshuffle(1,0,2), att.dimshuffle(1, 2, 0)]) # BCN
+        x_out, _ = theano.map(lambda x, a: T.sum(x.dimshuffle(0, 1, 'x').repeat(a.shape[1], axis=2) * a.dimshuffle(0, 'x', 1).repeat(x.shape[1], axis=1), axis=0),
+                              sequences=[x_in.dimshuffle(1,0,2), att.dimshuffle(1, 2, 0)]) # BDN
 
-        z_out = T.sum(z_att * z_out,axis=0).dimshuffle(2,0,1) # NBD
-        x_out = T.sum(x_att * x_out,axis=0).dimshuffle(2,0,1) # NBD
+        #z_out = p_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2) # TBCN
+        #z_att = att.dimshuffle(2,1,'x',0).repeat(z_out.shape[2],axis=2) # TBCN
+        #z_att = z_att / z_att.sum(axis=0,keepdims=True)
+        #z_att = theano.gradient.disconnected_grad(z_att)
+        #x_out = x_in.dimshuffle(0,1,2,'x').repeat(att.shape[0],axis=2) # TBDN
+        #x_att = att.dimshuffle(2, 1, 'x', 0).repeat(x_out.shape[2], axis=2)  # TBDN
+        #x_att = x_att / x_att.sum(axis=0, keepdims=True)
+        #x_att = theano.gradient.disconnected_grad(x_att)
+
+        #z_out = T.sum(z_att * z_out,axis=0).dimshuffle(2,0,1) # NBC
+        #x_out = T.sum(x_att * x_out,axis=0).dimshuffle(2,0,1) # NBD
+
+        #z_out = z_out.dimshuffle(2, 0, 1) # NBC
+        x_out = x_out.dimshuffle(2, 0, 1) # NBD
+
+        z_out = T.dot(x_out, self.W_in[0]) + self.b
+        #z_out = T.nnet.softmax((z_out.shape[0]*z_out.shape[1],z_out.shape[2])).reshape(z_out.shape)
         if reduce_output:
           if output_z:
             self.output = z_out
@@ -3099,9 +3112,9 @@ class FAlignmentLayer(ForwardLayer):
             self.output = x_out
         z_out = z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))
         x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))
-        nll, _ = T.nnet.crossentropy_softmax_1hot(x=x_out[idx], y_idx=y_out.flatten()[idx])
+        nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out.flatten()[idx])
         self.cost_val = norm * T.sum(nll)
-        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out.flatten()[idx]))
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
