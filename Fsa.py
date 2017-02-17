@@ -408,10 +408,12 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   :param dict phon_dict:
   :param int num_states:
   :param list edges:
-  :return int num_states_new:
-  :return list edges_new:
+  :return int num_states:
+  :return list edges:
   """
   global sil, eps
+
+  """
   allo_len = len(phon_dict)
   num_states_new = num_states + 4 * (allo_len - 1)
   edges_new = []
@@ -445,8 +447,9 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
         edges_new.append(edge_t)
     else:
       edges_new.append(edge)
+  """
 
-  return num_states_new, edges_new
+  return num_states, edges
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
