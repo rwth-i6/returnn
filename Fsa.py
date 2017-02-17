@@ -335,7 +335,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   print("Depth level is", depth)
   if depth >= 1:
     print("Lemma acceptor...")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+    word_list, num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
@@ -396,7 +396,7 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
       edges.append([start_node + 1, end_node + 1, i, 1.])
       num_states += 1
 
-  return num_states, edges
+  return word_list, num_states, edges
 
 
 def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
