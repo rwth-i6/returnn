@@ -366,7 +366,9 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
 def __lemma_acceptor_for_hmm_fsa(word_seq):
   """
   :param str word_seq:
-  :return int num_states, list edges:
+  :return list word_list:
+  :return int num_states:
+  :return list edges:
   """
   global sil, eps
   epsil = [sil, eps]
