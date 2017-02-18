@@ -427,7 +427,6 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   splits word and marks the letters next to a silence
   """
   word_pos = []
-  print(word_list)
   while (word_list):
     word = word_list.pop(0)
     for idx, letter in enumerate(word):
@@ -439,7 +438,6 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
         word_pos.append({letter: ['f']})
       else:
         word_pos.append({letter: ['']})
-  print(word_pos)
 
   """
   splits phonem sequence and marks the phonem next to a silence
