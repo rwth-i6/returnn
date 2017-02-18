@@ -446,11 +446,21 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   splits phoneme sequence and marks the phoneme next to a silence
   """
+  edges_t = []
+  edges_t.extend(edges_phon_t)
   phon_pos = []
+
+  while (edges_t):
+    edge = edges_t.pop(0)
+    if edge[2] != sil or edge[2] != eps:
+      for idx, letter in enumerate(edge[2]):
+        phon_pos.append(edge[2])
 
   """
   splits phoneme edge into several edges
   """
+  edges_phon = []
+  edges_phon.extend(edges_phon_t)
   print(num_states)
 
   return word_pos, phon_pos, num_states, edges_phon
