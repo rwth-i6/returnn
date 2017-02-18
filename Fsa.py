@@ -419,16 +419,16 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       for phons in phon_current:
         edges_phon.append([edge[0], edge[1], phons['phon'], phons['score']])
     elif edge[2] == sil or edge[2] == eps:
-      edges_phon.append(edge)
+      edges_phon.append(edge)  # adds eps and sil edges unchanged
     else:
-      assert 1 == 0, "unrecognized phoneme"
+      assert 1 == 0, "unrecognized phoneme"  # all edges should be handled
+
+  """
+  splits phonem sequence and marks the phonem next to a silence
+  """
 
   """
   splits phonem edge into several edges
-  """
-
-  """
-  marks the first and last phonem in a lemma
   """
 
   return word_pos, phon_pos, num_states, edges_phon
