@@ -417,6 +417,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
     if edge[2] != sil and edge[2] != eps:
       phon_current = phon_dict[edge[2]]
       for phons in phon_current:
+        phon_score = phons['score']  # calculate phon score correctly log space
         edges_phon_t.append([edge[0], edge[1], phons['phon'], phon_score])
     elif edge[2] == sil or edge[2] == eps:
       edges_phon_t.append(edge)  # adds eps and sil edges unchanged
