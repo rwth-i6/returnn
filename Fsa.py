@@ -2,14 +2,6 @@
 
 from __future__ import print_function
 
-"""
-TODO
-- state tying acceptor
-- class num_states, edges, first and last char
-- description
-- cleaner structure of code (classes)?
-"""
-
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
