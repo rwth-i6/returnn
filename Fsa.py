@@ -400,8 +400,9 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   :param dict phon_dict:
   :param int num_states:
   :param list edges:
+  :return list phoneme positions in word: stores the phoneme positions of words
   :return int num_states:
-  :return list edges:
+  :return list edges_phon:
   """
   global sil, eps
 
