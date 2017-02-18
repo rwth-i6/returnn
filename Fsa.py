@@ -407,7 +407,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   global sil, eps
 
-  edges_phon = []
+  edges_phon_t = []
 
   """
   replaces chars with phonems
@@ -417,9 +417,9 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
     if edge[2] != sil and edge[2] != eps:
       phon_current = phon_dict[edge[2]]
       for phons in phon_current:
-        edges_phon.append([edge[0], edge[1], phons['phon'], phons['score']])
+        edges_phon_t.append([edge[0], edge[1], phons['phon'], phon_score])
     elif edge[2] == sil or edge[2] == eps:
-      edges_phon.append(edge)  # adds eps and sil edges unchanged
+      edges_phon_t.append(edge)  # adds eps and sil edges unchanged
     else:
       assert 1 == 0, "unrecognized phoneme"  # all edges should be handled
 
