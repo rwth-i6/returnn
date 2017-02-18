@@ -424,12 +424,32 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       assert 1 == 0, "unrecognized phoneme"  # all edges should be handled
 
   """
+  splits word and marks the letters next to a silence
+  """
+  word_pos = []
+  print(word_list)
+  while (word_list):
+    word = word_list.pop(0)
+    for idx, letter in enumerate(word):
+      if idx == 0 and idx == len(word) - 1:
+        word_pos.append({letter: ['i', 'f']})
+      elif idx == 0:
+        word_pos.append({letter: ['i']})
+      elif idx == len(word) - 1:
+        word_pos.append({letter: ['f']})
+      else:
+        word_pos.append({letter: ['']})
+  print(word_pos)
+
+  """
   splits phonem sequence and marks the phonem next to a silence
   """
+  phon_pos = []
 
   """
   splits phonem edge into several edges
   """
+  print(num_states)
 
   return word_pos, phon_pos, num_states, edges_phon
 
