@@ -411,6 +411,14 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   replaces chars with phonems
   """
+  while (edges):
+    edge = edges.pop(0)
+    if edge[2] != sil and edge[2] != eps:
+      phon_current = phon_dict[edge[2]]
+      for phons in phon_current:
+        edges_phon.append([edge[0], edge[1], phons['phon'], phons['score']])
+    elif edge[2] == sil or edge[2] == eps:
+      edges_phon.append(edge)
     else:
       assert 1 == 0, "unrecognized phoneme"
 
