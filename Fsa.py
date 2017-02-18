@@ -400,8 +400,11 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   :param dict phon_dict:
   :param int num_states:
   :param list edges:
-  :return list word_pos: letter positions in word
-  :return list phon_pos: phoneme positions in lemma
+  :return list of dict word_pos: letter positions in word
+  :return list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start end point
   :return int num_states:
   :return list edges_phon:
   """
