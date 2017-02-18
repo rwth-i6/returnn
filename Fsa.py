@@ -406,43 +406,11 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   global sil, eps
 
-  """
-  allo_len = len(phon_dict)
-  num_states_new = num_states + 4 * (allo_len - 1)
-  edges_new = []
-  state_idx = 2
 
-  for edge in edges:
-    if edge[2] == sil and edge[1] == num_states - 1:
-      lst = list(edge)
-      lst[0] = num_states_new - 2
-      lst[1] = num_states_new - 1
-      edge = tuple(lst)
-      edges_new.append(edge)
-    elif edge[2] == word_list:
-      for allo_idx in range(allo_len):
-        if allo_idx == 0:
-          idx1 = edge[0]
-          idx2 = state_idx
-        elif allo_idx == allo_len - 1:
-          idx1 = state_idx
-          if edge[1] == 3:
-            edge_idx_t = 1
-          elif edge[1] == 2:
-            edge_idx_t = 2
-          idx2 = num_states_new - edge_idx_t
-          state_idx += 1
-        else:
-          idx1 = state_idx
-          state_idx += 1
-          idx2 = state_idx
-        edge_t = (idx1, idx2, phon_dict[allo_idx], 1.)
-        edges_new.append(edge_t)
     else:
-      edges_new.append(edge)
   """
 
-  return num_states, edges
+  return num_states, edges_phon
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
