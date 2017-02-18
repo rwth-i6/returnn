@@ -410,7 +410,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   edges_phon_t = []
 
   """
-  replaces chars with phonems
+  replaces chars with phonemes
   """
   while (edges):
     edge = edges.pop(0)
@@ -440,12 +440,12 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
         word_pos.append({letter: ['']})
 
   """
-  splits phonem sequence and marks the phonem next to a silence
+  splits phoneme sequence and marks the phoneme next to a silence
   """
   phon_pos = []
 
   """
-  splits phonem edge into several edges
+  splits phoneme edge into several edges
   """
   print(num_states)
 
