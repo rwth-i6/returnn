@@ -406,8 +406,20 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   global sil, eps
 
+  edges_phon = []
 
+  """
+  replaces chars with phonems
+  """
     else:
+      assert 1 == 0, "unrecognized phoneme"
+
+  """
+  splits phonem edge into several edges
+  """
+
+  """
+  marks the first and last phonem in a lemma
   """
 
   return num_states, edges_phon
