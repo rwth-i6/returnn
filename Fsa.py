@@ -338,7 +338,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
   if depth == 2:
     print("Phoneme acceptor...")
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
+    word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
     num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
@@ -400,7 +400,8 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   :param dict phon_dict:
   :param int num_states:
   :param list edges:
-  :return list phoneme positions in word: stores the phoneme positions of words
+  :return list word_pos: letter positions in word
+  :return list phon_pos: phoneme positions in lemma
   :return int num_states:
   :return list edges_phon:
   """
@@ -430,7 +431,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   marks the first and last phonem in a lemma
   """
 
-  return num_states, edges_phon
+  return word_pos, phon_pos, num_states, edges_phon
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
