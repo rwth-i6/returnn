@@ -306,7 +306,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
                          tdps=None  # ...
                          ):
   """
-  :param list[str] word_seq: sequences of words
+  :param list[str] or str word_seq: sequences of words
   :param str lexicon_file: lexicon XML file
   :param int allo_num_states: hom much HMM states per allophone
   :param int allo_context_len: how much context to store left and tight. 1 -> triphone
