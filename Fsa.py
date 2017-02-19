@@ -1,6 +1,7 @@
 #!/usr/bin/env python2.7
 
 from __future__ import print_function
+from __future__ import division
 
 
 def convert_label_seq_to_indices(num_labels, label_seq):
