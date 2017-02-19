@@ -122,7 +122,7 @@ class OutputLayer(Layer):
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
       if reshape_target:
-	src_index = self.sources[0].index
+        src_index = self.sources[0].index
         self.index = src_index
         self.y_data_flat = y.T.flatten()[(y.T.flatten()>=0).nonzero()]
       else:
