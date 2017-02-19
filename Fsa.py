@@ -478,6 +478,41 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   edges_phon.extend(edges_phon_t)
   print(num_states)
 
+  while (edges_phon_t):
+    edge = edges_phon_t.pop(0)
+    if edge[2] != sil and edge[2] != eps:
+      phon_seq = edge[2].split(" ")
+      for phon_idx, phon_label in enumerate(phon_seq):
+        phon_seq_len = len(phon_seq)
+        if phon_seq_len == 1:
+          edges_phon.append(edge)
+        elif phon_seq_len > 1:
+          if phon_idx == 0:
+            start_node = edge[0]
+            end_node = edge[0] + (phon_idx + 1) / 10  # int division from python3
+            phon_score = edge[3]
+            if not __check_node_existance(end_node, edges_phon):
+              num_states += 1  # check before append otherwise just added edge found
+            edges_phon.append([start_node, end_node, phon_label, phon_score])
+          elif phon_idx == phon_seq_len - 1:
+            pass
+            """
+            start_node = edge[0] + (phon_idx + 1) / 10  # int division from python3
+            end_node = edge[0] + (phon_idx + 2) / 10  # int division from python3
+            phon_score = 0.
+            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            """
+          else:
+            pass
+        else:
+          assert 1 == 0, "Something went wrong while expanding phoneme sequence"
+    else:
+      edges_phon.append(edge)
+    edges_phon.sort(key=lambda x: x[0])
+
+  print(num_states)
+  print(edges_phon)
+
   return word_pos, phon_pos, num_states, edges_phon
 
 
