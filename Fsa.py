@@ -512,6 +512,8 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   print(num_states)
   print(edges_phon)
 
+  __renumber_nodes()
+
   return word_pos, phon_pos, num_states, edges_phon
 
 
@@ -528,6 +530,10 @@ def __check_node_existance(node_num, edges):
     return True
   else:
     return False
+
+
+def __renumber_nodes():
+  pass
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
