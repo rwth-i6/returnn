@@ -382,12 +382,12 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
     assert isinstance(word_list[word_idx], str), "word is not a str"
     start_node = 2 * (word_idx + 1) - 1
     end_node = start_node + 1
-    edges.append([start_node, end_node, word_list[word_idx], 1.])
+    edges.append([start_node, end_node, word_list[word_idx], 0.])
     for i in epsil:
       if word_idx == 0:
-        edges.append([start_node - 1, end_node - 1, i, 1.])
+        edges.append([start_node - 1, end_node - 1, i, 0.])
         num_states += 1
-      edges.append([start_node + 1, end_node + 1, i, 1.])
+      edges.append([start_node + 1, end_node + 1, i, 0.])
       num_states += 1
 
   return word_list, num_states, edges
