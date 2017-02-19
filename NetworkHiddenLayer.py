@@ -2813,12 +2813,15 @@ class CAlignmentLayer(ForwardLayer):
     kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
     n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
+    self.cost_scale_val = numpy.float32(1)
     if base:
-      #self.params = base[0].params
-      self.params = {}
-      self.W_in = base[0].W_in
-      self.b = base[0].b
-      self.z = self.get_linear_forward_output()
+      if base[0].layer_class == 'calign':
+        self.params = {}
+        self.W_in = base[0].W_in
+        self.b = base[0].b
+        self.z = self.get_linear_forward_output()
+      elif base[0].layer_class == 'disc':
+        self.cost_scale_val = base[0].error_val / T.sum(base[0].index,dtype='float32')
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
@@ -2961,9 +2964,7 @@ class CAlignmentLayer(ForwardLayer):
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
   def cost(self):
-    iv = 3
-    lmb = T.cast(T.eq(T.mod(self.network.epoch,iv),0),'float32')
-    return self.cost_val, None
+    return self.cost_val * self.cost_scale_val, None
 
   def errors(self):
     return self.error_val
