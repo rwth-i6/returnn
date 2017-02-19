@@ -469,13 +469,12 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
           letter_pos.append([letter])
       phon_pos.append(letter_pos)
 
-  print(phon_pos)
-
   """
   splits phoneme edge into several edges
   """
   edges_phon = []
-  edges_phon.extend(edges_phon_t)
+  edges_phon_t.sort(key=lambda x: x[0])
+
   print(num_states)
 
   while (edges_phon_t):
