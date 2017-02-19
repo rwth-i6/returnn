@@ -1,14 +1,7 @@
 #!/usr/bin/env python2.7
 
 from __future__ import print_function
-
-"""
-TODO
-- state tying acceptor
-- class num_states, edges, first and last char
-- description
-- cleaner structure of code (classes)?
-"""
+from __future__ import division
 
 
 def convert_label_seq_to_indices(num_labels, label_seq):
@@ -314,7 +307,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
                          tdps=None  # ...
                          ):
   """
-  :param list[str] word_seq: sequences of words
+  :param list[str] or str word_seq: sequences of words
   :param str lexicon_file: lexicon XML file
   :param int allo_num_states: hom much HMM states per allophone
   :param int allo_context_len: how much context to store left and tight. 1 -> triphone
@@ -325,17 +318,17 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   """
   print("Word sequence:", word_seq)
   global sil
-  sil = 'sil'
-  print("Silence:", sil)
+  sil = '_'
+  print("Place holder silence:", sil)
   global eps
-  eps = 'eps'
+  eps = '*'
   print("Place holder epsilon:", eps)
   if depth is None:
     depth = 6
   print("Depth level is", depth)
   if depth >= 1:
     print("Lemma acceptor...")
-    num_states, edges = __lemma_acceptor_for_hmm_fsa(sil, word_seq)
+    word_list, num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
@@ -343,10 +336,10 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   if depth >= 2:
     lexicon = __load_lexicon(lexicon_file)
     print("Getting allophone sequence...")
-    allo_seq, allo_seq_score, phon = __find_allo_seq_in_lex(word_seq, lexicon)
+    phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
   if depth == 2:
     print("Phoneme acceptor...")
-    num_states, edges = __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+    word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
     num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
@@ -363,76 +356,185 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   return num_states, edges
 
 
-def __lemma_acceptor_for_hmm_fsa(sil, word_seq):
+def __lemma_acceptor_for_hmm_fsa(word_seq):
   """
-  :param word_seq:
-  :return: num_states, edges
+  :param str word_seq:
+  :return list word_list:
+  :return int num_states:
+  :return list edges:
   """
+  global sil, eps
+  epsil = [sil, eps]
+
   edges = []
+  num_states = 0
+
   if isinstance(word_seq, str):
-    word_seq_len = 1
-    num_states = 4
-    num_states_start = 0
-    num_states_end = num_states - 1
+    word_list = word_seq.split(" ")
+  elif isinstance(word_seq, list):
+    word_list = word_seq
   else:
-    word_seq_len = len(word_seq)
-    num_states = 2 + 2 + 4 * (word_seq_len)  # start/end + 2 for sil + number of states for word * 4
-    num_states_start = 0
-    num_states_end = num_states - 1
+    print("word sequence is not a str or a list. i will try...")
+    word_list = word_seq
 
-  edges.append((num_states_start, num_states_start + 1, sil, 1.))
-  edges.append((num_states_end - 1, num_states_end, sil, 1.))
-  if isinstance(word_seq, str):
-    for i in range(num_states_start, num_states):
-      for j in range(i, num_states):
-        edges_included = [m for m, n in enumerate(edges) if
-                          (n[0] == i and n[1] == j and n[2] == sil)]
-        if len(edges_included) == 0 and not (i == j):
-          edges.append((i, j, word_seq, 1.))
-  else:
-    for i in range(num_states_start, num_states_end):
-      for char in word_seq:
-        print(char)
+  assert isinstance(word_list, list), "word list is not a list"
 
-  return num_states, edges
+  for word_idx in range(len(word_list)):
+    assert isinstance(word_list[word_idx], str), "word is not a str"
+    start_node = 2 * (word_idx + 1) - 1
+    end_node = start_node + 1
+    edges.append([start_node, end_node, word_list[word_idx], 0.])
+    for i in epsil:
+      if word_idx == 0:
+        edges.append([start_node - 1, end_node - 1, i, 0.])
+        num_states += 1
+      edges.append([start_node + 1, end_node + 1, i, 0.])
+      num_states += 1
+
+  return word_list, num_states, edges
 
 
-def __phoneme_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
-  allo_len = len(allo_seq)
-  num_states_new = num_states + 4 * (allo_len - 1)
-  edges_new = []
-  state_idx = 2
+def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
+  """
+  phoneme acceptor
+  :param list word_list:
+  :param dict phon_dict:
+  :param int num_states:
+  :param list edges:
+  :return list of dict word_pos: letter positions in word
+  :return list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start end point
+  :return int num_states:
+  :return list edges_phon:
+  """
+  global sil, eps
 
-  for edge in edges:
-    if edge[2] == sil and edge[1] == num_states - 1:
-      lst = list(edge)
-      lst[0] = num_states_new - 2
-      lst[1] = num_states_new - 1
-      edge = tuple(lst)
-      edges_new.append(edge)
-    elif edge[2] == word_seq:
-      for allo_idx in range(allo_len):
-        if allo_idx == 0:
-          idx1 = edge[0]
-          idx2 = state_idx
-        elif allo_idx == allo_len - 1:
-          idx1 = state_idx
-          if edge[1] == 3:
-            edge_idx_t = 1
-          elif edge[1] == 2:
-            edge_idx_t = 2
-          idx2 = num_states_new - edge_idx_t
-          state_idx += 1
-        else:
-          idx1 = state_idx
-          state_idx += 1
-          idx2 = state_idx
-        edge_t = (idx1, idx2, allo_seq[allo_idx], 1.)
-        edges_new.append(edge_t)
+  edges_phon_t = []
+
+  """
+  replaces chars with phonemes
+  """
+  while (edges):
+    edge = edges.pop(0)
+    if edge[2] != sil and edge[2] != eps:
+      phon_current = phon_dict[edge[2]]
+      for phons in phon_current:
+        phon_score = phons['score']  # calculate phon score correctly log space
+        edges_phon_t.append([edge[0], edge[1], phons['phon'], phon_score])
+    elif edge[2] == sil or edge[2] == eps:
+      edges_phon_t.append(edge)  # adds eps and sil edges unchanged
     else:
-      edges_new.append(edge)
+      assert 1 == 0, "unrecognized phoneme"  # all edges should be handled
 
-  return num_states_new, edges_new
+  """
+  splits word and marks the letters next to a silence
+  """
+  word_pos = []
+  while (word_list):
+    word = word_list.pop(0)
+    for idx, letter in enumerate(word):
+      if idx == 0 and idx == len(word) - 1:
+        word_pos.append({letter: ['i', 'f']})
+      elif idx == 0:
+        word_pos.append({letter: ['i']})
+      elif idx == len(word) - 1:
+        word_pos.append({letter: ['f']})
+      else:
+        word_pos.append({letter: ['']})
+
+  """
+  splits phoneme sequence and marks the phoneme next to a silence
+  """
+  edges_t = []
+  edges_t.extend(edges_phon_t)
+  phon_pos = []
+
+  edges_t.sort(key=lambda x: x[0])
+
+  while (edges_t):
+    edge = edges_t.pop(0)  # edge is tuple start node, end node, label, score
+    if edge[2] != sil and edge[2] != eps:  # sil and eps ignored
+      phon_list = edge[2].split(" ")
+      letter_pos = []
+      for idx, letter in enumerate(phon_list):
+        if idx == 0 and idx == len(phon_list) - 1:
+          letter_pos.append([letter, 'i', 'f'])
+        elif idx == 0:
+          letter_pos.append([letter, 'i'])
+        elif idx == len(phon_list) - 1:
+          letter_pos.append([letter, 'f'])
+        else:
+          letter_pos.append([letter])
+      phon_pos.append(letter_pos)
+
+  """
+  splits phoneme edge into several edges
+  """
+  edges_phon = []
+  edges_phon_t.sort(key=lambda x: x[0])
+
+  while (edges_phon_t):
+    edge = edges_phon_t.pop(0)
+    if edge[2] != sil and edge[2] != eps:
+      phon_seq = edge[2].split(" ")
+      for phon_idx, phon_label in enumerate(phon_seq):
+        phon_seq_len = len(phon_seq)
+        if phon_seq_len == 1:
+          edges_phon.append(edge)
+        elif phon_seq_len > 1:
+          if phon_idx == 0:
+            start_node = edge[0]
+            end_node = num_states
+            phon_score = edge[3]
+            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            num_states += 1
+          elif phon_idx == phon_seq_len - 1:
+            start_node = num_states - 1
+            end_node = edge[1]
+            phon_score = 0.
+            edges_phon.append([start_node, end_node, phon_label, phon_score])
+          else:
+            start_node = num_states - 1
+            end_node = num_states
+            phon_score = 0.
+            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            num_states += 1
+        else:
+          assert 1 == 0, "Something went wrong while expanding phoneme sequence"
+    else:
+      edges_phon.append(edge)
+    edges_phon.sort(key=lambda x: x[0])
+
+  edges_phon = __renumber_nodes(num_states, edges_phon)
+
+  return word_pos, phon_pos, num_states, edges_phon
+
+
+def __check_node_existance(node_num, edges):
+  """
+  checks if the node numbers already exist in edges list
+  :param float node_num: node number to be checked
+  :return bool: true if node in edges
+  """
+  node_list = [edge_index for edge_index, edge in enumerate(edges)
+                      if (edge[0] == node_num or edge[1] == node_num)]
+
+  if len(node_list) > 0:
+    return True
+  else:
+    return False
+
+
+def __renumber_nodes(num_states, edges_phon):
+  """
+  reorders the node number: always rising numbers. never 40 -> 11
+  :param int num_states: number od states / nodes
+  :param list edges_phon: list with unordered nodes
+  :returnlist edges_phon: list with ordered nodes
+  """
+  return edges_phon
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
@@ -881,25 +983,28 @@ def __load_lexicon(lexFile):
   return lex
 
 
-def __find_allo_seq_in_lex(lemma, lex):
+def __find_allo_seq_in_lex(lemma_list, lex):
   '''
   searches a lexicon xml structure for a watching word and
   returns the matching allophone sequence as a list
-  :param lemma: the word to search for in the lexicon
+  :param lemma_list: the word / lemma sequence to search for in the lexicon
   :param lex: the lexicon
-  :return allo_seq: allophone sequence with the highest score as a list
-  :return phons: phonemes matching the lemma as a list of dictionaries with score and phon
+  :return dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
   '''
-  assert lex.lemmas[lemma], "Lemma not in lexicon"
+  if isinstance(lemma_list, str):
+    lemma_list = lemma_list.split(" ")
 
-  phons = lex.lemmas[lemma]['phons']
+  assert isinstance(lemma_list, list), " word list is not list"
 
-  phons_sorted = sorted(phons, key=lambda phon: phon['score'], reverse=True)
+  phon_dict = {}
 
-  allo_seq = phons_sorted[0]['phon'].split(' ')
-  allo_seq_score = phons_sorted[0]['score']
+  for lemma in lemma_list:
+    assert isinstance(lemma, str), "word is not str"
+    phon_dict[lemma] = lex.lemmas[lemma]['phons']
 
-  return allo_seq, allo_seq_score, phons
+  return phon_dict
 
 
 def fsa_to_dot_format(file, num_states, edges):
