@@ -3194,46 +3194,74 @@ class FStdAlignmentLayer(ForwardLayer):
 
 
 
-class InvAlignSegmentationLayer(HiddenLayer):
+class InvAlignSegmentationLayer(_NoOpLayer):
   layer_class = "invalignsegment"
 
-  def __init__(self, **kwargs):
+  def __init__(self, window=0,base=None, **kwargs):
 
     super(InvAlignSegmentationLayer, self).__init__(**kwargs)
-    self.set_attr('n_out', kwargs['n_out'])
+    if base:
+        kwargs['n_out'] = base[0].attrs['n_out']
+        self.set_attr('n_out', base[0].attrs['n_out'])
+        #self.set_attr('base',base)
+    else:
+        kwargs['n_out'] = self.sources[0].y_in[self.sources[0].attrs['target']].n_out
+        self.set_attr('n_out', self.sources[0].y_in[self.sources[0].attrs['target']].n_out)
+    #self.set_attr('n_out',self.sources[0].attrs['n_out'])
+    #self.attrs['n_out'] = theano.printing.Print('%s nout' %self.name,attrs=['shape'])(self.attrs['n_out'])
     assert len(self.sources) == 1
     assert self.sources[0].att is not None
-    n_in = self.sources[0].attrs['n_out']
-    n_out = self.attrs['n_out']
-    z = self.get_linear_forward_output()
+    #n_in = self.sources[0].attrs['n_out']
+    #n_out = self.attrs['n_out']
+    #z = self.get_linear_forward_output()
     att = self.sources[0].att.T
-    maxlen = T.max(T.extra_ops.diff(att))
-
-    # concatenate first index in each row, i.e., if att is [[3,5,8],[15,17,20]], make it  [[0,3,5,8],[12,15,17,20]]
-    att_with_firstindex = T.concatenate([T.maximum(0,att[:,0].dimshuffle(0,'x')-maxlen),att],axis=1)
-    att_sorted = att_with_firstindex.sort() #sort the rows so that [0,3,5,8,0,0,0] becomes [0,0,0,0,3,5,8]
-    att_wo_lastcol = T.concatenate([[0],att_sorted[:,:att_sorted.shape[1]-1].flatten().nonzero_values()])
-    ind = att_wo_lastcol.shape[0] - T.sum(T.extra_ops.diff(att_with_firstindex).flatten()>0)
-    att_wo_lastcol = att_wo_lastcol[ind:]
-    att_rep = att_wo_lastcol.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).T #repeat att maxlen times
-    incr = T.arange(1,maxlen+1).repeat(att_wo_lastcol.shape[0]).reshape((T.cast(maxlen,'int32'),att_wo_lastcol.shape[0])) #range of maxlen repeated att(shape) times
-    maskarr = T.extra_ops.diff(att_with_firstindex).flatten() #diff array
-    maskarr = T.clip(maskarr,0,T.max(maskarr)).nonzero_values() #clip negative values to 0 and remove zeroes
-    # repeat maxlen times (this now contains the length of each segment)
-    maskarr = maskarr.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).dimshuffle(1,0)
-
-    #comparing incr and maskarr, you get the value to be added to att_rep at each row and column.
-    # If incr > maskarr, then cond has -att_rep-1 so that when it is subtracted from att_rep,
-    #we get -1. Later z is concatenated with a row of 0s at the end so that this is retreived when z[-1] is encountered (to simulate [3,4,0,0] for example)
-    cond     = T.switch(T.lt(incr, maskarr+1), incr, -att_rep - 1)
-    z = z.dimshuffle(1,0,2).reshape((z.shape[0]*z.shape[1],z.shape[2]))
-    #z = self.sources[0].z.dimshuffle(1, 0, 2).reshape((self.sources[0].z.shape[0] * self.sources[0].z.shape[1], self.sources[0].z.shape[2]))
+    #att = theano.printing.Print('%s att orig'%self.name,attrs=['__str__'])(att)
+    if window:
+        maxlen = T.cast(window/2,'int32')
+        att = att.nonzero_values()
+        cond = T.arange(-maxlen,maxlen).repeat(att.shape[0]).reshape((2*maxlen,att.shape[0]))
+        att_rep = att.repeat(T.cast(2*maxlen,'int32')).reshape((att.shape[0],T.cast(2*maxlen,'int32'))).T #repeat att maxlen times
+        finalcond = T.maximum(att_rep + cond,-1)
+        finalcond = T.switch(T.lt(finalcond,T.max(att)),finalcond,-1)
+    else:
+        maxlen = T.concatenate([T.stack(att[0,0]),T.extra_ops.diff(att).flatten().sort()])[-1]
+        #maxlen = T.max(att[:,1:] - att[:,:att.shape[1]-1])
+        # concatenate first index in each row, i.e., if att is [[3,5,8],[15,17,20]], make it  [[0,3,5,8],[12,15,17,20]]
+        att_with_firstindex = T.concatenate([T.maximum(0,att[:,0].dimshuffle(0,'x')-maxlen),att],axis=1)
+        att_sorted = att_with_firstindex.sort() #sort the rows so that [0,3,5,8,0,0,0] becomes [0,0,0,0,3,5,8]
+        att_wo_lastcol = T.concatenate([[0],att_sorted[:,:att_sorted.shape[1]-1].flatten().nonzero_values()])
+        ind = att_wo_lastcol.shape[0] - T.sum(T.extra_ops.diff(att_with_firstindex).flatten()>0)
+        att_wo_lastcol = att_wo_lastcol[ind:]
+        att_rep = att_wo_lastcol.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).T #repeat att maxlen times
+        incr = T.arange(1,maxlen+1).repeat(att_wo_lastcol.shape[0]).reshape((T.cast(maxlen,'int32'),att_wo_lastcol.shape[0])) #range of maxlen repeated att(shape) times
+        maskarr = T.extra_ops.diff(att_with_firstindex).flatten() #diff array
+        maskarr = T.clip(maskarr,0,T.max(maskarr)).nonzero_values() #clip negative values to 0 and remove zeroes
+        # repeat maxlen times (this now contains the length of each segment)
+        maskarr = maskarr.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).dimshuffle(1,0)
+        #comparing incr and maskarr, you get the value to be added to att_rep at each row and column.
+        # If incr > maskarr, then cond has -att_rep-1 so that when it is subtracted from att_rep,
+        #we get -1. Later z is concatenated with a row of 0s at the end so that this is retreived when z[-1] is encountered (to simulate [3,4,0,0] for example)
+        cond     = T.switch(T.lt(incr, maskarr+1), incr, -att_rep - 1)
+        finalcond = att_rep + cond
+    finalcond = finalcond.sort(axis=0)
+    #finalcond = theano.printing.Print('%s finalcond'%self.name,attrs=['shape','__str__'])(finalcond)
+    if base:
+        z = base[0].output.dimshuffle(1,0,2).reshape((base[0].output.shape[0]*base[0].output.shape[1],base[0].output.shape[2]))
+    else:
+        z = self.sources[0].z.dimshuffle(1, 0, 2).reshape((self.sources[0].z.shape[0] * self.sources[0].z.shape[1], self.sources[0].z.shape[2]))
+    #z = theano.printing.Print('%s z' % self.name, attrs=['shape'])(z)
     z = T.concatenate([z,T.zeros((1,z.shape[1]))],axis=0)
-    result = z[T.cast(att_rep + cond,'int32')]
+    result = z[T.cast(finalcond,'int32')]
+    #att_rep = print_to_file("attrep",att_rep)
+    #att_rep = theano.printing.Print('att rep',attrs=['__str__'])(att_rep)
+    #cond = print_to_file("cond",cond)
+    self.z = result
+    #z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    #self.output = T.nnet.softmax(z_in).reshape(self.z.shape)
+    #result = theano.printing.Print('result',attrs=['shape'])(result)
     self.make_output(result)
     #self.act = [self.output, T.zeros_like(self.output)]
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
-
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}

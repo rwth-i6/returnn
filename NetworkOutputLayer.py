@@ -19,7 +19,7 @@ from Log import log
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+  def __init__(self, loss, y, dtype=None, reshape_target=False, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
                auto_fix_target_length=False,
                sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False, activation=None,
@@ -45,6 +45,8 @@ class OutputLayer(Layer):
       self.set_attr('dtype', dtype)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
+    if reshape_target:
+      self.set_attr("reshape_target",reshape_target)
     if grad_clip_z is not None:
       self.set_attr("grad_clip_z", grad_clip_z)
     if compute_distortions:
@@ -119,7 +121,12 @@ class OutputLayer(Layer):
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
-      self.y_data_flat = time_batch_make_flat(y)
+      if reshape_target:
+	src_index = self.sources[0].index
+        self.index = src_index
+        self.y_data_flat = y.T.flatten()[(y.T.flatten()>=0).nonzero()]
+      else:
+      	self.y_data_flat = time_batch_make_flat(y)
     else:
       assert self.attrs.get("target", "").endswith("[sparse:coo]")
       assert isinstance(self.y, tuple)
