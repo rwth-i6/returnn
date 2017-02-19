@@ -481,6 +481,21 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   return word_pos, phon_pos, num_states, edges_phon
 
 
+def __check_node_existance(node_num, edges):
+  """
+  checks if the node numbers already exist in edges list
+  :param float node_num: node number to be checked
+  :return bool: true if node in edges
+  """
+  node_list = [edge_index for edge_index, edge in enumerate(edges)
+                      if (edge[0] == node_num or edge[1] == node_num)]
+
+  if len(node_list) > 0:
+    return True
+  else:
+    return False
+
+
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
   allo_len = len(allo_seq)
   num_states_new = num_states + 4 * (allo_len - 1)
