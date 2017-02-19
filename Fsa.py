@@ -450,11 +450,25 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   edges_t.extend(edges_phon_t)
   phon_pos = []
 
+  edges_t.sort(key=lambda x: x[0])
+
   while (edges_t):
-    edge = edges_t.pop(0)
-    if edge[2] != sil or edge[2] != eps:
-      for idx, letter in enumerate(edge[2]):
-        phon_pos.append(edge[2])
+    edge = edges_t.pop(0)  # edge is tuple start node, end node, label, score
+    if edge[2] != sil and edge[2] != eps:  # sil and eps ignored
+      phon_list = edge[2].split(" ")
+      letter_pos = []
+      for idx, letter in enumerate(phon_list):
+        if idx == 0 and idx == len(phon_list) - 1:
+          letter_pos.append([letter, 'i', 'f'])
+        elif idx == 0:
+          letter_pos.append([letter, 'i'])
+        elif idx == len(phon_list) - 1:
+          letter_pos.append([letter, 'f'])
+        else:
+          letter_pos.append([letter])
+      phon_pos.append(letter_pos)
+
+  print(phon_pos)
 
   """
   splits phoneme edge into several edges
