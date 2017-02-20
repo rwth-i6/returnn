@@ -704,7 +704,14 @@ class Engine:
     print >> out, forwarder.output
     out.close()
 
-  def analyze(self, device, data, statistics):
+  def analyze(self, data, statistics):
+    """
+    :param Dataset.Dataset data:
+    :param list[str]|None statistics:
+    :return: nothing, will print everything to log.v1
+    """
+    if statistics is None:
+      statistics = ["confusion_matrix"]
     num_labels = len(data.labels)
     if "mle" in statistics:
       mle_labels = list(OrderedDict.fromkeys([ label.split('_')[0] for label in data.labels ]))

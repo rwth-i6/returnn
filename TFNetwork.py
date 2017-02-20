@@ -185,13 +185,13 @@ class TFNetwork(object):
         _construct_layer(src_name)
         for src_name in src_names
         if not src_name == "none"]
-      return self._add_layer(name=name, layer_class=layer_class, **layer_desc)
+      return self.add_layer(name=name, layer_class=layer_class, **layer_desc)
 
     for name, layer_desc in sorted(net_dict.items()):
       if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
         _construct_layer(name)
 
-  def _add_layer(self, name, layer_class, **layer_desc):
+  def add_layer(self, name, layer_class, **layer_desc):
     """
     :param str name:
     :param ()->LayerBase layer_class:

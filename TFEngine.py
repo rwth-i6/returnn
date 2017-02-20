@@ -232,10 +232,11 @@ class Runner(object):
     self.device_crash_batch = None
     self.start_time = None
     self.elapsed = None
-    self._results_accumulated = {}  # dict[str,float]  # entries like "cost:output" or "loss"
+    self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
+    self.stats = {}  # type: dict[str,float]  # entries like "stats:..."
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -260,9 +261,15 @@ class Runner(object):
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
         d["error:%s" % layer_name] = error
+    for layer in self.engine.network.layers.values():
+      for k, v in layer.stats.items():
+        d["stats:%s:%s" % (layer.name, k)] = v
     if self._should_train:
       assert self.engine.updater
-      d["optim_op"] = self.engine.updater.get_optim_op()
+      def callback_on_new():
+        # Force a new check.
+        self.engine._checked_uninitialized_vars = False
+      d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
     d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
@@ -308,6 +315,11 @@ class Runner(object):
     return self.engine.network.get_default_target()  # e.g. "classes"
 
   def _epoch_norm_factor_for_result(self, key):
+    """
+    :param str key: e.g. "cost:output"
+    :return: factor to multiply with such accumulated values for the final epoch stats
+    :rtype: float
+    """
     target = self._get_target_for_key(key)
     # Default: Normalize by number of frames.
     return 1.0 / float(self.data_provider.num_frames[target])
@@ -360,6 +372,15 @@ class Runner(object):
       value = fetches_results[key]
       target = self._get_target_for_key(key)
       eval_info[key] = value / float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
+
+    # Add raw stats.
+    for k, v in fetches_results.items():
+      if k.startswith("stats:"):
+        if v.ndim == 1:
+          v = list(v)  # looks nicer in logs
+        eval_info[k] = v
+        self.stats[k] = v  # Always just store latest value.
+
     return eval_info
 
   def run(self, report_prefix):
@@ -578,7 +599,6 @@ class Engine(object):
     self.batch_size = config.int('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', True)
     self.update_batch_size = config.int('update_batch_size', 0)
-    self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
     self.learning_rate_control = loadLearningRateControlFromConfig(config)
@@ -601,20 +621,25 @@ class Engine(object):
     self.init_network_from_config(config)
 
   def init_network_from_config(self, config):
+    """
+    :param Config.Config config:
+    """
+    self.model_filename = config.value('model', None)
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
     assert model_epoch_filename or self.start_epoch
+    self.epoch = epoch or self.start_epoch
 
     if self.pretrain:
       # This would be obsolete if we don't want to load an existing model.
       # In self.init_train_epoch(), we initialize a new model.
-      net_dict = self.pretrain.get_network_json_for_epoch(epoch or self.start_epoch)
+      net_dict = self.pretrain.get_network_json_for_epoch(self.epoch)
     else:
       net_dict = LayerNetwork.json_from_config(config)
 
-    self._init_network(net_desc=net_dict, epoch=epoch or self.start_epoch)
+    self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
@@ -783,13 +808,17 @@ class Engine(object):
                      for key in sorted(score.keys())])
 
   def eval_model(self):
+    # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
+    self.network.get_all_errors()
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
-        self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
-                                                                      batch_size=self.batch_size,
-                                                                      max_seqs=self.max_seqs,
-                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize))
+        self.dataset_batches[dataset_name] = dataset.generate_batches(
+          recurrent_net=self.network.recurrent,
+          batch_size=self.batch_size,
+          max_seqs=self.max_seqs,
+          max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize),
+          used_data_keys=self.network.used_data_keys)
       else:
         self.dataset_batches[dataset_name].reset()
       tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
@@ -876,3 +905,51 @@ class Engine(object):
     output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
     return output_value
 
+  def analyze(self, data, statistics):
+    """
+    :param Dataset.Dataset data:
+    :param list[str]|None statistics: ignored at the moment
+    :return: nothing, will print everything to log.v1
+    """
+    print("Analyze with network on %r." % data, file=log.v1)
+
+    if "analyze" not in self.network.layers:
+      from TFNetworkLayer import FramewiseStatisticsLayer
+      assert self.config.has("sil_label_idx")
+      self.network.add_layer(
+        name="analyze", layer_class=FramewiseStatisticsLayer,
+        sil_label_idx=self.config.int("sil_label_idx", 0),
+        sources=self.network.get_output_layers())
+
+    # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
+    self.network.get_all_errors()
+
+    batch_size = self.config.int('batch_size', 1)
+    max_seqs = self.config.int('max_seqs', -1)
+    max_seq_length = self.config.float('max_seq_length', 0)
+    if max_seq_length <= 0:
+      max_seq_length = sys.maxsize
+
+    batches = data.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=batch_size,
+      max_seqs=max_seqs,
+      max_seq_length=max_seq_length,
+      used_data_keys=self.network.used_data_keys)
+    analyzer = Runner(engine=self, dataset=data, batches=batches, train=False)
+    analyzer.run(report_prefix=self.get_epoch_str() + " analyze")
+
+    print("Finished analyzing of the dataset %r." % data, file=log.v1)
+    print("elapsed:", hms(analyzer.elapsed), file=log.v1)
+    print("num mini-batches:", analyzer.num_steps, file=log.v1)
+    print("total num_frames:", analyzer.data_provider.num_frames, file=log.v1)
+    print("score:", self.format_score(analyzer.score), file=log.v1)
+    print("error:", self.format_score(analyzer.error), file=log.v1)
+    for k, v in sorted(analyzer.stats.items()):
+      if k.startswith("stats:"):
+        print("%s:" % k, v, file=log.v1)
+    print("That are all collected stats.", file=log.v1)
+
+    if not analyzer.finalized:
+      print("WARNING: Did not finished through the whole epoch.", file=log.v1)
+      sys.exit(1)

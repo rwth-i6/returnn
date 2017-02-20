@@ -67,6 +67,8 @@ class LayerBase(object):
     self.L2 = L2
     self._is_output_layer = is_output_layer
     self.trainable = trainable
+    # Stats will be collected by the engine.
+    self.stats = {}  # type: dict[str,tf.Tensor]
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -577,6 +579,98 @@ class CombineLayer(LayerBase):
     self.output.placeholder = op(sources)
 
 
+class FramewiseStatisticsLayer(LayerBase):
+  layer_class = "framewise_statistics"
+
+  def __init__(self, sil_label_idx, histogram_num_bins=20, **kwargs):
+    # n_out=1 is a workaround for now. Our output should not be used. We have none.
+    super(FramewiseStatisticsLayer, self).__init__(n_out=1, **kwargs)
+    self.output.placeholder = tf.constant(0, name="dummy")
+    assert self.sources, "give me some sources"
+    # Currently, a bit hardcoded.
+    # We expect a framewise hard alignment, and calculate FER, CE, perplexity,
+    # for all frames, frames without silence, and silence frames.
+    from TFUtil import flatten_with_seq_len_mask
+    import numpy
+    source = self.sources[0]
+    output = source.output
+    target = source._get_target_value()
+    assert target.sparse
+    assert source.output_before_activation.act_func is tf.nn.softmax
+    output_seq_lens = output.size_placeholder[0]
+    output_before_softmax_flat = flatten_with_seq_len_mask(source.output_before_activation.x, output_seq_lens, time_major=output.is_time_major)
+    target_seq_lens = target.size_placeholder[0]
+    target_flat = flatten_with_seq_len_mask(target.placeholder, target_seq_lens, time_major=target.is_time_major)
+    target_flat.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+    flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
+    assert flat_last_dim == 1
+    output_flat = flatten_with_seq_len_mask(output.placeholder, output_seq_lens, time_major=output.is_time_major)
+    output_flat_argmax = tf.cast(tf.arg_max(output_before_softmax_flat, dimension=flat_last_dim), "int32")
+    frame_error = tf.not_equal(output_flat_argmax, target_flat)
+    # target_flat is shape (time,) -> index.
+    target_flat_exp = tf.pack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
+    true_label_prob = tf.gather_nd(output_flat, target_flat_exp)
+    true_label_prob.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    true_label_prob_i32 = tf.clip_by_value(
+      tf.cast(tf.round(true_label_prob * histogram_num_bins), tf.int32), 0, histogram_num_bins - 1)
+    true_label_prob_histogram = tf.stack(
+      [tf.equal(true_label_prob_i32, i) for i in range(histogram_num_bins)], axis=1)
+    true_label_prob_histogram.set_shape(tf.TensorShape([tf.Dimension(None), tf.Dimension(histogram_num_bins)]))
+
+    mask_no_sil = tf.not_equal(target_flat, sil_label_idx)
+    mask_sil = tf.equal(target_flat, sil_label_idx)
+    seq_len = tf.reduce_sum(target_seq_lens)
+    seq_len_sil = tf.reduce_sum(tf.cast(mask_sil, tf.int32))
+    seq_len_no_sil = tf.reduce_sum(tf.cast(mask_no_sil, tf.int32))
+
+    accumulated_seq_len = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
+    accumulated_seq_len_sil = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
+    accumulated_seq_len = tf.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
+    accumulated_seq_len_sil = tf.assign_add(accumulated_seq_len_sil, tf.cast(seq_len_sil, tf.int64))
+    accumulated_seq_len_no_sil = accumulated_seq_len - accumulated_seq_len_sil
+
+    self.stats["batch_seq_length"] = seq_len
+    self.stats["batch_seq_length_sil"] = seq_len_sil
+    self.stats["batch_seq_length_no_sil"] = seq_len_no_sil
+    self.stats["accumulated_seq_length"] = accumulated_seq_len
+    self.stats["accumulated_seq_length_sil"] = accumulated_seq_len_sil
+    self.stats["accumulated_seq_length_no_sil"] = accumulated_seq_len_no_sil
+
+    for _k, _v in {
+          "loss_ce": loss_ce,
+          "frame_error": frame_error,
+          "true_label_prob_histogram": true_label_prob_histogram}.items():
+      for _k2 in ["", "_sil", "_no_sil"]:
+        k = _k + _k2
+        v = _v
+        acc_seq_len = accumulated_seq_len
+        if k.endswith("_no_sil"):
+          v = tf.boolean_mask(v, mask_no_sil)
+          acc_seq_len = accumulated_seq_len_no_sil
+        elif k.endswith("_sil"):
+          v = tf.boolean_mask(v, mask_sil)
+          acc_seq_len = accumulated_seq_len_sil
+        v_f32 = tf.cast(v, tf.float32)
+        self.stats["batch_%s" % k] = tf.reduce_mean(v_f32, axis=0)
+        if v.dtype.is_floating:
+          acc_dtype = "float64"
+        else:
+          acc_dtype = "int64"
+        acc_shape = v.get_shape().as_list()[1:]
+        assert all(acc_shape)
+        acc_v = tf.Variable(initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype, trainable=False, name="accumulated_%s" % k)
+        acc_v = tf.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
+        self.stats["accumulated_%s" % k] = tf.cast(acc_v, tf.float64) / tf.cast(acc_seq_len, tf.float64)
+
+    self.stats["batch_loss_perplexity"] = tf.exp(self.stats["batch_loss_ce"])
+    self.stats["batch_loss_perplexity_sil"] = tf.exp(self.stats["batch_loss_ce_sil"])
+    self.stats["batch_loss_perplexity_no_sil"] = tf.exp(self.stats["batch_loss_ce_no_sil"])
+    self.stats["accumulated_loss_perplexity"] = tf.exp(self.stats["accumulated_loss_ce"])
+    self.stats["accumulated_loss_perplexity_sil"] = tf.exp(self.stats["accumulated_loss_ce_sil"])
+    self.stats["accumulated_loss_perplexity_no_sil"] = tf.exp(self.stats["accumulated_loss_ce_no_sil"])
+
+
 class Loss(object):
   class_name = None
   recurrent = False  # if this is a frame-wise criteria, this will be False
@@ -666,7 +760,8 @@ class CrossEntropyLoss(Loss):
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
           return self.reduce_func(out)
         else:
-          out = tf.log(tf.gather(self.output_flat, self.target_flat))
+          target_flat_exp = tf.pack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)
+          out = tf.log(tf.gather_nd(self.output_flat, target_flat_exp))
           return -self.reduce_func(out)
       else:  # not sparse
         if self.output_before_softmax_flat is not None:
@@ -685,7 +780,6 @@ class GenericCELoss(Loss):
 
     def loss(z, y, grad_f, target):
       nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
-      nlog_scores = tf.transpose(nlog_scores, [1, 0])  # (dim,time)
       # target is shape (time,) -> index.
       target_exp = tf.pack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
       # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).

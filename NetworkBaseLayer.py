@@ -736,14 +736,14 @@ class Layer(Container):
       bn += beta
     return bn
 
-  def make_output(self, output, collapse = True):
+  def make_output(self, output, collapse = True, sample_mean=None, gamma=None):
     self.output = output
     if collapse and self.depth > 1:
       self.output = self.make_consensus(self.output)
       if self.attrs['consensus'] == 'flat':
         self.attrs['n_out'] *= self.depth
     if self.attrs['batch_norm']:
-      self.output = self.batch_norm(self.output, self.attrs['n_out'])
+      self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma)
     if self.attrs['residual']:
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)

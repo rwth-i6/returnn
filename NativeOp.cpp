@@ -306,7 +306,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 	}
 }
 
-#define HANDLE_ERROR(err) (_cudaHandleError( err, __FILE__, __LINE__ ))
+#define HANDLE_ERROR(status) (_cudaHandleError( status, __FILE__, __LINE__ ))
+#define HANDLE_LAST_ERROR()  (HANDLE_ERROR(cudaGetLastError()))
 
 #define assert_cmp(a, cmp, b) assert((a) cmp (b))
 

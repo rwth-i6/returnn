@@ -219,28 +219,28 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     assert projection in ['average', 'concat'], "invalid projection"
 
     if base:
-      self.b1 = self.add_param(base[0].b1)
-      self.b2 = self.add_param(base[0].b2)
-      if directions >= 1:
-        self.b3 = self.add_param(base[0].b3)
-        self.b4 = self.add_param(base[0].b4)
-      self.W1, self.V_h1, self.V_v1 = self.add_param(base[0].W1), self.add_param(base[0].V_h1), self.add_param(base[0].V_v1)
-      self.W2, self.V_h2, self.V_v2 = self.add_param(base[0].W2), self.add_param(base[0].V_h2), self.add_param(base[0].V_v2)
-      if directions >= 1:
-        self.W3, self.V_h3, self.V_v3 = self.add_param(base[0].W3), self.add_param(base[0].V_h3), self.add_param(base[0].V_v3)
-        self.W4, self.V_h4, self.V_v4 = self.add_param(base[0].W4), self.add_param(base[0].V_h4), self.add_param(base[0].V_v4)
+      #self.b1 = self.add_param(base[0].b1)
+      #self.b2 = self.add_param(base[0].b2)
+      #if directions >= 1:
+      #  self.b3 = self.add_param(base[0].b3)
+      #  self.b4 = self.add_param(base[0].b4)
+      #self.W1, self.V_h1, self.V_v1 = self.add_param(base[0].W1), self.add_param(base[0].V_h1), self.add_param(base[0].V_v1)
+      #self.W2, self.V_h2, self.V_v2 = self.add_param(base[0].W2), self.add_param(base[0].V_h2), self.add_param(base[0].V_v2)
+      #if directions >= 1:
+      #  self.W3, self.V_h3, self.V_v3 = self.add_param(base[0].W3), self.add_param(base[0].V_h3), self.add_param(base[0].V_v3)
+      #  self.W4, self.V_h4, self.V_v4 = self.add_param(base[0].W4), self.add_param(base[0].V_h4), self.add_param(base[0].V_v4)
       #self.mass = base[0].mass
       #self.masks = base[0].masks
-      #self.b1 = base[0].b1
-      #self.b2 = base[0].b2
-      #if directions >= 1:
-      #  self.b3 = base[0].b3
-      #  self.b4 = base[0].b4
-      #self.W1, self.V_h1, self.V_v1 = base[0].W1, base[0].V_h1, base[0].V_v1
-      #self.W2, self.V_h2, self.V_v2 = base[0].W2, base[0].V_h2, base[0].V_v2
-      #if directions >= 1:
-      #  self.W3, self.V_h3, self.V_v3 = base[0].W3, base[0].V_h3, base[0].V_v3
-      #  self.W4, self.V_h4, self.V_v4 = base[0].W4, base[0].V_h4, base[0].V_v4
+      self.b1 = base[0].b1
+      self.b2 = base[0].b2
+      if directions >= 1:
+        self.b3 = base[0].b3
+        self.b4 = base[0].b4
+      self.W1, self.V_h1, self.V_v1 = base[0].W1, base[0].V_h1, base[0].V_v1
+      self.W2, self.V_h2, self.V_v2 = base[0].W2, base[0].V_h2, base[0].V_v2
+      if directions >= 1:
+        self.W3, self.V_h3, self.V_v3 = base[0].W3, base[0].V_h3, base[0].V_v3
+        self.W4, self.V_h4, self.V_v4 = base[0].W4, base[0].V_h4, base[0].V_v4
       self.mass = base[0].mass
       self.masks = base[0].masks
     else:
@@ -410,10 +410,10 @@ class ConvBaseLayer(TwoDBaseLayer):
     self.filter_width = filter[1]
     self.activation = strtoact(activation)
     if base:
-      self.W = self.add_param(base[0].W)
-      self.b = self.add_param(base[0].b)
-      #self.W = base[0].W
-      #self.b = base[0].b
+      #self.W = self.add_param(base[0].W)
+      #self.b = self.add_param(base[0].b)
+      self.W = base[0].W
+      self.b = base[0].b
     else:
       self.W = self.create_conv_weights(n_features, self.n_in, self.filter_height, self.filter_width)
       self.b = self.create_and_add_bias(n_features)
@@ -461,7 +461,8 @@ class ConvPoolLayer2(ConvBaseLayer):
     if not padding:
       padding = T.min(self.output_sizes) <= 0
       padding = theano.printing.Print(global_fn=maybe_print_pad_warning)(padding)
-
+    else:
+      padding = int(padding)
     fixed_sizes = T.maximum(sizes_raw, numpy.array([self.pool_size[0] + self.filter_height - 1, self.pool_size[1] + self.filter_width - 1], dtype="float32"))
     sizes = ifelse(padding, fixed_sizes, sizes_raw)
     X_size = T.cast(T.max(sizes, axis=0), "int32")
