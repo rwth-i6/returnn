@@ -527,14 +527,26 @@ def __check_node_existance(node_num, edges):
     return False
 
 
-def __renumber_nodes(num_states, edges_phon):
+def __renumber_nodes(num_states, edges):
   """
   reorders the node number: always rising numbers. never 40 -> 11
+  uses some kind of sorting algorithm (quicksort, ...)
   :param int num_states: number od states / nodes
   :param list edges_phon: list with unordered nodes
   :returnlist edges_phon: list with ordered nodes
   """
-  return edges_phon
+  while (edges):
+    start_node_zero = [edge_index for edge_index, edge in enumerate(edges)
+               if (edge[0] == 0)]
+
+    nodes_tmp = []
+    for node in start_node_zero:
+      nodes_tmp.append(node)
+      edges.pop(node)
+
+  print(num_states)
+
+  return edges
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
