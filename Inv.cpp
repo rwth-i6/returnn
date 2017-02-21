@@ -198,7 +198,7 @@ public:
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
                     if(bwd_(s + 1, m) != INF && score_(s, t) != INF)
-                        sum += exp(-bwd_(s + 1, m) - score_(s, t));
+                        sum += exp(-bwd_(s + 1, m) - score_(s, m));
                 /*
                 for(int m=t; m > t - M; ++m)
                     if(m >= 0 && bwd_(s + 1, m) != INF && score_(s, t) != INF)
@@ -214,7 +214,7 @@ public:
             float sum = 0.0;
             for(int t=0; t < T; ++t)
             {
-                bwd_(s, t) = 0;
+                //bwd_(s, t) = 0;
                 if(fwd_(s, t + M - 1) == INF || bwd_(s,t) == INF)
                     attention(s, t) = 0;
                 else
@@ -231,8 +231,8 @@ public:
                         attention(s, t) += bwd_(s+1,m);
                     }
                 }*/
-                sum += exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                //sum += attention(s, t);
+                //sum += exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
+                sum += attention(s, t);
             }
             for(int t=0; t < T; ++t)
                 attention(s, t) /= sum;
