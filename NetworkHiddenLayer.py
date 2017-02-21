@@ -2821,7 +2821,7 @@ class CAlignmentLayer(ForwardLayer):
         self.b = base[0].b
         self.z = self.get_linear_forward_output()
       elif base[0].layer_class == 'disc':
-        self.cost_scale_val = base[0].error_val / T.sum(base[0].index,dtype='float32')
+        self.cost_scale_val = (base[0].gen_error_val / T.sum(base[0].index,dtype='float32')) * (base[0].real_error_val / T.sum(base[0].index,dtype='float32'))
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
@@ -3360,9 +3360,12 @@ class DiscriminatorLayer(ForwardLayer):
 
     for src in self.sources: # real
       make_cost(src, True)
+    self.real_error_val = self.error_val / numpy.float32(len(self.sources + base))
     if base:
       for src in base: # gen
         make_cost(src, False)
+    self.gen_error_val = self.error_val / numpy.float32(len(self.sources + base)) - self.real_error_val
+      
 
     self.error_val /= numpy.float32(len(self.sources + base))
     self.cost_val /= numpy.float32(len(self.sources + base))
