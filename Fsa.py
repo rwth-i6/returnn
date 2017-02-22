@@ -507,7 +507,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       edges_phon.append(edge)
     edges_phon.sort(key=lambda x: x[0])
 
-  edges_phon = __sort_node_num(num_states, edges_phon)
+  edges_phon = __sort_node_num(edges_phon)
 
   return word_pos, phon_pos, num_states, edges_phon
 
@@ -527,7 +527,7 @@ def __check_node_existance(node_num, edges):
     return False
 
 
-def __sort_node_num(num_states, edges):
+def __sort_node_num(edges):
   """
   reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
