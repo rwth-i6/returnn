@@ -552,6 +552,35 @@ def __renumber_nodes(num_states, edges):
 def __find_edges_have_current_node(current_node_num, edges):
   current_node_list = []
   return current_node_list
+def __find_node_edges(node, edges):
+  """
+  find a specific node in all edges
+  :param int node: node number
+  :param list edges: all edges
+  :return dict node_dict: dict of nodes where
+        key: edge index
+        value: 0 = node at edge start position
+        value: 1 = node at edge end position
+        value: 2 = node at edge start and edge postion
+  """
+  node_dict = {}
+
+  pos_start = [edge_index for edge_index, edge in enumerate(edges) if (edge[0] == node)]
+  pos_end = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == node)]
+  pos_start_end = [edge_index for edge_index, edge in enumerate(edges) if
+                   (edge[0] == node or edge[1] == node)]
+
+  for pos in pos_start:
+    node_dict[pos] = 0
+
+  for pos in pos_end:
+    node_dict[pos] = 1
+
+  for pos in pos_start_end:
+    node_dict[pos] = 2
+
+  return node_dict
+
 
 
 def __find_edges_have_swap_node(swap_node_num, edges):
