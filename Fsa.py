@@ -529,7 +529,7 @@ def __check_node_existance(node_num, edges):
 
 def __renumber_nodes(num_states, edges):
   """
-  reorders the node number: always rising numbers. never 40 -> 11
+  reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
   :param int num_states: number od states / nodes
   :param list edges_phon: list with unordered nodes
