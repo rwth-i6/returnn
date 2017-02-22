@@ -549,6 +549,20 @@ def __renumber_nodes(num_states, edges):
   return edges
 
 
+def __find_edges_have_current_node(current_node_num, edges):
+  current_node_list = []
+  return current_node_list
+
+
+def __find_edges_have_swap_node(swap_node_num, edges):
+  swap_node_list = []
+  return swap_node_list
+
+
+def __binary_swapping(current_node_list, swap_node_list, num_states, edges):
+  return edges
+
+
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
   allo_len = len(allo_seq)
   num_states_new = num_states + 4 * (allo_len - 1)
