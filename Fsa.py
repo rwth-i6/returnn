@@ -507,7 +507,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       edges_phon.append(edge)
     edges_phon.sort(key=lambda x: x[0])
 
-  edges_phon = __renumber_nodes(num_states, edges_phon)
+  edges_phon = __sort_node_num(num_states, edges_phon)
 
   return word_pos, phon_pos, num_states, edges_phon
 
@@ -527,7 +527,7 @@ def __check_node_existance(node_num, edges):
     return False
 
 
-def __renumber_nodes(num_states, edges):
+def __sort_node_num(num_states, edges):
   """
   reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
@@ -535,8 +535,28 @@ def __renumber_nodes(num_states, edges):
   :param list edges: list with unordered nodes
   :return list edges: list with ordered nodes
   """
+  idx = 0
 
+  while (idx < len(edges)):  # traverse all edges from 0 to num_states
+    cur_edge = edges[idx]         # gets the current edge
+    cur_edge_start = cur_edge[0]  # with current start
+    cur_edge_end = cur_edge[1]    # and end node
 
+    if cur_edge_start > cur_edge_end:  # only something to do if start node number > end node number
+      edges_cur_start = __find_node_edges(cur_edge_start, edges)  # find start node in all edges
+      edges_cur_end = __find_node_edges(cur_edge_end, edges)  # find end node in all edges
+
+      for edge_key in edges_cur_start.keys():  # loop over edge which have the specific node
+        edges[edge_key][edges_cur_start[edge_key]] = cur_edge_end  # replaces the start node number
+
+      for edge_key in edges_cur_end.keys():  # edge_key: idx from edge in edges
+        edges[edge_key][edges_cur_end[edge_key]] = cur_edge_start  # replaces the end node number
+
+      # reset idx: restarts traversing at the beginning of graph
+      # swapping may introduce new disorders
+      idx = 0
+
+    idx += 1
 
   return edges
 
