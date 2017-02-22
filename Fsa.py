@@ -568,7 +568,7 @@ def __find_node_edges(node, edges):
   pos_start = [edge_index for edge_index, edge in enumerate(edges) if (edge[0] == node)]
   pos_end = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == node)]
   pos_start_end = [edge_index for edge_index, edge in enumerate(edges) if
-                   (edge[0] == node or edge[1] == node)]
+                   (edge[0] == node and edge[1] == node)]
 
   for pos in pos_start:
     node_dict[pos] = 0
