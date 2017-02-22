@@ -532,8 +532,8 @@ def __renumber_nodes(num_states, edges):
   reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
   :param int num_states: number od states / nodes
-  :param list edges_phon: list with unordered nodes
-  :returnlist edges_phon: list with ordered nodes
+  :param list edges: list with unordered nodes
+  :return list edges: list with ordered nodes
   """
   while (edges):
     start_node_zero = [edge_index for edge_index, edge in enumerate(edges)
