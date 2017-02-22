@@ -535,23 +535,12 @@ def __renumber_nodes(num_states, edges):
   :param list edges: list with unordered nodes
   :return list edges: list with ordered nodes
   """
-  while (edges):
-    start_node_zero = [edge_index for edge_index, edge in enumerate(edges)
-               if (edge[0] == 0)]
 
-    nodes_tmp = []
-    for node in start_node_zero:
-      nodes_tmp.append(node)
-      edges.pop(node)
 
-  print(num_states)
 
   return edges
 
 
-def __find_edges_have_current_node(current_node_num, edges):
-  current_node_list = []
-  return current_node_list
 def __find_node_edges(node, edges):
   """
   find a specific node in all edges
@@ -580,16 +569,6 @@ def __find_node_edges(node, edges):
     node_dict[pos] = 2
 
   return node_dict
-
-
-
-def __find_edges_have_swap_node(swap_node_num, edges):
-  swap_node_list = []
-  return swap_node_list
-
-
-def __binary_swapping(current_node_list, swap_node_list, num_states, edges):
-  return edges
 
 
 def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
