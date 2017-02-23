@@ -246,7 +246,8 @@ class CNN(_NoOpLayer):
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
     if self.base:
-      W = self.base[0].W #self.add_param(self.base[0].W)
+      #W = self.base[0].W
+      W = self.add_param(self.base[0].W)
     else:
       W = self.add_param(
         self.shared(
@@ -311,7 +312,8 @@ class CNN(_NoOpLayer):
 
   def bias_term(self, inputs, n_features, activation):
     if self.base:
-      b = self.base[0].b #self.add_param(self.base[0].b)
+      #b = self.base[0].b
+      b = self.add_param(self.base[0].b)
     else:
       b = self.add_param(
         self.shared(
