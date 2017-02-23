@@ -3260,7 +3260,7 @@ class DiscriminatorLayer(ForwardLayer):
       for src in base: # gen
         make_cost(src, False)
     self.gen_error_val = self.error_val / numpy.float32(len(self.sources + base)) - self.real_error_val
-      
+
 
     self.error_val /= numpy.float32(len(self.sources + base))
     self.cost_val /= numpy.float32(len(self.sources + base))
@@ -3312,7 +3312,7 @@ class BlurLayer(_NoOpLayer):
     super(BlurLayer, self).__init__(**kwargs)
     x_in, self.attrs['n_out'] = concat_sources(self.sources)
     kernel = self.rng.binomial(size=(1, 1, ctx, ctx), p=p, dtype='float32')
-    kernel = kernel / kernel.sum()
+    kernel = kernel / T.maximum(kernel.sum(),numpy.float32(1))
     from theano.sandbox.cuda.dnn import dnn_conv
     self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2,1)[:,:,:,0]
     self.index = self.sources[0].index
