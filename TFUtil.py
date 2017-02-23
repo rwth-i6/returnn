@@ -714,7 +714,7 @@ def expand_dims_unbroadcast(x, axis, dim):
 def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
-  :param tf.Tensor seq_lens: shape (batch,) of int32|int64
+  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
   :param bool collapse_repeated: like uniq() behavior
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
@@ -722,12 +722,16 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   with tf.name_scope("sparse_labels"):
     x = check_input_ndim(x, ndim=2)
-    x = check_dim_equal(x, 0, seq_lens, 0)
+    if seq_lens is not None:
+      x = check_dim_equal(x, 0, seq_lens, 0)
     if dtype:
       x = tf.cast(x, dtype)
     batch_size = tf.shape(x)[0]
     max_time = tf.shape(x)[1]
-    mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    if seq_lens is not None:
+      mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    else:
+      mask = tf.ones(dtype=tf.bool, shape=(batch_size, max_time))
     if collapse_repeated:
       with tf.name_scope("collapse_repeated"):
         diffs = tf.concat(1, [tf.ones_like(x[:, :1]), x[:, 1:] - x[:, :-1]])  # shape (batch,time)
@@ -744,7 +748,7 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       # tf.SparseTensor requires int64 indices
       flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):
-      shape = [batch_size, tf.reduce_max(seq_lens)]
+      shape = [batch_size, max_time]
       # tf.SparseTensor requires int64 shape
       shape = [tf.cast(d, tf.int64) for d in shape]
       shape = tf.convert_to_tensor(shape)
