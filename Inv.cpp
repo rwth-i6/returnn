@@ -62,7 +62,7 @@ public:
             int start = T - (N * S - s) * M;
             if(start < 0)
                 start = 0;
-            //start = 0;
+            start = 0;
             for(int t=start; t < T; ++t)
             {
                 float score = score_(s, t + M - 1);
@@ -90,7 +90,8 @@ public:
         for(int s=N*S-2;s>=-1;--s)
         {
             int next = t - bt_(s+1, t+M-1);
-            if(s < 0)
+            //cout << "next: " << next << endl;
+            if(next < 0)
                 next = 0;
             if(focus == FOCUS_LAST)
                 attention(s+1) = t;
@@ -182,7 +183,7 @@ public:
                     fwd_(s, t + M - 1) = -log(sum) + score_(s, t + M - 1);
             }
         }
-        
+
         //bwd_(N * S - 1, T - 1) = 0.0; //score_(N * S - 1, T - 1);
         bwd_(N * S - 1, T - 1) = score_(N * S - 1, T - 1);
 
