@@ -17,6 +17,15 @@ class Fsa:
     self.num_states = 0
     self.edges = []
     self.fsa_type = fsa_type
+    self.filename = 'fsa'
+    self.lemma = ''
+    self.depth = 0
+    self.num_labels = 0
+    self.lexicon = ''
+    self.state_tying = ''
+    self.asg_repetition = 0
+    self.label_conversion = True
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
