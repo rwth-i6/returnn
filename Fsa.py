@@ -362,6 +362,8 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = _state_tying_for_hmm_fsa(state_tying_file,
                                                  num_states,
                                                  edges)
+  if depth >= 7:
+    print("No depth level higher than 6!")
 
   return num_states, edges
 
