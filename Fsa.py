@@ -349,11 +349,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   if depth >= 4:
     print("Allophone state acceptor...")
     print("Number of allophone states:", allo_num_states)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(word_list,
-                                                               phon_dict,
-                                                               word_pos,
-                                                               phon_pos,
-                                                               allo_num_states,
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
                                                                num_states,
                                                                edges)
   if depth >= 5:
@@ -361,7 +357,13 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = __adds_loop_edges(num_states, edges)
   if depth >= 6:
     print("State tying...")
-    num_states, edges = __state_tying_for_hmm_fsa(state_tying_file, num_states, edges)
+    num_states, edges = __state_tying_for_hmm_fsa(word_list,
+                                                  phon_dict,
+                                                  word_pos,
+                                                  phon_pos,
+                                                  state_tying_file,
+                                                  num_states,
+                                                  edges)
 
   return num_states, edges
 
@@ -691,11 +693,7 @@ def __triphone_from_phon(word_seq):
   return tri_seq
 
 
-def __allophone_state_acceptor_for_hmm_fsa(word_list,
-                                           phon_dict,
-                                           word_pos,
-                                           phon_pos,
-                                           allo_num_states,
+def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
                                            num_states_input,
                                            edges_input):
   """
@@ -982,7 +980,13 @@ def __expand_tri_edge_for_hmm_fsa(current_edge,
   return edges_updated, num_states_output, edges_output
 
 
-def __state_tying_for_hmm_fsa(state_tying_file, num_states, edges):
+def __state_tying_for_hmm_fsa(word_list,
+                              phon_dict,
+                              word_pos,
+                              phon_pos,
+                              state_tying_file,
+                              num_states,
+                              edges):
   """
   idea: take file with mapping char to number and apply to edge labels
   :param int num_states:
