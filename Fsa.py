@@ -610,7 +610,34 @@ def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num
   global sil
   global eps
 
+  edges_tri = []
+  edges_t = []
+  edges_t.extend(edges)
+
+  print("word_seq:", word_seq)
+  print("phon_dict:", phon_dict)
+  print("word_pos:", word_pos)
+  print("phon_pos:", phon_pos)
+  print("num_states:", num_states)
+  print("edges:", edges)
+
+  while(edges_t):
+    edge_t = edges_t.pop(0)
+    if edge_t[2] == sil or edge_t[2] == eps:
+      edges_tri.append(edge_t)
     else:
+      print(edge_t)
+      prev_edge_t = __find_prev_next_edge(edge_t, 0, edges)
+      next_edge_t = __find_prev_next_edge(edge_t, 1, edges)
+
+      label_tri = [prev_edge_t[2], edge_t[2], next_edge_t[2]]
+
+      edge_n = [edge_t[0], edge_t[1], label_tri, edge_t[3]]
+      edges_tri.append(edge_n)
+
+  return num_states, edges_tri
+
+
 
 
 
