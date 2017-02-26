@@ -590,13 +590,29 @@ def __find_node_edges(node, edges):
   return node_dict
 
 
-def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
   allo_len = len(allo_seq)
   num_states_new = num_states + 4 * (allo_len - 1)
   edges_new = []
   state_idx = 2
 
   tri_seq = __triphone_from_phon(allo_seq)
+def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num_states, edges):
+  """
+  changes the labels of the edges from phonemes to triphones
+  :param list[str] or str word_seq: sequences of words
+  :param dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
+  :param list of dict word_pos: letter positions in word
+  :param list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start end point
+  :param int num_states: number of states
+  :param list edges: list of edges
+  :return int num_states: number of states
+  :return list edges_tri: list of edges
+  """
 
   for edge in edges:
     if edge[2] == sil and edge[1] == num_states - 1:
