@@ -693,7 +693,7 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
                                            phon_dict,
                                            word_pos,
                                            phon_pos,
-                                           allo_num_states = 3,
+                                           allo_num_states,
                                            num_states_input,
                                            edges_input):
   """
