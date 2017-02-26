@@ -613,6 +613,8 @@ def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num
   :return int num_states: number of states
   :return list edges_tri: list of edges
   """
+  global sil
+  global eps
 
   for edge in edges:
     if edge[2] == sil and edge[1] == num_states - 1:
