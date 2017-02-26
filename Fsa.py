@@ -341,7 +341,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num_states, edges)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_states, edges)
@@ -590,7 +590,7 @@ def __find_node_edges(node, edges):
   return node_dict
 
 
-def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num_states, edges):
+def __triphone_acceptor_for_hmm_fsa(num_states, edges):
   """
   changes the labels of the edges from phonemes to triphones
   :param list[str] or str word_seq: sequences of words
@@ -614,19 +614,11 @@ def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num
   edges_t = []
   edges_t.extend(edges)
 
-  print("word_seq:", word_seq)
-  print("phon_dict:", phon_dict)
-  print("word_pos:", word_pos)
-  print("phon_pos:", phon_pos)
-  print("num_states:", num_states)
-  print("edges:", edges)
-
   while(edges_t):
     edge_t = edges_t.pop(0)
     if edge_t[2] == sil or edge_t[2] == eps:
       edges_tri.append(edge_t)
     else:
-      print(edge_t)
       prev_edge_t = __find_prev_next_edge(edge_t, 0, edges)
       next_edge_t = __find_prev_next_edge(edge_t, 1, edges)
 
@@ -654,8 +646,6 @@ def __find_prev_next_edge(cur_edge, pn_switch, edges):
   # finds indexes of previous edges
   prev_edge_cand_idx = [edge_index for edge_index, edge in enumerate(edges)
                         if (cur_edge[pn_switch] == edge[1 - pn_switch])]
-
-  print(pn_switch, 1 - pn_switch)
 
   # remove eps and sil edges
   prev_edge_cand_idx_len = len(prev_edge_cand_idx)
