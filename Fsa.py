@@ -699,17 +699,7 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
-  :param list[str] or str word_seq: sequences of words
-  :param dict phon_dict:
-        key: lemma from the list
-        value: list of dictionaries with phon and score (keys)
-  :param list of dict word_pos: letter positions in word
-  :param list of list phon_pos: phoneme positions in lemma
-        0: phoneme sequence
-        1, 2: start end point
-        len = 1: no start or end point
-  :param allo_seq: sequence of allophones
-  :param str sil: placeholder for silence
+  :param int allo_num_states: number of allophone states to generate
   :param int num_states_input: number of states
   :param list[tuples(int, int, tuple(str, str, str), float)] edges_input:
         edges with label and weight
@@ -989,6 +979,16 @@ def __state_tying_for_hmm_fsa(word_list,
                               edges):
   """
   idea: take file with mapping char to number and apply to edge labels
+  :param list[str] or str word_seq: sequences of words
+  :param dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
+  :param list of dict word_pos: letter positions in word
+  :param list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start or end point
+  :param state_tying_file: file in which the state tying mappings are stored
   :param int num_states:
   :param list[tuples(start[int], end[int], label, weight)] edges:
   :return: num_states, edges
