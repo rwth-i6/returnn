@@ -1188,7 +1188,7 @@ def main():
     else:
       label_seq = args.label_seq
     num_states, edges = ctc_fsa_for_label_seq(num_labels=args.num_labels,
-                                              label_seq=label_seq)
+                                              label_seq=label_seq.lower())
   elif (args.fsa.lower() == 'asg'):
     assert args.asg_repetition, "Specify number of asg repetition labels in argument options: --asg_repetition [int]"
     if args.label_conversion:
@@ -1196,7 +1196,7 @@ def main():
     else:
       label_seq = args.label_seq
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels,
-                                              label_seq=label_seq,
+                                              label_seq=label_seq.lower(),
                                               repetitions=args.asg_repetition)
     print("Number of labels (ex.: a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
@@ -1205,7 +1205,7 @@ def main():
   elif (args.fsa.lower() == 'hmm'):
     assert args.lexicon, "Specify lexicon in argument options: --lexicon [path]"
     assert args.state_tying, "Specify state tying file in argument options: --state_tying [path]"
-    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
+    num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq.lower(),
                                              lexicon_file=args.lexicon,
                                              state_tying_file=args.state_tying,
                                              depth=args.depth,
