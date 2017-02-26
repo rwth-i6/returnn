@@ -338,13 +338,22 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     print("Getting allophone sequence...")
     phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
     print("Phoneme acceptor...")
-    word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
+    word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list,
+                                                                           phon_dict,
+                                                                           num_states,
+                                                                           edges)
   if depth >= 3:
     print("Triphone acceptor...")
     num_states, edges = __triphone_acceptor_for_hmm_fsa(num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_states, edges)
+    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(word_list,
+                                                               phon_dict,
+                                                               word_pos,
+                                                               phon_pos,
+                                                               allo_num_states,
+                                                               num_states,
+                                                               edges)
   if depth >= 5:
     print("HMM acceptor...")
     num_states, edges = __adds_loop_edges(num_states, edges)
@@ -607,8 +616,7 @@ def __triphone_acceptor_for_hmm_fsa(num_states, edges):
   :return int num_states: number of states
   :return list edges_tri: list of edges
   """
-  global sil
-  global eps
+  global sil, eps
 
   edges_tri = []
   edges_t = []
@@ -638,8 +646,7 @@ def __find_prev_next_edge(cur_edge, pn_switch, edges):
   :param list edges: list of edges
   :return list pn_edge: previous/next edge
   """
-  global sil
-  global eps
+  global sil, eps
 
   assert pn_switch == 0 or pn_switch == 1, ("Previous/Next switch has wrong value:", pn_switch)
 
@@ -691,7 +698,13 @@ def __triphone_from_phon(word_seq):
   return tri_seq
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_states_input, edges_input):
+def __allophone_state_acceptor_for_hmm_fsa(word_list,
+                                           phon_dict,
+                                           word_pos,
+                                           phon_pos,
+                                           allo_num_states = 3,
+                                           num_states_input,
+                                           edges_input):
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
@@ -701,6 +714,8 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_s
   :param list[tuples(int, int, tuple(str, str, str), float)] edges_input: edges with label and weight
   :return int num_states_output, list[tuples(int, int, tuple(str, str, str, int), float)] edges_output:
   """
+  global sil, eps
+
   allo_len = len(allo_seq)
   allo_count = 4 * allo_len
   edges_count = __count_all_edges_non_sil_or_eps(edges_input, sil)
