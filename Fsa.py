@@ -162,7 +162,9 @@ def __adds_loop_edges(num_states, edges):
   # adds loops to fsa (loops on first and last node excluded)
   for state in range(1, num_states - 1):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != eps)]
-    edges.append((state, state, edges[edges_included[0]][2], 1.))
+    edge_n = [state, state, edges[edges_included[0]][2], 0., edges[edges_included[0]][4]]
+    assert len(edge_n) == 5, "length of edge wrong"
+    edges.append(edge_n)
 
   return num_states, edges
 
@@ -494,29 +496,36 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       for phon_idx, phon_label in enumerate(phon_seq):
         phon_seq_len = len(phon_seq)
         if phon_seq_len == 1:
-          edges_phon.append(edge)
+          start_node = edge[0]
+          end_node = edge[1]
+          phon_score = edge[3]
+          edges_phon.append([start_node, end_node, phon_label, phon_score, 'if'])
         elif phon_seq_len > 1:
           if phon_idx == 0:
             start_node = edge[0]
             end_node = num_states
             phon_score = edge[3]
-            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            edges_phon.append([start_node, end_node, phon_label, phon_score, 'i'])
             num_states += 1
           elif phon_idx == phon_seq_len - 1:
             start_node = num_states - 1
             end_node = edge[1]
             phon_score = 0.
-            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            edges_phon.append([start_node, end_node, phon_label, phon_score, 'f'])
           else:
             start_node = num_states - 1
             end_node = num_states
             phon_score = 0.
-            edges_phon.append([start_node, end_node, phon_label, phon_score])
+            edges_phon.append([start_node, end_node, phon_label, phon_score, ''])
             num_states += 1
         else:
           assert 1 == 0, "Something went wrong while expanding phoneme sequence"
     else:
-      edges_phon.append(edge)
+      start_node = edge[0]
+      end_node = edge[1]
+      phon_label = edge[2]
+      phon_score = edge[3]
+      edges_phon.append([start_node, end_node, phon_label, phon_score, ''])
     edges_phon.sort(key=lambda x: x[0])
 
   edges_phon = __sort_node_num(edges_phon)
@@ -627,7 +636,7 @@ def __triphone_acceptor_for_hmm_fsa(num_states, edges):
 
       label_tri = [prev_edge_t[2], edge_t[2], next_edge_t[2]]
 
-      edge_n = [edge_t[0], edge_t[1], label_tri, edge_t[3]]
+      edge_n = [edge_t[0], edge_t[1], label_tri, edge_t[3], edge_t[4]]
       edges_tri.append(edge_n)
 
   return num_states, edges_tri
@@ -724,6 +733,7 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
           edge_label.extend(edge_t[2])
           edge_label.append(state)
           edge_score = edge_t[3]
+          edge_if = edge_t[4]
           if state == 0:  # first state
             edge_start = edge_t[0]
             edge_end = num_states_output
@@ -735,7 +745,7 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
           else:  # states in between
             edge_start = num_states_output - 1
             edge_end = num_states_output
-          edge_n = [edge_start, edge_end, edge_label, edge_score]
+          edge_n = [edge_start, edge_end, edge_label, edge_score, edge_if]
           edges_output.append(edge_n)
       else:
         num_states_output = num_states_input
@@ -990,26 +1000,31 @@ def __state_tying_for_hmm_fsa(word_list,
         len = 1: no start or end point
   :param state_tying_file: file in which the state tying mappings are stored
   :param int num_states:
-  :param list[tuples(start[int], end[int], label, weight)] edges:
+  :param list[list[start[int], end[int], label, weight, position]] edges:
   :return: num_states, edges
   """
-  global sil
+  global sil, eps
+  edges_t = []
+  edges_t.extend(edges)
   edges_ts = []
   edges_st = []
   statetying = __load_state_tying_file(state_tying_file)
 
-  for edge in edges:
-    allo_state_tying = edge[2]
+  while (edges_t):
+    edge_t = edges_t.pop(0)
+    assert len(edge_t) == 5, "edge length != 5"
+    label = edge_t[2]
+    pos = edge_t[4]
 
-    allo_syntax = __build_allo_syntax_for_mapping(allo_state_tying)
+    allo_syntax = __build_allo_syntax_for_mapping(label, pos)
 
-    allo_id_num = statetying.allo_map[allo_syntax]
+    if label == eps:
+      allo_id_num = '*'
+    else:
+      allo_id_num = statetying.allo_map[allo_syntax]
 
-    edges_ts.append((edge[0], edge[1], allo_syntax, edge[3]))
-    edges_st.append((edge[0], edge[1], allo_id_num, edge[3]))
-
-  edges_ts.sort()
-  edges_st.sort()
+    edges_ts.append((edge_t[0], edge_t[1], allo_syntax, edge_t[3]))
+    edges_st.append((edge_t[0], edge_t[1], allo_id_num, edge_t[3]))
 
   return num_states, edges_st
 
@@ -1036,22 +1051,23 @@ def __load_state_tying_file(stFile):
   return statetying
 
 
-def __build_allo_syntax_for_mapping(label):
+def __build_allo_syntax_for_mapping(label, pos = ''):
   """
   builds a conforming allo syntax for mapping
-  :param str pos_seq:
-  :param int pos_allo:
-  :param str or tuple(str, str, str) label: a allo either string or tuple
+  :param str or list label: a allo either string or list
+  :param str pos: position of allophone within the word
   :return str allo_map: a allo syntax ready for mapping
   """
-  global sil
-  assert isinstance(label, str) or isinstance(label, tuple), "Something went wrong while building allo syntax for mapping"
+  global sil, eps
+  assert isinstance(label, str) or isinstance(label, list), "Something went wrong while building allo syntax for mapping"
 
   if isinstance(label, str) and label == sil:
     allo_start = "%s{#+#}" % ('[SILENCE]')
+  elif isinstance(label, str) and label == eps:
+    allo_start = "*"
   else:
     if label[0] == '' and label[2] == '':
-      allo_start = "%s{#+#}" % (label[0])
+      allo_start = "%s{#+#}" % (label[1])
     elif label[0] == '':
       allo_start = "%s{#+%s}" % (label[1], label[2])
     elif label[2] == '':
@@ -1060,13 +1076,17 @@ def __build_allo_syntax_for_mapping(label):
       allo_start = "%s{%s+%s}" % (label[1], label[0], label[2])
 
   allo_middle = ''
-  if label[0] == '':
+  if pos == 'if':
+    allo_middle = "@%s@%s" % ('i', 'f')
+  elif pos == 'i':
     allo_middle = "@%s" % ('i')
-  if label[2] == '':
+  elif pos == 'f':
     allo_middle = "@%s" % ('f')
 
   if label == sil:
     allo_end = ".0"
+  elif label == eps:
+    allo_end = ""
   else:
     allo_end = ".%i" % (label[3])
 
