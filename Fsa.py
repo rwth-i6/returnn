@@ -40,24 +40,24 @@ def ctc_fsa_for_label_seq(num_labels, label_seq):
   num_states = 2 * (len(label_seq) + 1) - 1
 
   # create edges from the label sequence without loops and no empty labels
-  final_states, num_states, edges = __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges)
+  final_states, num_states, edges = _create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds blank labels to fsa
-  final_states, num_states, edges = __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges)
+  final_states, num_states, edges = _adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # creates end state
-  final_states, num_states, edges = __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges)
+  final_states, num_states, edges = _adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges)
 
   # adds loops to fsa
-  num_states, edges = __adds_loop_edges(num_states, edges)
+  num_states, edges = _adds_loop_edges(num_states, edges)
 
   # makes one single final state
-  num_states, edges = __make_single_final_state(final_states, num_states, edges)
+  num_states, edges = _make_single_final_state(final_states, num_states, edges)
 
   return num_states, edges
 
 
-def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
+def _create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   creates states from label sequence, skips repetitions
   :param list[int] label_seq: sequence of labels (normally some kind of word)
@@ -85,7 +85,7 @@ def __create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, 
   return final_states, num_states, edges
 
 
-def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
+def _adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   adds blank edges and repetitions to ctc
   :param list[int] label_seq: sequence of labels (normally some kind of word)
@@ -114,7 +114,7 @@ def __adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states,
   return final_states, num_states, edges
 
 
-def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
+def _adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
   """
   adds last states for ctc
   :param list[int] label_seq: sequence of labels (normally some kind of word)
@@ -143,7 +143,7 @@ def __adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, e
   return final_states, num_states, edges
 
 
-def __adds_loop_edges(num_states, edges):
+def _adds_loop_edges(num_states, edges):
   """
   for every node loops with edge label pointing to node
   :param int num_states: number of states
@@ -169,7 +169,7 @@ def __adds_loop_edges(num_states, edges):
   return num_states, edges
 
 
-def __make_single_final_state(final_states, num_states, edges):
+def _make_single_final_state(final_states, num_states, edges):
   """
   takes the graph and merges all final nodes into one single final node
   idea:
@@ -194,7 +194,7 @@ def __make_single_final_state(final_states, num_states, edges):
   return num_states, edges
 
 
-def __determine_edges(num_states, edges):
+def _determine_edges(num_states, edges):
   """
   transforms the graph from non-deterministic to deterministic
   specifically removing epsilon edges
@@ -203,13 +203,13 @@ def __determine_edges(num_states, edges):
   :return num_states, edges:
   """
   new_states = []  # type: list[set[int]]
-  start_states = __discover_eps([0], num_states, edges)
+  start_states = _discover_eps([0], num_states, edges)
   todo = [start_states]
 
   return num_states, edges
 
 
-def __discover_eps(node, num_states, edges):
+def _discover_eps(node, num_states, edges):
   """
   starting at a specific node, the nodes connected via epsilon are found
   :param list[int] node:
@@ -240,15 +240,15 @@ def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
   """
   edges = []
 
-  rep_seq = __check_for_repetitions_for_asg(num_labels, label_seq, repetitions)
+  rep_seq = _check_for_repetitions_for_asg(num_labels, label_seq, repetitions)
 
-  num_states, edges = __create_states_from_label_for_asg(rep_seq, edges)
-  num_states, edges = __adds_loop_edges(num_states, edges)
+  num_states, edges = _create_states_from_label_for_asg(rep_seq, edges)
+  num_states, edges = _adds_loop_edges(num_states, edges)
 
   return num_states, edges
 
 
-def __check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
+def _check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
   """
   checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
   :param list[int] label_indices: sequence of label indices
@@ -283,7 +283,7 @@ def __check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
   return reps
 
 
-def __create_states_from_label_for_asg(rep_seq, edges):
+def _create_states_from_label_for_asg(rep_seq, edges):
   """
   :param int rep_index: label number
   :param int num_labels: number of labels
@@ -331,46 +331,46 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   print("Depth level is", depth)
   if depth >= 1:
     print("Lemma acceptor...")
-    word_list, num_states, edges = __lemma_acceptor_for_hmm_fsa(word_seq)
+    word_list, num_states, edges = _lemma_acceptor_for_hmm_fsa(word_seq)
   else:
     print("No acceptor chosen! Try again!")
     num_states = 0
     edges = []
   if depth >= 2:
-    lexicon = __load_lexicon(lexicon_file)
+    lexicon = _load_lexicon(lexicon_file)
     print("Getting allophone sequence...")
-    phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
+    phon_dict = _find_allo_seq_in_lex(word_list, lexicon)
     print("Phoneme acceptor...")
-    word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list,
-                                                                           phon_dict,
-                                                                           num_states,
-                                                                           edges)
+    word_pos, phon_pos, num_states, edges = _phoneme_acceptor_for_hmm_fsa(word_list,
+                                                                          phon_dict,
+                                                                          num_states,
+                                                                          edges)
   if depth >= 3:
     print("Triphone acceptor...")
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(num_states, edges)
+    num_states, edges = _triphone_acceptor_for_hmm_fsa(num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
     print("Number of allophone states:", allo_num_states)
-    num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
-                                                               num_states,
-                                                               edges)
+    num_states, edges = _allophone_state_acceptor_for_hmm_fsa(allo_num_states,
+                                                              num_states,
+                                                              edges)
   if depth >= 5:
     print("HMM acceptor...")
-    num_states, edges = __adds_loop_edges(num_states, edges)
+    num_states, edges = _adds_loop_edges(num_states, edges)
   if depth >= 6:
     print("State tying...")
-    num_states, edges = __state_tying_for_hmm_fsa(word_list,
-                                                  phon_dict,
-                                                  word_pos,
-                                                  phon_pos,
-                                                  state_tying_file,
-                                                  num_states,
-                                                  edges)
+    num_states, edges = _state_tying_for_hmm_fsa(word_list,
+                                                 phon_dict,
+                                                 word_pos,
+                                                 phon_pos,
+                                                 state_tying_file,
+                                                 num_states,
+                                                 edges)
 
   return num_states, edges
 
 
-def __lemma_acceptor_for_hmm_fsa(word_seq):
+def _lemma_acceptor_for_hmm_fsa(word_seq):
   """
   :param str word_seq:
   :return list word_list:
@@ -408,7 +408,7 @@ def __lemma_acceptor_for_hmm_fsa(word_seq):
   return word_list, num_states, edges
 
 
-def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
+def _phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   phoneme acceptor
   :param list word_list:
@@ -528,12 +528,12 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       edges_phon.append([start_node, end_node, phon_label, phon_score, ''])
     edges_phon.sort(key=lambda x: x[0])
 
-  edges_phon = __sort_node_num(edges_phon)
+  edges_phon = _sort_node_num(edges_phon)
 
   return word_pos, phon_pos, num_states, edges_phon
 
 
-def __check_node_existance(node_num, edges):
+def _check_node_existance(node_num, edges):
   """
   checks if the node numbers already exist in edges list
   :param float node_num: node number to be checked
@@ -548,7 +548,7 @@ def __check_node_existance(node_num, edges):
     return False
 
 
-def __sort_node_num(edges):
+def _sort_node_num(edges):
   """
   reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
@@ -564,8 +564,8 @@ def __sort_node_num(edges):
     cur_edge_end = cur_edge[1]    # and end node
 
     if cur_edge_start > cur_edge_end:  # only something to do if start node number > end node number
-      edges_cur_start = __find_node_edges(cur_edge_start, edges)  # find start node in all edges
-      edges_cur_end = __find_node_edges(cur_edge_end, edges)  # find end node in all edges
+      edges_cur_start = _find_node_edges(cur_edge_start, edges)  # find start node in all edges
+      edges_cur_end = _find_node_edges(cur_edge_end, edges)  # find end node in all edges
 
       for edge_key in edges_cur_start.keys():  # loop over edge which have the specific node
         edges[edge_key][edges_cur_start[edge_key]] = cur_edge_end  # replaces the start node number
@@ -582,7 +582,7 @@ def __sort_node_num(edges):
   return edges
 
 
-def __find_node_edges(node, edges):
+def _find_node_edges(node, edges):
   """
   find a specific node in all edges
   :param int node: node number
@@ -612,7 +612,7 @@ def __find_node_edges(node, edges):
   return node_dict
 
 
-def __triphone_acceptor_for_hmm_fsa(num_states, edges):
+def _triphone_acceptor_for_hmm_fsa(num_states, edges):
   """
   changes the labels of the edges from phonemes to triphones
   :param int num_states: number of states
@@ -631,8 +631,8 @@ def __triphone_acceptor_for_hmm_fsa(num_states, edges):
     if edge_t[2] == sil or edge_t[2] == eps:
       edges_tri.append(edge_t)
     else:
-      prev_edge_t = __find_prev_next_edge(edge_t, 0, edges)
-      next_edge_t = __find_prev_next_edge(edge_t, 1, edges)
+      prev_edge_t = _find_prev_next_edge(edge_t, 0, edges)
+      next_edge_t = _find_prev_next_edge(edge_t, 1, edges)
 
       label_tri = [prev_edge_t[2], edge_t[2], next_edge_t[2]]
 
@@ -642,7 +642,7 @@ def __triphone_acceptor_for_hmm_fsa(num_states, edges):
   return num_states, edges_tri
 
 
-def __find_prev_next_edge(cur_edge, pn_switch, edges):
+def _find_prev_next_edge(cur_edge, pn_switch, edges):
   """
   find the next/previous edge within the edges list
   :param list cur_edge: current edge
@@ -677,7 +677,7 @@ def __find_prev_next_edge(cur_edge, pn_switch, edges):
   return pn_edge
 
 
-def __triphone_from_phon(word_seq):
+def _triphone_from_phon(word_seq):
   '''
   :param word_seq: sequence of allophones
   :return tri_seq: list of three phonemes
@@ -702,9 +702,9 @@ def __triphone_from_phon(word_seq):
   return tri_seq
 
 
-def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
-                                           num_states_input,
-                                           edges_input):
+def _allophone_state_acceptor_for_hmm_fsa(allo_num_states,
+                                          num_states_input,
+                                          edges_input):
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
@@ -752,12 +752,12 @@ def __allophone_state_acceptor_for_hmm_fsa(allo_num_states,
         edges_output = []
         edges_output.extend(edges_input)
 
-  edges_output = __sort_node_num(edges_output)
+  edges_output = _sort_node_num(edges_output)
 
   return num_states_output, edges_output
 
 
-def __count_all_edges_non_sil_or_eps(edges, sil='sil', eps='eps'):
+def _count_all_edges_non_sil_or_eps(edges, sil='sil', eps='eps'):
   """
   count all edges in a graph which are NOT silence or placeholders (epsilon)
   :param list[tuples(int, int, tuple(str, str, str), float)] edges: edges with label and weight
@@ -774,15 +774,15 @@ def __count_all_edges_non_sil_or_eps(edges, sil='sil', eps='eps'):
   return edges_count
 
 
-def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
-                                             sil,
-                                             allo_num_states,
-                                             num_states_input,
-                                             edges_input,
-                                             edges_traverse,
-                                             edges_updated,
-                                             num_states_output,
-                                             edges_output):
+def _walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                            sil,
+                                            allo_num_states,
+                                            num_states_input,
+                                            edges_input,
+                                            edges_traverse,
+                                            edges_updated,
+                                            num_states_output,
+                                            edges_output):
   """
   idea: go to edge. do not change start node. take end node. search in edges at position start
   node (only if ![sil], no change propagates from [sil]). add 2 to start and end node for all
@@ -823,37 +823,37 @@ def __walk_graph_add_allo_states_for_hmm_fsa(current_node,
   if len(edges_updated) > 0:
     current_edge = edges_updated.pop(0)
 
-    edges_traverse = __find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
+    edges_traverse = _find_edges_after_current_for_hmm_fsa(current_edge, edges_updated)
 
-    edges_updated, edges_output = __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
-                                                                  sil,
-                                                                  allo_num_states,
-                                                                  edges_traverse,
-                                                                  edges_updated,
-                                                                  edges_output)
+    edges_updated, edges_output = _change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                                              sil,
+                                                                              allo_num_states,
+                                                                              edges_traverse,
+                                                                              edges_updated,
+                                                                              edges_output)
 
-    edges_updated, num_states_output, edges_output = __expand_tri_edge_for_hmm_fsa(current_edge,
-                                                                      sil,
-                                                                      allo_num_states,
-                                                                      num_states_output,
-                                                                      edges_updated,
-                                                                      edges_output)
+    edges_updated, num_states_output, edges_output = _expand_tri_edge_for_hmm_fsa(current_edge,
+                                                                                  sil,
+                                                                                  allo_num_states,
+                                                                                  num_states_output,
+                                                                                  edges_updated,
+                                                                                  edges_output)
 
     num_states_output, edges_output = \
-      __walk_graph_add_allo_states_for_hmm_fsa(current_node,
-                                               sil,
-                                               allo_num_states,
-                                               num_states_input,
-                                               edges_input,
-                                               edges_traverse,
-                                               edges_updated,
-                                               num_states_output,
-                                               edges_output)
+      _walk_graph_add_allo_states_for_hmm_fsa(current_node,
+                                              sil,
+                                              allo_num_states,
+                                              num_states_input,
+                                              edges_input,
+                                              edges_traverse,
+                                              edges_updated,
+                                              num_states_output,
+                                              edges_output)
 
   return num_states_output, edges_output
 
 
-def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
+def _find_edges_after_current_for_hmm_fsa(current_edge, edges):
   """
   search for all edges with a start node >= current_edge[end node] and add to edges_traverse
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the currently selected edge
@@ -873,12 +873,12 @@ def __find_edges_after_current_for_hmm_fsa(current_edge, edges):
   return edges_traverse
 
 
-def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
-                                                 sil,
-                                                 allo_num_states,
-                                                 edges_traverse,
-                                                 edges_updated,
-                                                 edges_output):
+def _change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
+                                                sil,
+                                                allo_num_states,
+                                                edges_traverse,
+                                                edges_updated,
+                                                edges_output):
   """
   idea: change start / end node id number += 2 for edges
   :param tuples(int, int, tuple(str, str, str), float) current_edge: current edge
@@ -907,7 +907,7 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
     # construct list of current edges
     current_edge_list = [current_edge for n in range(len(edges_traverse))]
     # take all edges which have to be traversed and move them to higher nodes
-    edges_high = map(__map_higher_node, edges_traverse, current_edge_list)
+    edges_high = map(_map_higher_node, edges_traverse, current_edge_list)
     # create new list of edges from edges_updated which are in edges_traverse
     edges_sub = filter(lambda x: x in edges_traverse, edges_updated)
 
@@ -922,7 +922,7 @@ def __change_edge_to_higher_node_num_for_hmm_fsa(current_edge,
   return edges_updated, edges_output
 
 
-def __map_higher_node(x, y):
+def _map_higher_node(x, y):
   assert isinstance(x, tuple), "x has to be a tuple(int, int, tuple(str, str, str), float)"
   assert isinstance(y, tuple), "y should be a tuple(int, int, tuple(str, str, str), float)"
   assert len(x) == len(y), "x and y have different lengths"
@@ -932,12 +932,12 @@ def __map_higher_node(x, y):
     return (x[0], x[1] + 2, x[2], x[3])
 
 
-def __expand_tri_edge_for_hmm_fsa(current_edge,
-                                  sil,
-                                  allo_num_states,
-                                  num_states_t,
-                                  edges_updated,
-                                  edges_output):
+def _expand_tri_edge_for_hmm_fsa(current_edge,
+                                 sil,
+                                 allo_num_states,
+                                 num_states_t,
+                                 edges_updated,
+                                 edges_output):
   """
 
   :param tuple(int, int, tuple(str, str, str), float) current_edge: the current edge
@@ -980,13 +980,13 @@ def __expand_tri_edge_for_hmm_fsa(current_edge,
   return edges_updated, num_states_output, edges_output
 
 
-def __state_tying_for_hmm_fsa(word_list,
-                              phon_dict,
-                              word_pos,
-                              phon_pos,
-                              state_tying_file,
-                              num_states,
-                              edges):
+def _state_tying_for_hmm_fsa(word_list,
+                             phon_dict,
+                             word_pos,
+                             phon_pos,
+                             state_tying_file,
+                             num_states,
+                             edges):
   """
   idea: take file with mapping char to number and apply to edge labels
   :param list[str] or str word_seq: sequences of words
@@ -1008,7 +1008,7 @@ def __state_tying_for_hmm_fsa(word_list,
   edges_t.extend(edges)
   edges_ts = []
   edges_st = []
-  statetying = __load_state_tying_file(state_tying_file)
+  statetying = _load_state_tying_file(state_tying_file)
 
   while (edges_t):
     edge_t = edges_t.pop(0)
@@ -1016,7 +1016,7 @@ def __state_tying_for_hmm_fsa(word_list,
     label = edge_t[2]
     pos = edge_t[4]
 
-    allo_syntax = __build_allo_syntax_for_mapping(label, pos)
+    allo_syntax = _build_allo_syntax_for_mapping(label, pos)
 
     if label == eps:
       allo_id_num = '*'
@@ -1029,7 +1029,7 @@ def __state_tying_for_hmm_fsa(word_list,
   return num_states, edges_st
 
 
-def __load_state_tying_file(stFile):
+def _load_state_tying_file(stFile):
   '''
   loads a state tying map from a file, loads the file and returns its content
   :param stFile: state tying map file (allo_syntax int)
@@ -1051,7 +1051,7 @@ def __load_state_tying_file(stFile):
   return statetying
 
 
-def __build_allo_syntax_for_mapping(label, pos = ''):
+def _build_allo_syntax_for_mapping(label, pos =''):
   """
   builds a conforming allo syntax for mapping
   :param str or list label: a allo either string or list
@@ -1095,7 +1095,7 @@ def __build_allo_syntax_for_mapping(label, pos = ''):
   return allo_map
 
 
-def __load_lexicon(lexFile):
+def _load_lexicon(lexFile):
   '''
   loads a lexicon from a file, loads the xml and returns its conent
   :param lexFile: lexicon file with xml structure
@@ -1115,7 +1115,7 @@ def __load_lexicon(lexFile):
   return lex
 
 
-def __find_allo_seq_in_lex(lemma_list, lex):
+def _find_allo_seq_in_lex(lemma_list, lex):
   '''
   searches a lexicon xml structure for a watching word and
   returns the matching allophone sequence as a list
@@ -1154,8 +1154,8 @@ def fsa_to_dot_format(file, num_states, edges):
   for i in range(0, num_states):
     nodes.append(str(i))
 
-  __add_nodes(G, nodes)
-  __add_edges(G, edges)
+  _add_nodes(G, nodes)
+  _add_edges(G, edges)
 
   # print(G.source)
   filepath = "./tmp/" + file
@@ -1163,7 +1163,7 @@ def fsa_to_dot_format(file, num_states, edges):
   print("File saved in:", filename)
 
 
-def __add_nodes(graph, nodes):
+def _add_nodes(graph, nodes):
   for n in nodes:
     if isinstance(n, tuple):
       graph.node(n[0], **n[1])
@@ -1172,7 +1172,7 @@ def __add_nodes(graph, nodes):
   return graph
 
 
-def __add_edges(graph, edges):
+def _add_edges(graph, edges):
   for e in edges:
     e = ((str(e[0]), str(e[1])), {'label': str(e[2])})
     if isinstance(e[0], tuple):
