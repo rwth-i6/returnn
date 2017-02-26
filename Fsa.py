@@ -4,6 +4,10 @@ from __future__ import print_function
 from __future__ import division
 
 
+_SIL = '_'
+_EPS = '*'
+
+
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
   takes label sequence of chars and converts to indices (a->0, b->1, ...)
@@ -157,11 +161,10 @@ def _adds_loop_edges(num_states, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
-  global eps
   print("Adding loops...")
   # adds loops to fsa (loops on first and last node excluded)
   for state in range(1, num_states - 1):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != eps)]
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != _EPS)]
     edge_n = [state, state, edges[edges_included[0]][2], 0., edges[edges_included[0]][4]]
     assert len(edge_n) == 5, "length of edge wrong"
     edges.append(edge_n)
@@ -320,12 +323,8 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
   :returns (num_states, edges) like above
   """
   print("Word sequence:", word_seq)
-  global sil
-  sil = '_'
-  print("Place holder silence:", sil)
-  global eps
-  eps = '*'
-  print("Place holder epsilon:", eps)
+  print("Place holder silence:", _SIL)
+  print("Place holder epsilon:", _EPS)
   if depth is None:
     depth = 6
   print("Depth level is", depth)
@@ -375,8 +374,7 @@ def _lemma_acceptor_for_hmm_fsa(word_seq):
   :return int num_states:
   :return list edges:
   """
-  global sil, eps
-  epsil = [sil, eps]
+  epsil = [_SIL, _EPS]
 
   edges = []
   num_states = 0
@@ -421,8 +419,6 @@ def _phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   :return int num_states:
   :return list edges_phon:
   """
-  global sil, eps
-
   edges_phon_t = []
 
   """
@@ -430,12 +426,12 @@ def _phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
   """
   while (edges):
     edge = edges.pop(0)
-    if edge[2] != sil and edge[2] != eps:
+    if edge[2] != _SIL and edge[2] != _EPS:
       phon_current = phon_dict[edge[2]]
       for phons in phon_current:
         phon_score = phons['score']  # calculate phon score correctly log space
         edges_phon_t.append([edge[0], edge[1], phons['phon'], phon_score])
-    elif edge[2] == sil or edge[2] == eps:
+    elif edge[2] == _SIL or edge[2] == _EPS:
       edges_phon_t.append(edge)  # adds eps and sil edges unchanged
     else:
       assert 1 == 0, "unrecognized phoneme"  # all edges should be handled
@@ -467,7 +463,7 @@ def _phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
 
   while (edges_t):
     edge = edges_t.pop(0)  # edge is tuple start node, end node, label, score
-    if edge[2] != sil and edge[2] != eps:  # sil and eps ignored
+    if edge[2] != _SIL and edge[2] != _EPS:  # sil and eps ignored
       phon_list = edge[2].split(" ")
       letter_pos = []
       for idx, letter in enumerate(phon_list):
@@ -489,7 +485,7 @@ def _phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
 
   while (edges_phon_t):
     edge = edges_phon_t.pop(0)
-    if edge[2] != sil and edge[2] != eps:
+    if edge[2] != _SIL and edge[2] != _EPS:
       phon_seq = edge[2].split(" ")
       for phon_idx, phon_label in enumerate(phon_seq):
         phon_seq_len = len(phon_seq)
@@ -618,15 +614,13 @@ def _triphone_acceptor_for_hmm_fsa(num_states, edges):
   :return int num_states: number of states
   :return list edges_tri: list of edges
   """
-  global sil, eps
-
   edges_tri = []
   edges_t = []
   edges_t.extend(edges)
 
   while(edges_t):
     edge_t = edges_t.pop(0)
-    if edge_t[2] == sil or edge_t[2] == eps:
+    if edge_t[2] == _SIL or edge_t[2] == _EPS:
       edges_tri.append(edge_t)
     else:
       prev_edge_t = _find_prev_next_edge(edge_t, 0, edges)
@@ -648,8 +642,6 @@ def _find_prev_next_edge(cur_edge, pn_switch, edges):
   :param list edges: list of edges
   :return list pn_edge: previous/next edge
   """
-  global sil, eps
-
   assert pn_switch == 0 or pn_switch == 1, ("Previous/Next switch has wrong value:", pn_switch)
 
   # finds indexes of previous edges
@@ -660,7 +652,7 @@ def _find_prev_next_edge(cur_edge, pn_switch, edges):
   prev_edge_cand_idx_len = len(prev_edge_cand_idx)
   if prev_edge_cand_idx_len > 1:
     for idx in prev_edge_cand_idx:
-      assert edges[idx][2] == sil or edges[idx][2] == eps, "Edge found which is not sil or eps"
+      assert edges[idx][2] == _SIL or edges[idx][2] == _EPS, "Edge found which is not sil or eps"
   else:
     assert prev_edge_cand_idx_len <= 1, ("Too many previous edges found:", prev_edge_cand_idx)
 
@@ -713,8 +705,6 @@ def _allophone_state_acceptor_for_hmm_fsa(allo_num_states,
   :return int num_states_output:
   :return list[[int, int, [str, str, str, int], float]] edges_output:
   """
-  global sil, eps
-
   num_states_output = num_states_input
   edges_t = []
   edges_t.extend(edges_input)
@@ -722,7 +712,7 @@ def _allophone_state_acceptor_for_hmm_fsa(allo_num_states,
 
   while (edges_t):
     edge_t = edges_t.pop(0)
-    if edge_t[2] == sil or edge_t[2] == eps:
+    if edge_t[2] == _SIL or edge_t[2] == _EPS:
       edges_output.append(edge_t)  # adds sil/eps edge unchanged
     else:
       if allo_num_states > 1:  # requirement for edges to change
@@ -988,7 +978,6 @@ def _state_tying_for_hmm_fsa(state_tying_file,
   :param list[list[start[int], end[int], label, weight, position]] edges:
   :return: num_states, edges
   """
-  global sil, eps
   edges_t = []
   edges_t.extend(edges)
   edges_ts = []
@@ -1003,7 +992,7 @@ def _state_tying_for_hmm_fsa(state_tying_file,
 
     allo_syntax = _build_allo_syntax_for_mapping(label, pos)
 
-    if label == eps:
+    if label == _EPS:
       allo_id_num = '*'
     else:
       allo_id_num = statetying.allo_map[allo_syntax]
@@ -1043,12 +1032,11 @@ def _build_allo_syntax_for_mapping(label, pos =''):
   :param str pos: position of allophone within the word
   :return str allo_map: a allo syntax ready for mapping
   """
-  global sil, eps
   assert isinstance(label, str) or isinstance(label, list), "Something went wrong while building allo syntax for mapping"
 
-  if isinstance(label, str) and label == sil:
+  if isinstance(label, str) and label == _SIL:
     allo_start = "%s{#+#}" % ('[SILENCE]')
-  elif isinstance(label, str) and label == eps:
+  elif isinstance(label, str) and label == _EPS:
     allo_start = "*"
   else:
     if label[0] == '' and label[2] == '':
@@ -1068,9 +1056,9 @@ def _build_allo_syntax_for_mapping(label, pos =''):
   elif pos == 'f':
     allo_middle = "@%s" % ('f')
 
-  if label == sil:
+  if label == _SIL:
     allo_end = ".0"
-  elif label == eps:
+  elif label == _EPS:
     allo_end = ""
   else:
     allo_end = ".%i" % (label[3])
