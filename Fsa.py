@@ -638,7 +638,42 @@ def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num
   return num_states, edges_tri
 
 
+def __find_prev_next_edge(cur_edge, pn_switch, edges):
+  """
+  find the next/previous edge within the edges list
+  :param list cur_edge: current edge
+  :param int pn_switch: toggles between previous (0) and next (1) edge
+  :param list edges: list of edges
+  :return list pn_edge: previous/next edge
+  """
+  global sil
+  global eps
 
+  assert pn_switch == 0 or pn_switch == 1, ("Previous/Next switch has wrong value:", pn_switch)
+
+  # finds indexes of previous edges
+  prev_edge_cand_idx = [edge_index for edge_index, edge in enumerate(edges)
+                        if (cur_edge[pn_switch] == edge[1 - pn_switch])]
+
+  print(pn_switch, 1 - pn_switch)
+
+  # remove eps and sil edges
+  prev_edge_cand_idx_len = len(prev_edge_cand_idx)
+  if prev_edge_cand_idx_len > 1:
+    for idx in prev_edge_cand_idx:
+      assert edges[idx][2] == sil or edges[idx][2] == eps, "Edge found which is not sil or eps"
+  else:
+    assert prev_edge_cand_idx_len <= 1, ("Too many previous edges found:", prev_edge_cand_idx)
+
+  assert prev_edge_cand_idx_len >= 0, ("Negative edges found. Something went wrong..")
+
+  # sets pn_edge to the previous edge or if sil/eps then empty edge
+  if prev_edge_cand_idx_len == 1:
+    pn_edge = edges[prev_edge_cand_idx[0]]
+  else:
+    pn_edge = [None, None, '', None]
+
+  return pn_edge
 
 
 def __triphone_from_phon(word_seq):
