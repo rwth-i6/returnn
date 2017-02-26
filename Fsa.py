@@ -337,12 +337,11 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     lexicon = __load_lexicon(lexicon_file)
     print("Getting allophone sequence...")
     phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
-  if depth == 2:
     print("Phoneme acceptor...")
     word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_states, edges)
