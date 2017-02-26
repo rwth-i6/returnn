@@ -347,6 +347,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = __triphone_acceptor_for_hmm_fsa(num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
+    print("Number of allophone states:", allo_num_states)
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(word_list,
                                                                phon_dict,
                                                                word_pos,
@@ -1144,6 +1145,7 @@ def main():
   arg_parser.add_argument("--depth", type=int)
   arg_parser.add_argument("--asg_repetition", type=int)
   arg_parser.add_argument("--label_conversion", type=bool)
+  arg_parser.add_argument("--allo_num_states", type=int)
   args = arg_parser.parse_args()
 
   if (args.fsa.lower() == 'ctc'):
@@ -1172,7 +1174,8 @@ def main():
     num_states, edges = hmm_fsa_for_word_seq(word_seq=args.label_seq,
                                              lexicon_file=args.lexicon,
                                              state_tying_file=args.state_tying,
-                                             depth=args.depth)
+                                             depth=args.depth,
+                                             allo_num_states=args.allo_num_states)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
 
