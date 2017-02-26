@@ -718,16 +718,17 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
   """
   global sil, eps
 
-  allo_len = len(allo_seq)
-  allo_count = 4 * allo_len
-  edges_count = __count_all_edges_non_sil_or_eps(edges_input, sil)
-
-  assert edges_count == allo_count, "the count for the non-sil, non-eps edges varies: %i != %i"\
-                                    % (edges_count, allo_count)
-
-  global num_states_check
-  num_states_check = num_states_input + (allo_num_states - 1) * edges_count
   num_states_output = num_states_input
+  edges_t = []
+  edges_t.extend(edges_input)
+  edges_output = []
+
+  while (edges_t):
+    edge_t = edges_t.pop(0)
+    if edge_t[2] == sil or edge_t[2] == eps:
+      edges_output.append(edge_t)
+    else:
+      pass
 
   current_node = 0
 
