@@ -157,10 +157,11 @@ def __adds_loop_edges(num_states, edges):
       label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
       weight is a float, in -log space
   """
+  global eps
   print("Adding loops...")
   # adds loops to fsa (loops on first and last node excluded)
   for state in range(1, num_states - 1):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state)]
+    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != eps)]
     edges.append((state, state, edges[edges_included[0]][2], 1.))
 
   return num_states, edges
