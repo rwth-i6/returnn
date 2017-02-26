@@ -729,7 +729,13 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
     if edge_t[2] == sil or edge_t[2] == eps:
       edges_output.append(edge_t)
     else:
-      pass
+      if allo_num_states > 1:
+        for i in range(allo_num_states):
+          pass
+      else:
+        num_states_output = num_states_input
+        edges_output = []
+        edges_output.extend(edges_input)
 
   return num_states_output, edges_output
 
