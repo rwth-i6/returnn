@@ -590,12 +590,6 @@ def __find_node_edges(node, edges):
   return node_dict
 
 
-  allo_len = len(allo_seq)
-  num_states_new = num_states + 4 * (allo_len - 1)
-  edges_new = []
-  state_idx = 2
-
-  tri_seq = __triphone_from_phon(allo_seq)
 def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num_states, edges):
   """
   changes the labels of the edges from phonemes to triphones
@@ -616,36 +610,8 @@ def __triphone_acceptor_for_hmm_fsa(word_seq, phon_dict, word_pos, phon_pos, num
   global sil
   global eps
 
-  for edge in edges:
-    if edge[2] == sil and edge[1] == num_states - 1:
-      lst = list(edge)
-      lst[0] = num_states_new - 2
-      lst[1] = num_states_new - 1
-      edge = tuple(lst)
-      edges_new.append(edge)
-    elif edge[2] == word_seq:
-      for allo_idx in range(allo_len):
-        if allo_idx == 0:
-          idx1 = edge[0]
-          idx2 = state_idx
-        elif allo_idx == allo_len - 1:
-          idx1 = state_idx
-          if edge[1] == 3:
-            edge_idx_t = 1
-          elif edge[1] == 2:
-            edge_idx_t = 2
-          idx2 = num_states_new - edge_idx_t
-          state_idx += 1
-        else:
-          idx1 = state_idx
-          state_idx += 1
-          idx2 = state_idx
-        edge_t = (idx1, idx2, tri_seq[allo_idx], 1.)
-        edges_new.append(edge_t)
     else:
-      edges_new.append(edge)
 
-  return num_states_new, edges_new
 
 
 def __triphone_from_phon(word_seq):
