@@ -727,15 +727,33 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
   while (edges_t):
     edge_t = edges_t.pop(0)
     if edge_t[2] == sil or edge_t[2] == eps:
-      edges_output.append(edge_t)
+      edges_output.append(edge_t)  # adds sil/eps edge unchanged
     else:
-      if allo_num_states > 1:
-        for i in range(allo_num_states):
-          pass
+      if allo_num_states > 1:  # requirement for edges to change
+        for state in range(allo_num_states):  # loop through all required states
+          edge_label = []
+          edge_label.extend(edge_t[2])
+          edge_label.append(state)
+          edge_score = edge_t[3]
+          if state == 0:  # first state
+            edge_start = edge_t[0]
+            edge_end = num_states_output
+            num_states_output += 1
+          elif state == allo_num_states - 1:  # last state
+            edge_start = num_states_output
+            edge_end = edge_t[1]
+            num_states_output += 1
+          else:  # states in between
+            edge_start = num_states_output - 1
+            edge_end = num_states_output
+          edge_n = [edge_start, edge_end, edge_label, edge_score]
+          edges_output.append(edge_n)
       else:
         num_states_output = num_states_input
         edges_output = []
         edges_output.extend(edges_input)
+
+  edges_output = __sort_node_num(edges_output)
 
   return num_states_output, edges_output
 
