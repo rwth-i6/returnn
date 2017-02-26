@@ -602,15 +602,6 @@ def __find_node_edges(node, edges):
 def __triphone_acceptor_for_hmm_fsa(num_states, edges):
   """
   changes the labels of the edges from phonemes to triphones
-  :param list[str] or str word_seq: sequences of words
-  :param dict phon_dict:
-        key: lemma from the list
-        value: list of dictionaries with phon and score (keys)
-  :param list of dict word_pos: letter positions in word
-  :param list of list phon_pos: phoneme positions in lemma
-        0: phoneme sequence
-        1, 2: start end point
-        len = 1: no start end point
   :param int num_states: number of states
   :param list edges: list of edges
   :return int num_states: number of states
@@ -642,7 +633,7 @@ def __find_prev_next_edge(cur_edge, pn_switch, edges):
   """
   find the next/previous edge within the edges list
   :param list cur_edge: current edge
-  :param int pn_switch: toggles between previous (0) and next (1) edge
+  :param int pn_switch: either previous (0) and next (1) edge
   :param list edges: list of edges
   :return list pn_edge: previous/next edge
   """
@@ -708,11 +699,22 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
   """
   the edges which are not sil or eps are split into three allophone states / components
     marked with 0, 1, 2
+  :param list[str] or str word_seq: sequences of words
+  :param dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
+  :param list of dict word_pos: letter positions in word
+  :param list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start or end point
   :param allo_seq: sequence of allophones
   :param str sil: placeholder for silence
   :param int num_states_input: number of states
-  :param list[tuples(int, int, tuple(str, str, str), float)] edges_input: edges with label and weight
-  :return int num_states_output, list[tuples(int, int, tuple(str, str, str, int), float)] edges_output:
+  :param list[tuples(int, int, tuple(str, str, str), float)] edges_input:
+        edges with label and weight
+  :return int num_states_output:
+  :return list[[int, int, [str, str, str, int], float]] edges_output:
   """
   global sil, eps
 
