@@ -359,11 +359,7 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     num_states, edges = _adds_loop_edges(num_states, edges)
   if depth >= 6:
     print("State tying...")
-    num_states, edges = _state_tying_for_hmm_fsa(word_list,
-                                                 phon_dict,
-                                                 word_pos,
-                                                 phon_pos,
-                                                 state_tying_file,
+    num_states, edges = _state_tying_for_hmm_fsa(state_tying_file,
                                                  num_states,
                                                  edges)
 
@@ -980,24 +976,11 @@ def _expand_tri_edge_for_hmm_fsa(current_edge,
   return edges_updated, num_states_output, edges_output
 
 
-def _state_tying_for_hmm_fsa(word_list,
-                             phon_dict,
-                             word_pos,
-                             phon_pos,
-                             state_tying_file,
+def _state_tying_for_hmm_fsa(state_tying_file,
                              num_states,
                              edges):
   """
   idea: take file with mapping char to number and apply to edge labels
-  :param list[str] or str word_seq: sequences of words
-  :param dict phon_dict:
-        key: lemma from the list
-        value: list of dictionaries with phon and score (keys)
-  :param list of dict word_pos: letter positions in word
-  :param list of list phon_pos: phoneme positions in lemma
-        0: phoneme sequence
-        1, 2: start end point
-        len = 1: no start or end point
   :param state_tying_file: file in which the state tying mappings are stored
   :param int num_states:
   :param list[list[start[int], end[int], label, weight, position]] edges:
