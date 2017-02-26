@@ -8,6 +8,16 @@ _SIL = '_'
 _EPS = '*'
 
 
+class Fsa:
+  """class to create a finite state automaton"""
+  _SIL = '_'
+  _EPS = '*'
+
+  def __init__(self, fsa_type):
+    self.num_states = 0
+    self.edges = []
+    self.fsa_type = fsa_type
+
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
   takes label sequence of chars and converts to indices (a->0, b->1, ...)
