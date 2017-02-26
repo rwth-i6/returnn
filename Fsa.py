@@ -730,31 +730,6 @@ def __allophone_state_acceptor_for_hmm_fsa(word_list,
     else:
       pass
 
-  current_node = 0
-
-  edges_traverse = []
-  edges_updated = []
-  edges_output = []
-
-  edges_updated.extend(edges_input)
-  edges_updated.sort(key=lambda x: x[1])
-
-  assert id(edges_updated) != id(edges_input), "same id for edges is wrong"
-
-  num_states_output, edges_output = \
-    __walk_graph_add_allo_states_for_hmm_fsa(current_node,
-                                             sil,
-                                             allo_num_states,
-                                             num_states_input,
-                                             edges_input,
-                                             edges_traverse,
-                                             edges_updated,
-                                             num_states_output,
-                                             edges_output)
-
-  assert num_states_output == num_states_check,\
-    "the number of states does not match: %i != %i" % (num_states_output, num_states_check)
-
   return num_states_output, edges_output
 
 
