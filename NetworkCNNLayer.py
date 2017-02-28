@@ -259,6 +259,11 @@ class CNN(_NoOpLayer):
         )
       )
     self.W = W
+
+
+    #x_printed = theano.printing.Print('in', attrs=['shape'])(inputs)
+
+
     if self.transpose:
       op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(
         imshp=inputs.shape,
@@ -367,9 +372,9 @@ class NewConv(CNN):
     if self.status[0]:  # the previous layer is convolutional layer
       self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
     else:
-      inputs2 = inputs.reshape((time * batch, self.input_shape[0],
-                                self.input_shape[1], self.filter_shape[1]))  # (time*batch, row, col, stack)
-      self.input = inputs2.dimshuffle(0, 3, 1, 2)  # (batch, stack_size, row, col)
+      inputs2 = inputs.reshape((time * batch, self.input_shape[1],
+                                self.input_shape[0], self.filter_shape[1]))  # (time*batch, row, col, stack)
+      self.input = inputs2.dimshuffle(0, 3, 2, 1)  # (batch, stack_size, row, col)
     self.input.name = "conv_layer_input_final"
 
     if self.modes[3] != "tanh":
