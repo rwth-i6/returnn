@@ -734,12 +734,17 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       mask = tf.ones(dtype=tf.bool, shape=(batch_size, max_time))
     if collapse_repeated:
       with tf.name_scope("collapse_repeated"):
-        diffs = tf.concat(1, [tf.ones_like(x[:, :1]), x[:, 1:] - x[:, :-1]])  # shape (batch,time)
-        zero = diffs.dtype.as_numpy_dtype()
-        mask = tf.logical_and(tf.not_equal(diffs, zero), mask)
+        diffs = tf.concat(
+          1, [tf.ones_like(x[:, :1], dtype=tf.bool), tf.not_equal(x[:, 1:], x[:, :-1])])  # shape (batch,time)
+        mask = tf.logical_and(diffs, mask)
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
+      if collapse_repeated:
+        # Recalculate mask, so that we have them all behind each other.
+        seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+        max_time = tf.reduce_max(seq_lens)
+        mask = sequence_mask(seq_lens)
       time_idxs = expand_dims_unbroadcast(tf.range(max_time), 0, batch_size)  # shape (batch,time)
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
       batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
