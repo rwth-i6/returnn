@@ -535,6 +535,9 @@ class RecurrentUnitLayer(Layer):
     kwargs.setdefault("n_out", unit.n_out)
     n_out = unit.n_out
     self.set_attr('n_out', unit.n_out)
+    if n_dec < 0:
+      source_index = self.index
+      n_dec *= -1
     if n_dec != 0:
       self.target_index = self.index
       if isinstance(n_dec,float):
@@ -553,9 +556,7 @@ class RecurrentUnitLayer(Layer):
       n_dec = self.index.shape[0]
     # initialize recurrent weights
     self.W_re = None
-    if copy_weights_from_base:
-      self.W_re = self.add_param(base[0].W_re)
-    elif unit.n_re > 0:
+    if unit.n_re > 0:
       self.W_re = self.add_param(self.create_recurrent_weights(unit.n_units, unit.n_re, name="W_re_%s" % self.name))
     # initialize forward weights
     bias_init_value = self.create_bias(unit.n_in).get_value()
@@ -569,12 +570,20 @@ class RecurrentUnitLayer(Layer):
       self.set_attr('forward_weights_init', forward_weights_init)
     self.forward_weights_init = forward_weights_init
     self.W_in = []
+    sample_mean, gamma = None, None
     if copy_weights_from_base:
       self.params = {}
-      self.W_in = [ self.add_param(W) for W in base[0].W_in ]
-      self.b = self.add_param(base[0].b)
-      self.masks = base[0].masks
-      self.mass = base[0].mass
+      #self.W_re = self.add_param(base[0].W_re)
+      #self.W_in = [ self.add_param(W) for W in base[0].W_in ]
+      #self.b = self.add_param(base[0].b)
+      self.W_re = base[0].W_re
+      self.W_in = base[0].W_in
+      self.b = base[0].b
+      if self.attrs.get('batch_norm', False):
+        sample_mean = base[0].sample_mean
+        gamma = base[0].gamma
+      #self.masks = base[0].masks
+      #self.mass = base[0].mass
     else:
       for s in self.sources:
         W = self.create_forward_weights(s.attrs['n_out'], unit.n_in, name="W_in_%s_%s" % (s.name, self.name))
@@ -733,7 +742,7 @@ class RecurrentUnitLayer(Layer):
       self.params['sample_mean_batch_norm'].custom_update = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
       self.params['sample_mean_batch_norm'].custom_update_normalized = True
 
-    self.make_output(self.act[0][::direction or 1])
+    self.make_output(self.act[0][::direction or 1], sample_mean=sample_mean, gamma=gamma)
     self.params.update(unit.params)
 
   def cost(self):

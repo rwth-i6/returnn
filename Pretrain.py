@@ -277,29 +277,37 @@ class Pretrain:
     """
     from copy import deepcopy
     new_json = deepcopy(self._step_net_jsons[0])
-    assert "output" in new_json
-    # From the sources of the output layer, collect all their sources.
-    # Then remove the direct output sources and replace them with the indirect sources.
-    new_sources = set()
-    for source in new_json["output"]["from"]:
-      # Except for data sources. Just keep them.
-      if source == "data":
-        new_sources.add("data")
-      else:
-        assert source in new_json, "error %r, n: %i, last: %s" % (source, len(self._step_net_jsons), self._step_net_jsons[0])
-        new_sources.update(new_json[source].get("from", ["data"]))
-        del new_json[source]
-    # Check if anything changed.
-    # This is e.g. not the case if the only source was data.
-    if list(sorted(new_sources)) == list(sorted(new_json["output"]["from"])):
-      return False
-    # If we have data input, it likely means that the input dimension
-    # for the output layer would change. Just avoid that for now.
-    if "data" in new_sources:
-      return False
-    new_json["output"]["from"] = list(sorted(new_sources))
-    self._step_net_jsons = [new_json] + self._step_net_jsons
-    return True
+    while True:
+      assert "output" in new_json
+      # From the sources of the output layer, collect all their sources.
+      # Then remove the direct output sources and replace them with the indirect sources.
+      new_sources = set()
+      deleted_sources = set()
+      for source in new_json["output"]["from"]:
+        # Except for data sources. Just keep them.
+        if source == "data":
+          new_sources.add("data")
+        else:
+          assert source in new_json, "error %r, n: %i, last: %s" % (source, len(self._step_net_jsons), self._step_net_jsons[0])
+          new_sources.update(new_json[source].get("from", ["data"]))
+          del new_json[source]
+          deleted_sources.add(source)
+      # Check if anything changed.
+      # This is e.g. not the case if the only source was data.
+      if list(sorted(new_sources)) == list(sorted(new_json["output"]["from"])):
+        return False
+      new_json["output"]["from"] = list(sorted(new_sources))
+      # If we have data input, it likely means that the input dimension
+      # for the output layer would change. Just avoid that for now.
+      if "data" in new_sources:
+        # Try again.
+        continue
+      # If all deleted sources were non-trainable, skip this.
+      if all(not self._original_network_json[del_source].get("trainable", True) for del_source in deleted_sources):
+        # Try again.
+        continue
+      self._step_net_jsons = [new_json] + self._step_net_jsons
+      return True
 
   def _construct_epochs_from_output(self):
     self._step_net_jsons = [self._original_network_json]

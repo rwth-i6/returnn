@@ -63,7 +63,7 @@ class Data(object):
         dtype = "int32"
       else:
         dtype = "float32"
-    if dim is None:
+    if dim is None and len(shape):
       assert not sparse, "need dim"
       dim = shape[-1]
     self.dim = dim
@@ -82,6 +82,7 @@ class Data(object):
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
     self.placeholder = placeholder
+    # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
@@ -96,27 +97,27 @@ class Data(object):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     return {key: getattr(self, key) for key in keys}
 
-  def get_variable_dim_pattern(self):
+  def _get_variable_dim_pattern(self):
     """
-    :return: tuple with bools specifying which dims of the shape (including batch-dim) are of variable length.
+    :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
      e.g. (time,feature), shape=(None,128), this returns (True, False)
     :rtype: tuple[bool]
     """
-    return tuple([dim is None for dim in self.batch_shape])
+    return tuple([dim is None for dim in self.shape])
 
-  def matches_dim_pattern(self, other, check_time_and_batch_dim=True):
+  def _get_var_len_axes(self):
+    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d is None])
+
+  def matches_dim_pattern(self, other):
     """
     :param Data other:
-    :param bool check_time_and_batch_dim: whether to check if batch_dim_axis and time_dim_axis are the same
-    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time/batch dim
+    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time dim,
+      excluding batch-dim.
     :rtype: bool
     """
-    if check_time_and_batch_dim:
-      if self.batch_dim_axis != other.batch_dim_axis:
-        return False
-      if self.time_dim_axis != other.time_dim_axis:
-        return False
-    return self.get_variable_dim_pattern() == other.get_variable_dim_pattern()
+    if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
+      return False
+    return self._get_var_len_axes() == other._get_var_len_axes()
 
   def get_description(self, with_name=True, with_placeholder=False):
     keys = ["shape", "dtype", "sparse"]
@@ -144,12 +145,39 @@ class Data(object):
     """
     return self.time_dim_axis == 0
 
+  @property
+  def time_dim_axis_excluding_batch(self):
+    if self.time_dim_axis is None:
+      return None
+    return self.get_batch_axis_excluding_batch(self.time_dim_axis)
+
   def get_placeholder_as_time_major(self):
     if self.is_time_major:
       return self.placeholder
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
     return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+
+  def get_axes(self, exclude_time=False, exclude_batch=False):
+    """
+    :param bool exclude_time: will filter out the time-axis
+    :param bool exclude_batch: will filter out the batch-axis
+    :return: list of axes, like `range(len(self.shape))`, calculated with batch dim.
+    :rtype: list[int]
+    """
+    axes = list(range(len(self.batch_shape)))
+    if exclude_time and self.time_dim_axis is not None:
+      axes.pop(axes.index(self.time_dim_axis))
+    if exclude_batch and self.batch_dim_axis is not None:
+      axes.pop(axes.index(self.batch_dim_axis))
+    return axes
+
+  def get_batch_axis_excluding_batch(self, axis):
+    if axis == self.batch_dim_axis:
+      return None
+    if axis < self.batch_dim_axis:
+      return axis
+    return axis - 1
 
   @property
   def default_broadcast_noise_shape(self):
@@ -174,6 +202,19 @@ class OutputWithActivation(object):
         self.y = act_func(x)
     else:
       self.y = x
+
+  def is_softmax_act_func(self):
+    return self.act_func is tf.nn.softmax
+
+  def get_logits(self):
+    """
+    :rtype: tf.Tensor
+    :return: logits. logits are (not necessarily normalized) log probabilities, i.e. the input of softmax.
+    This call assumes that self.y is in probability space.
+    """
+    if self.is_softmax_act_func():
+      return self.x
+    return tf.log(self.y)
 
 
 def variable_summaries(var, name):
@@ -673,7 +714,7 @@ def expand_dims_unbroadcast(x, axis, dim):
 def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
-  :param tf.Tensor seq_lens: shape (batch,) of int32|int64
+  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
   :param bool collapse_repeated: like uniq() behavior
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
@@ -681,20 +722,29 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   with tf.name_scope("sparse_labels"):
     x = check_input_ndim(x, ndim=2)
-    x = check_dim_equal(x, 0, seq_lens, 0)
+    if seq_lens is not None:
+      x = check_dim_equal(x, 0, seq_lens, 0)
     if dtype:
       x = tf.cast(x, dtype)
     batch_size = tf.shape(x)[0]
     max_time = tf.shape(x)[1]
-    mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    if seq_lens is not None:
+      mask = sequence_mask(seq_lens, maxlen=max_time)  # shape (batch,time)
+    else:
+      mask = tf.ones(dtype=tf.bool, shape=(batch_size, max_time))
     if collapse_repeated:
       with tf.name_scope("collapse_repeated"):
-        diffs = tf.concat(1, [tf.ones_like(x[:, :1]), x[:, 1:] - x[:, :-1]])  # shape (batch,time)
-        zero = diffs.dtype.as_numpy_dtype()
-        mask = tf.logical_and(tf.not_equal(diffs, zero), mask)
+        diffs = tf.concat(
+          1, [tf.ones_like(x[:, :1], dtype=tf.bool), tf.not_equal(x[:, 1:], x[:, :-1])])  # shape (batch,time)
+        mask = tf.logical_and(diffs, mask)
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
+      if collapse_repeated:
+        # Recalculate mask, so that we have them all behind each other.
+        seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+        max_time = tf.reduce_max(seq_lens)
+        mask = sequence_mask(seq_lens)
       time_idxs = expand_dims_unbroadcast(tf.range(max_time), 0, batch_size)  # shape (batch,time)
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
       batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
@@ -703,7 +753,7 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       # tf.SparseTensor requires int64 indices
       flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):
-      shape = [batch_size, tf.reduce_max(seq_lens)]
+      shape = [batch_size, max_time]
       # tf.SparseTensor requires int64 shape
       shape = [tf.cast(d, tf.int64) for d in shape]
       shape = tf.convert_to_tensor(shape)
@@ -1150,3 +1200,29 @@ class CustomGradient(object):
 
 custom_gradient = CustomGradient()
 
+
+def debugRegisterBetterRepr():
+  """
+  Some types don't have good __repr__ implementations by default (for the current TF version).
+  For debugging, it can be helpful to give some more info.
+  """
+
+  from tensorflow.python.framework import tensor_util
+
+  def indexed_slices_repr(x):
+    """
+    :param tf.IndexedSlices x:
+    :rtype: str
+    """
+    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+  def op_repr(x):
+    """
+    :param tf.Operation x:
+    :rtype: str
+    """
+    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
+
+  tf.IndexedSlices.__repr__ = indexed_slices_repr
+  tf.Operation.__repr__ = op_repr

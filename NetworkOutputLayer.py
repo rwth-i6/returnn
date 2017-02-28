@@ -19,7 +19,7 @@ from Log import log
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y, dtype=None, copy_input=None, copy_output=None, time_limit=0,
+  def __init__(self, loss, y, dtype=None, reshape_target=False, copy_input=None, copy_output=None, time_limit=0,
                use_source_index=False,
                auto_fix_target_length=False,
                sigmoid_outputs=False, exp_outputs=False, gauss_outputs=False, activation=None,
@@ -45,6 +45,8 @@ class OutputLayer(Layer):
       self.set_attr('dtype', dtype)
     if copy_input:
       self.set_attr("copy_input", copy_input.name)
+    if reshape_target:
+      self.set_attr("reshape_target",reshape_target)
     if grad_clip_z is not None:
       self.set_attr("grad_clip_z", grad_clip_z)
     if compute_distortions:
@@ -119,7 +121,12 @@ class OutputLayer(Layer):
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
-      self.y_data_flat = time_batch_make_flat(y)
+      if reshape_target:
+        src_index = self.sources[0].index
+        self.index = src_index
+        self.y_data_flat = y.T.flatten()[(y.T.flatten()>=0).nonzero()]
+      else:
+      	self.y_data_flat = time_batch_make_flat(y)
     else:
       assert self.attrs.get("target", "").endswith("[sparse:coo]")
       assert isinstance(self.y, tuple)
@@ -258,6 +265,7 @@ class OutputLayer(Layer):
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
       custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
+      
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch
         self.set_attr("use_label_priors", use_label_priors)
@@ -612,7 +620,7 @@ class SequenceOutputLayer(OutputLayer):
       #from TheanoUtil import print_to_file
       #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
       def viterbi(op,x):
         print(x.argmin(axis=-1))
       #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
@@ -627,13 +635,14 @@ class SequenceOutputLayer(OutputLayer):
       #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       scores = -T.log(emissions.reshape(self.z.shape))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      fwdbwd = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
       if self.fast_bw_opts.get("bw_from"):
         out2 = self.fast_bw_opts.get("bw_from")
         bw = self.network.output[out2].baumwelch_alignment
+        obs_scores = self.network.output[out2].obs_scores
       else:
         def get_am_scores(layer):
           y = layer.p_y_given_x
@@ -722,7 +731,7 @@ class SequenceOutputLayer(OutputLayer):
           state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
-        fwdbwd = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+        fwdbwd, obs_scores = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
         if gamma != 1:
@@ -739,6 +748,7 @@ class SequenceOutputLayer(OutputLayer):
         if need_renorm:
           bw /= T.clip(T.sum(bw, axis=2, keepdims=True), numpy.float32(1.e-20), numpy.float32(1.e20))
       self.baumwelch_alignment = bw
+      self.obs_scores = obs_scores
       if self.ce_smoothing > 0:
         target_layer = self.attrs.get("ce_target_layer_align", None)
         assert target_layer  # we could also use self.y but so far we only want this
@@ -757,7 +767,11 @@ class SequenceOutputLayer(OutputLayer):
         err_inner -= numpy.float32(self.fast_bw_opts["log_score_penalty"]) * nlog_scores
       #idx = (src_index.flatten() > 0).nonzero()
       #err = T.sum(err_inner.reshape((err_inner.shape[0]*err_inner.shape[1],err_inner.shape[2]))[idx])
-      err = (err_inner * float_idx_bc).sum()
+      # use the log-likelihood of the sequence as the error output
+      if self.fast_bw_opts.get("use_obs_score_as_error"):
+        err = (obs_scores * T.cast(self.index,'float32') / T.sum(self.index, axis=0, dtype='float32', keepdims=True)).sum()
+      else:
+        err = (err_inner * float_idx_bc).sum()
       known_grads = {self.z: (y - bw) * float_idx_bc}
       if self.fast_bw_opts.get("gauss_grad"):
         known_grads[self.z] *= -2 * self.z
@@ -790,7 +804,7 @@ class SequenceOutputLayer(OutputLayer):
         tdp_fwd = T.as_tensor_variable(T.log(self.distortions['forward'][0]))
       err, grad, priors = TwoStateHMMOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)),
                                           self.index_for_ctc(),tdp_loop,tdp_fwd)
-      known_grads = {self.z: grad}
+      known_grads = {self.z: grad * numpy.float32(self.attrs.get('cost_scale', 1))}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'warp_ctc':
       import os

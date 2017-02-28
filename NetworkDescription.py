@@ -137,8 +137,8 @@ class LayerNetworkDescription:
     """
     num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
     data_dims = num_outputs.copy()
-    data_dims.setdefault("data", (num_inputs, 2))
     sparse_input = config.bool("sparse_input", False)
+    data_dims.setdefault("data", (num_inputs, 1 if sparse_input else 2))
     data = {}
     for key, data_type in data_dims.items():
       if isinstance(data_type, dict):
@@ -155,8 +155,6 @@ class LayerNetworkDescription:
       else:
         assert ndim >= 3
         init_args["shape"] = (None,) * (ndim - 1) + (dim,)
-      if key == "data":
-        init_args["sparse"] = sparse_input
       # In Returnn with Theano, we usually have the shape (time,batch,feature).
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:

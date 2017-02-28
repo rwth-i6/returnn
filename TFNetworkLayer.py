@@ -8,7 +8,8 @@ class LayerBase(object):
   recurrent = False
 
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None):
+               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
+               trainable=True):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -21,6 +22,7 @@ class LayerBase(object):
     :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
+    :param bool trainable: mostly ignored for now...
     """
     self.name = name
     self.network = network
@@ -52,7 +54,7 @@ class LayerBase(object):
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
     self.output = Data(**out_type)
-    # You are not supposed to set self.output.placeholder to the value which you want to return by the layer.
+    # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
@@ -64,10 +66,25 @@ class LayerBase(object):
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
     self._is_output_layer = is_output_layer
+    self.trainable = trainable
+    # Stats will be collected by the engine.
+    self.stats = {}  # type: dict[str,tf.Tensor]
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
       self.name, self.layer_class, self.output.get_description(with_name=False))
+
+  @classmethod
+  def cls_get_tf_scope_name(cls, name):
+    """
+    :param str name: layer name
+    :return: scope name, might be just name
+    """
+    return name.replace(":", "__")
+
+  @property
+  def tf_scope_name(self):
+    return self.cls_get_tf_scope_name(name=self.name)
 
   def is_output_layer(self):
     """
@@ -136,7 +153,7 @@ class LayerBase(object):
       return
     self.loss.init(
       output=self.output,
-      output_before_activation=self.output_before_activation,
+      output_with_activation=self.output_before_activation,
       target=self._get_target_value())
 
   def get_loss_value(self):
@@ -234,6 +251,10 @@ def concat_sources(src_layers):
 
 class _ConcatInputLayer(LayerBase):
   def __init__(self, dropout=0, mask=None, **kwargs):
+    """
+    :param float dropout:
+    :param str|None mask: "dropout" or "unity" or None
+    """
     super(_ConcatInputLayer, self).__init__(**kwargs)
     input_data = concat_sources(self.sources)
 
@@ -252,6 +273,77 @@ class _ConcatInputLayer(LayerBase):
     self.input_data = input_data
 
 
+class CopyLayer(_ConcatInputLayer):
+  layer_class = "copy"
+
+  def __init__(self, **kwargs):
+    # Dummy out_type for now, will reset layer.
+    super(CopyLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    self.output = self.input_data
+
+
+class SliceLayer(_ConcatInputLayer):
+  layer_class = "slice"
+
+  def __init__(self, axis=None, axis_kind=None,
+               slice_start=None, slice_end=None, slice_step=None,
+               **kwargs):
+    """
+    :param int|None axis:
+    :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
+    :param int|None slice_start:
+    :param int|None slice_end:
+    :param int|None slice_step:
+    :param int|None n_out:
+    """
+    # Dummy out_type for now, will reset layer.
+    super(SliceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    if axis is not None:
+      assert not axis_kind
+      assert 0 <= axis < len(self.input_data.batch_shape)
+    else:
+      assert axis_kind
+      axis_kind = axis_kind.upper()
+      if axis_kind == "T":
+        assert self.input_data.time_dim_axis is not None
+        axis = self.input_data.time_dim_axis
+      elif axis_kind == "B":
+        assert self.input_data.batch_dim_axis is not None
+        axis = self.input_data.batch_dim_axis
+      elif axis_kind == "F":
+        axes = self.input_data.get_axes(exclude_time=True, exclude_batch=True)
+        assert len(axes) == 1
+        axis = axes[0]
+    dim_slice = slice(slice_start, slice_end, slice_step)
+    slices = [slice(None, None)] * axis + [dim_slice]
+    out_type = self.input_data.get_kwargs()
+    axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
+    if axis_wo_batch is not None:
+      out_type["shape"] = list(out_type["shape"])
+      if out_type["shape"][axis_wo_batch] is not None:
+        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
+      if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
+        out_type["dim"] = out_type["shape"][axis_wo_batch]
+    self.output = Data(**out_type)
+    self.output.size_placeholder = self.input_data.size_placeholder
+    if axis == self.input_data.time_dim_axis:
+      if slice_start:
+        assert slice_start > 0
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          tf.maximum(0, self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] - slice_start)
+      if slice_end:
+        assert slice_end > 0
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          tf.minimum(
+            tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] - slice_end,
+            self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch])
+      if slice_step:
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] //= slice_step
+    elif axis_wo_batch is not None:
+      assert axis_wo_batch not in self.output.size_placeholder
+    self.output.placeholder = self.input_data.placeholder[slices]
+
+
 class LinearLayer(_ConcatInputLayer):
   layer_class = "linear"
 
@@ -262,9 +354,9 @@ class LinearLayer(_ConcatInputLayer):
     self.with_bias = with_bias
 
     input_data = self.input_data
-    n_in = input_data.shape[-1]
-    n_out = self.output.shape[-1]
-    assert n_in and n_out, "%r and %r" % (input_data.shape, self.output.shape)
+    n_in = input_data.dim
+    n_out = self.output.dim
+    assert n_in and n_out, "%r and %r" % (input_data, self.output)
 
     W = self.add_param(
       tf.Variable(
@@ -285,7 +377,11 @@ class LinearLayer(_ConcatInputLayer):
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
-      x = dot(x, W)
+      if self.input_data.sparse:
+        x = tf.nn.embedding_lookup(W, x)
+        ndim += 1
+      else:
+        x = dot(x, W)
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
@@ -303,6 +399,13 @@ class LinearLayer(_ConcatInputLayer):
     self.output.batch_dim_axis = self.input_data.batch_dim_axis
     self.output.time_dim_axis = self.input_data.time_dim_axis
     self.output.placeholder = x
+
+
+class SoftmaxLayer(LinearLayer):
+  layer_class = "softmax"
+
+  def __init__(self, activation="softmax", **kwargs):
+    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
 class RecLayer(_ConcatInputLayer):
@@ -330,11 +433,19 @@ class RecLayer(_ConcatInputLayer):
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
 
-  def __init__(self, unit="lstm", bidirectional=False, direction=None, **kwargs):
+  def __init__(self, unit="lstm", bidirectional=False, direction=None, input_projection=True, **kwargs):
+    """
+    :param str unit: the RNNCell/etc name, e.g. "nativelstm". see comment below
+    :param bool bidirectional: whether we should combine a forward and backward cell
+    :param int|None direction: None|1 -> forward, -1 -> backward
+    :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
+    :param dict[str] kwargs: passed on to base class
+    """
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn, rnn_cell
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
+    from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
     if unit in ["lstmp", "lstm"]:
       # Some possible LSTM implementations are:
       # * BasicLSTM, via official TF, pure TF implementation
@@ -369,9 +480,11 @@ class RecLayer(_ConcatInputLayer):
       if not self.input_data.is_time_major:
         assert self.input_data.batch_dim_axis == 0
         assert self.input_data.time_dim_axis == 1
-        x = tf.transpose(x, [1, 0, 2])   # (time,batch,dim)
+        x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
       if isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+        assert not self.input_data.sparse
+        assert input_projection
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
@@ -396,10 +509,17 @@ class RecLayer(_ConcatInputLayer):
           y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
         assert not bidirectional
-        W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
+        if input_projection:
+          W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
+          if self.input_data.sparse:
+            x = tf.nn.embedding_lookup(W, x)
+          else:
+            x = dot(x, W)
+        else:
+          assert not self.input_data.sparse
+          assert self.input_data.dim == cell_fw.n_input_dim
         b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
-        from TFUtil import dot, sequence_mask_time_major, directed
-        x = dot(x, W) + b
+        x += b
         index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
         y = cell_fw(inputs=directed(x, direction), index=directed(index, direction))
         y = directed(y, direction)
@@ -413,13 +533,6 @@ class RecLayer(_ConcatInputLayer):
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
 
-class SoftmaxLayer(LinearLayer):
-  layer_class = "softmax"
-
-  def __init__(self, activation="softmax", **kwargs):
-    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
-
-
 class FsaLayer(LayerBase):
   layer_class = "fsa"
 
@@ -430,6 +543,134 @@ class FsaLayer(LayerBase):
     # TODO...
 
 
+class CombineLayer(LayerBase):
+  layer_class = "combine"
+
+  # All ops require the same input shape and yield the same output shape. (For now)
+  @classmethod
+  def _op_kind_average(cls, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    x = sources[0].output.placeholder
+    for source in sources[1:]:
+      x += source.output.placeholder
+    x /= len(sources)
+    return x
+
+  def __init__(self, kind, sources, **kwargs):
+    """
+    :param str kind:
+    :param list[LayerBase] sources:
+    """
+    assert sources
+    kwargs = kwargs.copy()
+    if "n_out" not in kwargs and "out_type" not in kwargs:
+      kwargs["out_type"] = sources[0].output.get_kwargs()
+      kwargs["out_type"]["name"] = "%s_output" % kwargs["name"]
+    super(CombineLayer, self).__init__(sources=sources, **kwargs)
+    assert not self.output.sparse
+    for source in sources:
+      assert source.output.shape == self.output.shape
+      assert source.output.batch_dim_axis == self.output.batch_dim_axis
+      assert source.output.time_dim_axis == self.output.time_dim_axis
+    op = getattr(self, "_op_kind_%s" % kind)
+    self.output.placeholder = op(sources)
+
+
+class FramewiseStatisticsLayer(LayerBase):
+  layer_class = "framewise_statistics"
+
+  def __init__(self, sil_label_idx, histogram_num_bins=20, **kwargs):
+    # n_out=1 is a workaround for now. Our output should not be used. We have none.
+    super(FramewiseStatisticsLayer, self).__init__(n_out=1, **kwargs)
+    self.output.placeholder = tf.constant(0, name="dummy")
+    assert self.sources, "give me some sources"
+    # Currently, a bit hardcoded.
+    # We expect a framewise hard alignment, and calculate FER, CE, perplexity,
+    # for all frames, frames without silence, and silence frames.
+    from TFUtil import flatten_with_seq_len_mask
+    import numpy
+    source = self.sources[0]
+    output = source.output
+    target = source._get_target_value()
+    assert target.sparse
+    assert source.output_before_activation.act_func is tf.nn.softmax
+    output_seq_lens = output.size_placeholder[0]
+    output_before_softmax_flat = flatten_with_seq_len_mask(source.output_before_activation.x, output_seq_lens, time_major=output.is_time_major)
+    target_seq_lens = target.size_placeholder[0]
+    target_flat = flatten_with_seq_len_mask(target.placeholder, target_seq_lens, time_major=target.is_time_major)
+    target_flat.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+    flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
+    assert flat_last_dim == 1
+    output_flat = flatten_with_seq_len_mask(output.placeholder, output_seq_lens, time_major=output.is_time_major)
+    output_flat_argmax = tf.cast(tf.arg_max(output_before_softmax_flat, dimension=flat_last_dim), "int32")
+    frame_error = tf.not_equal(output_flat_argmax, target_flat)
+    # target_flat is shape (time,) -> index.
+    target_flat_exp = tf.pack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
+    true_label_prob = tf.gather_nd(output_flat, target_flat_exp)
+    true_label_prob.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    true_label_prob_i32 = tf.clip_by_value(
+      tf.cast(tf.round(true_label_prob * histogram_num_bins), tf.int32), 0, histogram_num_bins - 1)
+    true_label_prob_histogram = tf.stack(
+      [tf.equal(true_label_prob_i32, i) for i in range(histogram_num_bins)], axis=1)
+    true_label_prob_histogram.set_shape(tf.TensorShape([tf.Dimension(None), tf.Dimension(histogram_num_bins)]))
+
+    mask_no_sil = tf.not_equal(target_flat, sil_label_idx)
+    mask_sil = tf.equal(target_flat, sil_label_idx)
+    seq_len = tf.reduce_sum(target_seq_lens)
+    seq_len_sil = tf.reduce_sum(tf.cast(mask_sil, tf.int32))
+    seq_len_no_sil = tf.reduce_sum(tf.cast(mask_no_sil, tf.int32))
+
+    accumulated_seq_len = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
+    accumulated_seq_len_sil = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
+    accumulated_seq_len = tf.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
+    accumulated_seq_len_sil = tf.assign_add(accumulated_seq_len_sil, tf.cast(seq_len_sil, tf.int64))
+    accumulated_seq_len_no_sil = accumulated_seq_len - accumulated_seq_len_sil
+
+    self.stats["batch_seq_length"] = seq_len
+    self.stats["batch_seq_length_sil"] = seq_len_sil
+    self.stats["batch_seq_length_no_sil"] = seq_len_no_sil
+    self.stats["accumulated_seq_length"] = accumulated_seq_len
+    self.stats["accumulated_seq_length_sil"] = accumulated_seq_len_sil
+    self.stats["accumulated_seq_length_no_sil"] = accumulated_seq_len_no_sil
+
+    for _k, _v in {
+          "loss_ce": loss_ce,
+          "frame_error": frame_error,
+          "true_label_prob_histogram": true_label_prob_histogram}.items():
+      for _k2 in ["", "_sil", "_no_sil"]:
+        k = _k + _k2
+        v = _v
+        acc_seq_len = accumulated_seq_len
+        if k.endswith("_no_sil"):
+          v = tf.boolean_mask(v, mask_no_sil)
+          acc_seq_len = accumulated_seq_len_no_sil
+        elif k.endswith("_sil"):
+          v = tf.boolean_mask(v, mask_sil)
+          acc_seq_len = accumulated_seq_len_sil
+        v_f32 = tf.cast(v, tf.float32)
+        self.stats["batch_%s" % k] = tf.reduce_mean(v_f32, axis=0)
+        if v.dtype.is_floating:
+          acc_dtype = "float64"
+        else:
+          acc_dtype = "int64"
+        acc_shape = v.get_shape().as_list()[1:]
+        assert all(acc_shape)
+        acc_v = tf.Variable(initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype, trainable=False, name="accumulated_%s" % k)
+        acc_v = tf.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
+        self.stats["accumulated_%s" % k] = tf.cast(acc_v, tf.float64) / tf.cast(acc_seq_len, tf.float64)
+
+    self.stats["batch_loss_perplexity"] = tf.exp(self.stats["batch_loss_ce"])
+    self.stats["batch_loss_perplexity_sil"] = tf.exp(self.stats["batch_loss_ce_sil"])
+    self.stats["batch_loss_perplexity_no_sil"] = tf.exp(self.stats["batch_loss_ce_no_sil"])
+    self.stats["accumulated_loss_perplexity"] = tf.exp(self.stats["accumulated_loss_ce"])
+    self.stats["accumulated_loss_perplexity_sil"] = tf.exp(self.stats["accumulated_loss_ce_sil"])
+    self.stats["accumulated_loss_perplexity_no_sil"] = tf.exp(self.stats["accumulated_loss_ce_no_sil"])
+
+
 class Loss(object):
   class_name = None
   recurrent = False  # if this is a frame-wise criteria, this will be False
@@ -438,7 +679,7 @@ class Loss(object):
     # All are initialized in self.init().
     self.output = None  # type: Data
     self.time_major = None  # type: bool|None
-    self.output_before_activation = None  # type: (tf.Tensor,((tf.Tensor)->tf.Tensor))|None
+    self.output_with_activation = None  # type: OutputWithActivation
     self.output_seq_lens = None  # type: tf.Tensor
     self.target = None  # type: Data
     self.target_seq_lens = None  # type: tf.Tensor
@@ -448,26 +689,26 @@ class Loss(object):
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
 
-  def init(self, output, output_before_activation=None, target=None):
+  def init(self, output, output_with_activation=None, target=None):
     """
     :param Data output: generated output
-    :param OutputWithActivation|None output_before_activation:
+    :param OutputWithActivation|None output_with_activation:
     :param Data target: reference target from dataset
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
       self.output = output
-      self.output_before_activation = output_before_activation
+      self.output_with_activation = output_with_activation
       self.output_seq_lens = output.size_placeholder[0]
       self.target = target
       self.target_seq_lens = target.size_placeholder[0]
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if output_before_activation:
-        assert output_before_activation.y is output.placeholder
-      if output_before_activation and output_before_activation.act_func is tf.nn.softmax:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_before_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+      if output_with_activation:
+        assert output_with_activation.y is output.placeholder
+      if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
+        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
       else:
         self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
@@ -519,7 +760,8 @@ class CrossEntropyLoss(Loss):
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
           return self.reduce_func(out)
         else:
-          out = tf.log(tf.gather(self.output_flat, self.target_flat))
+          target_flat_exp = tf.pack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)
+          out = tf.log(tf.gather_nd(self.output_flat, target_flat_exp))
           return -self.reduce_func(out)
       else:  # not sparse
         if self.output_before_softmax_flat is not None:
@@ -538,7 +780,6 @@ class GenericCELoss(Loss):
 
     def loss(z, y, grad_f, target):
       nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
-      nlog_scores = tf.transpose(nlog_scores, [1, 0])  # (dim,time)
       # target is shape (time,) -> index.
       target_exp = tf.pack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
       # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).
@@ -569,9 +810,9 @@ class GenericCELoss(Loss):
     # See Theano NetworkOutputLayer.FramewiseOutputLayer.cost() with "generic_ce" loss.
     from TFUtil import flatten_with_seq_len_mask
     # activation function can be anything, e.g. exp or sigmoid, but not softmax, must be elemwise.
-    assert self.output_before_activation
-    x = self.output_before_activation.x
-    y = self.output_before_activation.y
+    assert self.output_with_activation
+    x = self.output_with_activation.x
+    y = self.output_with_activation.y
     grad_f, = tf.gradients(tf.log(y), x)
     assert grad_f is not None
     grad_f = flatten_with_seq_len_mask(grad_f, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
@@ -621,9 +862,11 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc"):
-      logits = self.output_before_activation
+      logits = self.output_with_activation
+      if self.output_with_activation:
+        logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output)
+        logits = tf.log(self.output.placeholder)
       assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
       assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
       seq_lens = self.output_seq_lens
@@ -635,9 +878,11 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc_error"):
-      logits = self.output_before_activation
+      logits = None
+      if self.output_with_activation:
+        logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output)
+        logits = tf.log(self.output.placeholder)
       if not self.output.is_time_major:
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens

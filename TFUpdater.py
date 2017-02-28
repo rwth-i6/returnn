@@ -40,11 +40,13 @@ class NadamOptimizer(tf.train.Optimizer):
     :param bool use_locking:
     :param str name:
 
-    Nadam is Adam with Nesterov momentum.
+    Nadam is Adam with Nesterov momentum, by Timothy Dozat (http://web.stanford.edu/~tdozat/).
     http://cs229.stanford.edu/proj2015/054_report.pdf
 
     Also see tf.train.AdamOptimizer for reference.
     For Nadam code, see also Theano Updater.
+    Also see here, from the original author of Nadam:
+    https://github.com/tdozat/Optimization/blob/master/tensorflow/nadam.py
     """
     super(NadamOptimizer, self).__init__(use_locking=use_locking, name=name)
 
@@ -71,7 +73,7 @@ class NadamOptimizer(tf.train.Optimizer):
 
   def _create_slots(self, var_list):
     # This get's called before self.prepare().
-    t = tf.train.get_global_step() + 1
+    t = tf.cast(tf.train.get_global_step(), "float32") + 1
     # Create the beta1 and beta2 accumulators on the same device as the first variable.
     if self._beta1_power is None or self._beta1_power.graph is not var_list[0].graph:
       with ops.colocate_with(var_list[0]):
@@ -89,7 +91,7 @@ class NadamOptimizer(tf.train.Optimizer):
     self._beta2_t = ops.convert_to_tensor(self._beta2, name="beta2")
     self._epsilon_t = ops.convert_to_tensor(self._epsilon, name="epsilon")
 
-    self._t = tf.train.get_global_step() + 1
+    self._t = tf.cast(tf.train.get_global_step(), "float32") + 1
 
     # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
     nadam_decay = 0.004  # Magical 250.0 denominator in nesterov scaling of i_t
@@ -162,8 +164,9 @@ class NadamOptimizer(tf.train.Optimizer):
     v_update = v
     v_ = v / (1 - beta2_power)
 
-    grad_ = grad / (1 - mu_prod_t_next)
-    m__ = mu_t_next * m_ + (1 - mu_t) * grad_  # dense + sparse
+    m__ = tf.sparse_add(
+      mu_t_next * m_,
+      tf.IndexedSlices((1 - mu_t) * grad.values / (1 - mu_prod_t_next), grad.indices, grad.dense_shape))
 
     step = lr_t * m__ / (tf.sqrt(v_) + epsilon_t)
     var_update = tf.assign_sub(var, step, use_locking=self._use_locking)
@@ -280,6 +283,7 @@ class Updater(object):
       aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
       grad_noise = self.config.float("gradient_noise", 0.0)
       grad_clip = self.config.float("gradient_clip", 0.0)
+      grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
 
       # Extended self.optimizer.minimize() to optinally modify gradients.
       grads_and_vars = self.optimizer.compute_gradients(
@@ -295,6 +299,10 @@ class Updater(object):
       if grad_clip:
         assert grad_clip > 0
         grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+      if grad_clip_global_norm:
+        assert grad_clip_global_norm > 0
+        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
       apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
@@ -308,10 +316,13 @@ class Updater(object):
         slot_vars.append(slot_var)
     self.tf_session.run(tf.variables_initializer(slot_vars, name="init_optim_slot_vars"))
 
-  def get_optim_op(self):
+  def get_optim_op(self, callback_on_new=None):
     """
+    :param None|()->None callback_on_new:
     :rtype: tf.Operation
     """
     if self.optim_op is None:
       self.create_optim_op()
+      if callback_on_new:
+        callback_on_new()
     return self.optim_op

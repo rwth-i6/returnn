@@ -268,6 +268,11 @@ class StereoHdfDataset(StereoDataset):
           self._normData.outputVariance,
         )
 
+    # enforce float32 to enable Theano optimizations
+    inputFeatures = inputFeatures.astype(np.float32)
+    if targets is not None:
+      targets = targets.astype(np.float32)
+
     return DatasetSeq(seq_idx, inputFeatures, targets)
 
   @staticmethod

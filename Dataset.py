@@ -74,6 +74,9 @@ class Dataset(object):
     self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
     self.epoch = None
 
+  def __repr__(self):
+    return "<%s %r>" % (self.__class__.__name__, self.name)
+
   def sliding_window(self, xr):
     """
     :type xr: numpy.ndarray

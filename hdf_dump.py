@@ -33,6 +33,8 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
   data_keys = sorted(dataset.get_data_keys())
   print >> log.v3, "Data keys:", data_keys
+  if "orth" in data_keys:
+    data_keys.remove("orth")
 
   # We need to do one run through the dataset to collect some stats like total len.
   print >> log.v3, "Collect stats, iterate through all data..."
@@ -87,6 +89,8 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     data_len = seq_len["data"]
     targets_len = seq_len["classes"]
     for data_key in dataset.get_target_list():
+      if data_key == "orth":
+        continue
       assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
     if targets_len is None:
       targets_len = data_len

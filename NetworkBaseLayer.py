@@ -18,7 +18,7 @@ class Container(object):
 
   def __init__(self, layer_class=None, name="", network=None,
                train_flag=False, eval_flag=False, depth=1, consensus="flat",
-               forward_weights_init=None, bias_init=None,
+               forward_weights_init=None, bias_init=None, weight_clip=0.0, cost=None,
                recurrent_weights_init=None,
                substitute_param_expr=None):
     """
@@ -54,6 +54,10 @@ class Container(object):
     if substitute_param_expr:
       self.set_attr("substitute_param_expr", substitute_param_expr)
     self.substitute_param_expr = substitute_param_expr
+    if weight_clip:
+      self.set_attr('weight_clip', weight_clip)
+    if cost:
+      self.set_attr('cost', cost)
 
   def __repr__(self):
     return "<%s class:%s name:%s>" % (self.__class__, self.layer_class, self.name)
@@ -463,7 +467,7 @@ class Layer(Container):
   recurrent = False
 
   def __init__(self, sources, n_out, index, y_in=None, target=None, target_index=None,
-               sparse=False, cost_scale=1.0,
+               sparse=False, cost_scale=1.0, input_scale=1.0,
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
@@ -515,6 +519,7 @@ class Layer(Container):
     if output_entropy_exp_reg:
       self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
+    self.set_attr('input_scale', input_scale)
     if y_in is not None:
       self.y_in = {}
       for k in y_in:
@@ -731,14 +736,14 @@ class Layer(Container):
       bn += beta
     return bn
 
-  def make_output(self, output, collapse = True):
+  def make_output(self, output, collapse = True, sample_mean=None, gamma=None):
     self.output = output
     if collapse and self.depth > 1:
       self.output = self.make_consensus(self.output)
       if self.attrs['consensus'] == 'flat':
         self.attrs['n_out'] *= self.depth
     if self.attrs['batch_norm']:
-      self.output = self.batch_norm(self.output, self.attrs['n_out'])
+      self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma)
     if self.attrs['residual']:
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)

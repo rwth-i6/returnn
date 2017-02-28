@@ -45,6 +45,18 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
     print("Does not have sys._current_frames, cannot get thread tracebacks.")
 
 
+def setupWarnWithTraceback():
+  import warnings
+  import better_exchook
+
+  def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+    log = file if hasattr(file, 'write') else sys.stderr
+    log.write(warnings.formatwarning(message, category, filename, lineno, line))
+    better_exchook.print_tb(sys._getframe(), file=log)
+
+  warnings.showwarning = warn_with_traceback
+
+
 def initBetterExchook():
   import thread
   import threading
@@ -79,6 +91,10 @@ def initBetterExchook():
     better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
 
   sys.excepthook = excepthook
+
+  from Util import to_bool
+  if os.environ.get("DEBUG_WARN_WITH_TRACEBACK") and to_bool(os.environ.get("DEBUG_WARN_WITH_TRACEBACK")):
+    setupWarnWithTraceback()
 
 
 def format_signum(signum):
@@ -177,7 +193,7 @@ def initFaulthandler(sigusr1_chain=False):
       if os.name != 'nt':
         faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
   from Util import to_bool
-  if os.environ.get("DEBUG") and to_bool(os.environ.get("DEBUG")):
+  if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
     installLibSigSegfault()
     installNativeSignalHandler()
 

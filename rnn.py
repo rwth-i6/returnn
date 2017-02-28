@@ -285,6 +285,10 @@ def initBackendEngine():
     print >> log.v3, "Theano:", describe_theano_version()
   elif BackendEngine.is_tensorflow_selected():
     print >> log.v3, "TensorFlow:", describe_tensorflow_version()
+    from Util import to_bool
+    from TFUtil import debugRegisterBetterRepr
+    if os.environ.get("DEBUG_TF_BETTER_REPR") and to_bool(os.environ.get("DEBUG_TF_BETTER_REPR")):
+      debugRegisterBetterRepr()
   else:
     raise NotImplementedError
 
@@ -376,9 +380,9 @@ def executeMainTask():
       theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
                                  outfile = "%s.png" % prefix)
   elif task == 'analyze':  # anything based on the network + Device
-    statistics = config.list('statistics', ['confusion_matrix'])
+    statistics = config.list('statistics', None)
     engine.init_network_from_config(config)
-    engine.analyze(engine.devices[0], eval_data, statistics)
+    engine.analyze(data=eval_data or dev_data, statistics=statistics)
   elif task == "analyze_data":  # anything just based on the data
     analyze_data(config)
   elif task == "classify":

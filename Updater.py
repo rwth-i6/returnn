@@ -56,6 +56,7 @@ class Updater:
                momentum=0.0, nesterov_momentum=0.0, momentum2=0.0,
                gradient_clip=-1.0,
                update_clip=-1.0,
+               weight_clip=0.0,
                adagrad=False,
                adadelta=False, adadelta_decay=0.90, adadelta_offset=1e-6,
                max_norm=0.0,
@@ -128,6 +129,7 @@ class Updater:
     self.momentum2 = numpy.float32(momentum2)
     self.gradient_clip = numpy.float32(gradient_clip)
     self.update_clip = numpy.float32(update_clip)
+    self.weight_clip = numpy.float32(weight_clip)
     self.max_norm = max_norm
     self.adagrad = adagrad
     self.adadelta = adadelta
@@ -420,7 +422,7 @@ class Updater:
         grads[param] = grads[param].transfer(self.device)
       gradient_scale = param.layer.gradient_scale
       if isinstance(param.layer.gradient_scale, list):
-        gradient_scale = T.switch(T.eq(T.mod(self.network.epoch - 1,gradient_scale[1]),0), gradient_scale[0], numpy.float32(0))
+        gradient_scale = T.switch(T.eq(T.mod(i_t - 1,gradient_scale[1]),0), gradient_scale[0], numpy.float32(0))
       deltas = grads[param] * T.cast(gradient_scale,'float32')
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
@@ -908,7 +910,15 @@ class Updater:
     #if upd:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))
-    updates.extend([(p, p + upd[p]) for p in upd if upd[p]])
+    for p in upd:
+      if upd[p]:
+        if p.layer.attrs.get('weight_clip', 0.0) > 0.0:
+          clip = numpy.float32(p.layer.attrs['weight_clip'])
+          updates.append((p, T.clip(p + upd[p], -clip, clip)))
+        elif self.weight_clip > 0.0:
+          updates.append((p, T.clip(p + upd[p], -self.weight_clip, self.weight_clip)))
+        else:
+          updates.append((p, p + upd[p]))
     updates.append((self.i, i_t))
     if self.adasecant:
       dt = 1 #T.cast(T.max(T.sum(self.network.output.values()[0].index,axis=0)), 'float32')

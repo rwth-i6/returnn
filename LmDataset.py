@@ -1,10 +1,12 @@
 
+from __future__ import print_function
+
 import sys
 from Dataset import DatasetSeq
 from CachedDataset2 import CachedDataset2
 import gzip
 import xml.etree.ElementTree as etree
-from Util import parse_orthography, parse_orthography_into_symbols, load_json, NumbersDict
+from Util import parse_orthography, parse_orthography_into_symbols, load_json, NumbersDict, BackendEngine
 from Log import log
 import numpy
 import time
@@ -14,26 +16,84 @@ from random import Random
 class LmDataset(CachedDataset2):
 
   def __init__(self,
-               corpus_file, phone_info=None, orth_symbols_file=None, orth_replace_map_file=None,
+               corpus_file,
+               orth_symbols_file=None,
+               orth_symbols_map_file=None,
+               orth_replace_map_file=None,
+               word_based=False,
+               seq_end_symbol="[END]",
+               unknown_symbol="[UNKNOWN]",
+               parse_orth_opts=None,
+               phone_info=None,
                add_random_phone_seqs=0,
                partition_epoch=1,
-               log_skipped_seqs=False, **kwargs):
+               auto_replace_unknown_symbol=False,
+               log_auto_replace_unknown_symbols=10,
+               log_skipped_seqs=10,
+               error_on_invalid_seq=True,
+               add_delayed_seq_data=False,
+               delayed_seq_data_start_symbol="[START]",
+               **kwargs):
     """
-    :param str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param dict | None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
-    :param str | None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
-    :param str | None orth_replace_map_file: JSON file with replacement dict for orth symbols
+    :param str|()->str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
+    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
+    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
+    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index"
+    :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols
+    :param bool word_based: whether to parse single words, or otherwise will be char-based
+    :param str|None seq_end_symbol: what to add at the end, if given.
+      will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
+    :param dict[str]|None parse_orth_opts: kwargs for parse_orthography()
     :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data
-    :param bool log_skipped_seqs: log skipped seqs
+    :param bool|int log_auto_replace_unknown_symbols: write about auto-replacements with unknown symbol.
+      if this is an int, it will only log the first N replacements, and then keep quiet.
+    :param bool|int log_skipped_seqs: write about skipped seqs to logging, due to missing lexicon entry or so.
+      if this is an int, it will only log the first N entries, and then keep quiet.
+    :param bool error_on_invalid_seq: if there is a seq we would have to skip, error
+    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
+      delayed_seq_data_start_symbol + original_sequence[:-1]
+    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
+    :param int partition_epoch: whether to partition the epochs into multiple parts. like epoch_split
     """
     super(LmDataset, self).__init__(**kwargs)
 
+    if callable(corpus_file):
+      corpus_file = corpus_file()
+    if callable(orth_symbols_file):
+      orth_symbols_file = orth_symbols_file()
+    if callable(orth_symbols_map_file):
+      orth_symbols_map_file = orth_symbols_map_file()
+    if callable(orth_replace_map_file):
+      orth_replace_map_file = orth_replace_map_file()
+
+    print("LmDataset, loading file", corpus_file, file=log.v4)
+
+    self.word_based = word_based
+    self.seq_end_symbol = seq_end_symbol
+    self.unknown_symbol = unknown_symbol
+    self.parse_orth_opts = parse_orth_opts or {}
+    self.parse_orth_opts.setdefault("word_based", self.word_based)
+    self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
+
     if orth_symbols_file:
       assert not phone_info
+      assert not orth_symbols_map_file
       orth_symbols = open(orth_symbols_file).read().splitlines()
       self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
       self.orth_symbols = orth_symbols
       self.labels["data"] = orth_symbols
+      self.seq_gen = None
+    elif orth_symbols_map_file:
+      assert not phone_info
+      orth_symbols_imap_list = [(int(b), a)
+                                for (a, b) in [l.split(None, 1)
+                                               for l in open(orth_symbols_map_file).read().splitlines()]]
+      orth_symbols_imap_list.sort()
+      assert orth_symbols_imap_list[0][0] == 0
+      assert orth_symbols_imap_list[-1][0] == len(orth_symbols_imap_list) - 1
+      self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
+      self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
+      self.labels["data"] = self.orth_symbols
       self.seq_gen = None
     else:
       assert not orth_symbols_file
@@ -44,33 +104,59 @@ class LmDataset(CachedDataset2):
     if orth_replace_map_file:
       orth_replace_map = load_json(filename=orth_replace_map_file)
       assert isinstance(orth_replace_map, dict)
-      self.orth_replace_map = {key: parse_orthography_into_symbols(v)
+      self.orth_replace_map = {key: parse_orthography_into_symbols(v, word_based=self.word_based)
                                for (key, v) in orth_replace_map.items()}
+      if self.orth_replace_map:
+        if len(self.orth_replace_map) <= 5:
+          print("  orth_replace_map: %r" % self.orth_replace_map, file=log.v5)
+        else:
+          print("  orth_replace_map: %i entries" % len(self.orth_replace_map), file=log.v5)
     else:
       self.orth_replace_map = {}
 
-    if len(self.labels["data"]) <= 256:
+    num_labels = len(self.labels["data"])
+    use_uint_types = False
+    if BackendEngine.is_tensorflow_selected():
+      use_uint_types = True
+    if num_labels <= 2 ** 7:
       self.dtype = "int8"
-    else:
+    elif num_labels <= 2 ** 8 and use_uint_types:
+      self.dtype = "uint8"
+    elif num_labels <= 2 ** 31:
       self.dtype = "int32"
+    elif num_labels <= 2 ** 32 and use_uint_types:
+      self.dtype = "uint32"
+    elif num_labels <= 2 ** 61:
+      self.dtype = "int64"
+    elif num_labels <= 2 ** 62 and use_uint_types:
+      self.dtype = "uint64"
+    else:
+      raise Exception("cannot handle so much labels: %i" % num_labels)
     self.num_outputs = {"data": [len(self.labels["data"]), 1]}
     self.num_inputs = self.num_outputs["data"][0]
     self.seq_order = None
+    self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
+    self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
     self.log_skipped_seqs = log_skipped_seqs
+    self.error_on_invalid_seq = error_on_invalid_seq
     self.partition_epoch = partition_epoch
     self.add_random_phone_seqs = add_random_phone_seqs
     for i in range(add_random_phone_seqs):
       self.num_outputs["random%i" % i] = self.num_outputs["data"]
+    self.add_delayed_seq_data = add_delayed_seq_data
+    self.delayed_seq_data_start_symbol = delayed_seq_data_start_symbol
+    if add_delayed_seq_data:
+      self.num_outputs["delayed"] = self.num_outputs["data"]
 
     if _is_bliss(corpus_file):
       iter_f = _iter_bliss
     else:
       iter_f = _iter_txt
     self.orths = []
-    print >> log.v4, "LmDataset, loading file", corpus_file
     iter_f(corpus_file, self.orths.append)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
+    print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
 
   def get_target_list(self):
     return sorted([k for k in self.num_outputs.keys() if k != "data"])
@@ -90,10 +176,28 @@ class LmDataset(CachedDataset2):
     self.next_orth_idx = 0
     self.next_seq_idx = 0
     self.num_skipped = 0
-    self._num_timesteps_accumulated = NumbersDict(0)
+    self.num_unknown = 0
     if self.seq_gen:
       self.seq_gen.random_seed(epoch)
     return True
+
+  def _reduce_log_skipped_seqs(self):
+    if isinstance(self.log_skipped_seqs, bool):
+      return
+    assert isinstance(self.log_skipped_seqs, int)
+    assert self.log_skipped_seqs >= 1
+    self.log_skipped_seqs -= 1
+    if not self.log_skipped_seqs:
+      print("LmDataset: will stop logging about skipped sequences now", file=log.v4)
+
+  def _reduce_log_auto_replace_unknown_symbols(self):
+    if isinstance(self.log_auto_replace_unknown_symbols, bool):
+      return
+    assert isinstance(self.log_auto_replace_unknown_symbols, int)
+    assert self.log_auto_replace_unknown_symbols >= 1
+    self.log_auto_replace_unknown_symbols -= 1
+    if not self.log_auto_replace_unknown_symbols:
+      print("LmDataset: will stop logging about auto-replace with unknown symbol now", file=log.v4)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -104,6 +208,8 @@ class LmDataset(CachedDataset2):
     while True:
       if self.next_orth_idx >= len(self.orths_epoch):
         assert self.next_seq_idx <= seq_idx, "We expect that we iterate through all seqs."
+        if self.num_skipped > 0:
+          print("LmDataset: reached end, skipped %i sequences" % self.num_skipped)
         return None
       assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
       orth = self.orths_epoch[self.seq_order[self.next_orth_idx]]
@@ -115,29 +221,50 @@ class LmDataset(CachedDataset2):
           phones = self.seq_gen.generate_seq(orth)
         except KeyError as e:
           if self.log_skipped_seqs:
-            print >> log.v4, "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (
-                             orth, e)
+            print("LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (orth, e), file=log.v4)
+            self._reduce_log_skipped_seqs()
+          if self.error_on_invalid_seq:
+            raise Exception("LmDataset: invalid seq %r, missing lexicon entry %r" % (orth, e))
           self.num_skipped += 1
-          continue
+          continue  # try another seq
         data = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
 
       elif self.orth_symbols:
-        orth_syms = parse_orthography(orth)
-        orth_syms = sum([self.orth_replace_map.get(s, [s]) for s in orth_syms], [])
-        i = 0
-        while i < len(orth_syms) - 1:
-          if orth_syms[i:i+2] == [" ", " "]:
-            orth_syms[i:i+2] = [" "]  # collapse two spaces
-          else:
-            i += 1
+        orth_syms = parse_orthography(orth, **self.parse_orth_opts)
+        while True:
+          orth_syms = sum([self.orth_replace_map.get(s, [s]) for s in orth_syms], [])
+          i = 0
+          while i < len(orth_syms) - 1:
+            if orth_syms[i:i+2] == [" ", " "]:
+              orth_syms[i:i+2] = [" "]  # collapse two spaces
+            else:
+              i += 1
+          if self.auto_replace_unknown_symbol:
+            try:
+              map(self.orth_symbols_map.__getitem__, orth_syms)
+            except KeyError as e:
+              orth_sym = e.message
+              if self.log_auto_replace_unknown_symbols:
+                print("LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r" % (orth_sym, self.unknown_symbol), file=log.v3)
+                self._reduce_log_auto_replace_unknown_symbols()
+              self.orth_replace_map[orth_sym] = [self.unknown_symbol] if self.unknown_symbol is not None else []
+              continue  # try this seq again with updated orth_replace_map
+          break
+        self.num_unknown += orth_syms.count(self.unknown_symbol)
+        if self.word_based:
+          orth_debug_str = repr(orth_syms)
+        else:
+          orth_debug_str = repr("".join(orth_syms))
         try:
           data = numpy.array(map(self.orth_symbols_map.__getitem__, orth_syms), dtype=self.dtype)
         except KeyError as e:
           if self.log_skipped_seqs:
-            print >> log.v4, "LmDataset: skipping sequence %r because of missing orth symbol: %s" % (
-                             "".join(orth_syms), e)
+            print("LmDataset: skipping sequence %s because of missing orth symbol: %s" % (orth_debug_str, e), file=log.v4)
+            self._reduce_log_skipped_seqs()
+          if self.error_on_invalid_seq:
+            raise Exception("LmDataset: invalid seq %s, missing orth symbol %s" % (orth_debug_str, e))
           self.num_skipped += 1
-          continue
+          continue  # try another seq
 
       else:
         assert False
@@ -147,7 +274,10 @@ class LmDataset(CachedDataset2):
         assert self.seq_gen  # not implemented atm for orths
         phones = self.seq_gen.generate_garbage_seq(target_len=data.shape[0])
         targets["random%i" % i] = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
-      self._num_timesteps_accumulated += data.shape[0]
+      if self.add_delayed_seq_data:
+        targets["delayed"] = numpy.concatenate(
+          ([self.orth_symbols_map[self.delayed_seq_data_start_symbol]], data[:-1])).astype(self.dtype)
+        assert targets["delayed"].shape == data.shape
       self.next_seq_idx = seq_idx + 1
       return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
 
@@ -262,7 +392,7 @@ class AllophoneState:
 class Lexicon:
 
   def __init__(self, filename):
-    print >> log.v4, "Loading lexicon", filename
+    print("Loading lexicon", filename, file=log.v4)
     lex_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       lex_file = gzip.GzipFile(fileobj=lex_file)
@@ -289,7 +419,7 @@ class Lexicon:
           self.phonemes[symbol] = {"index": len(self.phonemes), "symbol": symbol, "variation": variation}
           root.clear()  # free memory
         elif elem.tag == "phoneme-inventory":
-          print >> log.v4, "Finished phoneme inventory, %i phonemes" % len(self.phonemes)
+          print("Finished phoneme inventory, %i phonemes" % len(self.phonemes), file=log.v4)
           root.clear()  # free memory
         elif elem.tag == "lemma":
           for orth_elem in elem.findall("orth"):
@@ -298,7 +428,7 @@ class Lexicon:
             assert orth not in self.lemmas
             self.lemmas[orth] = {"orth": orth, "phons": phons}
           root.clear()  # free memory
-    print >> log.v4, "Finished whole lexicon, %i lemmas" % len(self.lemmas)
+    print("Finished whole lexicon, %i lemmas" % len(self.lemmas), file=log.v4)
 
 
 class StateTying:
@@ -526,25 +656,34 @@ def _main(argv):
   import better_exchook
   better_exchook.install()
   log.initialize(verbosity=[5])
-  dataset = LmDataset(**eval(argv[0]))
+  print("LmDataset demo startup")
+  kwargs = eval(argv[0])
+  print("Creating LmDataset with kwargs=%r ..." % kwargs)
+  dataset = LmDataset(**kwargs)
+  print("init_seq_order ...")
   dataset.init_seq_order(epoch=1)
 
   seq_idx = 0
   last_log_time = time.time()
+  print("start iterating through seqs ...")
   while dataset.is_less_than_num_seqs(seq_idx):
+    if seq_idx == 0:
+      print("load_seqs with seq_idx=%i ...." % seq_idx)
     dataset.load_seqs(seq_idx, seq_idx + 1)
 
     if time.time() - last_log_time > 2.0:
       last_log_time = time.time()
-      print >> log.v5, "Loading %s progress, %i/%i (%.0f%%) seqs loaded (%.0f%% skipped), total syms %i ..." % (
-                       dataset.__class__.__name__, dataset.next_orth_idx, dataset.estimated_num_seqs,
-                       100.0 * dataset.next_orth_idx / dataset.estimated_num_seqs,
-                       100.0 * dataset.num_skipped / (dataset.next_orth_idx or 1),
-                       dataset._num_timesteps_accumulated["data"])
+      print("Loading %s progress, %i/%i (%.0f%%) seqs loaded (%.0f%% skipped), (%.0f%% unknown) total syms %i ..." % (
+            dataset.__class__.__name__, dataset.next_orth_idx, dataset.estimated_num_seqs,
+            100.0 * dataset.next_orth_idx / dataset.estimated_num_seqs,
+            100.0 * dataset.num_skipped / (dataset.next_orth_idx or 1),
+            100.0 * dataset.num_unknown / dataset._num_timesteps_accumulated["data"],
+            dataset._num_timesteps_accumulated["data"]))
 
     seq_idx += 1
 
-  print >>log.v3, "dataset len:", dataset.len_info()
+  print("finished iterating, num seqs: %i" % seq_idx)
+  print("dataset len:", dataset.len_info())
 
 
 if __name__ == "__main__":

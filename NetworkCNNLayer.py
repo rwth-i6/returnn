@@ -16,7 +16,7 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from NetworkHiddenLayer import _NoOpLayer
 from ActivationFunctions import strtoact
 from cuda_implementation.FractionalMaxPoolingOp import fmp
-
+from theano.sandbox.cuda import dnn
 
 class CNN(_NoOpLayer):
   recurrent = True
@@ -246,6 +246,7 @@ class CNN(_NoOpLayer):
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
     if self.base:
+      #W = self.base[0].W
       W = self.add_param(self.base[0].W)
     else:
       W = self.add_param(
@@ -316,6 +317,7 @@ class CNN(_NoOpLayer):
 
   def bias_term(self, inputs, n_features, activation):
     if self.base:
+      #b = self.base[0].b
       b = self.add_param(self.base[0].b)
     else:
       b = self.add_param(
@@ -532,4 +534,3 @@ class ResNet(CNN):
 
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (time*batch, out-row, out-col, nb feature maps)
     self.output = output2.reshape((time, batch, output2.shape[1] * output2.shape[2] * output2.shape[3]))  # (time, batch, out-dim)
-
