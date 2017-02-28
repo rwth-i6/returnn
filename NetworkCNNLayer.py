@@ -261,10 +261,6 @@ class CNN(_NoOpLayer):
       )
     self.W = W
 
-
-    #x_printed = theano.printing.Print('in', attrs=['shape'])(inputs)
-
-
     if self.transpose:
       op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(
         imshp=inputs.shape,
@@ -374,6 +370,10 @@ class NewConv(CNN):
     if self.status[0]:  # the previous layer is convolutional layer
       self.input = T.concatenate([s.Output for s in self.sources], axis=1)  # (batch, stack size, row, col)
     else:
+      # In case of spliced data, the last dim in inputs contains stacked frames (e.g. ASR).
+      # Since Theano reshape will read _and_ write elements row-wise, we need to transpose the target matrix.
+      # This is done by swapping target dimensions (reshape(.., input_shape[1], input_shape[0]) and subsequent
+      # dimshuffle that puts row and col dim where Theano expects them.
       inputs2 = inputs.reshape((time * batch, self.input_shape[1],
                                 self.input_shape[0], self.filter_shape[1]))  # (time*batch, row, col, stack)
       self.input = inputs2.dimshuffle(0, 3, 2, 1)  # (batch, stack_size, row, col)
