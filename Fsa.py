@@ -337,12 +337,11 @@ def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
     lexicon = __load_lexicon(lexicon_file)
     print("Getting allophone sequence...")
     phon_dict = __find_allo_seq_in_lex(word_list, lexicon)
-  if depth == 2:
     print("Phoneme acceptor...")
     word_pos, phon_pos, num_states, edges = __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges)
   if depth >= 3:
     print("Triphone acceptor...")
-    num_states, edges = __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges)
+    num_states, edges = __triphone_acceptor_for_hmm_fsa(num_states, edges)
   if depth >= 4:
     print("Allophone state acceptor...")
     num_states, edges = __allophone_state_acceptor_for_hmm_fsa(allo_seq, sil, allo_num_states, num_states, edges)
@@ -507,7 +506,7 @@ def __phoneme_acceptor_for_hmm_fsa(word_list, phon_dict, num_states, edges):
       edges_phon.append(edge)
     edges_phon.sort(key=lambda x: x[0])
 
-  edges_phon = __renumber_nodes(num_states, edges_phon)
+  edges_phon = __sort_node_num(edges_phon)
 
   return word_pos, phon_pos, num_states, edges_phon
 
@@ -527,66 +526,144 @@ def __check_node_existance(node_num, edges):
     return False
 
 
-def __renumber_nodes(num_states, edges):
+def __sort_node_num(edges):
   """
-  reorders the node number: always rising numbers. never 40 -> 11
+  reorders the node numbers: always rising numbers. never 40 -> 11
   uses some kind of sorting algorithm (quicksort, ...)
   :param int num_states: number od states / nodes
-  :param list edges_phon: list with unordered nodes
-  :returnlist edges_phon: list with ordered nodes
+  :param list edges: list with unordered nodes
+  :return list edges: list with ordered nodes
   """
-  while (edges):
-    start_node_zero = [edge_index for edge_index, edge in enumerate(edges)
-               if (edge[0] == 0)]
+  idx = 0
 
-    nodes_tmp = []
-    for node in start_node_zero:
-      nodes_tmp.append(node)
-      edges.pop(node)
+  while (idx < len(edges)):  # traverse all edges from 0 to num_states
+    cur_edge = edges[idx]         # gets the current edge
+    cur_edge_start = cur_edge[0]  # with current start
+    cur_edge_end = cur_edge[1]    # and end node
 
-  print(num_states)
+    if cur_edge_start > cur_edge_end:  # only something to do if start node number > end node number
+      edges_cur_start = __find_node_edges(cur_edge_start, edges)  # find start node in all edges
+      edges_cur_end = __find_node_edges(cur_edge_end, edges)  # find end node in all edges
+
+      for edge_key in edges_cur_start.keys():  # loop over edge which have the specific node
+        edges[edge_key][edges_cur_start[edge_key]] = cur_edge_end  # replaces the start node number
+
+      for edge_key in edges_cur_end.keys():  # edge_key: idx from edge in edges
+        edges[edge_key][edges_cur_end[edge_key]] = cur_edge_start  # replaces the end node number
+
+      # reset idx: restarts traversing at the beginning of graph
+      # swapping may introduce new disorders
+      idx = 0
+
+    idx += 1
 
   return edges
 
 
-def __triphone_acceptor_for_hmm_fsa(sil, word_seq, allo_seq, num_states, edges):
-  allo_len = len(allo_seq)
-  num_states_new = num_states + 4 * (allo_len - 1)
-  edges_new = []
-  state_idx = 2
+def __find_node_edges(node, edges):
+  """
+  find a specific node in all edges
+  :param int node: node number
+  :param list edges: all edges
+  :return dict node_dict: dict of nodes where
+        key: edge index
+        value: 0 = node at edge start position
+        value: 1 = node at edge end position
+        value: 2 = node at edge start and edge postion
+  """
+  node_dict = {}
 
-  tri_seq = __triphone_from_phon(allo_seq)
+  pos_start = [edge_index for edge_index, edge in enumerate(edges) if (edge[0] == node)]
+  pos_end = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == node)]
+  pos_start_end = [edge_index for edge_index, edge in enumerate(edges) if
+                   (edge[0] == node and edge[1] == node)]
 
-  for edge in edges:
-    if edge[2] == sil and edge[1] == num_states - 1:
-      lst = list(edge)
-      lst[0] = num_states_new - 2
-      lst[1] = num_states_new - 1
-      edge = tuple(lst)
-      edges_new.append(edge)
-    elif edge[2] == word_seq:
-      for allo_idx in range(allo_len):
-        if allo_idx == 0:
-          idx1 = edge[0]
-          idx2 = state_idx
-        elif allo_idx == allo_len - 1:
-          idx1 = state_idx
-          if edge[1] == 3:
-            edge_idx_t = 1
-          elif edge[1] == 2:
-            edge_idx_t = 2
-          idx2 = num_states_new - edge_idx_t
-          state_idx += 1
-        else:
-          idx1 = state_idx
-          state_idx += 1
-          idx2 = state_idx
-        edge_t = (idx1, idx2, tri_seq[allo_idx], 1.)
-        edges_new.append(edge_t)
+  for pos in pos_start:
+    node_dict[pos] = 0
+
+  for pos in pos_end:
+    node_dict[pos] = 1
+
+  for pos in pos_start_end:
+    node_dict[pos] = 2
+
+  return node_dict
+
+
+def __triphone_acceptor_for_hmm_fsa(num_states, edges):
+  """
+  changes the labels of the edges from phonemes to triphones
+  :param list[str] or str word_seq: sequences of words
+  :param dict phon_dict:
+        key: lemma from the list
+        value: list of dictionaries with phon and score (keys)
+  :param list of dict word_pos: letter positions in word
+  :param list of list phon_pos: phoneme positions in lemma
+        0: phoneme sequence
+        1, 2: start end point
+        len = 1: no start end point
+  :param int num_states: number of states
+  :param list edges: list of edges
+  :return int num_states: number of states
+  :return list edges_tri: list of edges
+  """
+  global sil
+  global eps
+
+  edges_tri = []
+  edges_t = []
+  edges_t.extend(edges)
+
+  while(edges_t):
+    edge_t = edges_t.pop(0)
+    if edge_t[2] == sil or edge_t[2] == eps:
+      edges_tri.append(edge_t)
     else:
-      edges_new.append(edge)
+      prev_edge_t = __find_prev_next_edge(edge_t, 0, edges)
+      next_edge_t = __find_prev_next_edge(edge_t, 1, edges)
 
-  return num_states_new, edges_new
+      label_tri = [prev_edge_t[2], edge_t[2], next_edge_t[2]]
+
+      edge_n = [edge_t[0], edge_t[1], label_tri, edge_t[3]]
+      edges_tri.append(edge_n)
+
+  return num_states, edges_tri
+
+
+def __find_prev_next_edge(cur_edge, pn_switch, edges):
+  """
+  find the next/previous edge within the edges list
+  :param list cur_edge: current edge
+  :param int pn_switch: toggles between previous (0) and next (1) edge
+  :param list edges: list of edges
+  :return list pn_edge: previous/next edge
+  """
+  global sil
+  global eps
+
+  assert pn_switch == 0 or pn_switch == 1, ("Previous/Next switch has wrong value:", pn_switch)
+
+  # finds indexes of previous edges
+  prev_edge_cand_idx = [edge_index for edge_index, edge in enumerate(edges)
+                        if (cur_edge[pn_switch] == edge[1 - pn_switch])]
+
+  # remove eps and sil edges
+  prev_edge_cand_idx_len = len(prev_edge_cand_idx)
+  if prev_edge_cand_idx_len > 1:
+    for idx in prev_edge_cand_idx:
+      assert edges[idx][2] == sil or edges[idx][2] == eps, "Edge found which is not sil or eps"
+  else:
+    assert prev_edge_cand_idx_len <= 1, ("Too many previous edges found:", prev_edge_cand_idx)
+
+  assert prev_edge_cand_idx_len >= 0, ("Negative edges found. Something went wrong..")
+
+  # sets pn_edge to the previous edge or if sil/eps then empty edge
+  if prev_edge_cand_idx_len == 1:
+    pn_edge = edges[prev_edge_cand_idx[0]]
+  else:
+    pn_edge = [None, None, '', None]
+
+  return pn_edge
 
 
 def __triphone_from_phon(word_seq):

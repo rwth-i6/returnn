@@ -265,6 +265,7 @@ class OutputLayer(Layer):
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
       custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
+      
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch
         self.set_attr("use_label_priors", use_label_priors)
@@ -803,7 +804,7 @@ class SequenceOutputLayer(OutputLayer):
         tdp_fwd = T.as_tensor_variable(T.log(self.distortions['forward'][0]))
       err, grad, priors = TwoStateHMMOp()(emissions, cpu_contiguous(self.y.dimshuffle(1, 0)),
                                           self.index_for_ctc(),tdp_loop,tdp_fwd)
-      known_grads = {self.z: grad}
+      known_grads = {self.z: grad * numpy.float32(self.attrs.get('cost_scale', 1))}
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'warp_ctc':
       import os
