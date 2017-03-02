@@ -410,12 +410,12 @@ class CombinedDataset(CachedDataset2):
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
     try:
-      self._num_seqs = sum([ds.num_seqs for ds in self.datasets.values()])
+      self._num_seqs = sum([self.datasets[k].num_seqs for k in sorted(self.datasets.keys())])
       self.know_num_seqs_beforehand = True
 #      print "Dont need to set estimations for num_seqs. Currently is {s}".format(s=[ds.num_seqs for ds in self.datasets.values()])
     except:
-      self._estimated_num_seqs = sum([ds.estimated_num_seqs for ds in self.datasets.values()])
-      self.estimated_num_seq_per_subset = [ds.estimated_num_seqs for ds in self.datasets.values()]
+      self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
+      self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
 #      TODO this estimate seems broken on a small test corpus; needs further testing
 #      print "Need to set estimations for num_seqs. Currently is {s}".format(s=[ds.estimated_num_seqs for ds in self.datasets.values()])
       self.know_num_seqs_beforehand = False
@@ -492,8 +492,8 @@ class CombinedDataset(CachedDataset2):
 
           if total_remaining < 0.1: # We expect no more data, but try anyway
             nonempty_datasets = []
-            for j,ds in enumerate(self.datasets.values()):
-              if ds.is_less_than_num_seqs(self.used_num_seqs_per_subset[j]):
+            for j,k in enumerate(sorted(self.datasets.keys())):
+              if self.datasets[k].is_less_than_num_seqs(self.used_num_seqs_per_subset[j]):
                 nonempty_datasets.append(j)
             if nonempty_datasets == []:
               return False # No more data to add
