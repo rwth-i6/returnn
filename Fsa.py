@@ -19,7 +19,7 @@ class Fsa:
     self.fsa_type = fsa_type
     self.filename = 'fsa'
     self.lemma = ''
-    self.depth = 0
+    self.depth = 6
     self.num_labels = 0
     self.lexicon = ''
     self.state_tying = ''
