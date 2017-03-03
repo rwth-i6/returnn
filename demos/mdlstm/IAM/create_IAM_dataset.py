@@ -143,7 +143,7 @@ def convert(file_list_path, char_list_path, selections, out_file_names, pad_whit
       if f.split("/")[-1].split(".png")[0] in selection_set:
         selected_file_list.append(f)
         selected_transcription_list.append(t)
-    write_to_hdf(selected_file_list, selected_transcription_list, charlist, n_labels, out_file_name, dataset_prefix, compress)
+    write_to_hdf(selected_file_list, selected_transcription_list, charlist, n_labels, out_file_name, dataset_prefix, compress=compress)
 
 
 def get_image_list(train_list_path):
@@ -188,7 +188,7 @@ def convert_IAM_lines_demo(base_path_imgs, tag, blacklist=[]):
   selections = [demo_list]
   out_file_names = [out_file_name_demo]
   
-  convert(file_list_path, char_list_path, selections, out_file_names, pad_whitespace=True, dataset_prefix="trainset", base_path=base_path_imgs, compress=False)
+  convert(file_list_path, char_list_path, selections, out_file_names, pad_whitespace=True, dataset_prefix="trainset", base_path=base_path_imgs, compress=True)
 
 def convert_IAM_lines_train(base_path_imgs, tag, blacklist=[]):
   base_path_out = "features/" + tag + "/"
@@ -208,8 +208,7 @@ def convert_IAM_lines_train(base_path_imgs, tag, blacklist=[]):
   selections = [train_list1, train_list2, train_valid_list]
   out_file_names = [out_file_name_train1, out_file_name_train2, out_file_name_train_valid]
 
-  #convert(file_list_path, char_list_path, selections, out_file_names, pad_whitespace=True, dataset_prefix="trainset", base_path=base_path_imgs, compress=True)
-  convert(file_list_path, char_list_path, selections, out_file_names, pad_whitespace=True, dataset_prefix="trainset", base_path=base_path_imgs, compress=False)
+  convert(file_list_path, char_list_path, selections, out_file_names, pad_whitespace=True, dataset_prefix="trainset", base_path=base_path_imgs, compress=True)
 
 
 def convert_IAM_lines_valid_test(base_path_imgs, tag):
@@ -239,7 +238,7 @@ def convert_IAM_lines_valid_test(base_path_imgs, tag):
     transcriptions = [[]] * len(imgs)
 
     print "converting IAM_lines to", out_file_name
-    write_to_hdf(imgs, transcriptions, charlist, n_labels, out_file_name, dataset_prefix=prefix, compress=False)
+    write_to_hdf(imgs, transcriptions, charlist, n_labels, out_file_name, dataset_prefix=prefix, compress=True)
 
 
 def main():
