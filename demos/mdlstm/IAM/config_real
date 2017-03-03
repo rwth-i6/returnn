@@ -3,7 +3,7 @@
 "device": "gpuX",
 "multiprocessing": true,
 "batching": "default",
-"cache_size": "16G",
+"cache_size": "256G",
 "max_seqs": 10,
 "batch_size": 600000,
 "nadam": 1,
