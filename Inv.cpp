@@ -5,6 +5,7 @@
 #define FOCUS_LAST 0
 #define FOCUS_MAX 1
 
+#define VERBOSE 0
 
 class Inv
 {
@@ -12,7 +13,7 @@ public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
     int T, int N, int S, int min_skip, int max_skip, int focus, SArrayI& attention)
     {
-        int M = max_skip + 1;
+        int M = max_skip;
         if(M > T - S)
         {
             M = T - S + 1;
@@ -25,11 +26,15 @@ public:
         {
             min_skip = M;
         }
-        if((T - M) / (N * S) > M)
+        if(M == 0)
+        {
+          M = T / (N * S) + min_skip + 1;
+          min_skip = M - 2 * min_skip;
+        } else if((T - M) / (N * S) > M)
         {
             M = (T - M) / (N * S) + 1;
             static int max_skip_warning_limit = 0;
-            if(M > max_skip_warning_limit)
+            if(VERBOSE && M > max_skip_warning_limit)
             {
                 max_skip_warning_limit = M;
                 cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
@@ -141,7 +146,7 @@ public:
         {
             M = T / (N * S) + 1;
             static int max_skip_warning_limit = 0;
-            if(M > max_skip_warning_limit)
+            if(VERBOSE && M > max_skip_warning_limit)
             {
                 max_skip_warning_limit = M;
                 cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
