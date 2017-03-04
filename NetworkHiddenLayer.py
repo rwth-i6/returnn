@@ -2798,12 +2798,12 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, focus='last', mode='viterbi', **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=0, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
       base = []
-    kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
+    kwargs['n_out'] = kwargs['y_in'][target].n_out + (blank > 0)
     n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
@@ -2935,7 +2935,7 @@ class CAlignmentLayer(ForwardLayer):
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
-        if blank:
+        if blank > 0.0:
           jdx = self.sources[0].index.dimshuffle(1,0).flatten()
           jdx = T.set_subtensor(jdx[att_flat],numpy.int32(0))
           norm = self.index.sum(dtype='float32') / jdx.sum(dtype='float32')
@@ -2945,7 +2945,7 @@ class CAlignmentLayer(ForwardLayer):
                                                      y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
           rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
                                                      y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
-          self.cost_val += norm * T.sum(bnll) #- T.sum(rnll)
+          self.cost_val += numpy.float32(blank) * norm * T.sum(bnll) #- T.sum(rnll)
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
