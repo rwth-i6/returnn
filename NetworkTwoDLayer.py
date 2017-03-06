@@ -340,12 +340,16 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     return b
 
 def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, filter_dilation, poolsize):
-  conv_op = CuDNNConvHWBCOpValidInstance
-  pool_op = PoolHWBCOp(poolsize)
-  conv_out = conv_op(X, W, b) if filter_height * filter_width > 0 else X
-  crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
-  Y = pool_op(crop_out)
-  Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
+  from Device import is_using_gpu
+  if is_using_gpu():
+    conv_op = CuDNNConvHWBCOpValidInstance
+    pool_op = PoolHWBCOp(poolsize)
+    conv_out = conv_op(X, W, b) if filter_height * filter_width > 0 else X
+    crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
+    Y = pool_op(crop_out)
+    Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
+  else:
+    Y = X
   return Y
 
 
