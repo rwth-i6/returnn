@@ -296,7 +296,6 @@ class Fsa:
       self.edges.append((label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.))
     self.final_states.append(label_blank_idx + 1)
 
-
   def _adds_last_state_for_ctc(self):
     """
     adds last states for ctc
@@ -309,7 +308,6 @@ class Fsa:
     self.edges.append((i + 1, i + 2, label_blank, 1.))
     self.num_states += 3
     self.final_states.append(self.num_states - 1)
-
 
   def _make_single_final_state(self):
     """
@@ -328,36 +326,6 @@ class Fsa:
         edges_fstate = [edge_index for edge_index, edge in enumerate(self.edges) if (edge[1] == fstate)]
         for fstate_edge in edges_fstate:
           self.edges.append((self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.))
-
-
-def _determine_edges(num_states, edges):
-  """
-  transforms the graph from non-deterministic to deterministic
-  specifically removing epsilon edges
-  :param int num_states: number of states
-  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
-  :return num_states, edges:
-  """
-  new_states = []  # type: list[set[int]]
-  start_states = _discover_eps([0], num_states, edges)
-  todo = [start_states]
-
-  return num_states, edges
-
-
-def _discover_eps(node, num_states, edges):
-  """
-  starting at a specific node, the nodes connected via epsilon are found
-  :param list[int] node:
-    list of nodes in the graph which are starting points for epsilon edge search
-  :param int num_states: number of states
-  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
-  :return list[tuples(start[int], end[int], label, weight)] eps_edges:
-    all edges from specific node with label epsilon
-  """
-  eps_edges = []
-
-  return eps_edges
 
 
 def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
