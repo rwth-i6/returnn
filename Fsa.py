@@ -15,8 +15,8 @@ class Fsa:
 
   def __init__(self, lemma, fsa_type):
     """
-    :param lemma:
-    :param fsa_type:
+    :param str lemma: word or sentence
+    :param str fsa_type: determines finite state automaton type: asg, ctc, hmm
     """
     # needed by ASG, CTC and HMM
     self.num_states = 0
@@ -48,7 +48,7 @@ class Fsa:
   def set_params(self,
                  filename='fsa',
                  asg_repetition=2,
-                 num_labels=27,
+                 num_labels=256,  # ascii number of labels
                  label_conversion=None,
                  depth=6,
                  allo_num_states=3,
@@ -119,12 +119,13 @@ class Fsa:
   def run(self):
     if self.fsa_type == 'asg':
       if self.label_conversion == True:
-        self.lemma = self.convert_label_seq_to_indices()
+        self.convert_label_seq_to_indices()
       else:
         self.lemma = self.lemma_orig
-      assert type(self.lemma) == str, "Lemma not str"
 
-      print("Number of labels (ex.: a-z == 27 labels):", self.num_labels)
+      assert isinstance(self.lemma, str) or isinstance(self.lemma, list), "Lemma not str or list"
+
+      print("Number of labels (ex.: ascii: 265 labels):", self.num_labels)
       print("Number of repetition symbols:", self.asg_repetition)
       for rep in range(1, self.asg_repetition + 1):
         print("Repetition label:", self.num_labels + rep, "meaning", rep, "repetitions")
@@ -144,20 +145,17 @@ class Fsa:
 
   def convert_label_seq_to_indices(self):
     """
-    takes label sequence of chars and converts to indices (a->0, b->1, ...)
-    :param int num_labels: total number of labels
-    :param str label_seq: sequence of labels
-    :return list[int] label_indices: labels converted into indices
+    takes label sequence of chars and converts to indices (ascii numbering)
     """
     label_indices = []
     label_seq = self.lemma_orig
 
     for label in label_seq:
-      label_index = ord(label) - 97
+      label_index = ord(label)
       assert label_index < self.num_labels, "Index of label exceeds number of labels"
       label_indices.append(label_index)
 
-    self.label = label_indices
+    self.lemma = label_indices
 
   def _adds_loop_edges(self):
     """
@@ -1274,7 +1272,7 @@ def main():
   arg_parser.add_argument("--asg_repetition", type=int)
   arg_parser.set_defaults(asg_repetition=3)
   arg_parser.add_argument("--num_labels", type=int)
-  arg_parser.set_defaults(num_labels=27)
+  arg_parser.set_defaults(num_labels=265)  # ascii number of labels
   arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
   arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
   arg_parser.set_defaults(label_conversion=None)
@@ -1330,9 +1328,8 @@ def main():
                                              state_tying_file=args.state_tying,
                                              depth=args.depth,
                                              allo_num_states=args.allo_num_states)
-
-  fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
   """
+  fsa_to_dot_format(file=fsa_gen.filename, num_states=fsa_gen.num_states, edges=fsa_gen.edges)
 
 
 if __name__ == "__main__":
