@@ -72,7 +72,7 @@ class Fsa:
   def run(self):
     if self.fsa_type == 'asg':
       if self.label_conversion == True:
-        self.lemma = self.convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
+        self.lemma = self.convert_label_seq_to_indices()
       else:
         self.lemma = self.lemma_orig
       assert type(self.lemma) == str, "Lemma not str"
@@ -95,7 +95,7 @@ class Fsa:
       print("No finite state automaton matches to chosen type")
 
 
-  def convert_label_seq_to_indices(num_labels, label_seq):
+  def convert_label_seq_to_indices(self):
     """
     takes label sequence of chars and converts to indices (a->0, b->1, ...)
     :param int num_labels: total number of labels
@@ -103,15 +103,16 @@ class Fsa:
     :return list[int] label_indices: labels converted into indices
     """
     label_indices = []
+    label_seq = self.lemma_orig
 
     for label in label_seq:
       label_index = ord(label) - 97
-      assert label_index < num_labels, "Index of label exceeds number of labels"
+      assert label_index < self.num_labels, "Index of label exceeds number of labels"
       label_indices.append(label_index)
 
-    return label_indices
+    self.label = label_indices
 
-  def _adds_loop_edges(num_states, edges):
+  def _adds_loop_edges(self):
     """
     for every node loops with edge label pointing to node
     :param int num_states: number of states
@@ -127,21 +128,19 @@ class Fsa:
     """
     print("Adding loops...")
     # adds loops to fsa (loops on first and last node excluded)
-    for state in range(1, num_states - 1):
-      edges_included = [edge_index for edge_index, edge in enumerate(edges) if
+    for state in range(1, self.num_states - 1):
+      edges_included = [edge_index for edge_index, edge in enumerate(self.edges) if
                         (edge[1] == state and edge[2] != _EPS)]
       try:
-        label_pos = edges[edges_included[0]][4]
+        label_pos = self.edges[edges_included[0]][4]
       except:
         label_pos = None
-      edge_n = [state, state, edges[edges_included[0]][2], 0., label_pos]
+      edge_n = [state, state, self.edges[edges_included[0]][2], 0., label_pos]
       assert len(edge_n) == 5, "length of edge wrong"
-      edges.append(edge_n)
-
-    return num_states, edges
+      self.edges.append(edge_n)
 
 
-  def _check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
+  def _check_for_repetitions_for_asg(self):
     """
     checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
     :param list[int] label_indices: sequence of label indices
@@ -151,32 +150,32 @@ class Fsa:
     rep_count = 0
     index_old = None
 
-    if repetitions == 0:
-      reps = label_indices
+    if self.asg_repetition == 0:
+      reps = self.lemma
     else:
-      for index in label_indices:
+      for index in self.lemma:
         index_t = index
         if index_t == index_old:
-          if rep_count < repetitions:
+          if rep_count < self.asg_repetition:
             rep_count += 1
           elif rep_count != 0:
-            reps.append(num_labels + rep_count)
+            reps.append(self.num_labels + rep_count)
             rep_count = 1
           else:
             print("Something went wrong")
         elif index_t != index_old:
           if rep_count != 0:
-            reps.append(num_labels + rep_count)
+            reps.append(self.num_labels + rep_count)
             rep_count = 0
           reps.append(index)
         else:
           print("Something went wrong")
         index_old = index
 
-    return reps
+    self.lemma = reps
 
 
-  def _create_states_from_label_for_asg(rep_seq, edges):
+  def _create_states_from_label_for_asg(self):
     """
     :param int rep_index: label number
     :param int num_labels: number of labels
@@ -190,12 +189,10 @@ class Fsa:
         label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
         weight is a float, in -log space
     """
-    for rep_index, rep_label in enumerate(rep_seq):
-      edges.append((rep_index, rep_index+1, rep_label, 1.))
+    for rep_index, rep_label in enumerate(self.lemma):
+      self.edges.append((rep_index, rep_index+1, rep_label, 1.))
 
-    num_states = len(rep_seq) + 1
-
-    return num_states, edges
+    self.num_states = len(self.lemma) + 1
 
 
 def ctc_fsa_for_label_seq(num_labels, label_seq):
