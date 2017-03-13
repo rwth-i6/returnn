@@ -38,6 +38,29 @@ class Fsa:
     self.label_conversion = None
 
 
+  def setParamsASG(self, asg_repetition, num_labels, label_conversion):
+    """
+    sets the parameters for ASG FSA generator
+    :param int asg_repetition:
+      if a label is repeated within the lemma how many repetitions will be substituted
+      with a specific repetition symbol
+    :param int num_labels: total number of labels
+    :param bool label_conversion:
+      true: each label converted to index of its label
+      false: no conversion
+    :return:
+    """
+    self.asg_repetition = asg_repetition
+    assert self.asg_repetition >= 0, "ASG repetition not set"
+
+    self.num_labels = num_labels
+    assert self.num_labels > 0, "Number of labels not set (ASG)"
+
+    self.label_conversion = label_conversion
+    assert self.label_conversion != None and type(
+      self.label_conversion) == bool, "Label conversion not set (ASG)"
+
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
