@@ -243,9 +243,8 @@ class Fsa:
 
   def _check_for_repetitions_for_asg(self):
     """
-    checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
-    :param list[int] label_indices: sequence of label indices
-    :return: list[int] reps: list of indices of label repetitions
+    checks the label indices for repetitions,
+    if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
     """
     reps = []
     rep_count = 0
@@ -277,17 +276,7 @@ class Fsa:
 
   def _create_states_from_label_for_asg(self):
     """
-    :param int rep_index: label number
-    :param int num_labels: number of labels
-    :param list edges: list of edges
-    :returns (num_states, edges)
-    where:
-      num_states: int, number of states.
-        per convention, state 0 is start state, state (num_states - 1) is single final state
-      edges: list[(from,to,label_idx,weight)]
-        from and to are state_idx >= 0 and < num_states,
-        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-        weight is a float, in -log space
+    create states from lemma
     """
     for rep_index, rep_label in enumerate(self.lemma):
       self.edges.append((rep_index, rep_index+1, rep_label, 1.))
