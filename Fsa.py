@@ -94,7 +94,7 @@ class Fsa:
       pass
     else:
       print("No finite state automaton matches to chosen type")
-
+      sys.exit(0)
 
   def convert_label_seq_to_indices(self):
     """
@@ -140,7 +140,6 @@ class Fsa:
       assert len(edge_n) == 5, "length of edge wrong"
       self.edges.append(edge_n)
 
-
   def _check_for_repetitions_for_asg(self):
     """
     checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
@@ -174,7 +173,6 @@ class Fsa:
         index_old = index
 
     self.lemma = reps
-
 
   def _create_states_from_label_for_asg(self):
     """
