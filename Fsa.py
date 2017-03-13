@@ -95,6 +95,13 @@ class Fsa:
     print("Setting parameters for", self.fsa_type)
     self.filename = filename
 
+    if not isinstance(label_conversion, bool):
+      print("Set label conversion option:")
+      print("1 (On) or 0 (Off)")
+      label_conversion = raw_input("--> ")
+    self.label_conversion = bool(int(label_conversion))
+    assert isinstance(self.label_conversion, bool), "Label conversion not set"
+
     if self.fsa_type == 'asg' or self.fsa_type == 'ctc':
       if self.fsa_type == 'asg' and asg_repetition < 0:
         print("Enter length of repetition symbols:")
@@ -109,13 +116,6 @@ class Fsa:
         num_labels = raw_input("--> ")
       self.num_labels = int(num_labels)
       assert self.num_labels > 0, "Number of labels not set"
-
-      if not isinstance(label_conversion, bool):
-        print("Set label conversion option:")
-        print("1 (On) or 0 (Off)")
-        label_conversion = raw_input("--> ")
-      self.label_conversion = bool(int(label_conversion))
-      assert isinstance(self.label_conversion, bool), "Label conversion not set"
 
     elif self.fsa_type == 'hmm':
       self.lemma_orig = self.lemma_orig.lower()
@@ -215,13 +215,8 @@ class Fsa:
         self._adds_loop_edges()
       if self.depth >= 6:
         print("State tying...")
-        num_states, edges = _state_tying_for_hmm_fsa(state_tying_file,
-                                                     num_states,
-                                                     edges)
+        self._state_tying_for_hmm_fsa()
       if self.depth >= 7:
-        print("Replacing with numbers...")
-        _state_tying_finish_for_hmm_fsa()
-      if self.depth >= 8:
         print("No depth level higher than 6!")
     else:
       print("No finite state automaton matches to chosen type")
@@ -712,6 +707,95 @@ class Fsa:
     self.num_states = num_states_output
     self.edges = edges_output
 
+  def _state_tying_for_hmm_fsa(self):
+    """
+    idea: take file with mapping char to number and apply to edge labels
+    """
+    edges_t = []
+    edges_t.extend(self.edges)
+    self.edges = []
+    self._load_state_tying_file()
+
+    while (edges_t):
+      edge_t = edges_t.pop(0)
+      assert len(edge_t) == 5, "edge length != 5"
+      label = edge_t[2]
+      pos = edge_t[4]
+
+      allo_syntax = self._build_allo_syntax_for_mapping(label, pos)
+
+      if label == self._EPS:
+        allo_id_num = '*'
+      else:
+        allo_id_num = self.state_tying.allo_map[allo_syntax]
+
+      if self.label_conversion:
+        self.edges.append((edge_t[0], edge_t[1], allo_id_num, edge_t[3]))
+      else:
+        self.edges.append((edge_t[0], edge_t[1], allo_syntax, edge_t[3]))
+
+  def _load_state_tying_file(self):
+    '''
+    loads a state tying map from a file, loads the file and returns its content
+    :param stFile: state tying map file (allo_syntax int)
+    :return state_tying: variable with state tying mapping
+    where:
+      statetying.allo_map important
+    '''
+    from os.path import isfile
+    from LmDataset import StateTying
+
+    print("Loading state tying file:", self.state_tying_name)
+
+    assert isfile(self.state_tying_name), "State tying file does not exists"
+
+    self.state_tying = StateTying(self.state_tying_name)
+
+    print("Finished state tying mapping:", len(self.state_tying.allo_map), "allos to int")
+
+  def _build_allo_syntax_for_mapping(self, label, pos=''):
+    """
+    builds a conforming allo syntax for mapping
+    :param str or list label: a allo either string or list
+    :param str pos: position of allophone within the word
+    :return str allo_map: a allo syntax ready for mapping
+    """
+    assert isinstance(label, str) or isinstance(label,
+                                                list), "Something went wrong while building allo syntax for mapping"
+
+    if isinstance(label, str) and label == self._SIL:
+      allo_start = "%s{#+#}" % ('[SILENCE]')
+    elif isinstance(label, str) and label == self._EPS:
+      allo_start = "*"
+    else:
+      if label[0] == '' and label[2] == '':
+        allo_start = "%s{#+#}" % (label[1])
+      elif label[0] == '':
+        allo_start = "%s{#+%s}" % (label[1], label[2])
+      elif label[2] == '':
+        allo_start = "%s{%s+#}" % (label[1], label[0])
+      else:
+        allo_start = "%s{%s+%s}" % (label[1], label[0], label[2])
+
+    allo_middle = ''
+    if pos == 'if':
+      allo_middle = "@%s@%s" % ('i', 'f')
+    elif pos == 'i':
+      allo_middle = "@%s" % ('i')
+    elif pos == 'f':
+      allo_middle = "@%s" % ('f')
+
+    if label == self._SIL:
+      allo_end = ".0"
+    elif label == self._EPS:
+      allo_end = ""
+    else:
+      allo_end = ".%i" % (label[3])
+
+    allo_map = "%s%s%s" % (allo_start, allo_middle, allo_end)
+
+    return allo_map
+
 
 def _check_node_existance(node_num, edges):
   """
@@ -974,108 +1058,6 @@ def _expand_tri_edge_for_hmm_fsa(current_edge,
   edges_output.sort(key=lambda x: x[1])
 
   return edges_updated, num_states_output, edges_output
-
-
-def _state_tying_for_hmm_fsa(state_tying_file,
-                             num_states,
-                             edges):
-  """
-  idea: take file with mapping char to number and apply to edge labels
-  :param state_tying_file: file in which the state tying mappings are stored
-  :param int num_states:
-  :param list[list[start[int], end[int], label, weight, position]] edges:
-  :return: num_states, edges
-  """
-  edges_t = []
-  edges_t.extend(edges)
-  edges_ts = []
-  edges_st = []
-  statetying = _load_state_tying_file(state_tying_file)
-
-  while (edges_t):
-    edge_t = edges_t.pop(0)
-    assert len(edge_t) == 5, "edge length != 5"
-    label = edge_t[2]
-    pos = edge_t[4]
-
-    allo_syntax = _build_allo_syntax_for_mapping(label, pos)
-
-    if label == _EPS:
-      allo_id_num = '*'
-    else:
-      allo_id_num = statetying.allo_map[allo_syntax]
-
-    if self.label_conversion:
-      edges_st.append((edge_t[0], edge_t[1], allo_id_num, edge_t[3]))
-    else:
-      edges_ts.append((edge_t[0], edge_t[1], allo_syntax, edge_t[3]))
-
-  return num_states, edges_ts
-
-
-def _load_state_tying_file(stFile):
-  '''
-  loads a state tying map from a file, loads the file and returns its content
-  :param stFile: state tying map file (allo_syntax int)
-  :return state_tying: variable with state tying mapping
-  where:
-    statetying.allo_map important
-  '''
-  from os.path import isfile
-  from LmDataset import StateTying
-
-  print("Loading state tying file:", stFile)
-
-  assert isfile(stFile), "State tying file does not exists"
-
-  statetying = StateTying(stFile)
-
-  print("Finished state tying mapping:", len(statetying.allo_map), "allos to int")
-
-  return statetying
-
-
-def _build_allo_syntax_for_mapping(label, pos =''):
-  """
-  builds a conforming allo syntax for mapping
-  :param str or list label: a allo either string or list
-  :param str pos: position of allophone within the word
-  :return str allo_map: a allo syntax ready for mapping
-  """
-  assert isinstance(label, str) or isinstance(label, list), "Something went wrong while building allo syntax for mapping"
-
-  if isinstance(label, str) and label == _SIL:
-    allo_start = "%s{#+#}" % ('[SILENCE]')
-  elif isinstance(label, str) and label == _EPS:
-    allo_start = "*"
-  else:
-    if label[0] == '' and label[2] == '':
-      allo_start = "%s{#+#}" % (label[1])
-    elif label[0] == '':
-      allo_start = "%s{#+%s}" % (label[1], label[2])
-    elif label[2] == '':
-      allo_start = "%s{%s+#}" % (label[1], label[0])
-    else:
-      allo_start = "%s{%s+%s}" % (label[1], label[0], label[2])
-
-  allo_middle = ''
-  if pos == 'if':
-    allo_middle = "@%s@%s" % ('i', 'f')
-  elif pos == 'i':
-    allo_middle = "@%s" % ('i')
-  elif pos == 'f':
-    allo_middle = "@%s" % ('f')
-
-  if label == _SIL:
-    allo_end = ".0"
-  elif label == _EPS:
-    allo_end = ""
-  else:
-    allo_end = ".%i" % (label[3])
-
-  allo_map = "%s%s%s" % (allo_start, allo_middle, allo_end)
-
-  return allo_map
 
 
 def fsa_to_dot_format(file, num_states, edges):
