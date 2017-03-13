@@ -72,7 +72,7 @@ class Fsa:
   def run(self):
     if self.fsa_type == 'asg':
       if self.label_conversion == True:
-        self.lemma = convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
+        self.lemma = self.convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
       else:
         self.lemma = self.lemma_orig
       assert type(self.lemma) == str, "Lemma not str"
@@ -84,9 +84,9 @@ class Fsa:
 
       self.edges = []
 
-      _check_for_repetitions_for_asg()
-      _create_states_from_label_for_asg()
-      _adds_loop_edges()
+      self._check_for_repetitions_for_asg()
+      self._create_states_from_label_for_asg()
+      self._adds_loop_edges()
     elif self.fsa_type == 'ctc':
       pass
     elif self.fsa_type == 'hmm':
@@ -95,21 +95,107 @@ class Fsa:
       print("No finite state automaton matches to chosen type")
 
 
-def convert_label_seq_to_indices(num_labels, label_seq):
-  """
-  takes label sequence of chars and converts to indices (a->0, b->1, ...)
-  :param int num_labels: total number of labels
-  :param str label_seq: sequence of labels
-  :return list[int] label_indices: labels converted into indices
-  """
-  label_indices = []
+  def convert_label_seq_to_indices(num_labels, label_seq):
+    """
+    takes label sequence of chars and converts to indices (a->0, b->1, ...)
+    :param int num_labels: total number of labels
+    :param str label_seq: sequence of labels
+    :return list[int] label_indices: labels converted into indices
+    """
+    label_indices = []
 
-  for label in label_seq:
-    label_index = ord(label) - 97
-    assert label_index < num_labels, "Index of label exceeds number of labels"
-    label_indices.append(label_index)
+    for label in label_seq:
+      label_index = ord(label) - 97
+      assert label_index < num_labels, "Index of label exceeds number of labels"
+      label_indices.append(label_index)
 
-  return label_indices
+    return label_indices
+
+  def _adds_loop_edges(num_states, edges):
+    """
+    for every node loops with edge label pointing to node
+    :param int num_states: number of states
+    :param list edges: list of edges
+    :returns (num_states, edges)
+    where:
+      num_states: int, number of states.
+        per convention, state 0 is start state, state (num_states - 1) is single final state
+      edges: list[(from,to,label_idx,weight)]
+        from and to are state_idx >= 0 and < num_states,
+        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+        weight is a float, in -log space
+    """
+    print("Adding loops...")
+    # adds loops to fsa (loops on first and last node excluded)
+    for state in range(1, num_states - 1):
+      edges_included = [edge_index for edge_index, edge in enumerate(edges) if
+                        (edge[1] == state and edge[2] != _EPS)]
+      try:
+        label_pos = edges[edges_included[0]][4]
+      except:
+        label_pos = None
+      edge_n = [state, state, edges[edges_included[0]][2], 0., label_pos]
+      assert len(edge_n) == 5, "length of edge wrong"
+      edges.append(edge_n)
+
+    return num_states, edges
+
+
+  def _check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
+    """
+    checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
+    :param list[int] label_indices: sequence of label indices
+    :return: list[int] reps: list of indices of label repetitions
+    """
+    reps = []
+    rep_count = 0
+    index_old = None
+
+    if repetitions == 0:
+      reps = label_indices
+    else:
+      for index in label_indices:
+        index_t = index
+        if index_t == index_old:
+          if rep_count < repetitions:
+            rep_count += 1
+          elif rep_count != 0:
+            reps.append(num_labels + rep_count)
+            rep_count = 1
+          else:
+            print("Something went wrong")
+        elif index_t != index_old:
+          if rep_count != 0:
+            reps.append(num_labels + rep_count)
+            rep_count = 0
+          reps.append(index)
+        else:
+          print("Something went wrong")
+        index_old = index
+
+    return reps
+
+
+  def _create_states_from_label_for_asg(rep_seq, edges):
+    """
+    :param int rep_index: label number
+    :param int num_labels: number of labels
+    :param list edges: list of edges
+    :returns (num_states, edges)
+    where:
+      num_states: int, number of states.
+        per convention, state 0 is start state, state (num_states - 1) is single final state
+      edges: list[(from,to,label_idx,weight)]
+        from and to are state_idx >= 0 and < num_states,
+        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+        weight is a float, in -log space
+    """
+    for rep_index, rep_label in enumerate(rep_seq):
+      edges.append((rep_index, rep_index+1, rep_label, 1.))
+
+    num_states = len(rep_seq) + 1
+
+    return num_states, edges
 
 
 def ctc_fsa_for_label_seq(num_labels, label_seq):
@@ -234,35 +320,6 @@ def _adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, ed
   return final_states, num_states, edges
 
 
-def _adds_loop_edges(num_states, edges):
-  """
-  for every node loops with edge label pointing to node
-  :param int num_states: number of states
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  print("Adding loops...")
-  # adds loops to fsa (loops on first and last node excluded)
-  for state in range(1, num_states - 1):
-    edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != _EPS)]
-    try:
-      label_pos = edges[edges_included[0]][4]
-    except:
-      label_pos = None
-    edge_n = [state, state, edges[edges_included[0]][2], 0., label_pos]
-    assert len(edge_n) == 5, "length of edge wrong"
-    edges.append(edge_n)
-
-  return num_states, edges
-
-
 def _make_single_final_state(final_states, num_states, edges):
   """
   takes the graph and merges all final nodes into one single final node
@@ -316,87 +373,6 @@ def _discover_eps(node, num_states, edges):
   eps_edges = []
 
   return eps_edges
-
-
-def asg_fsa_for_label_seq(num_labels, label_seq, repetitions):
-  """
-  :param int num_labels: number of labels
-  :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
-  :param int repetitions: number of label repetitions
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  edges = []
-
-  rep_seq = _check_for_repetitions_for_asg(num_labels, label_seq, repetitions)
-
-  num_states, edges = _create_states_from_label_for_asg(rep_seq, edges)
-  num_states, edges = _adds_loop_edges(num_states, edges)
-
-  return num_states, edges
-
-
-def _check_for_repetitions_for_asg(num_labels, label_indices, repetitions):
-  """
-  checks the label indices for repetitions, if the n-1 label index is a repetition n in reps gets set to 1 otherwise 0
-  :param list[int] label_indices: sequence of label indices
-  :return: list[int] reps: list of indices of label repetitions
-  """
-  reps = []
-  rep_count = 0
-  index_old = None
-
-  if repetitions == 0:
-    reps = label_indices
-  else:
-    for index in label_indices:
-      index_t = index
-      if index_t == index_old:
-        if rep_count < repetitions:
-          rep_count += 1
-        elif rep_count != 0:
-          reps.append(num_labels + rep_count)
-          rep_count = 1
-        else:
-          print("Something went wrong")
-      elif index_t != index_old:
-        if rep_count != 0:
-          reps.append(num_labels + rep_count)
-          rep_count = 0
-        reps.append(index)
-      else:
-        print("Something went wrong")
-      index_old = index
-
-  return reps
-
-
-def _create_states_from_label_for_asg(rep_seq, edges):
-  """
-  :param int rep_index: label number
-  :param int num_labels: number of labels
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  for rep_index, rep_label in enumerate(rep_seq):
-    edges.append((rep_index, rep_index+1, rep_label, 1.))
-
-  num_states = len(rep_seq) + 1
-
-  return num_states, edges
 
 
 def hmm_fsa_for_word_seq(word_seq, lexicon_file, state_tying_file, depth=6,
