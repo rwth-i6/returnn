@@ -252,7 +252,11 @@ def _adds_loop_edges(num_states, edges):
   # adds loops to fsa (loops on first and last node excluded)
   for state in range(1, num_states - 1):
     edges_included = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == state and edge[2] != _EPS)]
-    edge_n = [state, state, edges[edges_included[0]][2], 0., edges[edges_included[0]][4]]
+    try:
+      label_pos = edges[edges_included[0]][4]
+    except:
+      label_pos = None
+    edge_n = [state, state, edges[edges_included[0]][2], 0., label_pos]
     assert len(edge_n) == 5, "length of edge wrong"
     edges.append(edge_n)
 
@@ -1087,7 +1091,7 @@ def _state_tying_for_hmm_fsa(state_tying_file,
     edges_ts.append((edge_t[0], edge_t[1], allo_syntax, edge_t[3]))
     edges_st.append((edge_t[0], edge_t[1], allo_id_num, edge_t[3]))
 
-  return num_states, edges_st
+  return num_states, edges_ts
 
 
 def _load_state_tying_file(stFile):
@@ -1269,9 +1273,9 @@ def main():
     if args.label_conversion:
       label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
     else:
-      label_seq = args.label_seq
+      label_seq = args.label_seq.lower()
     num_states, edges = asg_fsa_for_label_seq(num_labels=args.num_labels,
-                                              label_seq=label_seq.lower(),
+                                              label_seq=label_seq,
                                               repetitions=args.asg_repetition)
     print("Number of labels (ex.: a-z == 27 labels):", args.num_labels)
     print("Number of repetition symbols:", args.asg_repetition)
