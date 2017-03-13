@@ -8,6 +8,7 @@ class Fsa:
   """class to create a finite state automaton"""
   _SIL = '_'
   _EPS = '*'
+  _BLANK = '%'
 
   def __init__(self, lemma, fsa_type):
     """
@@ -158,6 +159,7 @@ class Fsa:
       self._create_states_from_label_for_asg()
       self._adds_loop_edges()
     elif self.fsa_type == 'ctc':
+      print("Place holder blank:", self._BLANK)
       if self.label_conversion == True:
         self.convert_label_seq_to_indices()
       else:
@@ -324,8 +326,7 @@ class Fsa:
     # adds blank labels to fsa
     for label_index in range(0, len(self.lemma)):
       label_blank_idx = 2 * label_index + 1
-      label_blank = 'blank' #  num_labels + 1
-      self.edges.append((label_blank_idx - 1, label_blank_idx, label_blank, 1.))
+      self.edges.append((label_blank_idx - 1, label_blank_idx, self._BLANK, 1.))
       self.edges.append((label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.))
     self.final_states.append(label_blank_idx + 1)
 
@@ -335,10 +336,9 @@ class Fsa:
     """
     print("Adds final states and edges...")
     i = self.num_states
-    label_blank = 'blank' #  num_labels + 1
-    self.edges.append((i - 3, i, label_blank, 1.))
+    self.edges.append((i - 3, i, self._BLANK, 1.))
     self.edges.append((i, i + 1, self.lemma[-1], 1.))
-    self.edges.append((i + 1, i + 2, label_blank, 1.))
+    self.edges.append((i + 1, i + 2, self._BLANK, 1.))
     self.num_states += 3
     self.final_states.append(self.num_states - 1)
 
