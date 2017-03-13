@@ -1270,18 +1270,34 @@ def main():
   arg_parser.add_argument("--fsa", type=str, required=True)
   arg_parser.add_argument("--label_seq", type=str, required=True)
   arg_parser.add_argument("--file", type=str)
-  arg_parser.add_argument("--num_labels", type=int)
-  arg_parser.add_argument("--state_tying", type=str)
-  arg_parser.add_argument("--lexicon", type=str)
-  arg_parser.add_argument("--depth", type=int)
+  arg_parser.set_defaults(file='fsa')
   arg_parser.add_argument("--asg_repetition", type=int)
-  arg_parser.add_argument("--label_conversion", type=bool)
+  arg_parser.set_defaults(asg_repetition=3)
+  arg_parser.add_argument("--num_labels", type=int)
+  arg_parser.set_defaults(num_labels=27)
+  arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
+  arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
+  arg_parser.set_defaults(label_conversion=None)
+  arg_parser.add_argument("--depth", type=int)
+  arg_parser.set_defaults(depth=6)
   arg_parser.add_argument("--allo_num_states", type=int)
+  arg_parser.set_defaults(allo_num_states=3)
+  arg_parser.add_argument("--lexicon", type=str)
+  arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
+  arg_parser.add_argument("--state_tying", type=str)
+  arg_parser.set_defaults(state_tying='state-tying.txt')
   args = arg_parser.parse_args()
 
   fsa_gen = Fsa(args.label_seq, args.fsa)
 
-  fsa_gen.setParams()
+  fsa_gen.set_params(filename=args.file,
+                     asg_repetition=args.asg_repetition,
+                     num_labels=args.num_labels,
+                     label_conversion=args.label_conversion,
+                     depth=args.depth,
+                     allo_num_states=args.allo_num_states,
+                     lexicon=args.lexicon,
+                     state_tying=args.state_tying)
 
   """
   if (args.fsa.lower() == 'ctc'):
