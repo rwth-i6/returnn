@@ -207,22 +207,10 @@ class Fsa:
   def _adds_loop_edges(self):
     """
     for every node loops with edge label pointing to node
-    :param int num_states: number of states
-    :param list edges: list of edges
-    :returns (num_states, edges)
-    where:
-      num_states: int, number of states.
-        per convention, state 0 is start state, state (num_states - 1) is single final state
-      edges: list[(from,to,label_idx,weight)]
-        from and to are state_idx >= 0 and < num_states,
-        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-        weight is a float, in -log space
     """
     print("Adding loops...")
-    if self.fsa_type == 'asg':
+    if self.fsa_type == 'asg' or self.fsa_type == 'ctc':
       countloops = self.num_states
-    elif self.fsa_type == 'ctc':
-      countloops = self.num_states - 1
     elif self.fsa_type == 'hmm':
       countloops = self.num_states - 1
     else:
