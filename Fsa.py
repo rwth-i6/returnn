@@ -44,9 +44,10 @@ class Fsa:
     self.state_tying = ''
 
 
-  def setParamsASG(self, asg_repetition, num_labels, label_conversion):
+  def setParams(self, asg_repetition, num_labels, label_conversion):
     """
-    sets the parameters for ASG FSA generator
+    sets the parameters for FSA generator
+    checks if needed params for fsa type available otherwise erquests user input
     :param int asg_repetition:
       if a label is repeated within the lemma how many repetitions will be substituted
       with a specific repetition symbol
@@ -85,15 +86,7 @@ class Fsa:
       print("Repetition label:", self.num_labels + rep, "meaning", rep, "repetitions")
 
 
-  def setParamsCTC(self):
-    pass
-
-
   def runCTC(self):
-    pass
-
-
-  def setParamsHMM(self):
     pass
 
 
