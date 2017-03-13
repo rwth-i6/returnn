@@ -13,12 +13,23 @@ class Fsa:
   _SIL = '_'
   _EPS = '*'
 
-  def __init__(self, fsa_type):
+  def __init__(self, lemma, fsa_type):
+    """
+    :param lemma:
+    :param fsa_type:
+    """
     self.num_states = 0
     self.edges = []
-    self.fsa_type = fsa_type
+
+    assert type(fsa_type) == str, "FSA type input not a string"
+    self.fsa_type = fsa_type.lower()
+    assert type(self.fsa_type) == str, "FSA type not a string"
+
     self.filename = 'fsa'
-    self.lemma = ''
+    self.lemma_orig = lemma
+    assert type(self.lemma_orig) == str or type(self.lemma_orig) == list, "Lemma type not correct"
+    self.lemma = None
+
     self.depth = 6
     self.num_labels = 0
     self.lexicon = ''
