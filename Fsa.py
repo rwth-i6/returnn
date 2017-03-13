@@ -15,8 +15,26 @@ class Fsa:
 
   def __init__(self, lemma, fsa_type):
     """
-    :param str lemma: word or sentence
+    :param str or list lemma: word or sentence
     :param str fsa_type: determines finite state automaton type: asg, ctc, hmm
+    :param int num_states: number of states
+    :param list edges: list of edges
+    where:
+      num_states: int, number of states.
+        per convention, state 0 is start state, state (num_states - 1) is single final state
+      edges: list[(from,to,label_idx,weight)]
+        from and to are state_idx >= 0 and < num_states,
+        label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
+        weight is a float, in -log space
+    :param str filename: name of file to store graph
+    :param int asg_repetition: repetition symbols for asg
+    :param int num_labels: number of labels
+    :param bool label_conversion: use chars or indexes
+    :param list[int] final_states: list of final states
+    :param int depth: depth / level of hmm
+    :param int allo_num_states: number of allophone states
+    :param str lexicon: lexicon file name
+    :param str state_tying: state tying file name
     """
     # needed by ASG, CTC and HMM
     self.num_states = 0
