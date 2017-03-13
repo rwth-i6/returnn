@@ -1221,18 +1221,23 @@ def _add_edges(graph, edges):
 def main():
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()
-  arg_parser.add_argument("--file", required=True)
-  arg_parser.add_argument("--num_labels", type=int, required=True)
-  arg_parser.add_argument("--label_seq", required=True)
-  arg_parser.add_argument("--fsa", required=True)
-  arg_parser.add_argument("--state_tying")
-  arg_parser.add_argument("--lexicon")
+  arg_parser.add_argument("--fsa", type=str, required=True)
+  arg_parser.add_argument("--label_seq", type=str, required=True)
+  arg_parser.add_argument("--file", type=str)
+  arg_parser.add_argument("--num_labels", type=int)
+  arg_parser.add_argument("--state_tying", type=str)
+  arg_parser.add_argument("--lexicon", type=str)
   arg_parser.add_argument("--depth", type=int)
   arg_parser.add_argument("--asg_repetition", type=int)
   arg_parser.add_argument("--label_conversion", type=bool)
   arg_parser.add_argument("--allo_num_states", type=int)
   args = arg_parser.parse_args()
 
+  fsa_gen = Fsa(args.label_seq, args.fsa)
+
+  fsa_gen.setParams()
+
+  """
   if (args.fsa.lower() == 'ctc'):
     if args.label_conversion:
       label_seq = convert_label_seq_to_indices(args.num_labels, args.label_seq)
@@ -1263,6 +1268,7 @@ def main():
                                              allo_num_states=args.allo_num_states)
 
   fsa_to_dot_format(file=args.file, num_states=num_states, edges=edges)
+  """
 
 
 if __name__ == "__main__":
