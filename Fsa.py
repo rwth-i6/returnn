@@ -114,7 +114,7 @@ class Fsa:
 
     else:
       print("No finite state automaton matches to chosen type")
-      sys.exit(0)
+      sys.exit(-1)
 
   def run(self):
     if self.fsa_type == 'asg':
@@ -141,7 +141,7 @@ class Fsa:
       pass
     else:
       print("No finite state automaton matches to chosen type")
-      sys.exit(0)
+      sys.exit(-1)
 
   def convert_label_seq_to_indices(self):
     """
