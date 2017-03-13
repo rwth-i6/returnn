@@ -18,6 +18,7 @@ class Fsa:
     :param lemma:
     :param fsa_type:
     """
+    # needed by ASG, CTC and HMM
     self.num_states = 0
     self.edges = []
 
@@ -30,13 +31,13 @@ class Fsa:
     self.lemma = None
 
     self.filename = 'fsa'
-    self.label_conversion = None
 
     # needed by ASG
     self.asg_repetition = -1
-    self.num_labels = 0
 
     # needed by ASG and CTC
+    self.num_labels = 0
+    self.label_conversion = None
 
     # needed by HMM
     self.depth = 6
