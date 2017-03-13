@@ -25,17 +25,23 @@ class Fsa:
     self.fsa_type = fsa_type.lower()
     assert type(self.fsa_type) == str, "FSA type not a string"
 
-    self.filename = 'fsa'
     self.lemma_orig = lemma
     assert type(self.lemma_orig) == str or type(self.lemma_orig) == list, "Lemma type not correct"
     self.lemma = None
 
-    self.depth = 6
+    self.filename = 'fsa'
+    self.label_conversion = None
+
+    # needed by ASG
+    self.asg_repetition = -1
     self.num_labels = 0
+
+    # needed by ASG and CTC
+
+    # needed by HMM
+    self.depth = 6
     self.lexicon = ''
     self.state_tying = ''
-    self.asg_repetition = -1
-    self.label_conversion = None
 
 
   def setParamsASG(self, asg_repetition, num_labels, label_conversion):
