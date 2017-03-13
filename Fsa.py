@@ -210,9 +210,9 @@ class Fsa:
         print("Allophone state acceptor...")
         print("Number of allophone states:", self.allo_num_states)
         self._allophone_state_acceptor_for_hmm_fsa()
-      """if self.depth >= 5:
+      if self.depth >= 5:
         print("HMM acceptor...")
-        num_states, edges = _adds_loop_edges(num_states, edges)
+        self._adds_loop_edges()
       if self.depth >= 6:
         print("State tying...")
         num_states, edges = _state_tying_for_hmm_fsa(state_tying_file,
@@ -226,7 +226,6 @@ class Fsa:
     else:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
-    """
 
   def convert_label_seq_to_indices(self):
     """
@@ -247,18 +246,18 @@ class Fsa:
     for every node loops with edge label pointing to node
     """
     print("Adding loops...")
-    if self.fsa_type == 'asg' or self.fsa_type == 'ctc':
+    if self.fsa_type == 'asg' or self.fsa_type == 'ctc':  # loops on first node excluded
       countloops = self.num_states
-    elif self.fsa_type == 'hmm':
+    elif self.fsa_type == 'hmm':  # loops on first and last node excluded
       countloops = self.num_states - 1
     else:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
 
-    # adds loops to fsa (loops on first and last node excluded)
+    # adds loops to fsa
     for state in range(1, countloops):
       edges_included = [edge_index for edge_index, edge in enumerate(self.edges) if
-                        (edge[1] == state and edge[2] != _EPS)]
+                        (edge[1] == state and edge[2] != self._EPS)]
       try:
         label_pos = self.edges[edges_included[0]][4]
       except:
