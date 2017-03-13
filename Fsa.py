@@ -69,29 +69,30 @@ class Fsa:
       self.label_conversion) == bool, "Label conversion not set (ASG)"
 
 
-  def runASG(self):
-    if self.label_conversion == True:
-      self.lemma = convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
+  def run(self):
+    if self.fsa_type == 'asg':
+      if self.label_conversion == True:
+        self.lemma = convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
+      else:
+        self.lemma = self.lemma_orig
+      assert type(self.lemma) == str, "Lemma not str"
+
+      print("Number of labels (ex.: a-z == 27 labels):", self.num_labels)
+      print("Number of repetition symbols:", self.asg_repetition)
+      for rep in range(1, self.asg_repetition + 1):
+        print("Repetition label:", self.num_labels + rep, "meaning", rep, "repetitions")
+
+      self.edges = []
+
+      _check_for_repetitions_for_asg()
+      _create_states_from_label_for_asg()
+      _adds_loop_edges()
+    elif self.fsa_type == 'ctc':
+      pass
+    elif self.fsa_type == 'hmm':
+      pass
     else:
-      self.lemma = self.lemma_orig
-
-    assert type(self.lemma) == str, "Lemma not str"
-
-    self.num_states, self.edges = asg_fsa_for_label_seq(self.num_labels,
-                                              self.lemma,
-                                              self.asg_repetition)
-    print("Number of labels (ex.: a-z == 27 labels):", self.num_labels)
-    print("Number of repetition symbols:", self.asg_repetition)
-    for rep in range(1, self.asg_repetition + 1):
-      print("Repetition label:", self.num_labels + rep, "meaning", rep, "repetitions")
-
-
-  def runCTC(self):
-    pass
-
-
-  def runHMM(self):
-    pass
+      print("No finite state automaton matches to chosen type")
 
 
 def convert_label_seq_to_indices(num_labels, label_seq):
