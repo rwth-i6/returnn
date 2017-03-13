@@ -22,12 +22,12 @@ class Fsa:
     self.num_states = 0
     self.edges = []
 
-    assert type(fsa_type) == str, "FSA type input not a string"
+    assert isinstance(fsa_type, str), "FSA type input not a string"
     self.fsa_type = fsa_type.lower()
-    assert type(self.fsa_type) == str, "FSA type not a string"
+    assert isinstance(self.fsa_type, str), "FSA type not a string"
 
     self.lemma_orig = lemma
-    assert type(self.lemma_orig) == str or type(self.lemma_orig) == list, "Lemma type not correct"
+    assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list), "Lemma type not correct"
     self.lemma = None
 
     self.filename = 'fsa'
