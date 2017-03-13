@@ -172,8 +172,18 @@ class Fsa:
         weight is a float, in -log space
     """
     print("Adding loops...")
+    if self.fsa_type == 'asg':
+      countloops = self.num_states
+    elif self.fsa_type == 'ctc':
+      countloops = self.num_states - 1
+    elif self.fsa_type == 'hmm':
+      countloops = self.num_states - 1
+    else:
+      print("No finite state automaton matches to chosen type")
+      sys.exit(-1)
+
     # adds loops to fsa (loops on first and last node excluded)
-    for state in range(1, self.num_states - 1):
+    for state in range(1, countloops):
       edges_included = [edge_index for edge_index, edge in enumerate(self.edges) if
                         (edge[1] == state and edge[2] != _EPS)]
       try:
