@@ -61,6 +61,15 @@ class Fsa:
       self.label_conversion) == bool, "Label conversion not set (ASG)"
 
 
+  def runASG(self):
+    if self.label_conversion == True:
+      self.lemma = convert_label_seq_to_indices(self.num_labels, self.lemma_orig)
+    else:
+      self.lemma = self.lemma_orig
+
+    assert type(self.lemma) == str, "Lemma not str"
+
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
