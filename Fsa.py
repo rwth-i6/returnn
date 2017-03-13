@@ -70,6 +70,14 @@ class Fsa:
 
     assert type(self.lemma) == str, "Lemma not str"
 
+    self.num_states, self.edges = asg_fsa_for_label_seq(self.num_labels,
+                                              self.lemma,
+                                              self.asg_repetition)
+    print("Number of labels (ex.: a-z == 27 labels):", self.num_labels)
+    print("Number of repetition symbols:", self.asg_repetition)
+    for rep in range(1, self.asg_repetition + 1):
+      print("Repetition label:", self.num_labels + rep, "meaning", rep, "repetitions")
+
 
   def setParamsCTC(self):
     pass
