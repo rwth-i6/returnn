@@ -33,22 +33,31 @@ class Fsa:
     self.filename = 'fsa'
 
     # needed by ASG
-    self.asg_repetition = -1
+    self.asg_repetition = 2
 
     # needed by ASG and CTC
-    self.num_labels = 0
+    self.num_labels = 27
     self.label_conversion = None
 
     # needed by HMM
     self.depth = 6
+    self.allo_num_states = 3
     self.lexicon = ''
     self.state_tying = ''
 
-
-  def setParams(self, asg_repetition, num_labels, label_conversion):
+  def set_params(self,
+                 filename='fsa',
+                 asg_repetition=2,
+                 num_labels=27,
+                 label_conversion=None,
+                 depth=6,
+                 allo_num_states=3,
+                 lexicon='',
+                 state_tying=''):
     """
     sets the parameters for FSA generator
     checks if needed params for fsa type available otherwise erquests user input
+    :param str filename: sets the output file name
     :param int asg_repetition:
       if a label is repeated within the lemma how many repetitions will be substituted
       with a specific repetition symbol
@@ -56,19 +65,56 @@ class Fsa:
     :param bool label_conversion:
       true: each label converted to index of its label
       false: no conversion
+    :param int depth: depth of the hmm acceptor
+    :param int allo_num_states: umber of allophone states
+    :param str lexicon: lexicon file name
+    :param str state_tying: state tyting file name
     :return:
     """
-    self.asg_repetition = asg_repetition
-    assert type(self.asg_repetition) == int, "ASG repetition wrong type"
-    assert self.asg_repetition >= 0, "ASG repetition not set"
+    print("Setting parameters for", self.fsa_type)
+    self.filename = filename
 
-    self.num_labels = num_labels
-    assert self.num_labels > 0, "Number of labels not set (ASG)"
+    if self.fsa_type == 'asg' or self.fsa_type == 'ctc':
+      if self.fsa_type == 'asg' and asg_repetition < 0:
+        print("Enter length of repetition symbols:")
+        print("Example: 3 -> 2 repetition symbols for 2 and 3 repetitions")
+        asg_repetition = raw_input("--> ")
+      self.asg_repetition = int(asg_repetition)
+      assert isinstance(self.asg_repetition, int), "ASG repetition wrong type"
+      assert self.asg_repetition >= 0, "ASG repetition not set"
 
-    self.label_conversion = label_conversion
-    assert self.label_conversion != None and type(
-      self.label_conversion) == bool, "Label conversion not set (ASG)"
+      if num_labels <= 0:
+        print("Enter number of labels:")
+        num_labels = raw_input("--> ")
+      self.num_labels = int(num_labels)
+      assert self.num_labels > 0, "Number of labels not set"
 
+      if not isinstance(label_conversion, bool):
+        print("Set label conversion option:")
+        print("1 (On) or 0 (Off)")
+        label_conversion = raw_input("--> ")
+      self.label_conversion = bool(int(label_conversion))
+      assert isinstance(self.label_conversion, bool), "Label conversion not set"
+
+    elif self.fsa_type == 'hmm':
+      if depth < 0:
+        print("Set the depth level of HMM:")
+        depth = raw_input("--> ")
+      self.depth = int(depth)
+      assert isinstance(self.depth, int) and self.depth > 1, "Depth for HMM not set"
+
+      if allo_num_states < 1:
+        print("Set the number of allophone states:")
+        allo_num_states = raw_input("--> ")
+      self.allo_num_states = int(allo_num_states)
+      assert isinstance(self.allo_num_states, int) and self.allo_num_states > 0,\
+        "Number of allophone states not set"
+      self.lexicon = lexicon
+      self.state_tying = state_tying
+
+    else:
+      print("No finite state automaton matches to chosen type")
+      sys.exit(0)
 
   def run(self):
     if self.fsa_type == 'asg':
