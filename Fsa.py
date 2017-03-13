@@ -57,6 +57,9 @@ class Fsa:
     self.num_labels = 27
     self.label_conversion = None
 
+    # needed by CTC
+    self.final_states = []
+
     # needed by HMM
     self.depth = 6
     self.allo_num_states = 3
@@ -154,7 +157,33 @@ class Fsa:
       self._create_states_from_label_for_asg()
       self._adds_loop_edges()
     elif self.fsa_type == 'ctc':
-      pass
+      if self.label_conversion == True:
+        self.convert_label_seq_to_indices()
+      else:
+        self.lemma = self.lemma_orig
+
+      assert isinstance(self.lemma, str) or isinstance(self.lemma, list), "Lemma not str or list"
+
+      self.edges = []
+      self.final_states = []
+
+      # calculate number of states
+      self.num_states = 2 * (len(self.lemma) + 1) - 1
+
+      # create edges from the label sequence without loops and no empty labels
+      self._create_states_from_label_seq_for_ctc()
+
+      # adds blank labels to fsa
+      self._adds_blank_states_for_ctc()
+
+      # creates end state
+      self._adds_last_state_for_ctc()
+
+      # adds loops to fsa
+      self._adds_loop_edges()
+
+      # makes one single final state
+      self._make_single_final_state()
     elif self.fsa_type == 'hmm':
       pass
     else:
@@ -265,152 +294,63 @@ class Fsa:
 
     self.num_states = len(self.lemma) + 1
 
+  def _create_states_from_label_seq_for_ctc(self):
+    """
+    creates states from label sequence, skips repetitions
+    """
+    print("Creating nodes and edges from label sequence...")
+    # go through the whole label sequence and create the state for each label
+    for label_index in range(0, len(self.lemma)):
+      # if to remove skips if two equal labels follow each other
+      if self.lemma[label_index] != self.lemma[label_index - 1]:
+        n = 2 * label_index
+        self.edges.append((n, n + 2, self.lemma[label_index], 1.))
 
-def ctc_fsa_for_label_seq(num_labels, label_seq):
-  """
-  :param int num_labels: number of labels without blank
-  :param list[int] label_seq: sequences of label indices, i.e. numbers >= 0 and < num_labels
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  edges = []
-  final_states = []
-  # calculate number of states
-  num_states = 2 * (len(label_seq) + 1) - 1
-
-  # create edges from the label sequence without loops and no empty labels
-  final_states, num_states, edges = _create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges)
-
-  # adds blank labels to fsa
-  final_states, num_states, edges = _adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges)
-
-  # creates end state
-  final_states, num_states, edges = _adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges)
-
-  # adds loops to fsa
-  num_states, edges = _adds_loop_edges(num_states, edges)
-
-  # makes one single final state
-  num_states, edges = _make_single_final_state(final_states, num_states, edges)
-
-  return num_states, edges
+  def _adds_blank_states_for_ctc(self):
+    """
+    adds blank edges and repetitions to ctc
+    """
+    print("Adding blank states and edges...")
+    # adds blank labels to fsa
+    for label_index in range(0, len(self.lemma)):
+      label_blank_idx = 2 * label_index + 1
+      label_blank = 'blank' #  num_labels + 1
+      self.edges.append((label_blank_idx - 1, label_blank_idx, label_blank, 1.))
+      self.edges.append((label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.))
+    self.final_states.append(label_blank_idx + 1)
 
 
-def _create_states_from_label_seq_for_ctc(label_seq, num_labels, final_states, num_states, edges):
-  """
-  creates states from label sequence, skips repetitions
-  :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_labels: number of labels
-  :param list[int] final_states: list of final states
-  :param int num_states: number of states
-  :param list[tuple] edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  print("Creating nodes and edges from label sequence...")
-  # go through the whole label sequence and create the state for each label
-  for label_index in range(0, len(label_seq)):
-    # if to remove skips if two equal labels follow each other
-    if label_seq[label_index] != label_seq[label_index - 1]:
-      n = 2 * label_index
-      edges.append((n, n + 2, label_seq[label_index], 1.))
-
-  return final_states, num_states, edges
-
-
-def _adds_blank_states_for_ctc(label_seq, num_labels, final_states, num_states, edges):
-  """
-  adds blank edges and repetitions to ctc
-  :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_labels: number of labels
-  :param list[int] final_states: list of final states
-  :param int num_states: number of states
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  print("Adding blank states and edges...")
-  # adds blank labels to fsa
-  for label_index in range(0, len(label_seq)):
-    label_blank_idx = 2 * label_index + 1
+  def _adds_last_state_for_ctc(self):
+    """
+    adds last states for ctc
+    """
+    print("Adds final states and edges...")
+    i = self.num_states
     label_blank = 'blank' #  num_labels + 1
-    edges.append((label_blank_idx - 1, label_blank_idx, label_blank, 1.))
-    edges.append((label_blank_idx, label_blank_idx + 1, label_seq[label_index], 1.))
-  final_states.append(label_blank_idx + 1)
-
-  return final_states, num_states, edges
-
-
-def _adds_last_state_for_ctc(label_seq, num_labels, final_states, num_states, edges):
-  """
-  adds last states for ctc
-  :param list[int] label_seq: sequence of labels (normally some kind of word)
-  :param int num_labels: number of labels
-  :param list[int] final_states: list of final states
-  :param int num_states: number of states
-  :param list edges: list of edges
-  :returns (num_states, edges)
-  where:
-    num_states: int, number of states.
-      per convention, state 0 is start state, state (num_states - 1) is single final state
-    edges: list[(from,to,label_idx,weight)]
-      from and to are state_idx >= 0 and < num_states,
-      label_idx >= 0 and label_idx < num_labels  --or-- label_idx == num_labels for blank symbol
-      weight is a float, in -log space
-  """
-  print("Adds final states and edges...")
-  i = num_states
-  label_blank = 'blank' #  num_labels + 1
-  edges.append((i - 3, i, label_blank, 1.))
-  edges.append((i, i + 1, label_seq[-1], 1.))
-  edges.append((i + 1, i + 2, label_blank, 1.))
-  num_states += 3
-  final_states.append(num_states - 1)
-
-  return final_states, num_states, edges
+    self.edges.append((i - 3, i, label_blank, 1.))
+    self.edges.append((i, i + 1, self.lemma[-1], 1.))
+    self.edges.append((i + 1, i + 2, label_blank, 1.))
+    self.num_states += 3
+    self.final_states.append(self.num_states - 1)
 
 
-def _make_single_final_state(final_states, num_states, edges):
-  """
-  takes the graph and merges all final nodes into one single final node
-  idea:
-  - add new single final node
-  - for all edge which ended in a former final node:
-    - create new edge from stating node to new single final node with the same label
-  :param list[int] final_states: list of index numbers of the final states
-  :param int num_states: number of states
-  :param list[tuples(start[int], end[int], label, weight)] edges: list of edges
-  :return num_states, edges:
-  """
-  print("Creates single final state...")
-  if len(final_states) == 1 and final_states[0] == num_states - 1:  # nothing to change
-    return num_states, edges
-
-  num_states += 1
-  for fstate in final_states:
-    edges_fstate = [edge_index for edge_index, edge in enumerate(edges) if (edge[1] == fstate)]
-    for fstate_edge in edges_fstate:
-      edges.append((edges[fstate_edge][0], num_states - 1, edges[fstate_edge][2], 1.))
-
-  return num_states, edges
+  def _make_single_final_state(self):
+    """
+    takes the graph and merges all final nodes into one single final node
+    idea:
+      - add new single final node
+      - for all edge which ended in a former final node:
+      - create new edge from stating node to new single final node with the same label
+    """
+    print("Creates single final state...")
+    if len(self.final_states) == 1 and self.final_states[0] == self.num_states - 1:  # nothing to change
+      pass
+    else:
+      self.num_states += 1
+      for fstate in self.final_states:
+        edges_fstate = [edge_index for edge_index, edge in enumerate(self.edges) if (edge[1] == fstate)]
+        for fstate_edge in edges_fstate:
+          self.edges.append((self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.))
 
 
 def _determine_edges(num_states, edges):
