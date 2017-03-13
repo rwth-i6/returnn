@@ -70,6 +70,21 @@ class Fsa:
     assert type(self.lemma) == str, "Lemma not str"
 
 
+  def setParamsCTC(self):
+    pass
+
+
+  def runCTC(self):
+    pass
+
+
+  def setParamsHMM(self):
+    pass
+
+
+  def runHMM(self):
+    pass
+
 
 def convert_label_seq_to_indices(num_labels, label_seq):
   """
