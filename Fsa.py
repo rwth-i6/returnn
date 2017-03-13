@@ -449,7 +449,7 @@ class Fsa:
     """
     replaces chars with phonemes
     """
-    while (self.edges):
+    while self.edges:
       edge = self.edges.pop(0)
       if edge[2] != self._SIL and edge[2] != self._EPS:
         phon_current = self.phon_dict[edge[2]]
@@ -470,7 +470,7 @@ class Fsa:
     assert isinstance(self.lemma, list), "Lemma not list"
     word_list = []
     word_list.extend(self.lemma)
-    while (word_list):
+    while word_list:
       word = word_list.pop(0)
       for idx, letter in enumerate(word):
         if idx == 0 and idx == len(word) - 1:
@@ -491,7 +491,7 @@ class Fsa:
 
     edges_t.sort(key=lambda x: x[0])
 
-    while (edges_t):
+    while edges_t:
       edge = edges_t.pop(0)  # edge is tuple start node, end node, label, score
       if edge[2] != self._SIL and edge[2] != self._EPS:  # sil and eps ignored
         phon_list = edge[2].split(" ")
@@ -515,7 +515,7 @@ class Fsa:
     edges_tt.sort(key=lambda x: x[0])
     self.edges = []
 
-    while (edges_tt):
+    while edges_tt:
       edge = edges_tt.pop(0)
       if edge[2] != self._SIL and edge[2] != self._EPS:
         phon_seq = edge[2].split(" ")
