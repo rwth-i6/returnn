@@ -51,6 +51,7 @@ class Fsa:
     :return:
     """
     self.asg_repetition = asg_repetition
+    assert type(self.asg_repetition) == int, "ASG repetition wrong type"
     assert self.asg_repetition >= 0, "ASG repetition not set"
 
     self.num_labels = num_labels
