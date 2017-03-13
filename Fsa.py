@@ -1299,6 +1299,8 @@ def main():
                      lexicon=args.lexicon,
                      state_tying=args.state_tying)
 
+  fsa_gen.run()
+
   """
   if (args.fsa.lower() == 'ctc'):
     if args.label_conversion:
