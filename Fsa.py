@@ -34,8 +34,9 @@ class Fsa:
     self.num_labels = 0
     self.lexicon = ''
     self.state_tying = ''
-    self.asg_repetition = 0
-    self.label_conversion = True
+    self.asg_repetition = -1
+    self.label_conversion = None
+
 
 
 def convert_label_seq_to_indices(num_labels, label_seq):
