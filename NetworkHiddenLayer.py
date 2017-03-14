@@ -2843,18 +2843,13 @@ class CAlignmentLayer(ForwardLayer):
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
                base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
-    target = kwargs['target']
-    if tdps is None:
-      tdps = [1e10, 0., 3.]
-    if len(tdps) - 2 < max_skip:
-      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
-    else:
-      max_skip = len(tdps) - 2
+    target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
       base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out + blank
     n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
+    self.index = self.network.j[target]
     self.cost_scale_val = numpy.float32(1)
     if base:
       if base[0].layer_class == 'calign':
@@ -2981,18 +2976,19 @@ class CAlignmentLayer(ForwardLayer):
         z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
         y_out = self.y_out.flatten()
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-        self.cost_val = T.sum(nll)
+        self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
         if blank:
-          jdx = self.sources[0].index.flatten()
-          norm = self.index.sum(dtype='float32') / self.sources[0].index.sum(dtype='float32')
+          jdx = self.sources[0].index.dimshuffle(1,0).flatten()
+          jdx = T.set_subtensor(jdx[att_flat],numpy.int32(0))
+          norm = self.index.sum(dtype='float32') / jdx.sum(dtype='float32')
+          jdx = (jdx.reshape(self.sources[0].index.shape).dimshuffle(1,0).flatten() > 0).nonzero()
           z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
           bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
                                                      y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
           rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
                                                      y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
-          self.cost_val += T.sum(bnll) - T.sum(rnll)
-        self.cost_val *= norm
+          self.cost_val += norm * T.sum(bnll) #- T.sum(rnll)
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
@@ -3356,8 +3352,8 @@ class BlurLayer(_NoOpLayer):
     x_in, self.attrs['n_out'] = concat_sources(self.sources)
     kernel = self.rng.binomial(size=(1, 1, ctx, ctx), p=p, dtype='float32')
     kernel = kernel / T.maximum(kernel.sum(),numpy.float32(1))
-    from theano.sandbox.cuda.dnn import dnn_conv
-    self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2,1)[:,:,:,0]
+    from theano.tensor.nnet import conv2d
+    self.output = conv2d(input=x_in.dimshuffle(1,'x',2,0), border_mode=(int(ctx/2),int(ctx/2)), filters=kernel, filter_shape=(1, 1, ctx, ctx), input_shape=(None, 1, self.attrs['n_out'], None)).dimshuffle(3,0,2,1)[:,:,:,0]
     self.index = self.sources[0].index
 
 class TanhToSigmoidLayer(_NoOpLayer):

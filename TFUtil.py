@@ -1224,5 +1224,13 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
 
+  def var_repr(x):
+    """
+    :param tf.Variable x:
+    :rtype: str
+    """
+    return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
+
   tf.IndexedSlices.__repr__ = indexed_slices_repr
   tf.Operation.__repr__ = op_repr
+  tf.Variable.__repr__ = var_repr

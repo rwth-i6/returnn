@@ -1,7 +1,6 @@
 import os
 import theano.sandbox.cuda
 from theano.sandbox.cuda.basic_ops import (as_cuda_ndarray_variable, gpu_contiguous)
-import theano.sandbox.cuda.dnn
 from theano import gof
 from theano.gof.opt import OpSub
 from theano.compile import optdb
