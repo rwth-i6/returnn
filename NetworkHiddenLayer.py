@@ -1161,7 +1161,8 @@ class DftLayer(_NoOpLayer):
   are returned because of symmetric spectrum
   """
   layer_class = "dft_layer_abs"
-  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+  recurrent = True #Even though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+  # (reason: sequences are concatenated otherwise, breaking windowing borders)
 
   def __init__(self, dftLength=512, **kwargs):
     super(DftLayer, self).__init__(**kwargs)
@@ -2798,7 +2799,7 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=True, blank=0, focus='last', mode='viterbi', **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=False, blank=0, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
