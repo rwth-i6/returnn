@@ -339,49 +339,18 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     b = self.add_param(b)
     return b
 
-
-printed_cudnn_warning = False
-
-
 def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, filter_dilation, poolsize):
-  global printed_cudnn_warning
-  if theano.sandbox.cuda.dnn.dnn_available():
+  from Device import is_using_gpu
+  if is_using_gpu():
     conv_op = CuDNNConvHWBCOpValidInstance
     pool_op = PoolHWBCOp(poolsize)
     conv_out = conv_op(X, W, b) if filter_height * filter_width > 0 else X
     crop_out = CropToBatchImageSizeInstance(conv_out, sizes)
     Y = pool_op(crop_out)
     Y = CropToBatchImageSizeZeroInstance(Y, output_sizes)
-    return Y
   else:
-    if not printed_cudnn_warning:
-      print >> log.v2, "warning, cudnn not available, using theano conv implementation"
-      printed_cudnn_warning = True
-    #note: this solution uses alot of dimshuffles and so also alot of memory
-    #I only have this so that I can still run on my laptop for testing
-    #it's not really useful for productive use and also not much tested
-    filter_shape = (n_maps, n_in, filter_height, filter_width)
-    X_shuffled = X.dimshuffle(2, 3, 0, 1)
-    conv_out = conv.conv2d(input=X_shuffled, border_mode="valid", filters=W,
-                           filter_shape=filter_shape, # filter_dilation=filter_dilation,
-                           image_shape=(None, n_in, None, None)) if filter_height * filter_width > 0 else X
-    crop_out = CropToBatchImageSizeInstance(conv_out.dimshuffle(2, 3, 0, 1), sizes).dimshuffle(2, 3, 0, 1)
-    if poolsize == (1, 1):
-      Y = crop_out
-    else:
-      #pooling cannot handle width > 512 (only with cuDNN), so we swap the axes and swap them back afterwards
-      crop_out = crop_out.dimshuffle(0, 1, 3, 2)
-      pooled_out = pool.pool_2d(
-        input=crop_out,
-        #max_pool_2d wants the sizes in the other order
-        ds=poolsize[::-1],
-        ignore_border=True
-      )
-      #unshuffle it
-      Y = pooled_out.dimshuffle(0, 1, 3, 2)
-    Y = Y.dimshuffle(2, 3, 0, 1)
-    Y += b
-    return Y
+    Y = X
+  return Y
 
 
 class ConvBaseLayer(TwoDBaseLayer):

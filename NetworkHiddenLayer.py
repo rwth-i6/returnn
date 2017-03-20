@@ -1,8 +1,12 @@
 
 import theano
 import numpy
-import scipy
-import scipy.signal
+try:
+    flag_scipyAvailable = 1
+    import scipy
+    import scipy.signal
+except:
+    flag_scipyAvailable = 0
 import json
 import h5py
 import sys
@@ -3309,8 +3313,8 @@ class BlurLayer(_NoOpLayer):
     x_in, self.attrs['n_out'] = concat_sources(self.sources)
     kernel = self.rng.binomial(size=(1, 1, ctx, ctx), p=p, dtype='float32')
     kernel = kernel / T.maximum(kernel.sum(),numpy.float32(1))
-    from theano.sandbox.cuda.dnn import dnn_conv
-    self.output = dnn_conv(x_in.dimshuffle(1,'x',2,0),kernel,(ctx/2,ctx/2)).dimshuffle(3,0,2,1)[:,:,:,0]
+    from theano.tensor.nnet import conv2d
+    self.output = conv2d(input=x_in.dimshuffle(1,'x',2,0), border_mode=(int(ctx/2),int(ctx/2)), filters=kernel, filter_shape=(1, 1, ctx, ctx), input_shape=(None, 1, self.attrs['n_out'], None)).dimshuffle(3,0,2,1)[:,:,:,0]
     self.index = self.sources[0].index
 
 class TanhToSigmoidLayer(_NoOpLayer):
