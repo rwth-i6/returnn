@@ -689,7 +689,7 @@ class Engine:
     else:
       from thread import start_new_thread
       start_new_thread(httpd.serve_forever, ())
-      server = SimpleJSONRPCServer(('localhost', 3334))
+      server = SimpleJSONRPCServer(('0.0.0.0', 3334))
       server.register_function(_classify, 'classify')
       server.register_function(_result, 'result')
       print >> log.v3, "json-rpc listening on port", 3334
