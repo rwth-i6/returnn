@@ -22,6 +22,7 @@ class StereoDataset(CachedDataset2):
   def __init__(self, **kwargs):
     """constructor"""
     super(StereoDataset, self).__init__(**kwargs)
+    self._seq_index_list = None
 
   @property
   def num_seqs(self):
@@ -42,6 +43,27 @@ class StereoDataset(CachedDataset2):
     """
     raise NotImplementedError
 
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :type epoch: int|None
+    :param epoch: epoch number
+    :type seq_list: list[str] | None seq_list: In case we want to set a predefined order.
+    :param seq_list: only None is currently supported
+    Initialize lists:
+      self.seq_index  # sorted seq idx
+    """
+    super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if seq_list:
+      raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
+    else:
+      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, self.get_seq_length)
+
+    self._seq_index_list = seq_index 
+    if epoch is not None:
+      # Give some hint to the user in case he is wondering why the cache is reloading.
+      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+
+    return True
 
 class StereoHdfDataset(StereoDataset):
   """A stereo dataset which needs an hdf file as input. The hdf file
@@ -240,8 +262,11 @@ class StereoHdfDataset(StereoDataset):
     """
     if seq_idx >= self.num_seqs:
       return None
+    
+    # map the seq_idx to the shuffled sequence indices
+    shuf_seq_idx = self._seq_index_list[seq_idx]
 
-    seqMapping = self._seqMap[seq_idx]
+    seqMapping = self._seqMap[shuf_seq_idx]
     fileIdx = seqMapping[0]
     datasetName = seqMapping[1]
     fileHandler = self._fileHandlers[fileIdx]
