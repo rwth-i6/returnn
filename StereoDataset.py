@@ -12,6 +12,7 @@ from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
 from BundleFile import BundleFile
 from NormalizationData import NormalizationData
+from Log import log
 
 
 class StereoDataset(CachedDataset2):
@@ -52,11 +53,17 @@ class StereoDataset(CachedDataset2):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    print('do init_seq_order of StereoDataset')
+    super(StereoDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+
+    if epoch is None:
+        self._seq_index_list = range(self.num_seqs)
+        return True
+        
     if seq_list:
       raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, self.get_seq_length)
+      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))
 
     self._seq_index_list = seq_index 
     if epoch is not None:
@@ -264,6 +271,8 @@ class StereoHdfDataset(StereoDataset):
       return None
     
     # map the seq_idx to the shuffled sequence indices
+    if self._seq_index_list is None:
+        self.init_seq_order()
     shuf_seq_idx = self._seq_index_list[seq_idx]
 
     seqMapping = self._seqMap[shuf_seq_idx]
