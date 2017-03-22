@@ -12,6 +12,7 @@ from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
 from BundleFile import BundleFile
 from NormalizationData import NormalizationData
+from Log import log
 
 
 class StereoDataset(CachedDataset2):
@@ -22,6 +23,7 @@ class StereoDataset(CachedDataset2):
   def __init__(self, **kwargs):
     """constructor"""
     super(StereoDataset, self).__init__(**kwargs)
+    self._seq_index_list = None
 
   @property
   def num_seqs(self):
@@ -42,6 +44,32 @@ class StereoDataset(CachedDataset2):
     """
     raise NotImplementedError
 
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :type epoch: int|None
+    :param epoch: epoch number
+    :type seq_list: list[str] | None seq_list: In case we want to set a predefined order.
+    :param seq_list: only None is currently supported
+    Initialize lists:
+      self.seq_index  # sorted seq idx
+    """
+    super(StereoDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+
+    if epoch is None:
+        self._seq_index_list = range(self.num_seqs)
+        return True
+        
+    if seq_list:
+      raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
+    else:
+      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))
+
+    self._seq_index_list = seq_index 
+    if epoch is not None:
+      # Give some hint to the user in case he is wondering why the cache is reloading.
+      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+
+    return True
 
 class StereoHdfDataset(StereoDataset):
   """A stereo dataset which needs an hdf file as input. The hdf file
@@ -240,8 +268,13 @@ class StereoHdfDataset(StereoDataset):
     """
     if seq_idx >= self.num_seqs:
       return None
+    
+    # map the seq_idx to the shuffled sequence indices
+    if self._seq_index_list is None:
+        self.init_seq_order()
+    shuf_seq_idx = self._seq_index_list[seq_idx]
 
-    seqMapping = self._seqMap[seq_idx]
+    seqMapping = self._seqMap[shuf_seq_idx]
     fileIdx = seqMapping[0]
     datasetName = seqMapping[1]
     fileHandler = self._fileHandlers[fileIdx]
@@ -255,18 +288,10 @@ class StereoHdfDataset(StereoDataset):
       assert isinstance(self._normData, NormalizationData)
       # inputs
       if self._flag_normalizeInputs:
-        inputFeatures = StereoHdfDataset._normalizeVector(
-          inputFeatures,
-          self._normData.inputMean,
-          self._normData.inputVariance,
-        )
+        inputFeatures = StereoHdfDataset._normalizeVector(inputFeatures, self._normData.inputMean, self._normData.inputVariance)
       # outputs
       if self._flag_normalizeTargets:
-        targets = StereoHdfDataset._normalizeVector(
-          targets,
-          self._normData.outputMean,
-          self._normData.outputVariance,
-        )
+        targets = StereoHdfDataset._normalizeVector(targets, self._normData.outputMean, self._normData.outputVariance)
 
     # enforce float32 to enable Theano optimizations
     inputFeatures = inputFeatures.astype(np.float32)
@@ -350,14 +375,7 @@ class DatasetWithTimeContext(StereoHdfDataset):
         rightContext.append(np.zeros(bins))
     for t in range(frames):
       f = inputFeatures[t, ...]
-      newFeature = np.concatenate(
-        [
-          np.concatenate(leftContext, axis=0),
-          f,
-          np.concatenate(rightContext, axis=0)
-        ],
-        axis=0
-      )
+      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)],axis=0)
       inFeatWithContext.append(newFeature)
       leftContext.popleft()
       leftContext.append(f)
