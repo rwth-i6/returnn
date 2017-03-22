@@ -5,13 +5,13 @@
 #define FOCUS_LAST 0
 #define FOCUS_MAX 1
 
-#define VERBOSE 0
+#define VERBOSE 1
 
 class Inv
 {
 public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
-    int T, int N, int S, int min_skip, int max_skip, int focus, SArrayI& attention)
+    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, SArrayI& attention)
     {
         int M = max_skip;
         if(M > T - S)
@@ -30,7 +30,8 @@ public:
         {
           M = T / (N * S) + min_skip + 1;
           min_skip = M - 2 * min_skip;
-        } else if((T - M) / (N * S) > M)
+        }
+        else if((T - M) / (N * S) > M)
         {
             M = (T - M) / (N * S) + 1;
             static int max_skip_warning_limit = 0;
@@ -68,12 +69,18 @@ public:
             if(start < 0)
                 start = 0;
             start = 0;
+            int max_skip = M;
+            if(labellings(s / S) == nil)
+              max_skip = T - min_skip;
             for(int t=start; t < T; ++t)
             {
                 float score = score_(s, t + M - 1);
                 float min_score = INF;
                 int min_index = M - min_skip;
-                for(int m=t; m < t + M - min_skip; ++m)
+                int max_skip = M;
+                if(labellings(s / S) == nil)
+                  max_skip = T - t + min_skip;
+                for(int m=t; m < t + max_skip - min_skip; ++m)
                 {
                     float prev = fwd_(s - 1, m);
                     if(prev < min_score)
@@ -84,10 +91,10 @@ public:
                 }
 
                 if(min_score == INF)
-                  fwd_(s, t + M - 1) = INF;
+                  fwd_(s, t + max_skip - 1) = INF;
                 else
-                  fwd_(s, t + M - 1) = min_score + score;
-                bt_(s, t + M - 1) = M - 1 - min_index;
+                  fwd_(s, t + max_skip - 1) = min_score + score;
+                bt_(s, t + max_skip - 1) = max_skip - 1 - min_index;
             }
         }
 

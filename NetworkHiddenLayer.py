@@ -2845,7 +2845,7 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, focus='last', mode='viterbi', **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
@@ -2876,6 +2876,10 @@ class CAlignmentLayer(ForwardLayer):
         tdps[i] = 1e30
     if min_skip > 0:
       tdps[:min_skip] = [1e30] * min_skip
+    if nil is None:
+      nil = -1
+    elif nil < 0:
+      nil = n_cls - nil
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2899,7 +2903,7 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      att, emi = InvOp(min_skip, max_skip, nstates, focus, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      att, emi = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
       y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
       rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
