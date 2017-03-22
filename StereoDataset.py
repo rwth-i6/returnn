@@ -255,18 +255,10 @@ class StereoHdfDataset(StereoDataset):
       assert isinstance(self._normData, NormalizationData)
       # inputs
       if self._flag_normalizeInputs:
-        inputFeatures = StereoHdfDataset._normalizeVector(
-          inputFeatures,
-          self._normData.inputMean,
-          self._normData.inputVariance,
-        )
+        inputFeatures = StereoHdfDataset._normalizeVector(inputFeatures, self._normData.inputMean, self._normData.inputVariance)
       # outputs
       if self._flag_normalizeTargets:
-        targets = StereoHdfDataset._normalizeVector(
-          targets,
-          self._normData.outputMean,
-          self._normData.outputVariance,
-        )
+        targets = StereoHdfDataset._normalizeVector(targets, self._normData.outputMean, self._normData.outputVariance)
 
     # enforce float32 to enable Theano optimizations
     inputFeatures = inputFeatures.astype(np.float32)
@@ -350,14 +342,7 @@ class DatasetWithTimeContext(StereoHdfDataset):
         rightContext.append(np.zeros(bins))
     for t in range(frames):
       f = inputFeatures[t, ...]
-      newFeature = np.concatenate(
-        [
-          np.concatenate(leftContext, axis=0),
-          f,
-          np.concatenate(rightContext, axis=0)
-        ],
-        axis=0
-      )
+      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)],axis=0)
       inFeatWithContext.append(newFeature)
       leftContext.popleft()
       leftContext.append(f)
