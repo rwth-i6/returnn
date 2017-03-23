@@ -496,6 +496,20 @@ class Device(object):
     self.epoch_var = theano.shared(numpy.zeros((), dtype="int32"), name="epoch_var")
     self.tags_var  = theano.shared(numpy.zeros((0, 0), dtype="int8"), name="tags_var")
 
+    self.streams = []
+    output_streams = []
+    if config.has('stream'):
+      from NetworkStream import NetworkStream
+      for stream in config.value('stream').split():  # usage: layer_name.member_var:port
+        stream, port = stream.split(':')
+        layer, member = stream.split('.')
+        ctx = self.trainnet.hidden[layer] if layer in self.trainnet.hidden else self.trainnet.output[layer]
+        if ctx.hasattr(member):
+          output_streams.append(ctx.getattr(member))
+        elif member in ctx.attrs:
+          output_streams.append(ctx.attrs['member'])
+        self.streams.append(NetworkStream(stream,port))
+
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss in ('ctc', 'hmm'):
@@ -516,9 +530,9 @@ class Device(object):
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
-      # The function output lists must be consistent with TrainTaskThread.evaluate().
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
-      outputs = [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
+      # The function output lists must be consistent with TrainTaskThread.evaluate()
+      outputs = self.output_streams + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -569,7 +583,7 @@ class Device(object):
       test_givens = self.make_givens(self.testnet)
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
+      test_outputs = output_streams + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
@@ -581,7 +595,7 @@ class Device(object):
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
-      source = []
+      source = output_streams
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         param = None
@@ -782,6 +796,15 @@ class Device(object):
       outputs_format = self.train_outputs_format
     elif task == "eval":
       outputs_format = self.test_outputs_format
+
+    # stream handling
+    if(self.streams):
+      stream_outputs = output[:len(self.streams)]
+      output = output[len(self.streams):]
+      for stream, out in zip(self.streams, stream_outputs):
+        stream.update(out)
+
+
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
