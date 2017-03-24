@@ -597,7 +597,7 @@ class Device(object):
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
-      source = output_streams
+      source = output_streams['eval']
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         param = None
@@ -717,14 +717,18 @@ class Device(object):
           if hidden.layer_class == 'mdlstm':
             source.append(T.sum(hidden.output,axis=0))
           else:
-            signal = hidden.getattr(param).dimshuffle('x',0,1)
+            signal = getattr(hidden, param)
+            if signal.ndim == 2:
+              signal = signal.dimshuffle('x',0,1)
             sidx = hidden.index.dimshuffle('x',0)
             source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
         elif extract in self.testnet.output:
           if param is None:
             param = 'output'
           hidden = self.testnet.output[extract]
-          signal = hidden.output.getattr(param).dimshuffle('x', 0, 1)
+          signal = getattr(hidden, param)
+          if signal.ndim == 2:
+            signal = signal.dimshuffle('x', 0, 1)
           source.append(signal)
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
