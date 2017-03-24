@@ -455,58 +455,183 @@ class Updater:
       #if self.momentum > 0:
       #  upd[p] += self.momentum * self.deltas[param]
       if self.variance_reduction:
-        self.decay = 0.9
-        self.gamma_clip = 1.8
-        outlier_detection = True
-        eps = numpy.float32(1e-10)
-        gamma_num = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_nume_sqr_" + param.name)
-        gamma_denom = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_deno_sqr_" + param.name)
-        mean_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_grad_%s" % param.name)
-        mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="msg_" + param.name)
-        deltas_prev = self.var(value=numpy.zeros_like(param.get_value()) + eps, name="deltas_prev_" + param.name)
+        # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
+        self.use_adam = False
+        self.use_adagrad = False
+        self.use_adadelta = False
+        self.skip_nan_inf = False
+        self.start_var_reduction = 0
+        self.use_corrected_grad = True
+        self.decay = 0.75
+        self.delta_clip = 50.0
+        self.gamma_clip = 2.5  # 1.8
+        eps = numpy.float32(1e-7)
+        deltas = deltas / (deltas.norm(2) + eps)
+        if self.use_adagrad:
+          sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name,
+                                     broadcastable=param.broadcastable)
+        if self.use_adadelta:
+          eg2 = self.var(param.get_value(borrow=True) * 0., name="eg2_%s" % param.name,
+                         broadcastable=param.broadcastable)
+          edx2 = self.var(param.get_value(borrow=True) * 0., name="edx2_%s" % param.name,
+                          broadcastable=param.broadcastable)
+        if self.use_adam:
+          m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+          v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
+        taus_x_t = self.var((numpy.ones_like(param.get_value()) + eps) * 2.1, name="taus_x_t_" + param.name)
+
+        # Variance reduction parameters
+        # Numerator of the gamma:
+        gamma_nume_sqr = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_nume_sqr_" + param.name)
+        # Denominator of the gamma:
+        gamma_deno_sqr = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_deno_sqr_" + param.name)
+        # For the covariance parameter := E[\gamma \alpha]_{t-1}
+        cov_num_t = self.var(numpy.zeros_like(param.get_value()) + eps, name="cov_num_t_" + param.name)
+        # mean_grad := E[g]_{t-1}
+        mean_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_grad_%s" % param.name)
+        # mean_squared_grad := E[g^2]_{t-1}
+        mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="msg_" + param.name)
+        # mean_square_dx := E[(\Delta x)^2]_{t-1}
+        mean_square_dx = self.var(value=numpy.zeros_like(param.get_value()), name="msd_" + param.name)
+        old_grad = self.var(value=numpy.zeros_like(param.get_value()) + eps, name="old_grad_" + param.name)
+
+        # The uncorrected gradient of previous of the previous update:
+        old_plain_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="old_plain_grad_" + param.name)
+        mean_curvature = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_curvature_" + param.name)
+        mean_curvature_sqr = self.var(numpy.zeros_like(param.get_value()) + eps,
+                                      name="mean_curvature_sqr_" + param.name)
+
+        # Initialize the E[\Delta]_{t-1}
+        mean_dx = self.var(numpy.zeros_like(param.get_value()), name="mean_dx_" + param.name)
+
+        # Block-wise normalize the gradient:
+        # For the first time-step, assume that delta_x_t := deltas
         cond = T.eq(self.i, 0)
         msdx = cond * deltas ** 2 + (1 - cond) * mean_square_dx
         mdx = cond * deltas + (1 - cond) * mean_dx
 
+        """
+        Compute the new updated values.
+        """
+        # E[g_i^2]_t
+        new_mean_squared_grad = mean_square_grad * self.decay + T.sqr(deltas) * (1 - self.decay)
+        new_mean_squared_grad.name = "msg_" + param.name
+        # E[g_i]_t
         new_mean_grad = mean_grad * self.decay + deltas * (1 - self.decay)
-        new_gamma_num = gamma_num * (1 - 1 / taus_x_t) + T.sqr(
-          (deltas - deltas_prev) * (deltas_prev - new_mean_grad)) / taus_x_t
-        new_gamma_denom = gamma_denom * (1 - 1 / taus_x_t) + T.sqr(
-          (new_mean_grad - deltas) * (deltas_prev - new_mean_grad)) / taus_x_t
+        new_mean_grad.name = "nmg_" + param.name
+        # Keep the rms for numerator and denominator of gamma.
+        new_gamma_nume_sqr = gamma_nume_sqr * (1 - 1 / taus_x_t) + T.sqr(
+          (deltas - old_grad) * (old_grad - new_mean_grad)) / taus_x_t
+        new_gamma_nume_sqr.name = "ngammasqr_num_" + param.name
+        new_gamma_deno_sqr = gamma_deno_sqr * (1 - 1 / taus_x_t) + T.sqr(
+          (new_mean_grad - deltas) * (old_grad - new_mean_grad)) / taus_x_t
+        new_gamma_deno_sqr.name = "ngammasqr_den_" + param.name
 
-        gamma = T.sqrt(gamma_num) / T.sqrt(gamma_denom + eps)
+        gamma = T.sqrt(gamma_nume_sqr) / T.sqrt(gamma_deno_sqr + eps)
+        gamma.name = "gamma_" + param.name
 
         if self.gamma_clip:
           gamma = T.minimum(gamma, self.gamma_clip)
 
+        momentum_step = gamma * new_mean_grad
+        corrected_grad_cand = (deltas + momentum_step) / (1 + gamma)
+
+        # For starting the variance reduction.
+        if self.start_var_reduction > -1:
+          cond = T.le(self.start_var_reduction, self.i)
+          corrected_grad = cond * corrected_grad_cand + (1 - cond) * deltas
+        else:
+          corrected_grad = deltas
+        if self.use_adagrad:
+          g = corrected_grad
+          # Accumulate gradient (windowed version)
+          new_sum_squared_grad = (
+            sum_square_grad + T.sqr(g)
+          )
+
+          rms_g_t = T.sqrt(new_sum_squared_grad)
+          rms_g_t = T.maximum(rms_g_t, 1.0)
+        if self.use_adadelta:
+          decay = self.decay  # self.adadelta_decay
+          offset = eps  # self.adadelta_offset
+          g2 = T.sqr(corrected_grad)
+          eg2_new = decay * eg2 + (1 - decay) * g2
+          rms_g_t = T.sqrt(eg2_new + offset) / T.sqrt(edx2 + offset)  # - 1.0 / dx_new
+          # rms_g_t = T.maximum(rms_g_t, 1.0)
+
+        # Use the gradients from the previous update
+        # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
+        cur_curvature = deltas - old_plain_grad
+        new_curvature_ave = mean_curvature * (1 - 1 / taus_x_t) + cur_curvature / taus_x_t
+        new_curvature_ave.name = "ncurve_ave_" + param.name
+
+        # Average average curvature
+        nc_ave = new_curvature_ave
+        new_curvature_sqr_ave = mean_curvature_sqr * (1 - 1 / taus_x_t) + T.sqr(cur_curvature) / taus_x_t
+        new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
+
+        # Unbiased average squared curvature
+        nc_sq_ave = new_curvature_sqr_ave
+
+        slope = self.learning_rate_var
+        rms_dx_tm1 = T.sqrt(msdx + slope)
+        rms_curve_t = T.sqrt(new_curvature_sqr_ave + slope)
+
+        # This is where the update step is being defined
+        # delta_x_t = -scaled_lr * (rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + epsilon))
+        delta_x_t = -(rms_dx_tm1 / rms_curve_t - cov_num_t / (new_curvature_sqr_ave + self.learning_rate_var))
+        delta_x_t.name = "delta_x_t_" + param.name
+
+        # This part seems to be necessary for only RNNs
+        # For feedforward networks this does not seem to be important.
+        if self.delta_clip:
+          delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
+        if self.use_adagrad or self.use_adadelta:
+          delta_x_t = delta_x_t * corrected_grad / rms_g_t
+        elif self.use_adam:
+          m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+          v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+          a_t = T.cast(T.sqrt(1 - beta2 ** i_t) / (1 - beta1 ** i_t), dtype="float32")
+          delta_x_t = delta_x_t * corrected_grad * a_t
+        else:
+          # logger.info("Clipped adagrad is disabled.")
+          delta_x_t = delta_x_t * corrected_grad
+
         new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
+        # To compute the E[\Delta^2]_t
+        new_mean_square_dx = msdx * (1 - 1 / taus_x_t) + T.sqr(delta_x_t) / taus_x_t
+        # To compute the E[\Delta]_t
+        new_mean_dx = mean_dx * (1 - 1 / taus_x_t) + delta_x_t / taus_x_t
 
-        if outlier_detection:
-          mean_square_dx = self.var(value=numpy.zeros_like(param.get_value()), name="msd_" + param.name)
-          mean_dx = self.var(numpy.zeros_like(param.get_value()), name="mean_dx_" + param.name)
-          # To compute the E[\Delta^2]_t
-          new_mean_square_dx = msdx * (1 - 1 / taus_x_t) + T.sqr(deltas) / taus_x_t
-          # To compute the E[\Delta]_t
-          new_mean_dx = mean_dx * (1 - 1 / taus_x_t) + deltas / taus_x_t
+        # Perform the outlier detection:
+        # This outlier detection is slightly different:
+        self.upper_bound_tau = 1e8
+        self.lower_bound_tau = 1.5
+        new_taus_t = T.switch(
+          T.or_(abs(deltas - new_mean_grad) > (2 * T.sqrt(new_mean_squared_grad - new_mean_grad ** 2)),
+                abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave ** 2))),
+          self.var(2.2), new_taus_t)
 
-          new_taus_t = T.switch(
-            T.or_(abs(deltas - new_mean_grad) > (2 * T.sqrt(new_mean_squared_grad - new_mean_grad ** 2)),
-                  abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave ** 2))),
-            self.var(2.2), new_taus_t)
+        # Apply the bound constraints on tau:
+        new_taus_t = T.maximum(self.lower_bound_tau, new_taus_t)
+        new_taus_t = T.minimum(self.upper_bound_tau, new_taus_t)
 
-          # Apply the bound constraints on tau:
-          new_taus_t = T.clip(new_taus_t, 1.5, 1e8)
-          updates.append((mean_square_dx, new_mean_square_dx))
-          updates.append((mean_dx, new_mean_dx))
+        new_cov_num_t = cov_num_t * (1 - 1 / taus_x_t) + (delta_x_t * cur_curvature) * (1 / taus_x_t)
+        deltas = -delta_x_t
 
+        # Apply updates
         updates.append((mean_square_grad, new_mean_squared_grad))
-        updates.append((gamma_num, new_gamma_num))
-        updates.append((gamma_denom, new_gamma_denom))
+        updates.append((mean_square_dx, new_mean_square_dx))
+        updates.append((mean_dx, new_mean_dx))
+        updates.append((gamma_nume_sqr, new_gamma_nume_sqr))
+        updates.append((gamma_deno_sqr, new_gamma_deno_sqr))
         updates.append((taus_x_t, new_taus_t))
+        updates.append((cov_num_t, new_cov_num_t))
         updates.append((mean_grad, new_mean_grad))
-        
-        deltas = T.switch(T.eq(self.i, 0, deltas, (deltas + gamma * new_mean_grad) / (1 + gamma)))
+        updates.append((old_plain_grad, deltas))
+        updates.append((mean_curvature, new_curvature_ave))
+        updates.append((mean_curvature_sqr, new_curvature_sqr_ave))
 
       if self.adasecant:
         # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
