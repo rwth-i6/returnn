@@ -2937,6 +2937,7 @@ class CAlignmentLayer(ForwardLayer):
       assert search == 'time'
 
     self.att = att
+    self.attention = emi
     if self.eval_flag and search == 'decode':
       self.output = self.z * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
       self.p_y_given_x = p_in * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
