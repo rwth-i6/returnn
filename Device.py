@@ -532,7 +532,7 @@ class Device(object):
 
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       # The function output lists must be consistent with TrainTaskThread.evaluate()
-      outputs = self.output_streams + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
+      outputs = output_streams + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
