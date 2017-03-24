@@ -6,6 +6,7 @@
 #define FOCUS_MAX 1
 
 #define VERBOSE 1
+#define AUTO_INCREASE_SKIP 0
 
 class Inv
 {
@@ -14,32 +15,35 @@ public:
     int T, int N, int S, int min_skip, int max_skip, int focus, int nil, SArrayI& attention)
     {
         int M = max_skip;
-        if(M > T - S)
+        if(AUTO_INCREASE_SKIP)
         {
-            M = T - S + 1;
-            if(M < 1)
-            {
-               M = 1;
-            }
-        }
-        if(min_skip > M)
-        {
-            min_skip = M;
-        }
-        if(M == 0)
-        {
-          M = T / (N * S) + min_skip + 1;
-          min_skip = M - 2 * min_skip;
-        }
-        else if((T - M) / (N * S) > M)
-        {
-            M = (T - M) / (N * S) + 1;
-            static int max_skip_warning_limit = 0;
-            if(VERBOSE && M > max_skip_warning_limit)
-            {
-                max_skip_warning_limit = M;
-                cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
-            }
+          if(M > T - S)
+          {
+              M = T - S + 1;
+              if(M < 1)
+              {
+                 M = 1;
+              }
+          }
+          if(min_skip > M)
+          {
+              min_skip = M;
+          }
+          if(M == 0)
+          {
+            M = T / (N * S) + min_skip + 1;
+            min_skip = M - 2 * min_skip;
+          }
+          else if((T - M) / (N * S) > M)
+          {
+              M = (T - M) / (N * S) + 1;
+              static int max_skip_warning_limit = 0;
+              if(VERBOSE && M > max_skip_warning_limit)
+              {
+                  max_skip_warning_limit = M;
+                  cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
+              }
+          }
         }
 
         fwd_.resize(N * S, T + M - 1);
@@ -69,18 +73,18 @@ public:
             if(start < 0)
                 start = 0;
             start = 0;
-            int max_skip = M;
+            int cur_min_skip = min_skip;
             if(labellings(s / S) == nil)
-              max_skip = T - min_skip;
+              cur_min_skip = 0;
             for(int t=start; t < T; ++t)
             {
+                int cur_max_skip = M;
+                if(labellings(s / S) == nil)
+                  cur_max_skip = T - t;
                 float score = score_(s, t + M - 1);
                 float min_score = INF;
-                int min_index = M - min_skip;
-                int max_skip = M;
-                if(labellings(s / S) == nil)
-                  max_skip = T - t + min_skip;
-                for(int m=t; m < t + max_skip - min_skip; ++m)
+                int min_index = M - cur_min_skip;
+                for(int m=t + cur_min_skip; m < t + cur_max_skip; ++m)
                 {
                     float prev = fwd_(s - 1, m);
                     if(prev < min_score)
@@ -91,10 +95,10 @@ public:
                 }
 
                 if(min_score == INF)
-                  fwd_(s, t + max_skip - 1) = INF;
+                  fwd_(s, t + M - 1) = INF;
                 else
-                  fwd_(s, t + max_skip - 1) = min_score + score;
-                bt_(s, t + max_skip - 1) = max_skip - 1 - min_index;
+                  fwd_(s, t + M - 1) = min_score + score;
+                bt_(s, t + M - 1) = cur_max_skip - 1 - min_index;
             }
         }
 
