@@ -508,7 +508,7 @@ class Device(object):
           output_streams.append(ctx.getattr(member))
         elif member in ctx.attrs:
           output_streams.append(ctx.attrs['member'])
-        self.streams.append(NetworkStream(stream,port))
+        self.streams.append(NetworkStream(stream, port))
 
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
@@ -802,9 +802,7 @@ class Device(object):
       stream_outputs = output[:len(self.streams)]
       output = output[len(self.streams):]
       for stream, out in zip(self.streams, stream_outputs):
-        stream.update(out)
-
-
+        stream.update(task, out, self.tags)
 
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
