@@ -1,8 +1,12 @@
 
 import theano
 import numpy
-import scipy
-import scipy.signal
+try:
+    flag_scipyAvailable = 1
+    import scipy
+    import scipy.signal
+except:
+    flag_scipyAvailable = 0
 import json
 import h5py
 import sys
@@ -1079,7 +1083,7 @@ class MfccLayer(_NoOpLayer):
     dctIndMatrix = numpy.reshape(numpy.asarray(range(nrOfFilters)), (nrOfFilters, 1)) * numpy.reshape((numpy.asarray(range(nrOfFilters)) + 1), (1, nrOfFilters))
     dctMatrix = T.cos(numpy.pi/nrOfFilters * dctIndMatrix)
     mfccs = T.dot(filtered, dctMatrix)
-    self.attrs['n_out'] = nrOfMfccCoefficients
+    self.set_attr('n_out', nrOfMfccCoefficients)
     self.make_output(mfccs[:,:,0:nrOfMfccCoefficients])
 
   def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None):
@@ -1151,7 +1155,48 @@ class MfccLayer(_NoOpLayer):
       filterMatrix = numpy.divide(filterMatrixNumerator, filterMatrixDenominator)
       return filterMatrix
 
+class Preemphasis(_NoOpLayer):
+  """
+  This layer is expecting a time signal as input and applying the preemphasis to the segment.
+  (This is not completely correct application of preemphasis, since the first element of the segment does not
+  know its predecessor in the time signal, therefore the effect is different than applying preemphasis on the
+  complete signal beforehand)
+  """
+  layer_class = "preemphasis_layer"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
 
+  def __init__(self, alpha=1.0, **kwargs):
+    """
+    """
+    super(Preemphasis, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    inputVec = self.sources[0].output
+    n_in = self.sources[0].attrs["n_out"]
+    self.set_attr('n_out', n_in)
+    preemphMatrix = numpy.zeros((n_in, n_in))
+    numpy.fill_diagonal(preemphMatrix, 1)
+    preemphMatrix[numpy.arange(n_in-1)+1, numpy.arange(n_in-1)] = -1 * alpha
+    outputVec = T.dot(inputVec, preemphMatrix.transpose())
+    self.make_output(outputVec)
+
+class EnergyNormalization(_NoOpLayer):
+  """
+  This layer expects a (chunkted) time signal at the input. It normalizes the signal energy of the input chunk.
+  """
+  layer_class = "energy_normalization_layer"
+  recurrent = True #Event though the layer is not recurrent the implementation does not work with "False" -> reason unclear
+
+  def __init__(self, **kwargs):
+    """
+    """
+    super(EnergyNormalization, self).__init__(**kwargs)
+    self.set_attr('target', 'classes')
+    # normalization matrix
+    inputVec = self.sources[0].output
+    self.set_attr('n_out', self.sources[0].attrs["n_out"])
+    normFactor = 1.0 / T.sqrt(T.dot(inputVec.T, inputVec))
+    outputVec = normFactor * inputVec
+    self.make_output(outputVec)
 
 class DftLayer(_NoOpLayer):
   """
@@ -1164,13 +1209,15 @@ class DftLayer(_NoOpLayer):
   recurrent = True #Even though the layer is not recurrent the implementation does not work with "False" -> reason unclear
   # (reason: sequences are concatenated otherwise, breaking windowing borders)
 
-  def __init__(self, dftLength=512, **kwargs):
+  def __init__(self, dftLength=512, windowName='hamming', flag_useSqrtWindow=False, **kwargs):
     super(DftLayer, self).__init__(**kwargs)
     self.set_attr('target', 'classes')
     # DFT properties
     nrOfFreqBins=int(numpy.floor(dftLength/2.0) + 1)
     # windowing
-    win = scipy.signal.get_window('hamming', dftLength)
+    win = scipy.signal.get_window(windowName, dftLength)
+    if flag_useSqrtWindow:
+        win = numpy.sqrt(win)
     windowedInput = self.sources[0].output * win
     # create DFT matrix
     nVec = numpy.asarray(range(dftLength))
@@ -1180,7 +1227,7 @@ class DftLayer(_NoOpLayer):
     dftImagMatrix = numpy.cos(2*numpy.pi*indexMatrix/(float(dftLength)))
     # apply DFT matrix
     dftAbsCoeff = T.sqrt(T.dot(windowedInput, numpy.transpose(dftRealMatrix))**2 + T.dot(windowedInput, numpy.transpose(dftImagMatrix))**2)
-    self.attrs['n_out'] = kVec.shape[0]
+    self.set_attr('n_out', kVec.shape[0])
     self.make_output(dftAbsCoeff)
 
 class GaussianFilter1DLayer(_NoOpLayer):
@@ -2799,7 +2846,7 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=False, blank=0, focus='last', mode='viterbi', **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
@@ -2830,6 +2877,10 @@ class CAlignmentLayer(ForwardLayer):
         tdps[i] = 1e30
     if min_skip > 0:
       tdps[:min_skip] = [1e30] * min_skip
+    if nil is None:
+      nil = -1
+    elif nil < 0:
+      nil = n_cls - nil
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2853,7 +2904,7 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      att, emi = InvOp(min_skip, max_skip, nstates, focus, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      att, emi = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
       y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
       rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(

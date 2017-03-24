@@ -5,7 +5,7 @@ import os
 Tfloat = theano.config.floatX  # @UndefinedVariable
 
 class InvOp(theano.Op):
-  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'mode')
+  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'nil', 'mode')
 
   def __eq__(self, other):
     return type(self) == type(other)
@@ -16,9 +16,10 @@ class InvOp(theano.Op):
   def __str__(self):
     return self.__class__.__name__
 
-  def __init__(self, min_skip, max_skip, nstates, focus='last', mode='viterbi'):
+  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, mode='viterbi'):
     self.min_skip = min_skip
     self.max_skip = max_skip
+    self.nil = nil
     self.focus = ['last','max'].index(focus)
     self.nstates = nstates
     self.mode = ['viterbi','full'].index(mode)
@@ -55,6 +56,7 @@ class InvOp(theano.Op):
     nstates = self.nstates
     min_skip = self.min_skip
     max_skip = self.max_skip
+    nil = self.nil
     mode = self.mode
     focus = self.focus
     fail = sub['fail']
@@ -82,7 +84,7 @@ class InvOp(theano.Op):
                   SArrayI attentionSWr(attentionWr, 1, i);
                   SArrayI emissionSWr(emissionWr, 1, i);
                   if(%(mode)s == 0)
-                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, %(focus)s, attentionSWr);
+                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, attentionSWr);
                   for(int j=0;j<attentionSWr.dim(0);++j)
                   {
                     emissionSWr(attentionSWr(j)) = 1;
@@ -293,7 +295,7 @@ class AlignOp(theano.Op):
 
 
 class InvAlignOp(AlignOp):
-  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'mode')
+  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'nil', 'mode')
 
   def c_code(self, node, name, inp, out, sub):
     x, y, len_x, len_y = inp
