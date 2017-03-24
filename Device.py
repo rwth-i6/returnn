@@ -497,18 +497,20 @@ class Device(object):
     self.tags_var  = theano.shared(numpy.zeros((0, 0), dtype="int8"), name="tags_var")
 
     self.streams = []
-    output_streams = []
+    output_streams = {'train' : [],'eval' : []}
     if config.has('stream'):
       from NetworkStream import NetworkStream
-      for stream in config.value('stream').split():  # usage: layer_name.member_var:port
+      for stream in config.value('stream', '').split():  # usage: layer_name.member_var:port
         stream, port = stream.split(':')
         layer, member = stream.split('.')
-        ctx = self.trainnet.hidden[layer] if layer in self.trainnet.hidden else self.trainnet.output[layer]
-        if ctx.hasattr(member):
-          output_streams.append(ctx.getattr(member))
-        elif member in ctx.attrs:
-          output_streams.append(ctx.attrs['member'])
-        self.streams.append(NetworkStream(stream, port))
+        self.streams.append(NetworkStream(stream, int(port)))
+        for key in ['train', 'eval']:
+          net = self.trainnet if key == 'train' else self.testnet
+          ctx  = net.hidden[layer] if layer in net.hidden else net.output[layer]
+          if hasattr(ctx,member):
+            output_streams[key].append(getattr(ctx,member))
+          elif member in ctx.attrs:
+            output_streams[key].append(ctx.attrs['member'])
 
     self.forwarder = None
     if self.network_task in ['train', 'theano_graph']:
@@ -532,7 +534,7 @@ class Device(object):
 
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       # The function output lists must be consistent with TrainTaskThread.evaluate()
-      outputs = output_streams + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
+      outputs = output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -570,7 +572,7 @@ class Device(object):
 
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
+      test_outputs = output_streams['eval'] + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
@@ -583,7 +585,7 @@ class Device(object):
       test_givens = self.make_givens(self.testnet)
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = output_streams + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
+      test_outputs = output_streams['eval'] + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       self.tester = theano.function(inputs=[self.block_start, self.block_end],
                                     outputs=test_outputs,
@@ -595,7 +597,7 @@ class Device(object):
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
-      source = output_streams
+      source = output_streams['eval']
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         param = None
@@ -715,14 +717,18 @@ class Device(object):
           if hidden.layer_class == 'mdlstm':
             source.append(T.sum(hidden.output,axis=0))
           else:
-            signal = hidden.getattr(param).dimshuffle('x',0,1)
+            signal = getattr(hidden, param)
+            if signal.ndim == 2:
+              signal = signal.dimshuffle('x',0,1)
             sidx = hidden.index.dimshuffle('x',0)
             source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
         elif extract in self.testnet.output:
           if param is None:
             param = 'output'
           hidden = self.testnet.output[extract]
-          signal = hidden.output.getattr(param).dimshuffle('x', 0, 1)
+          signal = getattr(hidden, param)
+          if signal.ndim == 2:
+            signal = signal.dimshuffle('x', 0, 1)
           source.append(signal)
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
