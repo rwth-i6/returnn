@@ -2846,12 +2846,12 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
-               base=None, output_attention=False, output_z=False, reduce_output=True, blank=False, nil = None, focus='last', mode='viterbi', **kwargs):
+               base=None, output_attention=False, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
     if base is None:
       base = []
-    kwargs['n_out'] = kwargs['y_in'][target].n_out + (blank > 0)
+    kwargs['n_out'] = kwargs['y_in'][target].n_out #+ blank
     n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
@@ -2880,7 +2880,7 @@ class CAlignmentLayer(ForwardLayer):
     if nil is None:
       nil = -1
     elif nil < 0:
-      nil = n_cls - nil
+      nil = n_cls + nil
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2944,9 +2944,10 @@ class CAlignmentLayer(ForwardLayer):
       self.index = self.sources[0].index
       self.attrs['n_out'] = n_cls
     elif output_attention:
-      self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
-      self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
-      self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
+      #self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
+      #self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
+      #self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
+      self.output = self.p_y_given_x = T.cast(emi,'float32').dimshuffle(0,1,'x')
       self.attrs['n_out'] = 1
       return
     else:
@@ -2988,17 +2989,17 @@ class CAlignmentLayer(ForwardLayer):
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
-        if blank > 0.0:
+        if blank is not None:
           jdx = self.sources[0].index.dimshuffle(1,0).flatten()
           jdx = T.set_subtensor(jdx[att_flat],numpy.int32(0))
           norm = self.index.sum(dtype='float32') / jdx.sum(dtype='float32')
           jdx = (jdx.reshape(self.sources[0].index.shape).dimshuffle(1,0).flatten() > 0).nonzero()
           z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
           bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
-                                                     y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(n_cls))
+                                                     y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(blank))
           rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
-                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
-          self.cost_val += numpy.float32(blank) * norm * T.sum(bnll) #- T.sum(rnll)
+                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(blank))
+          self.cost_val += norm * T.sum(bnll) #- T.sum(rnll)
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:

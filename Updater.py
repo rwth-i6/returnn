@@ -68,6 +68,7 @@ class Updater:
                nadam=False,
                nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
                eve=False,
+               gradient_l2_norm=False,
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -159,6 +160,7 @@ class Updater:
     self.gradient_noise_decay = gradient_noise_decay
     self.grad_noise_rel_grad_norm = grad_noise_rel_grad_norm
     self.reset_update_params = reset_update_params
+    self.gradient_l2_norm = gradient_l2_norm
     self.device = str(theano.config.device)
     self.params = {}
     self.pid = -1
@@ -426,6 +428,8 @@ class Updater:
       deltas = grads[param] * T.cast(gradient_scale,'float32')
       if self.max_norm > 0:
         deltas = self.norm_constraint(deltas, self.max_norm)
+      if self.gradient_l2_norm:
+        deltas = deltas / (deltas.norm(2) + numpy.float32(1e-10))
 
       if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
@@ -645,7 +649,8 @@ class Updater:
         self.delta_clip = 50.0
         self.gamma_clip = 2.5 #1.8
         eps = numpy.float32(1e-7)
-        deltas = deltas / (deltas.norm(2) + eps)
+        if not self.gradient_l2_norm:
+          deltas = deltas / (deltas.norm(2) + eps)
         if self.use_adagrad:
           sum_square_grad = self.var(param.get_value(borrow=True) * 0., name="sum_square_grad_%s" % param.name, broadcastable=param.broadcastable)
         if self.use_adadelta:
@@ -926,31 +931,20 @@ class Updater:
         #upd = upd * 0.1 / (0.1 + (self.sqrsum[param] + deltas ** 2) ** 0.5)
 
       elif self.adamdelta: # adam moment normalization + adadelta learning rate scaling
-        m_cache = self.var(1, name="momemtum_cache")
-        m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
-        v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
-        self.adam_offset = numpy.float32(1e-8)
+        self.adam_offset = numpy.float32(1e-16)
+        m_prev = self.var(param, zero=True, name="adam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="adam_v_%s" % param.name)
 
-        mt = (beta1 * (1 - 0.5 * 0.96 ** (
-        i_t * float(self.nadam_decay))))  # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        mtnext = beta1 * (1 - 0.5 * 0.96 ** ((i_t + 1) * float(self.nadam_decay)))  # for simplified NAG
+        m_t = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
+        g = m_t / (T.sqrt(v_t) + self.adam_offset)
 
-        m_cache_new = m_cache * mt
-        bias_corr = m_cache_new * mtnext
-
-        _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
-
-        m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        _m = m / T.cast(1 - bias_corr,
-                        dtype="float32")  # bias correction (with momentum schedule (include the next t+1))
-
-        v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas ** 2)
-        _v = v / T.cast(1 - beta2 ** i_t, dtype="float32")
-        __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
-        g = __m / (T.sqrt(_v) + self.adam_offset)
+        #updates.append((m_prev, m_t))
+        #updates.append((v_prev, v_t))
 
         decay = self.adadelta_decay
         offset = self.adadelta_offset
+        g = deltas
         g2 = g ** 2
         eg2_new = decay * self.eg2[param] + (numpy.float32(1) - decay) * g2
         dx_new = - g * T.sqrt(self.edx2[param] + offset) / T.sqrt(eg2_new + offset)
@@ -961,9 +955,6 @@ class Updater:
         updates.append((self.eg2[param], eg2_new))
         updates.append((self.edx2[param], edx2_new))
         updates.append((self.dx[param], dx_new))
-        updates.append((m_cache, m_cache_new))
-        updates.append((m_prev, m))
-        updates.append((v_prev, v))
 
       elif self.adadelta:
         decay = self.adadelta_decay
