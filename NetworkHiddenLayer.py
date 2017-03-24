@@ -2988,11 +2988,7 @@ class CAlignmentLayer(ForwardLayer):
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
-<<<<<<< HEAD
         if blank is not None:
-=======
-        if blank > 0.0:
->>>>>>> 500129f42785e9f72a897218c03d9aeb50cab058
           jdx = self.sources[0].index.dimshuffle(1,0).flatten()
           jdx = T.set_subtensor(jdx[att_flat],numpy.int32(0))
           norm = self.index.sum(dtype='float32') / jdx.sum(dtype='float32')
@@ -3001,13 +2997,8 @@ class CAlignmentLayer(ForwardLayer):
           bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
                                                      y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(blank))
           rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
-<<<<<<< HEAD
                                                      y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(blank))
           self.cost_val += norm * T.sum(bnll) #- T.sum(rnll)
-=======
-                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(n_cls))
-          self.cost_val += numpy.float32(blank) * norm * T.sum(bnll) #- T.sum(rnll)
->>>>>>> 500129f42785e9f72a897218c03d9aeb50cab058
     elif search == 'search':
       z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
       if train_skips:
