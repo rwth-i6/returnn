@@ -65,7 +65,6 @@ class Updater:
                adamdelta=False,
                adam_fit_learning_rate=True,
                adamax=False,
-               adamvr=False,
                nadam=False,
                nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
                eve=False,
@@ -77,6 +76,7 @@ class Updater:
                update_multiple_models_average_step_i=0, update_multiple_models_averaging=True,
                update_multiple_models_param_is_cur_model=False,
                multi_batch_update=0,
+               variance_reduction=False,
                enforce_triangular_matrix_zero=False,
                gradient_noise=0.0,
                gradient_noise_decay=0.55,
@@ -136,13 +136,13 @@ class Updater:
     self.adadelta_decay = numpy.float32(adadelta_decay)
     self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
-    self.adamvr = adamvr
     self.nadam = nadam
     self.nadam_decay = nadam_decay
     self.adam = adam
     self.eve = eve
     self.adamdelta = adamdelta
     self.adam_fit_learning_rate = adam_fit_learning_rate
+    self.variance_reduction = variance_reduction
     self.adamax = adamax
     self.mean_normalized_sgd = mean_normalized_sgd
     self.mean_normalized_sgd_average_interpolation = numpy.float32(mean_normalized_sgd_average_interpolation)
@@ -454,6 +454,60 @@ class Updater:
         deltas = T.clip(deltas, -self.gradient_clip, self.gradient_clip)
       #if self.momentum > 0:
       #  upd[p] += self.momentum * self.deltas[param]
+      if self.variance_reduction:
+        self.decay = 0.9
+        self.gamma_clip = 1.8
+        outlier_detection = True
+        eps = numpy.float32(1e-10)
+        gamma_num = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_nume_sqr_" + param.name)
+        gamma_denom = self.var(numpy.zeros_like(param.get_value()) + eps, name="gamma_deno_sqr_" + param.name)
+        mean_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="mean_grad_%s" % param.name)
+        mean_square_grad = self.var(numpy.zeros_like(param.get_value()) + eps, name="msg_" + param.name)
+        deltas_prev = self.var(value=numpy.zeros_like(param.get_value()) + eps, name="deltas_prev_" + param.name)
+
+        cond = T.eq(self.i, 0)
+        msdx = cond * deltas ** 2 + (1 - cond) * mean_square_dx
+        mdx = cond * deltas + (1 - cond) * mean_dx
+
+        new_mean_grad = mean_grad * self.decay + deltas * (1 - self.decay)
+        new_gamma_num = gamma_num * (1 - 1 / taus_x_t) + T.sqr(
+          (deltas - deltas_prev) * (deltas_prev - new_mean_grad)) / taus_x_t
+        new_gamma_denom = gamma_denom * (1 - 1 / taus_x_t) + T.sqr(
+          (new_mean_grad - deltas) * (deltas_prev - new_mean_grad)) / taus_x_t
+
+        gamma = T.sqrt(gamma_num) / T.sqrt(gamma_denom + eps)
+
+        if self.gamma_clip:
+          gamma = T.minimum(gamma, self.gamma_clip)
+
+        new_taus_t = (1 - T.sqr(mdx) / (msdx + eps)) * taus_x_t + self.var(1 + eps, name="stabilized")
+
+        if outlier_detection:
+          mean_square_dx = self.var(value=numpy.zeros_like(param.get_value()), name="msd_" + param.name)
+          mean_dx = self.var(numpy.zeros_like(param.get_value()), name="mean_dx_" + param.name)
+          # To compute the E[\Delta^2]_t
+          new_mean_square_dx = msdx * (1 - 1 / taus_x_t) + T.sqr(deltas) / taus_x_t
+          # To compute the E[\Delta]_t
+          new_mean_dx = mean_dx * (1 - 1 / taus_x_t) + deltas / taus_x_t
+
+          new_taus_t = T.switch(
+            T.or_(abs(deltas - new_mean_grad) > (2 * T.sqrt(new_mean_squared_grad - new_mean_grad ** 2)),
+                  abs(cur_curvature - nc_ave) > (2 * T.sqrt(nc_sq_ave - nc_ave ** 2))),
+            self.var(2.2), new_taus_t)
+
+          # Apply the bound constraints on tau:
+          new_taus_t = T.clip(new_taus_t, 1.5, 1e8)
+          updates.append((mean_square_dx, new_mean_square_dx))
+          updates.append((mean_dx, new_mean_dx))
+
+        updates.append((mean_square_grad, new_mean_squared_grad))
+        updates.append((gamma_num, new_gamma_num))
+        updates.append((gamma_denom, new_gamma_denom))
+        updates.append((taus_x_t, new_taus_t))
+        updates.append((mean_grad, new_mean_grad))
+        
+        deltas = T.switch(T.eq(self.i, 0, deltas, (deltas + gamma * new_mean_grad) / (1 + gamma)))
+
       if self.adasecant:
         # https://github.com/caglar/adasecant_wshp_paper/blob/master/adasecant/codes/learning_rule.py
         self.use_adam = False
