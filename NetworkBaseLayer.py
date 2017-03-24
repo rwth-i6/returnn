@@ -488,6 +488,7 @@ class Layer(Container):
     self.index = index
     self.sources = sources; ":type: list[Layer]"
     self.num_sources = len(sources)
+    self.D = max([s.D for s in sources if isinstance(s,Layer)] + [0])
     if mask is None: mask = 'none'
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
@@ -688,7 +689,7 @@ class Layer(Container):
       assert False, "consensus method unknown: " + cns
 
   def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False, index=None,
-                 sample_mean=None, gamma=None, beta=None):
+                 sample_mean=None, gamma=None, beta=None, depth_norm=False):
     x = h
     if h.ndim == 3:
       if index is None: index = self.index
@@ -734,6 +735,8 @@ class Layer(Container):
         beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_%s_beta" % (self.name,h.name)))
       self.beta = beta
       bn += beta
+    if depth_norm:
+      bn = bn / (T.sqrt(2)**self.D)
     return bn
 
   def make_output(self, output, collapse = True, sample_mean=None, gamma=None):
