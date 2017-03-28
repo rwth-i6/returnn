@@ -3264,7 +3264,6 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
 	    self.fullind = fullind
     self.make_output(result)
     self.z = result
-    self.output = theano.printing.Print('%s output'%self.name,attrs=['shape'])(self.output)
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class ReshapeLayer6(ForwardLayer):
@@ -3305,7 +3304,6 @@ class ReshapeLayer6(ForwardLayer):
       zfinal = self.z
       self.index = self.sources[0].index
     self.make_output(zfinal)
-    self.output = theano.printing.Print('%s output'%self.name,attrs=['shape'])(self.output)
     self.act = [self.output, T.zeros_like(self.output)]
     #self.set_attr('n_out',self.attrs['n_out']*w)
 
