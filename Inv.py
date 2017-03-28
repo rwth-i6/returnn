@@ -22,7 +22,7 @@ class InvOp(theano.Op):
     self.nil = nil
     self.focus = ['last','max'].index(focus)
     self.nstates = nstates
-    self.mode = ['viterbi','full'].index(mode)
+    self.mode = mode
 
   def make_node(self, x, y, len_x, len_y):
     x = theano.tensor.as_tensor_variable(x)
@@ -36,7 +36,7 @@ class InvOp(theano.Op):
     assert len_y.ndim == 1  # vector of seqs lengths
     assert len_y.dtype == "int32"
 
-    return theano.Apply(self, [x, y, len_x, len_y], [T.imatrix(),T.imatrix()])
+    return theano.Apply(self, [x, y, len_x, len_y], [T.ftensor3()])
 
   def c_support_code(self):
     src = ""
@@ -52,43 +52,39 @@ class InvOp(theano.Op):
 
   def c_code(self, node, name, inp, out, sub):
     x, y, len_x, len_y = inp
-    attention, emission = out # (N*S,B)
+    attention = out[0]
     nstates = self.nstates
     min_skip = self.min_skip
     max_skip = self.max_skip
     nil = self.nil
-    mode = self.mode
+    viterbi = int(self.mode == 'viterbi')
     focus = self.focus
     fail = sub['fail']
     return """
             Py_XDECREF(%(attention)s);
-            npy_intp ydims[] = {PyArray_DIM(%(y)s,0) * %(nstates)s, PyArray_DIM(%(y)s,1)};
-            npy_intp xdims[] = {PyArray_DIM(%(x)s,0), PyArray_DIM(%(x)s,1)};
-            %(attention)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), ydims, PyArray_DescrFromType(NPY_INT32), 0);
-            %(emission)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(y)s), xdims, PyArray_DescrFromType(NPY_INT32), 0);
+            int T = PyArray_DIM(%(x)s,0);
+            int B = PyArray_DIM(%(x)s,1);
+            int N = PyArray_DIM(%(y)s,0) * %(nstates)s;
+            npy_intp dims[] = {N, B, T};
+            %(attention)s = (PyArrayObject*) PyArray_Zeros(3, dims, PyArray_DescrFromType(NPY_FLOAT32), 0);
             if (!%(attention)s)
                 %(fail)s;
             {
-              ArrayI attentionWr(%(attention)s);
-              ArrayI emissionWr(%(emission)s);
+              ArrayF attentionWr(%(attention)s);
               ArrayF xWr(%(x)s);
               ArrayI yWr(%(y)s);
               CArrayI len_xWr(%(len_x)s);
               CArrayI len_yWr(%(len_y)s);
 
-              int numSeqs = len_xWr.dim(0);
               #pragma omp parallel for
-              for(int i = 0; i < numSeqs; ++i)
+              for(int i = 0; i < B; ++i)
               {
                   Inv cls;
-                  SArrayI attentionSWr(attentionWr, 1, i);
-                  SArrayI emissionSWr(emissionWr, 1, i);
-                  if(%(mode)s == 0)
-                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, attentionSWr);
-                  for(int j=0;j<attentionSWr.dim(0);++j)
+                  SArrayF attentionSWr(attentionWr, 1, i);
+                  if(%(viterbi)s)
                   {
-                    emissionSWr(attentionSWr(j)) = 1;
-                    attentionSWr(j) += xWr.dim(0) * i;
+                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
+                                %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, attentionSWr);
                   }
               }
             }

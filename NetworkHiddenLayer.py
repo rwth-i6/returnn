@@ -2904,17 +2904,14 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      att, emi = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-      y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      self.attention = theano.gradient.disconnected_grad(self.attention)
+      self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
       rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
-      max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
-      ratt = att
-      att_flat = att.flatten()
       index = theano.gradient.disconnected_grad(rindex)
-      self.y_out = y_out
     elif search in ['search','decode']:
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
@@ -2936,43 +2933,20 @@ class CAlignmentLayer(ForwardLayer):
     else:
       assert search == 'time'
 
-    self.att = att
-    self.attention = emi
-    if self.eval_flag and search == 'decode':
-      self.output = self.z * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
-      self.p_y_given_x = p_in * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
-      self.index = self.sources[0].index
-      self.attrs['n_out'] = n_cls
-    elif output_attention:
-      #self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
-      #self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
-      #self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
-      self.output = self.p_y_given_x = T.cast(emi,'float32').dimshuffle(0,1,'x')
-      self.attrs['n_out'] = 1
-      return
-    else:
-      if reduce_output:
-        if output_z:
-          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att_flat]
-          self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
-        else:
-          if not self.eval_flag:
-            x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          else:
-            x_out = x_in.dimshuffle(0, 1, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
-        self.index = index
-      else:
-        self.output = self.z if output_z else x_in
-        self.p_y_given_x = p_in
-        if search == 'decode':
-          self.p_y_given_x *= q_in
-        if output_z:
-          self.attrs['n_out'] = n_cls
-        self.index = self.sources[0].index
+    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
+    z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
 
-    #if self.attrs['search'] == 'time' or self.eval_flag:
-    #  return
+    if reduce_output:
+      self.output = z_out if output_z else x_out
+      self.index = index
+    else:
+      self.output = self.z if output_z else x_in
+      self.index = self.sources[0].index
+
+    if output_z:
+      self.attrs['n_out'] = n_cls
+
+    self.p_y_given_x = p_in
 
     if search in ['align', 'decode', 'search']:
       idx = (rindex.flatten() > 0).nonzero()
@@ -2984,7 +2958,7 @@ class CAlignmentLayer(ForwardLayer):
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
       else:
-        z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+        z_out = z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))
         y_out = self.y_out.flatten()
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)

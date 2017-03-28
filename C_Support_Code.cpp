@@ -11,19 +11,19 @@ using namespace std;
 
 template<typename T>
 class Log
-{    
+{
 public:
     Log(T v = 0):
         logVal_(v < expMin ? logZero : log(v))
     {
 
     }
-    
+
     Log(const Log& other)
     {
     	logVal_ = other.logVal_;
     }
-    
+
     static Log<T> fromLogVal(T logVal)
     {
     	logVal = std::min(logVal, logInf);
@@ -32,7 +32,7 @@ public:
 		res.logVal_ = logVal;
 		return res;
     }
-    
+
     Log<T> pow(T v)
     {
     	if(logVal_ == logZero)
@@ -100,16 +100,16 @@ public:
     {
         return logVal_ == rhs.logVal_;
     }
-    
+
     bool operator<(const Log<T>& rhs)
     {
     	return logVal_ < rhs.logVal_;
     }
-    
+
     bool operator>(const Log<T>& rhs)
     {
     	return logVal_ > rhs.logVal_;
-    }        
+    }
 
     T expVal() const
     {
@@ -207,7 +207,7 @@ public:
             printf("index out of range2: %i / %i \n", idx, (int) PyArray_DIM(a_,0));
         }
         return *reinterpret_cast<T*>(PyArray_DATA(a_) + idx);
-    }                
+    }
 
     T& operator()(int idx1, int idx2)
     {
@@ -278,7 +278,7 @@ public:
         }
     }
 
-private:        
+private:
     PyArrayObject* a_;
 };
 
@@ -292,9 +292,9 @@ public:
 	dim_(dim),
 	idxValue_(idxValue)
 	{
-		
+
 	}
-	
+
 	int dim(int idx) const
 	{
 		if(idx < dim_)
@@ -305,8 +305,8 @@ public:
 		{
 			return arr_.dim(idx + 1);
 		}
-	}	
-	
+	}
+
 	T& operator()(int idx)
 	{
 		if(dim_ == 0)
@@ -323,7 +323,7 @@ public:
 			throw std::out_of_range("indexing error");
 		}
 	}
-	
+
     T& operator()(int idx1, int idx2)
     {
     	if(dim_ == 0)
@@ -344,12 +344,12 @@ public:
 			throw std::out_of_range("indexing error");
     	}
     }
-    
+
     const T& operator()(int idx) const
     {
     	return const_cast<PySubArrayWrapper<T>&>(*this)(idx);
     }
-    
+
     const T& operator()(int idx1, int idx2) const
     {
     	return const_cast<PySubArrayWrapper<T>&>(*this)(idx1, idx2);
@@ -385,7 +385,7 @@ public:
 	size2_(0),
 	data_(0)
 	{
-	
+
 	}
 
 	TwoDArray(size_t size1, size_t size2):
@@ -393,19 +393,19 @@ public:
 	size2_(size2),
 	data_(new T[size1*size2]())
 	{
-	
+
 	}
-	
+
 	~TwoDArray()
 	{
 		delete[] data_;
 	}
-	
+
 	void resize(size_t size1, size_t size2)
 	{
 		size1_ = size1;
 		size2_ = size2;
-		delete[] data_;		
+		delete[] data_;
 		data_ = new T[size1*size2]();
 	}
 
@@ -415,7 +415,7 @@ public:
 		std::swap(size2_, other.size2_);
 		std::swap(data_, other.data_);
 	}
-	
+
 	size_t size(size_t idx) const
 	{
 		if(idx == 0)
@@ -432,7 +432,7 @@ public:
 			throw std::out_of_range("indexing error");
 		}
 	}
-	
+
 	T& operator()(size_t idx1, size_t idx2)
 	{
 		//optional range check
@@ -441,20 +441,20 @@ public:
 			std::cerr << "indexing error4: idx1: " << idx1 << " idx2: " << idx2 << " size1_:" << size1_ << " size2_: " << size2_ << std::endl;
 			throw std::out_of_range("indexing error");
 		}
-		
-		return data_[size2_ * idx1 + idx2]; 
+
+		return data_[size2_ * idx1 + idx2];
 	}
-	
+
 	const T& operator()(size_t idx1, size_t idx2) const
 	{
 		return const_cast<TwoDArray<T>&>(*this)(idx1, idx2);
 	}
-	
+
 	T& at(size_t idx1, size_t idx2)
 	{
 		return (*this)(idx1, idx2);
 	}
-	
+
 	const T& at(size_t idx1, size_t idx2) const
 	{
 		return (*this)(idx1,idx2);
@@ -503,7 +503,7 @@ float& dataf(PyArrayObject* arr)
 
 //http://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C.2B.2B
 template<class T>
-int levenshteinDist(const T &s1, const T & s2) 
+int levenshteinDist(const T &s1, const T & s2)
 {
     const size_t len1 = s1.size(), len2 = s2.size();
     std::vector<unsigned int> col(len2+1), prevCol(len2+1);
