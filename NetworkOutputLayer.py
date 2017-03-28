@@ -138,9 +138,6 @@ class OutputLayer(Layer):
             self.y_data_flat = self.y_data_flat[(self.y_data_flat >= 0).nonzero()]
         else:
           self.y_data_flat = time_batch_make_flat(y)
-        self.index = theano.printing.Print('%s reshaped index' % self.name, attrs=['shape', '__str__'])(self.index)
-        self.y_data_flat = theano.printing.Print('%s reshaped ydataflat' % self.name, attrs=['shape', '__str__'])(
-          self.y_data_flat)
       else:
         self.y_data_flat = time_batch_make_flat(y)
     else:
