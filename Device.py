@@ -727,18 +727,10 @@ class Device(object):
             param = 'output'
           hidden = self.testnet.output[extract]
           signal = getattr(hidden, param)
-          if signal.ndim == 2:
-            signal = signal.dimshuffle('x', 0, 1)
+          assert signal.ndim == 3, "extraction variable has to be of shape (time,batch,dimension)"
           source.append(signal)
         elif extract == 'input':
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
-        elif extract == 'attention':
-          assert param
-          idx = T.cast(self.testnet.hidden[param].index,'float32').dimshuffle(0,1,'x').repeat(self.testnet.hidden[param].attention[0].shape[2],axis=2)
-          source.append(self.testnet.hidden[param].attention[0] * idx)
-        elif extract == 'alignment':
-          idx = T.cast(self.testnet.hidden[param].base[0].index,'float32').dimshuffle(0,1,'x')
-          source.append(self.testnet.hidden[param].alignment[0].dimshuffle(0,1,'x') * idx)
         else:
           assert False, "invalid extraction: " + extract
       self.extractor = theano.function(inputs = [],
