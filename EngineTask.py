@@ -655,10 +655,9 @@ class EvalTaskThread(TaskThread):
         device.set_net_params(self.network)
 
 class HDFForwardTaskThread(TaskThread):
-    def __init__(self, network, devices, data, batches, cache, merge={}):
+    def __init__(self, network, devices, data, batches, cache, compression="none"):
       super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
       self.tags = []
-      self.merge = merge
       self.cache = cache
       self.network = network
       self.num_seqs = 0
@@ -670,18 +669,19 @@ class HDFForwardTaskThread(TaskThread):
       cache.attrs['inputPattSize'] = data.num_inputs
       cache.attrs['numDims'] = 1
       cache.attrs['numLabels'] = data.num_outputs[target]
+      self.compression=compression
       if target in data.labels:
         hdf5_strings(cache, 'labels', data.labels[target])
       try:
         cache.attrs['numSeqs'] = data.num_seqs
       except Exception:
         cache.attrs['numSeqs'] = 1
-        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,))
+        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', maxshape=(None,), compression=compression)
       else:
-        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i')
-        self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i')
+        self.seq_lengths = cache.create_dataset("seqLengths", (cache.attrs['numSeqs'],), dtype='i', compression=compression)
+        self.seq_dims = cache.create_dataset("seqDims", (cache.attrs['numSeqs'], 1), dtype='i', compression=compression)
       try:
-        self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i') for k in data.get_target_list() }
+        self.targets = { k: cache.create_dataset("targets/data/" + k, (data.get_num_timesteps(),), dtype='i', compression=compression) for k in data.get_target_list() }
       except Exception:
         self.targets = None
       self.times = []
@@ -715,7 +715,7 @@ class HDFForwardTaskThread(TaskThread):
       from EngineBatch import Batch
       assert isinstance(batch, Batch)
       if "inputs" not in self.cache:
-        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None))
+        self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None), compression=self.compression)
       if features.shape[-1] > self.inputs.shape[1]:
         self.inputs.resize(features.shape[-1],axis=1)
       tt = 0

@@ -224,6 +224,7 @@ class Engine:
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
+    self.compression = config.bool('compression', False)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
     assert model_epoch_filename or self.start_epoch
@@ -557,11 +558,9 @@ class Engine:
     :type combine_labels: str
     """
     cache = h5py.File(output_file, "w")
-    batches = data.generate_batches(recurrent_net=self.network.recurrent,
-                                    batch_size=batch_size,
-                                    max_seqs=self.max_seqs)
-    merge = {}
-    forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache, merge)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=batch_size, max_seqs=self.max_seqs)
+    forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache,
+                                     "gzip" if self.compression else None)
     forwarder.join()
     cache.close()
 
