@@ -5,7 +5,7 @@ try:
     flag_scipyAvailable = 1
     import scipy
     import scipy.signal
-except:
+except ImportError:
     flag_scipyAvailable = 0
 import json
 import h5py

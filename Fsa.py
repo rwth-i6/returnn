@@ -257,7 +257,7 @@ class Fsa:
                         (edge[1] == state and edge[2] != self._EPS)]
       try:
         label_pos = self.edges[edges_included[0]][4]
-      except:
+      except Exception:
         label_pos = None
       edge_n = [state, state, self.edges[edges_included[0]][2], 0., label_pos]
       assert len(edge_n) == 5, "length of edge wrong"

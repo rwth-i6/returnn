@@ -58,13 +58,13 @@ class StereoDataset(CachedDataset2):
     if epoch is None:
         self._seq_index_list = range(self.num_seqs)
         return True
-        
+
     if seq_list:
       raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
     else:
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))
 
-    self._seq_index_list = seq_index 
+    self._seq_index_list = seq_index
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
@@ -239,7 +239,7 @@ class StereoHdfDataset(StereoDataset):
     for fh in self._fileHandlers:
       try:
         fh.close()
-      except:
+      except Exception:
         pass
 
   @property
@@ -268,7 +268,7 @@ class StereoHdfDataset(StereoDataset):
     """
     if seq_idx >= self.num_seqs:
       return None
-    
+
     # map the seq_idx to the shuffled sequence indices
     if self._seq_index_list is None:
         self.init_seq_order()
