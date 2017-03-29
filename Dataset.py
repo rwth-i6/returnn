@@ -726,7 +726,7 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
     assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
-    from ExternSprintDataset import ExternSprintDataset
+    from SprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
   elif ":" in config_str:
     kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
