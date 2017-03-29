@@ -1,6 +1,6 @@
 
 """
-Implements the SprintDataset and ExternSprintDataset classes, some Dataset subtypes.
+Implements the SprintDatasetBase and ExternSprintDataset classes, some Dataset subtypes.
 Note that from the main RETURNN process, you probably want ExternSprintDataset instead.
 """
 
@@ -21,7 +21,7 @@ from TaskSystem import Unpickler, numpy_copy_and_set_unused
 from Util import eval_shell_str, interrupt_main
 
 
-class SprintDataset(Dataset):
+class SprintDatasetBase(Dataset):
   """
   In Sprint, we use this object for multiple purposes:
   - Multiple epoch handling via SprintInterface.getSegmentList().
@@ -46,7 +46,7 @@ class SprintDataset(Dataset):
 
   def __init__(self, window=1, target_maps=None, **kwargs):
     assert window == 1
-    super(SprintDataset, self).__init__(**kwargs)
+    super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
       assert isinstance(target_maps, dict)
       target_maps = target_maps.copy()
@@ -126,7 +126,7 @@ class SprintDataset(Dataset):
     """
     Called by CRNN train thread when we enter a new epoch.
     """
-    super(SprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     with self.lock:
       self.crnnEpoch = epoch
       self.predefined_seq_list_order = seq_list
@@ -210,7 +210,7 @@ class SprintDataset(Dataset):
     print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end,
     if start == end: return
     with self.lock:
-      super(SprintDataset, self).load_seqs(start, end)
+      super(SprintDatasetBase, self).load_seqs(start, end)
       print >> log.v5, "first features shape:", self._getSeq(start).features.shape
 
   def _load_seqs(self, start, end):
@@ -371,7 +371,7 @@ class SprintDataset(Dataset):
           # We can do somewhat better. self._complete_frac is for self.next_seq_to_be_added.
           return self._complete_frac * float(seq_idx + 1) / self.next_seq_to_be_added
       else:
-        return super(SprintDataset, self).get_complete_frac(seq_idx)
+        return super(SprintDatasetBase, self).get_complete_frac(seq_idx)
 
   def get_seq_length(self, sorted_seq_idx):
     with self.lock:
@@ -397,13 +397,13 @@ class SprintDataset(Dataset):
       return self._getSeq(sorted_seq_idx).seq_tag
 
 
-class ExternSprintDataset(SprintDataset):
+class ExternSprintDataset(SprintDatasetBase):
   """
   This is a Dataset which you can use directly in RETURNN.
   You can use it to get any type of data from Sprint (RWTH ASR toolkit),
   e.g. you can use Sprint to do feature extraction and preprocessing.
 
-  This class is like SprintDataset, except that we will start an external Sprint instance ourselves
+  This class is like SprintDatasetBase, except that we will start an external Sprint instance ourselves
   which will forward the data to us over a pipe.
   The Sprint subprocess will use SprintExternInterface to communicate with us.
   """
