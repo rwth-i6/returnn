@@ -1,6 +1,8 @@
-# This file contains dataset implementations to have an easy to use
-# interface for using RETURNN for regression.
-# Applications are for example speech enhancement or mask estimations
+"""
+This file contains dataset implementations to have an easy to use
+interface for using RETURNN for regression.
+Applications are for example speech enhancement or mask estimations
+"""
 
 __author__ = 'menne'
 
