@@ -21,8 +21,9 @@ class NumpyAlignOp(theano.Op):
         alignment[:length_x,b] = self._fullAlignmentSequenceInv(0, length_x, scores[:length_x,b],
                                                              transcriptions[:length_y,b])
       else:
-        alignment[:length_x,b] = self._fullAlignmentSequence(0, length_x, scores[:length_x,b],
-                                                                transcriptions[:length_y,b])
+        #alignment[:length_x,b] = self._fullAlignmentSequence(0, length_x, scores[:length_x,b],
+        #                                                        transcriptions[:length_y,b])
+        alignment[:length_x,b] = self._ViterbiSequence(0, length_x, scores[:length_x,b],transcriptions[:length_y,b])
     output_storage[0][0] = alignment
 
   # optional:
@@ -32,7 +33,7 @@ class NumpyAlignOp(theano.Op):
     self.numStates = 3
     self.inverse = inverse
     self.repetitions = 1
-    self.silence = False
+    self.silence = True
     self.pruningThreshold = 500.
     if inverse:
       self.tdp = [ 1e10, 0., 1.9, 3., 2.5, 2., 1.4 ]
@@ -63,6 +64,58 @@ class NumpyAlignOp(theano.Op):
             self.repetitions * (startState + s) - 1
 
     return hmm
+
+  def _ViterbiSequence(self, start, end, scores, transcription):
+    """Align a given sequence with the full sum"""
+
+    usedStates = self.numStates * 2
+    inf = 1e30
+    hmm = self._buildHmm(transcription)
+    lengthT = end - start
+    lengthS = len(hmm)
+
+    # with margins of 2 at the bottom or top
+    fwdScore = np.full((lengthT, lengthS + 2), inf)
+    bt = np.full((lengthT, lengthS + 2), -1, dtype=np.int32)
+
+    # precompute all state priors
+    stateprior = np.full((lengthS), inf)
+    for s in range(0, lengthS):
+      stateprior[s] = 0.0 #self.stateprior((hmm[s] + 1)/self.repetitions) * prior_scale
+
+    # precompute all scores and densities
+    score = np.full((lengthT, lengthS), inf)
+    for t in range(0, lengthT):
+      for s in range(0, lengthS):
+        h = (hmm[s] + 1) / self.repetitions
+        h -= h % 3
+        h -= 1
+        h /= self.numStates
+        score[t][s] = scores[start + t, h]
+    # divide all scores with state priors
+    #score = np.subtract(score, stateprior)
+
+    # forward
+    # initialize first column
+    fwdScore[0, 2] = score[0, 0]
+
+    # go through all following columns
+    for t in range(1, lengthT):
+      for s in range(0, lengthS):
+        scores = np.add(np.add(fwdScore[t - 1, s:s + 3], score[t][s]), self.tdp[0:3][::-1])
+        best = np.argmin(scores)
+        fwdScore[t][s + 2] = scores[best]
+        bt[t][s + 2] = 2 - best
+
+    alignment = np.full((lengthT), -1, dtype=np.int32)
+    # backtrack
+    s = lengthS - 1
+    alignment[lengthT - 1] = hmm[s]
+    for t in range(lengthT - 2, -1, -1):
+      s = s - bt[t + 1][s + 2]
+      alignment[t] = hmm[s]
+
+    return alignment
 
   def _fullAlignmentSequence(self, start, end, scores, transcription):
     """Fully aligns sequence from start to end with given transcription"""

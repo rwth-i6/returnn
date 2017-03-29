@@ -6,7 +6,7 @@
 #define FOCUS_MAX 1
 
 #define VERBOSE 1
-#define AUTO_INCREASE_SKIP 1
+#define AUTO_INCREASE_SKIP 0
 
 class Inv
 {
@@ -64,7 +64,7 @@ public:
         for(int m = M-1 + min_skip; m < 2*M-2; ++m)
         {
             fwd_(0, m) = score_(0, m);
-            bt_(0, m) = m - M + 2;
+            bt_(0, m) = m - M + 1;
         }
 
         for(int s=1; s < N * S; ++s)
