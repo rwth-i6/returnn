@@ -19,6 +19,7 @@ import numpy
 
 import TaskSystem
 from Dataset import Dataset, DatasetSeq
+from CachedDataset2 import CachedDataset2
 from Log import log
 from TaskSystem import Unpickler, numpy_copy_and_set_unused
 from Util import eval_shell_str, interrupt_main
@@ -647,3 +648,144 @@ class ExternSprintDataset(SprintDatasetBase):
     with self.lock:
       assert self._num_seqs is not None
       return self._num_seqs
+
+
+class SprintCacheDataset(CachedDataset2):
+
+  class Data(object):
+    def __init__(self, data_key, filename, type=None, allophone_labeling=None):
+      self.data_key = data_key
+      from SprintCache import open_file_archive
+      self.sprint_cache = open_file_archive(filename)
+      if not type:
+        if data_key == "data":
+          type = "feat"
+        elif data_key == "classes":
+          type = "align"
+        else:
+          # Some sensible defaults.
+          if allophone_labeling:
+            type = "align"
+          else:
+            type = "feat"
+      assert type in ["feat", "align"]
+      self.type = type
+      self.allophone_labeling = None
+      if allophone_labeling:
+        from SprintCache import AllophoneLabeling
+        self.allophone_labeling = AllophoneLabeling(**allophone_labeling)
+      else:
+        assert type != "align", "need allophone_labeling for 'align' type"
+      self.content_keys = [fn for fn in self.sprint_cache.file_list() if not fn.endswith(".attribs")]
+      if type == "align":
+        self.num_labels = self.allophone_labeling.num_labels
+        if self.num_labels < 2 ** 7:
+          self.dtype = "int8"
+        elif self.num_labels < 2 ** 15:
+          self.dtype = "int16"
+        else:
+          assert self.num_labels < 2 ** 31
+          self.dtype = "int32"
+        self.num_dims = 1
+      elif type == "feat":
+        self.num_labels = self._get_feature_dim()
+        self.num_dims = 2
+        self.dtype = "float32"
+      else:
+        assert False
+
+    def _get_feature_dim(self):
+      assert self.type == "feat"
+      assert self.content_keys
+      times, feats = self.sprint_cache.read(self.content_keys[0], "feat")
+      assert len(times) == len(feats) > 0
+      feat = feats[0]
+      assert isinstance(feat, numpy.ndarray)
+      assert feat.ndim == 1
+      return feat.shape[0]
+
+    def read(self, name):
+      """
+      :param str name: content-filename for sprint cache 
+      :return: numpy array of shape (time, [num_labels])
+      :rtype: numpy.ndarray
+      """
+      res = self.sprint_cache.read(name, typ=self.type)
+      if self.type == "align":
+        label_seq = numpy.array([self.allophone_labeling.get_label_idx(a, s) for (t, a, s) in res], dtype=self.dtype)
+        assert label_seq.shape == (len(res),)
+        return label_seq
+      elif self.type == "feat":
+        times, feats = res
+        assert len(times) == len(feats) > 0
+        feat_mat = numpy.array(feats, dtype=self.dtype)
+        assert feat_mat.shape == (len(times), self.num_labels)
+        return feat_mat
+      else:
+        assert False
+
+  def __init__(self, data, **kwargs):
+    """
+    :param dict[str,dict[str]] data: data-key -> dict which keys such as filename, see Data constructor  
+    """
+    super(SprintCacheDataset, self).__init__(**kwargs)
+    self.data = {key: self.Data(data_key=key, **opts) for (key, opts) in data.items()}
+    self.seq_list_original = self.data["data"].content_keys
+    self.seq_list_ordered = self.seq_list_original
+    self._num_seqs = len(self.seq_list_original)
+    self._check_matching_content_list()
+    self.num_outputs = {key: (d.num_labels, d.num_dims) for (key, d) in self.data.items()}
+    self.num_inputs = self.num_outputs["data"][0]
+    self._seq_lens = None
+
+  def _check_matching_content_list(self):
+    data0 = self.data["data"]
+    assert isinstance(data0, self.Data)
+    for key, data in self.data.items():
+      if key == "data":
+        continue
+      assert isinstance(data, self.Data)
+      assert data.content_keys == data0.content_keys
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    assert not seq_list
+    need_reinit = self.epoch is None or self.epoch != epoch
+    super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not need_reinit:
+      return False
+    data0 = self.data["data"]
+    assert isinstance(data0, self.Data)
+    get_seq_size = lambda s: data0.sprint_cache.ft[self.seq_list_original[s]].size
+    seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len=get_seq_size)
+    self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
+    return True
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
+    """
+    if seq_idx >= self.num_seqs:
+      return None
+    seq_tag = self.get_tag(seq_idx)  # type: str
+    data = {key: d.read(seq_tag) for (key, d) in self.data}  # type: dict[str,numpy.ndarray]
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=data["data"], targets=data)
+
+  def get_data_keys(self):
+    """
+    :rtype: list[str]
+    """
+    return self.data.keys()
+
+  def get_target_list(self):
+    """
+    :rtype: list[str]
+    """
+    return [key for (key, d) in self.data if d.type == "align"]
+
+  def get_tag(self, sorted_seq_idx):
+    """
+    :rtype: str
+    """
+    return self.seq_list_ordered[sorted_seq_idx]

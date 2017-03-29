@@ -8,6 +8,14 @@ class CachedDataset2(Dataset):
   """
   Somewhat like CachedDataset, but different.
   Simpler in some sense. And more generic. Caching might be worse.
+  
+  If you derive from this class:
+  - you must override `_collect_single_seq`
+  - you must set `num_inputs` (dense-dim of "data" key) and `num_outputs` (dict key -> dim, ndim-1)
+  - you should set `labels`
+  - handle seq ordering by overriding `init_seq_order`
+  - you can set `_estimated_num_seqs`
+  - you can set `_num_seqs` or `_num_timesteps` if you know them in advance
   """
 
   def __init__(self, **kwargs):
@@ -90,6 +98,7 @@ class CachedDataset2(Dataset):
       self._load_seqs(self.expected_load_seq_start, n + 1)
       if self._get_seq(n) is not None:
         return True
+      # We reached the end.
       self._num_seqs = self.added_data[-1].seq_idx + 1
       assert n >= self._num_seqs
       self.reached_final_seq = True

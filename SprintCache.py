@@ -6,6 +6,8 @@
 This module is about reading (maybe later also writing) the Sprint archive format.
 """
 
+from __future__ import print_function
+
 import sys
 import os
 import array
@@ -104,7 +106,7 @@ class FileArchive:
 
   def __init__(self, filename, must_exists=True):
 
-    self.ft = {}
+    self.ft = {}  # type: dict[str,FileInfo]
     if os.path.exists(filename):
       self.allophones = []
       self.f = open(filename, 'rb')
@@ -328,10 +330,14 @@ class FileArchive:
     return mix, state
 
   def setAllophones(self, f):
+    """
+    :param str f: allophone filename. line-separated. will ignore lines starting with "#" 
+    """
     del self.allophones[:]
     for l in open(f):
       l = l.strip()
-      if l.startswith("#"): continue
+      if l.startswith("#"):
+        continue
       self.allophones.append(l)
 
   def addFeatureCache(self, filename, features, times):
@@ -381,6 +387,9 @@ class FileArchive:
 class FileArchiveBundle():
 
   def __init__(self, filename):
+    """
+    :param str filename: .bundle file 
+    """
     # filename -> FileArchive
     self.archives = {}  # type: dict[str,FileArchive]
     # archive content file -> FileArchive
@@ -393,6 +402,10 @@ class FileArchiveBundle():
       self._short_seg_names.update(a._short_seg_names)
 
   def file_list(self):
+    """
+    :rtype: list[str]
+    :returns: list of content-filenames (which can be used for self.read())
+    """
     return self.files.keys()
 
   def has_entry(self, filename):
@@ -422,6 +435,9 @@ class FileArchiveBundle():
     return self.files[filename].read(filename, typ)
 
   def setAllophones(self, filename):
+    """
+    :param str filename: allophone filename 
+    """
     for a in self.archives.values():
       a.setAllophones(filename)
 
@@ -455,6 +471,55 @@ def is_sprint_cache_file(filename):
         bs = unpack('%ds' % l, f.read(l))[0]
         header = bs.decode("ascii")
         return header == FileArchive.SprintCacheHeader
+
+
+class AllophoneLabeling(object):
+  def __init__(self, silence_phone, allophone_file, phoneme_file=None, state_tying_file=None, verbose_out=None):
+    """
+    :param str silence_phone: e.g. "si"
+    :param str allophone_file: list of allophones
+    :param str|None phoneme_file: list of phonemes
+    :param str|None state_tying_file: allophone state tying (e.g. via CART). maps each allophone state to a class label
+    :param file verbose_out: stream to dump log messages
+    """
+    assert phoneme_file or state_tying_file
+    self.allophone_file = allophone_file
+    self.allophones = [l for l in open(allophone_file).read().splitlines() if l and l[0] != "#"]
+    self.allophones_idx = {p: i for i, p in enumerate(self.allophones)}
+    self.sil_allo_state_id = self.allophones_idx[silence_phone + "{#+#}@i@f"]
+    if verbose_out:
+      print("AllophoneLabeling: Num allophones: %i" % len(self.allophones), file=verbose_out)
+    self.sil_label_idx = None
+    self.num_labels = None
+    self.phonemes = None
+    self.phoneme_idxs = None
+    self.state_tying = None
+    if phoneme_file:
+      self.phonemes = open(phoneme_file).read().splitlines()
+      self.phoneme_idxs = {p: i for i, p in enumerate(self.phonemes)}
+      if not state_tying_file:
+        self.sil_label_idx = self.phoneme_idxs[silence_phone]
+        self.num_labels = len(self.phonemes)
+        if verbose_out:
+          print("AllophoneLabeling: %i phones = labels." % self.num_labels, file=verbose_out)
+    if state_tying_file:
+      self.state_tying = {k: int(v)
+                          for l in open(state_tying_file).read().splitlines()
+                          for (k, v) in [l.split()]}
+      self.sil_label_idx = self.state_tying[silence_phone + "{#+#}@i@f.0"]
+      self.num_labels = max(self.state_tying.values()) + 1
+      if verbose_out:
+        print("AllophoneLabeling: State tying with %i labels." % self.num_labels, file=verbose_out)
+    assert self.num_labels is not None
+    assert self.state_tying or self.phoneme_idxs
+
+  def get_label_idx(self, allo_idx, state_idx):
+    allo_str = self.allophones[allo_idx]
+    if self.state_tying:
+      return self.state_tying["%s.%i" % (allo_str, state_idx)]
+    else:
+      phone = allo_str[:allo_str.index("{")]
+      return self.phoneme_idxs[phone]
 
 
 ###############################################################################
