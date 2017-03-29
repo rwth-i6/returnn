@@ -53,6 +53,8 @@ class StereoDataset(CachedDataset2):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
+    if hasattr(self, 'added_data'):
+        self._cleanup_old_seqs(self.num_seqs)
     super(StereoDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
 
     if epoch is None:
