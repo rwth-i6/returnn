@@ -651,6 +651,11 @@ class ExternSprintDataset(SprintDatasetBase):
 
 
 class SprintCacheDataset(CachedDataset2):
+  """
+  Can directly read Sprint cache files (and bundle files).
+  Supports both cached features and cached alignments.
+  For alignments, you need to provide all options for the AllophoneLabeling class, such as allophone file, etc.
+  """
 
   class Data(object):
     def __init__(self, data_key, filename, type=None, allophone_labeling=None):
@@ -674,6 +679,7 @@ class SprintCacheDataset(CachedDataset2):
       if allophone_labeling:
         from SprintCache import AllophoneLabeling
         self.allophone_labeling = AllophoneLabeling(**allophone_labeling)
+        self.sprint_cache.setAllophones(self.allophone_labeling.allophone_file)
       else:
         assert type != "align", "need allophone_labeling for 'align' type"
       self.content_keys = [fn for fn in self.sprint_cache.file_list() if not fn.endswith(".attribs")]
@@ -741,11 +747,17 @@ class SprintCacheDataset(CachedDataset2):
   def _check_matching_content_list(self):
     data0 = self.data["data"]
     assert isinstance(data0, self.Data)
+    sorted_list0 = sorted(data0.content_keys)
     for key, data in self.data.items():
       if key == "data":
         continue
       assert isinstance(data, self.Data)
-      assert data.content_keys == data0.content_keys
+      assert len(data.content_keys) == len(data0.content_keys)
+      sorted_list1 = sorted(data.content_keys)
+      for i in range(len(data.content_keys)):
+        k0 = sorted_list0[i]
+        k1 = sorted_list1[i]
+        assert k0 == k1
 
   def init_seq_order(self, epoch=None, seq_list=None):
     assert not seq_list
@@ -753,12 +765,17 @@ class SprintCacheDataset(CachedDataset2):
     super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not need_reinit:
       return False
+    self._num_seqs = len(self.seq_list_original)
     data0 = self.data["data"]
     assert isinstance(data0, self.Data)
     get_seq_size = lambda s: data0.sprint_cache.ft[self.seq_list_original[s]].size
     seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len=get_seq_size)
     self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
     return True
+
+  def get_dataset_seq_for_name(self, name, seq_idx=-1):
+    data = {key: d.read(name) for (key, d) in self.data.items()}  # type: dict[str,numpy.ndarray]
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=name, features=data["data"], targets=data)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -769,8 +786,7 @@ class SprintCacheDataset(CachedDataset2):
     if seq_idx >= self.num_seqs:
       return None
     seq_tag = self.get_tag(seq_idx)  # type: str
-    data = {key: d.read(seq_tag) for (key, d) in self.data}  # type: dict[str,numpy.ndarray]
-    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=data["data"], targets=data)
+    return self.get_dataset_seq_for_name(seq_idx=seq_idx, name=seq_tag)
 
   def get_data_keys(self):
     """
@@ -789,3 +805,58 @@ class SprintCacheDataset(CachedDataset2):
     :rtype: str
     """
     return self.seq_list_ordered[sorted_seq_idx]
+
+
+def demo():
+  print("SprintDataset demo.")
+  from argparse import ArgumentParser
+  arg_parser = ArgumentParser()
+  arg_parser.add_argument("--config", help="config with ExternSprintDataset", required=True)
+  arg_parser.add_argument("--sprint_cache_dataset", help="kwargs dict for SprintCacheDataset", required=True)
+  args = arg_parser.parse_args()
+  from Log import log
+  log.initialize(verbosity=[4])
+  sprint_cache_dataset_kwargs = eval(args.sprint_cache_dataset)
+  assert isinstance(sprint_cache_dataset_kwargs, dict)
+  sprint_cache_dataset = SprintCacheDataset(**sprint_cache_dataset_kwargs)
+  print("SprintCacheDataset: %r" % sprint_cache_dataset)
+  from Config import Config
+  config = Config()
+  config.load_file(args.config)
+  from Dataset import init_dataset
+  dataset = init_dataset(config.typed_value("train"))
+  print("Dataset via config: %r" % dataset)
+  assert sprint_cache_dataset.num_inputs == dataset.num_inputs
+  assert tuple(sprint_cache_dataset.num_outputs["classes"]) == tuple(dataset.num_outputs["classes"])
+  sprint_cache_dataset.init_seq_order(epoch=1)
+
+  print("Iterating through dataset...")
+  from Util import progress_bar_with_time
+  seq_idx = 0
+  dataset.init_seq_order(epoch=1)
+  while dataset.is_less_than_num_seqs(seq_idx):
+    dataset.load_seqs(seq_idx, seq_idx + 1)
+    tag = dataset.get_tag(seq_idx)
+    assert not tag.startswith("seq-"), "dataset does not provide tag-names for seqs"
+    dataset_seq = sprint_cache_dataset.get_dataset_seq_for_name(tag)
+    data = dataset.get_data(seq_idx, "data")
+    targets = dataset.get_data(seq_idx, "classes")
+    assert data.shape == dataset_seq.features.shape
+    assert targets.shape == dataset_seq.targets["classes"].shape
+    assert numpy.allclose(data, dataset_seq.features)
+    assert numpy.allclose(targets, dataset_seq.targets["classes"])
+    seq_idx += 1
+    progress_bar_with_time(dataset.get_complete_frac(seq_idx))
+
+  print("Finished through dataset. Num seqs: %i" % seq_idx)
+  print("SprintCacheDataset has num seqs: %i." % sprint_cache_dataset.num_seqs)
+
+
+if __name__ == "__main__":
+  import better_exchook
+  better_exchook.install()
+  try:
+    demo()
+  except KeyboardInterrupt:
+    print("KeyboardInterrupt.")
+    sys.exit(1)
