@@ -2,11 +2,10 @@
 import theano
 import numpy
 try:
-    flag_scipyAvailable = 1
-    import scipy
-    import scipy.signal
+  import scipy
+  import scipy.signal
 except ImportError:
-    flag_scipyAvailable = 0
+  scipy = None
 import json
 import h5py
 import sys
