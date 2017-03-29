@@ -8,7 +8,10 @@ import atexit
 import os
 import signal
 import sys
-import thread
+try:
+  import thread
+except ImportError:
+  import _thread as thread
 from threading import Condition, currentThread, Thread
 import math
 import time

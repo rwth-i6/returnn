@@ -2,6 +2,11 @@
 import os
 import sys
 import signal
+try:
+  import thread
+except ImportError:
+  import _thread as thread
+import threading
 
 
 signum_to_signame = {
@@ -58,8 +63,6 @@ def setupWarnWithTraceback():
 
 
 def initBetterExchook():
-  import thread
-  import threading
   import better_exchook
   import pdb
 
