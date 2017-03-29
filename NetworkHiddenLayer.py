@@ -2,11 +2,10 @@
 import theano
 import numpy
 try:
-    flag_scipyAvailable = 1
-    import scipy
-    import scipy.signal
-except:
-    flag_scipyAvailable = 0
+  import scipy
+  import scipy.signal
+except ImportError:
+  scipy = None
 import json
 import h5py
 import sys
@@ -2904,17 +2903,14 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      att, emi = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-      y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      self.attention = theano.gradient.disconnected_grad(self.attention)
+      self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
       rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
-      max_length_y = y_out.shape[0]
       norm = numpy.float32(1./nstates)
-      ratt = att
-      att_flat = att.flatten()
       index = theano.gradient.disconnected_grad(rindex)
-      self.y_out = y_out
     elif search in ['search','decode']:
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
@@ -2936,43 +2932,20 @@ class CAlignmentLayer(ForwardLayer):
     else:
       assert search == 'time'
 
-    self.att = att
-    self.attention = emi
-    if self.eval_flag and search == 'decode':
-      self.output = self.z * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
-      self.p_y_given_x = p_in * q_in[:,:,1].dimshuffle(0,1,'x').repeat(n_cls,axis=2)
-      self.index = self.sources[0].index
-      self.attrs['n_out'] = n_cls
-    elif output_attention:
-      #self.output = T.cast(att, 'float32').dimshuffle(0,1,'x')
-      #self.output = T.concatenate([self.output,T.zeros_like(self.output[-1:])],axis=0)
-      #self.output = T.set_subtensor(self.output[T.sum(index,axis=0,dtype='int32'),T.arange(self.output.shape[1])], numpy.int32(-1))
-      self.output = self.p_y_given_x = T.cast(emi,'float32').dimshuffle(0,1,'x')
-      self.attrs['n_out'] = 1
-      return
-    else:
-      if reduce_output:
-        if output_z:
-          z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att_flat]
-          self.output = z_out.reshape((max_length_y, self.z.shape[1], z_out.shape[1]))
-        else:
-          if not self.eval_flag:
-            x_out = x_in.dimshuffle(1, 0, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          else:
-            x_out = x_in.dimshuffle(0, 1, 2).reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))[att_flat]
-          self.output = x_out.reshape((max_length_y, self.z.shape[1], x_out.shape[1]))
-        self.index = index
-      else:
-        self.output = self.z if output_z else x_in
-        self.p_y_given_x = p_in
-        if search == 'decode':
-          self.p_y_given_x *= q_in
-        if output_z:
-          self.attrs['n_out'] = n_cls
-        self.index = self.sources[0].index
+    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
+    z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
 
-    #if self.attrs['search'] == 'time' or self.eval_flag:
-    #  return
+    if reduce_output:
+      self.output = z_out if output_z else x_out
+      self.index = index
+    else:
+      self.output = self.z if output_z else x_in
+      self.index = self.sources[0].index
+
+    if output_z:
+      self.attrs['n_out'] = n_cls
+
+    self.p_y_given_x = p_in
 
     if search in ['align', 'decode', 'search']:
       idx = (rindex.flatten() > 0).nonzero()
@@ -2984,7 +2957,7 @@ class CAlignmentLayer(ForwardLayer):
         self.cost_val = norm * T.sum(nll)
         self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
       else:
-        z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[att.flatten()]
+        z_out = z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))
         y_out = self.y_out.flatten()
         nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
         self.cost_val = norm * T.sum(nll)
@@ -3208,6 +3181,130 @@ class InvAlignSegmentationLayer(_NoOpLayer):
     self.make_output(result)
     #self.act = [self.output, T.zeros_like(self.output)]
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
+
+class InvAlignSegmentationLayer2(_NoOpLayer):
+  layer_class = "invalignsegment2"
+
+  def __init__(self, window=0,win=0,base=None, **kwargs):
+
+    super(InvAlignSegmentationLayer2, self).__init__(**kwargs)
+    if base:
+        kwargs['n_out'] = base[0].attrs['n_out']
+        self.set_attr('n_out', base[0].attrs['n_out'])
+        #self.set_attr('base',base)
+    else:
+        kwargs['n_out'] = self.sources[0].y_in[self.sources[0].attrs['target']].n_out
+        self.set_attr('n_out', self.sources[0].y_in[self.sources[0].attrs['target']].n_out)
+    self.set_attr('window', window)
+    self.set_attr('win',win)
+    assert len(self.sources) == 1
+    if not self.eval_flag:
+      assert self.sources[0].att is not None
+      att = self.sources[0].att.T
+      if window:
+        maxlen = T.cast(window / 2, 'int32')
+        att = att.nonzero_values()
+        cond = T.arange(-maxlen, maxlen).repeat(att.shape[0]).reshape((2 * maxlen, att.shape[0]))
+        att_rep = att.repeat(T.cast(2 * maxlen, 'int32')).reshape(
+          (att.shape[0], T.cast(2 * maxlen, 'int32'))).T  # repeat att maxlen times
+        finalcond = T.maximum(att_rep + cond, -1)
+        finalcond = T.switch(T.lt(finalcond, T.max(att)), finalcond, -1)
+      else:
+        maxlen = T.concatenate([T.stack(att[0, 0]), T.extra_ops.diff(att).flatten().sort()])[-1]
+        # maxlen = T.max(att[:,1:] - att[:,:att.shape[1]-1])
+        # concatenate first index in each row, i.e., if att is [[3,5,8],[15,17,20]], make it  [[0,3,5,8],[12,15,17,20]]
+        att_with_firstindex = T.concatenate([T.maximum(0, att[:, 0].dimshuffle(0, 'x') - maxlen), att], axis=1)
+        att_sorted = att_with_firstindex.sort()  # sort the rows so that [0,3,5,8,0,0,0] becomes [0,0,0,0,3,5,8]
+        att_wo_lastcol = T.concatenate([[0], att_sorted[:, :att_sorted.shape[1] - 1].flatten().nonzero_values()])
+        ind = att_wo_lastcol.shape[0] - T.sum(T.extra_ops.diff(att_with_firstindex).flatten() > 0)
+        att_wo_lastcol = att_wo_lastcol[ind:]
+        att_rep = att_wo_lastcol.repeat(T.cast(maxlen, 'int32')).reshape(
+          (att_wo_lastcol.shape[0], T.cast(maxlen, 'int32'))).T  # repeat att maxlen times
+        incr = T.arange(1, maxlen + 1).repeat(att_wo_lastcol.shape[0]).reshape(
+          (T.cast(maxlen, 'int32'), att_wo_lastcol.shape[0]))  # range of maxlen repeated att(shape) times
+        maskarr = T.extra_ops.diff(att_with_firstindex).flatten()  # diff array
+        maskarr = T.clip(maskarr, 0, T.max(maskarr)).nonzero_values()  # clip negative values to 0 and remove zeroes
+        # repeat maxlen times (this now contains the length of each segment)
+        maskarr = maskarr.repeat(T.cast(maxlen, 'int32')).reshape(
+          (att_wo_lastcol.shape[0], T.cast(maxlen, 'int32'))).dimshuffle(1, 0)
+        # comparing incr and maskarr, you get the value to be added to att_rep at each row and column.
+        # If incr > maskarr, then cond has -att_rep-1 so that when it is subtracted from att_rep,
+        # we get -1. Later z is concatenated with a row of 0s at the end so that this is retreived when z[-1] is encountered (to simulate [3,4,0,0] for example)
+        cond = T.switch(T.lt(incr, maskarr + 1), incr, -att_rep - 1)
+        finalcond = att_rep + cond
+      finalcond = finalcond.sort(axis=0)
+      # finalcond = theano.printing.Print('%s finalcond'%self.name,attrs=['shape','__str__'])(finalcond)
+      if base:
+        z = base[0].output.dimshuffle(1, 0, 2).reshape(
+          (base[0].output.shape[0] * base[0].output.shape[1], base[0].output.shape[2]))
+      else:
+        z = self.sources[0].z.dimshuffle(1, 0, 2).reshape(
+          (self.sources[0].z.shape[0] * self.sources[0].z.shape[1], self.sources[0].z.shape[2]))
+      # z = theano.printing.Print('%s z' % self.name, attrs=['shape'])(z)
+      z = T.concatenate([z, T.zeros((1, z.shape[1]))], axis=0)
+      result = z[T.cast(finalcond, 'int32')]
+      self.z = result
+
+    else:
+	    timesteps = self.sources[0].output.shape[0]
+	    batches = self.sources[0].output.shape[1]
+	    z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0] * self.sources[0].output.shape[1], self.sources[0].output.shape[2]))
+	    att = T.arange(timesteps).repeat(win).reshape((timesteps,win)) + T.arange(win)
+	    att = att.T
+	    att = T.where(att>=timesteps,-timesteps*batches,att)
+	    timesteps = theano.printing.Print('%s timesteps'%self.name,attrs=['__str__'])(timesteps)
+	    att = theano.printing.Print('%s att'%self.name,attrs=['shape'])(att)
+	    fullind = T.tile(att,(1,batches))
+	    fullind = fullind + (T.arange(batches) * timesteps).repeat(timesteps)
+	    fullind = T.where(fullind<0,-1,fullind)
+	    fullind = theano.printing.Print('%s full index'%self.name,attrs=['__str__','shape'])(fullind)
+	    z = T.concatenate([z,T.zeros((1,z.shape[1]))],axis=0)
+	    result = z[fullind]
+	    self.fullind = fullind
+    self.make_output(result)
+    self.z = result
+    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
+
+class ReshapeLayer6(ForwardLayer):
+  layer_class = "reshape6"
+
+  def __init__(self, base=None, **kwargs):
+    target = kwargs['target']
+    kwargs['n_out'] = kwargs['y_in'][target].n_out
+    super(ReshapeLayer6, self).__init__(**kwargs)
+    self.set_attr('n_out',kwargs['n_out'])
+    assert len(self.sources) == 1
+    assert base is not None
+    self.base = base
+
+    if self.eval_flag:
+      t = base[0].sources[0].output.shape[0]
+      b = base[0].sources[0].output.shape[1]
+      w = base[0].attrs['win']
+      d = self.attrs['n_out']
+      #take the final state and reshape to TBD
+      zfinal = self.z[-1,:,:]
+      zfinal = zfinal.reshape((b,t,zfinal.shape[1])).dimshuffle(1,0,2)
+      self.index = base[0].sources[0].index
+      ze = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+      p_y_given_x = T.nnet.softmax(ze)
+      fullind = base[0].fullind
+      p_y_given_x = T.concatenate([p_y_given_x,T.zeros((1,p_y_given_x.shape[1]))],axis=0)
+      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
+      for i in range(w):
+        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
+        if i>0:
+            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
+      fullind = theano.printing.Print('%s fullind'%self.name,attrs=['__str__','shape'])(fullind)
+      p_y_given_x_new = p_y_given_x[fullind.T.flatten()].reshape((t * b, w * d))
+      p_y_given_x_new = p_y_given_x_new.reshape((b,t,p_y_given_x_new.shape[1])).dimshuffle(1,0,2)
+      self.p_y_given_x = p_y_given_x_new
+    else:
+      zfinal = self.z
+      self.index = self.sources[0].index
+    self.make_output(zfinal)
+    self.act = [self.output, T.zeros_like(self.output)]
+    #self.set_attr('n_out',self.attrs['n_out']*w)
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# This script will emulate a Sprint executable, so that we can use it for SprintDataset.
+# This script will emulate a Sprint executable, so that we can use it for SprintDatasetBase.
 # This is useful for tests.
 # To generate data, we can use the GeneratingDataset code.
 

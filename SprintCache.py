@@ -55,6 +55,12 @@ class FileArchive:
     return float(unpack("d", self.f.read(8))[0])
 
   def read_v(self, typ, size):
+    """
+    :param str typ: "f" for float (float32) or "d" for double (float64)
+    :param int size: number of elements to return
+    :return: numpy array of shape (size,) of dtype depending on typ
+    :rtype: numpy.ndarray
+    """
     if   typ == 'f':
         b = 4
         t = numpy.float32
@@ -92,17 +98,18 @@ class FileArchive:
   def write_f64(self, i):
     return self.f.write(pack("d", i))
 
+  SprintCacheHeader = "SP_ARC1\0"
+  start_recovery_tag = 0xaa55aa55
+  end_recovery_tag = 0x55aa55aa
+
   def __init__(self, filename, must_exists=True):
-    self.header = "SP_ARC1\0"
-    self.start_recovery_tag = 0xaa55aa55
-    self.end_recovery_tag   = 0x55aa55aa
 
     self.ft = {}
     if os.path.exists(filename):
       self.allophones = []
       self.f = open(filename, 'rb')
-      header = self.read_str(8)
-      assert header == self.header
+      header = self.read_str(len(self.SprintCacheHeader))
+      assert header == self.SprintCacheHeader
 
       ft = bool(self.read_char())
       if ft:
@@ -113,10 +120,13 @@ class FileArchive:
     else:
       assert not must_exists, "File does not exist: %r" % filename
       self.f = open(filename, 'wb')
-      self.write_str(self.header)
+      self.write_str(self.SprintCacheHeader)
       self.write_char(1)
 
-      #print(self.ft)
+    self._short_seg_names = {os.path.basename(n): n for n in self.ft.keys()}
+    if len(self._short_seg_names) < len(self.ft):
+      # We don't have a unique mapping, so we cannot use this.
+      self._short_seg_names.clear()
 
   def __del__(self):
     self.f.close()
@@ -181,6 +191,18 @@ class FileArchive:
       #                          "file info table found.")
 
   def _raw_read(self, size, typ):
+    """
+    :param int|None size: needed for typ == "str"
+    :param str typ: "str", "feat" or "align"
+    :return: depending on typ, "str" -> string, "feat" -> (time, data), "align" -> align,
+      where string is a str,
+      time is list of time-stamp tuples (start-time,end-time) in millisecs,
+        data is a list of features, each a numpy vector,
+      align is a list of (time, allophone, state), time is an int from 0 to len of align,
+        allophone is some int, state is e.g. in [0,1,2].
+    :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+    """
+
     if typ == "str":
       return self.read_str(size)
 
@@ -204,7 +226,9 @@ class FileArchive:
       assert typ == "flow-alignment"
       flag = self.read_u32()  # ?
       typ = self.read_str(8)
-      if typ == "ALIGNRLE":
+      if typ in ["ALIGNRLE", "AALPHRLE"]:
+        # In case of AALPHRLE, after the alignment, we include the alphabet of the used labels.
+        # We ignore this at the moment.
         size = self.read_U32()
         if size < (1 << 31):
           # RLE scheme
@@ -237,9 +261,32 @@ class FileArchive:
           raise NotImplementedError("No support for weighted "
                                     "alignments yet.")
       else:
-        raise Exception("No valid alignment header found. Wrong cache?")
+        raise Exception("No valid alignment header found (found: %r). Wrong cache?" % typ)
+
+  def has_entry(self, filename):
+    """
+    :param str filename: argument for self.read()
+    :return: True if we have this entry
+    """
+    return filename in self.ft
 
   def read(self, filename, typ):
+    """
+    :param str filename: the entry-name in the archive
+    :param str typ: "str", "feat" or "align"
+    :return: depending on typ, "str" -> string, "feat" -> (time, data), "align" -> align,
+      where string is a str,
+      time is list of time-stamp tuples (start-time,end-time) in millisecs,
+        data is a list of features, each a numpy vector,
+      align is a list of (time, allophone, state), time is an int from 0 to len of align,
+        allophone is some int, state is e.g. in [0,1,2].
+    :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+    """
+
+    if filename not in self.ft:
+      if filename in self._short_seg_names:
+        filename = self._short_seg_names[filename]
+
     fi = self.ft[filename]
     self.f.seek(fi.pos)
     size = self.read_U32()
@@ -268,15 +315,20 @@ class FileArchive:
     return self._raw_read(size=fi.size, typ=typ)
 
   def getState(self, mix):
+    assert self.allophones
     max_states = 6
     #print("Was:", mix)
     for state in range(max_states):
       if mix >= len(self.allophones):
         mix -= (1<<26)
+      else:
+        break
     #print("Now:", mix)
-    return (mix, state)
+    assert mix >= 0
+    return mix, state
 
   def setAllophones(self, f):
+    del self.allophones[:]
     for l in open(f):
       l = l.strip()
       if l.startswith("#"): continue
@@ -329,17 +381,44 @@ class FileArchive:
 class FileArchiveBundle():
 
   def __init__(self, filename):
-    self.archives = {}  # :type: dict[str,FileArchive]  # filename -> FileArchive
-    self.files = {}  # :type: dict[str,FileArchive]  # archive content file -> FileArchive
+    # filename -> FileArchive
+    self.archives = {}  # type: dict[str,FileArchive]
+    # archive content file -> FileArchive
+    self.files = {}  # type: dict[str,FileArchive]
+    self._short_seg_names = {}
     for l in open(filename).read().splitlines():
       self.archives[l] = a = FileArchive(l, must_exists=True)
       for f in a.ft.keys():
         self.files[f] = a
+      self._short_seg_names.update(a._short_seg_names)
 
   def file_list(self):
     return self.files.keys()
 
+  def has_entry(self, filename):
+    """
+    :param str filename: argument for self.read()
+    :return: True if we have this entry
+    """
+    return filename in self.files
+
   def read(self, filename, typ):
+    """
+    :param str filename: the entry-name in the archive
+    :param str typ: "str", "feat" or "align"
+    :return: depending on typ, "str" -> string, "feat" -> (time, data), "align" -> align,
+      where string is a str,
+      time is list of time-stamp tuples (start-time,end-time) in millisecs,
+        data is a list of features, each a numpy vector,
+      align is a list of (time, allophone, state), time is an int from 0 to len of align,
+        allophone is some int, state is e.g. in [0,1,2].
+    :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+
+    Uses FileArchive.read().
+    """
+    if filename not in self.files:
+      if filename in self._short_seg_names:
+        filename = self._short_seg_names[filename]
     return self.files[filename].read(filename, typ)
 
   def setAllophones(self, filename):
@@ -348,11 +427,34 @@ class FileArchiveBundle():
 
 
 def open_file_archive(archive_filename, must_exists=True):
+  """
+  :param str archive_filename:
+  :param bool must_exists:
+  :rtype: FileArchiveBundle|FileArchive
+  """
   if archive_filename.endswith(".bundle"):
     assert must_exists
     return FileArchiveBundle(archive_filename)
   else:
     return FileArchive(archive_filename, must_exists=must_exists)
+
+
+def is_sprint_cache_file(filename):
+    """
+    :param str filename: file to check. must exist
+    :return: True iff this is a sprint cache (which can be loaded with `open_file_archive()`)
+    :rtype: bool
+    """
+    assert os.path.exists(filename)
+    if not os.path.isfile(filename):
+        return False
+    if filename.endswith(".bundle"):
+        return True
+    with open(filename, 'rb') as f:
+        l = len(FileArchive.SprintCacheHeader)
+        bs = unpack('%ds' % l, f.read(l))[0]
+        header = bs.decode("ascii")
+        return header == FileArchive.SprintCacheHeader
 
 
 ###############################################################################

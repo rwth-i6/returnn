@@ -678,7 +678,7 @@ def get_dataset_class(name):
   from importlib import import_module
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
-  mod_names = ["HDFDataset", "ExternSprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset", "StereoDataset"]
+  mod_names = ["HDFDataset", "SprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset", "StereoDataset"]
   for mod_name in mod_names:
     mod = import_module(mod_name)
     if name in vars(mod):
@@ -726,7 +726,7 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
     assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
-    from ExternSprintDataset import ExternSprintDataset
+    from SprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
   elif ":" in config_str:
     kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))

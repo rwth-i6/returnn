@@ -22,7 +22,7 @@ import numpy
 import theano
 import theano.tensor as T
 
-from SprintDataset import SprintDataset
+from SprintDataset import SprintDatasetBase
 from Log import log
 from Device import get_gpu_names
 import rnn
@@ -43,7 +43,7 @@ TargetMode = None
 Task = "train"
 
 config = None; """ :type: rnn.Config """
-sprintDataset = None; """ :type: SprintDataset """
+sprintDataset = None; """ :type: SprintDatasetBase """
 engine = None; """ :type: Engine | TFEngine.Engine """
 
 
@@ -86,7 +86,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # Loop over multiple epochs. Epochs start at 1.
   for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
-      # So that the CRNN train thread always has the SprintDataset in a sane state before we reset it.
+      # So that the CRNN train thread always has the SprintDatasetBase in a sane state before we reset it.
       sprintDataset.waitForCrnnEpoch(curEpoch)
     sprintDataset.initSprintEpoch(curEpoch)
 
@@ -431,7 +431,7 @@ def initDataset():
   if sprintDataset:
     return
   assert config
-  sprintDataset = SprintDataset.from_config(config)
+  sprintDataset = SprintDatasetBase.from_config(config)
 
 
 def getFinalEpoch():
