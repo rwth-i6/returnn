@@ -810,46 +810,86 @@ class SprintCacheDataset(CachedDataset2):
 def demo():
   print("SprintDataset demo.")
   from argparse import ArgumentParser
+  from Util import hms, progress_bar_with_time
+  from Log import log
+  from Config import Config
+  from Dataset import init_dataset
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--config", help="config with ExternSprintDataset", required=True)
   arg_parser.add_argument("--sprint_cache_dataset", help="kwargs dict for SprintCacheDataset", required=True)
+  arg_parser.add_argument("--max_num_seqs", default=sys.maxint, type=int)
+  arg_parser.add_argument("--action", default="compare", help="compare or benchmark")
   args = arg_parser.parse_args()
-  from Log import log
   log.initialize(verbosity=[4])
   sprint_cache_dataset_kwargs = eval(args.sprint_cache_dataset)
   assert isinstance(sprint_cache_dataset_kwargs, dict)
   sprint_cache_dataset = SprintCacheDataset(**sprint_cache_dataset_kwargs)
   print("SprintCacheDataset: %r" % sprint_cache_dataset)
-  from Config import Config
   config = Config()
   config.load_file(args.config)
-  from Dataset import init_dataset
   dataset = init_dataset(config.typed_value("train"))
   print("Dataset via config: %r" % dataset)
   assert sprint_cache_dataset.num_inputs == dataset.num_inputs
   assert tuple(sprint_cache_dataset.num_outputs["classes"]) == tuple(dataset.num_outputs["classes"])
   sprint_cache_dataset.init_seq_order(epoch=1)
 
-  print("Iterating through dataset...")
-  from Util import progress_bar_with_time
-  seq_idx = 0
-  dataset.init_seq_order(epoch=1)
-  while dataset.is_less_than_num_seqs(seq_idx):
-    dataset.load_seqs(seq_idx, seq_idx + 1)
-    tag = dataset.get_tag(seq_idx)
-    assert not tag.startswith("seq-"), "dataset does not provide tag-names for seqs"
-    dataset_seq = sprint_cache_dataset.get_dataset_seq_for_name(tag)
-    data = dataset.get_data(seq_idx, "data")
-    targets = dataset.get_data(seq_idx, "classes")
-    assert data.shape == dataset_seq.features.shape
-    assert targets.shape == dataset_seq.targets["classes"].shape
-    assert numpy.allclose(data, dataset_seq.features)
-    assert numpy.allclose(targets, dataset_seq.targets["classes"])
-    seq_idx += 1
-    progress_bar_with_time(dataset.get_complete_frac(seq_idx))
+  if args.action == "compare":
+    print("Iterating through dataset...")
+    seq_idx = 0
+    dataset.init_seq_order(epoch=1)
+    while seq_idx < args.max_num_seqs:
+      if not dataset.is_less_than_num_seqs(seq_idx):
+        break
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      tag = dataset.get_tag(seq_idx)
+      assert not tag.startswith("seq-"), "dataset does not provide tag-names for seqs"
+      dataset_seq = sprint_cache_dataset.get_dataset_seq_for_name(tag)
+      data = dataset.get_data(seq_idx, "data")
+      targets = dataset.get_data(seq_idx, "classes")
+      assert data.shape == dataset_seq.features.shape
+      assert targets.shape == dataset_seq.targets["classes"].shape
+      assert numpy.allclose(data, dataset_seq.features)
+      assert numpy.allclose(targets, dataset_seq.targets["classes"])
+      seq_idx += 1
+      progress_bar_with_time(dataset.get_complete_frac(seq_idx))
 
-  print("Finished through dataset. Num seqs: %i" % seq_idx)
-  print("SprintCacheDataset has num seqs: %i." % sprint_cache_dataset.num_seqs)
+    print("Finished through dataset. Num seqs: %i" % seq_idx)
+    print("SprintCacheDataset has num seqs: %i." % sprint_cache_dataset.num_seqs)
+
+  elif args.action == "benchmark":
+    print("Iterating through dataset...")
+    start_time = time.time()
+    seq_tags = []
+    seq_idx = 0
+    dataset.init_seq_order(epoch=1)
+    while seq_idx < args.max_num_seqs:
+      if not dataset.is_less_than_num_seqs(seq_idx):
+        break
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      tag = dataset.get_tag(seq_idx)
+      assert not tag.startswith("seq-"), "dataset does not provide tag-names for seqs"
+      seq_tags.append(tag)
+      dataset.get_data(seq_idx, "data")
+      dataset.get_data(seq_idx, "classes")
+      seq_idx += 1
+      progress_bar_with_time(dataset.get_complete_frac(seq_idx))
+    print("Finished through dataset. Num seqs: %i, time: %f" % (seq_idx, time.time() - start_time))
+    print("SprintCacheDataset has num seqs: %i." % sprint_cache_dataset.num_seqs)
+    if hasattr(dataset, "exit_handler"):
+      dataset.exit_handler()
+    else:
+      print("No way to stop any background tasks.")
+    del dataset
+
+    start_time = time.time()
+    print("Iterating through SprintCacheDataset...")
+    for i, tag in enumerate(seq_tags):
+      sprint_cache_dataset.get_dataset_seq_for_name(tag)
+      progress_bar_with_time(float(i) / len(seq_tags))
+    print("Finished through SprintCacheDataset. time: %f" % (time.time() - start_time,))
+
+  else:
+    raise Exception("invalid action: %r" % args.action)
 
 
 if __name__ == "__main__":
