@@ -114,7 +114,7 @@ public:
                 if(coverage)
                 {
                   for(int i=t;i>next;--i)
-                    attention(s+1,i) = 1./((float)(i-t+1));
+                    attention(s+1,i) = 1./((float)(t-i+1));
                     //attention(s+1,i) = 1./((float)(t-next));
                 }
             }
