@@ -6,13 +6,13 @@
 #define FOCUS_MAX 1
 
 #define VERBOSE 1
-#define AUTO_INCREASE_SKIP 0
+#define AUTO_INCREASE_SKIP 1
 
 class Inv
 {
 public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
-    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, SArrayF& attention)
+    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, bool coverage, SArrayF& attention)
     {
         int M = max_skip;
         if(AUTO_INCREASE_SKIP)
@@ -109,7 +109,15 @@ public:
             if(next < 0)
                 next = 0;
             if(focus == FOCUS_LAST)
+            {
                 attention(s+1, t) = 1;
+                if(coverage)
+                {
+                  for(int i=t;i>next;--i)
+                    attention(s+1,i) = 1./((float)(i-t+1));
+                    //attention(s+1,i) = 1./((float)(t-next));
+                }
+            }
             else if(focus == FOCUS_MAX)
             {
                 float min_score = INF;

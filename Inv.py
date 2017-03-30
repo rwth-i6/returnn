@@ -5,7 +5,7 @@ import os
 Tfloat = theano.config.floatX  # @UndefinedVariable
 
 class InvOp(theano.Op):
-  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'nil', 'mode')
+  __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'nil', 'coverage', 'mode')
 
   def __eq__(self, other):
     return type(self) == type(other)
@@ -16,9 +16,10 @@ class InvOp(theano.Op):
   def __str__(self):
     return self.__class__.__name__
 
-  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, mode='viterbi'):
+  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, coverage=False, mode='viterbi'):
     self.min_skip = min_skip
     self.max_skip = max_skip
+    self.coverage = coverage
     self.nil = nil
     self.focus = ['last','max'].index(focus)
     self.nstates = nstates
@@ -59,6 +60,7 @@ class InvOp(theano.Op):
     nil = self.nil
     viterbi = int(self.mode == 'viterbi')
     focus = self.focus
+    coverage = self.coverage
     fail = sub['fail']
     return """
             Py_XDECREF(%(attention)s);
@@ -84,7 +86,7 @@ class InvOp(theano.Op):
                   if(%(viterbi)s)
                   {
                     cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
-                                %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, attentionSWr);
+                                %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, %(coverage)s, attentionSWr);
                   }
               }
             }
