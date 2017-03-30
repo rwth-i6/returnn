@@ -2936,7 +2936,7 @@ class CAlignmentLayer(ForwardLayer):
       x_out = x_in
       z_out = self.z
       self.y_out = T.cast(self.attention[0].dimshuffle(1,0),'int32')
-      norm = T.sum(self.index,dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
+      norm = T.sum(rindex) / T.sum(self.sources[0].index,dtype='float32')
       self.index = rindex = self.sources[0].index
     else:
       x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
