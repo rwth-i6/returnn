@@ -7,6 +7,8 @@
 
 #define COVERAGE_EXPONENTIAL 1
 #define COVERAGE_UNIFORM 2
+#define COVERAGE_CONSTANT 3
+#define COVERAGE_DENSE 4
 
 #define VERBOSE 1
 #define AUTO_INCREASE_SKIP 0
@@ -121,6 +123,8 @@ public:
                     {
                         case COVERAGE_UNIFORM: attention(s+1,i) = 1./((float)(t-next));break;
                         case COVERAGE_EXPONENTIAL: attention(s+1,i) = 1./((float)(t-i+1));break;
+                        case COVERAGE_CONSTANT: attention(s+1,i) = 1;break;
+                        case COVERAGE_DENSE: attention(0,i) = labellings((s+1) / S);break;
                         default: cout << "unknown coverage flag: " << coverage << endl;break;
                     }
                   }

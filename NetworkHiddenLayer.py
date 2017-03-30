@@ -2932,8 +2932,15 @@ class CAlignmentLayer(ForwardLayer):
     else:
       assert search == 'time'
 
-    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
-    z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+    if coverage == 4 and mode == 'viterbi':
+      x_out = x_in
+      z_out = self.z
+      self.y_out = T.cast(self.attention[0].dimshuffle(1,0),'int32')
+      norm = T.sum(self.index,dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
+      self.index = rindex = self.sources[0].index
+    else:
+      x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
+      z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
 
     if reduce_output:
       self.output = z_out if output_z else x_out
