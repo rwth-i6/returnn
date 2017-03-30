@@ -118,15 +118,28 @@ class OutputLayer(Layer):
       self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       self.index = copy_output.index
       self.y = y = copy_output.y_out
+    if self.eval_flag:
+      reshape_target = False
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
       if reshape_target:
-        src_index = self.sources[0].index
-        self.index = src_index
-        self.y_data_flat = y.T.flatten()[(y.T.flatten()>=0).nonzero()]
+        if not self.eval_flag:
+          if copy_output:
+            ind = self.index.T.flatten()
+            self.y_data_flat = y.T.flatten()
+            self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
+            src_index = self.sources[0].index
+            self.index = src_index
+          else:
+            src_index = self.sources[0].index
+            self.index = src_index
+            self.y_data_flat = y.T.flatten()
+            self.y_data_flat = self.y_data_flat[(self.y_data_flat >= 0).nonzero()]
+        else:
+          self.y_data_flat = time_batch_make_flat(y)
       else:
-      	self.y_data_flat = time_batch_make_flat(y)
+        self.y_data_flat = time_batch_make_flat(y)
     else:
       assert self.attrs.get("target", "").endswith("[sparse:coo]")
       assert isinstance(self.y, tuple)
@@ -265,7 +278,7 @@ class OutputLayer(Layer):
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
       custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
-      
+
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch
         self.set_attr("use_label_priors", use_label_priors)

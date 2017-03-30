@@ -7,7 +7,7 @@ from Log import log
 from Config import Config
 from GeneratingDataset import GeneratingDataset
 from Dataset import DatasetSeq
-from ExternSprintDataset import ExternSprintDataset
+from SprintDataset import ExternSprintDataset
 import numpy as np
 import os
 import sys

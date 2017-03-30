@@ -6,7 +6,7 @@
 #define FOCUS_MAX 1
 
 #define VERBOSE 1
-#define AUTO_INCREASE_SKIP 1
+#define AUTO_INCREASE_SKIP 0
 
 class Inv
 {

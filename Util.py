@@ -10,6 +10,11 @@ import shlex
 import numpy as np
 import re
 import time
+try:
+  import thread
+except ImportError:
+  import _thread as thread
+import threading
 
 PY3 = sys.version_info[0] >= 3
 
@@ -553,8 +558,6 @@ def is_quitting():
   return False
 
 def interrupt_main():
-  import thread
-  import threading
   is_main_thread = isinstance(threading.currentThread(), threading._MainThread)
   if is_quitting():  # ignore if we are already quitting
     if is_main_thread:  # strange to get again in main thread
