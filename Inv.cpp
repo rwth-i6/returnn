@@ -5,6 +5,9 @@
 #define FOCUS_LAST 0
 #define FOCUS_MAX 1
 
+#define COVERAGE_EXPONENTIAL 1
+#define COVERAGE_UNIFORM 2
+
 #define VERBOSE 1
 #define AUTO_INCREASE_SKIP 0
 
@@ -12,7 +15,7 @@ class Inv
 {
 public:
     void viterbi(CSArrayF& activs, CSArrayI& labellings,
-    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, bool coverage, SArrayF& attention)
+    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, int coverage, SArrayF& attention)
     {
         int M = max_skip;
         if(AUTO_INCREASE_SKIP)
@@ -107,15 +110,20 @@ public:
         {
             int next = t - bt_(s+1, t+M-1);
             if(next < 0)
-                next = 0;
+                next = -1;
             if(focus == FOCUS_LAST)
             {
-                attention(s+1, t) = 1;
-                if(coverage)
+                if(coverage > 0)
                 {
                   for(int i=t;i>next;--i)
-                    attention(s+1,i) = 1./((float)(t-i+1));
-                    //attention(s+1,i) = 1./((float)(t-next));
+                  {
+                    switch(coverage)
+                    {
+                        case COVERAGE_UNIFORM: attention(s+1,i) = 1./((float)(t-next));break;
+                        case COVERAGE_EXPONENTIAL: attention(s+1,i) = 1./((float)(t-i+1));break;
+                        default: cout << "unknown coverage flag: " << coverage << endl;break;
+                    }
+                  }
                 }
             }
             else if(focus == FOCUS_MAX)

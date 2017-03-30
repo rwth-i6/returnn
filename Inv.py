@@ -16,7 +16,7 @@ class InvOp(theano.Op):
   def __str__(self):
     return self.__class__.__name__
 
-  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, coverage=False, mode='viterbi'):
+  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, coverage=0, mode='viterbi'):
     self.min_skip = min_skip
     self.max_skip = max_skip
     self.coverage = coverage
