@@ -212,6 +212,22 @@ class WindowLayer(_NoOpLayer):
     self.make_output(out)
 
 
+class WindowAverageLayer(_NoOpLayer):
+  layer_class = "windowed_average"
+
+  def __init__(self, window, center=0, **kwargs):
+    super(WindowAverageLayer, self).__init__(**kwargs)
+    source, n_out = concat_sources(self.sources, unsparse=False)
+    self.set_attr('n_out', n_out)
+    self.set_attr('window', window)
+    self.set_attr('center', center)
+    from TheanoUtil import windowed_batch
+    out = windowed_batch(source, window=window, center=center)
+    windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
+    out = T.dot(windows, numpy.float32(1) / T.arange(1,window+1,1,'float32')[::-1])
+    self.make_output(out)
+
+
 class DownsampleLayer(_NoOpLayer):
   """
   E.g. method == "average", axis == 0, factor == 2 -> each 2 time-frames are averaged.

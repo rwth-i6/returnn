@@ -56,7 +56,7 @@ def opt_contiguous_on_gpu(x):
   return x
 
 
-def windowed_batch(source, window):
+def windowed_batch(source, window, center=0):
   """
   :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
   :param int|theano.Variable window: window size
@@ -66,7 +66,7 @@ def windowed_batch(source, window):
   n_time = source.shape[0]
   n_batch = source.shape[1]
   n_dim = source.shape[2]
-  w_right = window // 2
+  w_right = window // 2 - center
   w_left = window - w_right - 1
   pad_left = T.zeros((w_left, n_batch, n_dim), dtype=source.dtype)
   pad_right = T.zeros((w_right, n_batch, n_dim), dtype=source.dtype)
