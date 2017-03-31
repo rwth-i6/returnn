@@ -212,19 +212,23 @@ class WindowLayer(_NoOpLayer):
     self.make_output(out)
 
 
-class WindowAverageLayer(_NoOpLayer):
-  layer_class = "windowed_average"
+class WindowContextLayer(_NoOpLayer):
+  layer_class = "window_context"
 
-  def __init__(self, window, center=0, **kwargs):
-    super(WindowAverageLayer, self).__init__(**kwargs)
+  def __init__(self, window, average='uniform', p=None, **kwargs):
+    super(WindowContextLayer, self).__init__(**kwargs)
     source, n_out = concat_sources(self.sources, unsparse=False)
+    if p is None:
+      p = 1. - 1. / window
+    p = numpy.float32(p)
     self.set_attr('n_out', n_out)
     self.set_attr('window', window)
-    self.set_attr('center', center)
-    from TheanoUtil import windowed_batch
-    out = windowed_batch(source, window=window, center=center)
+    self.set_attr('average', average)
+    from TheanoUtil import context_batched
+    out = context_batched(source, window=window)
+    weights = p * numpy.float32(1-p)**T.arange(1,window+1)[::-1]
     windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
-    out = T.dot(windows, numpy.float32(1) / T.arange(1,window+1,1,'float32')[::-1])
+    out = T.dot(windows, weights)
     self.make_output(out)
 
 
