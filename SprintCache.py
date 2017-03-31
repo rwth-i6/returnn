@@ -222,7 +222,7 @@ class FileArchive:
         time[i] = self.read_v("d", 2)  # 2    x f64
       return time, data
 
-    elif typ == "align":
+    elif typ in ["align", "align_raw"]:
       type_len = self.read_U32()
       typ = self.read_str(type_len)
       assert typ == "flow-alignment"
@@ -241,14 +241,18 @@ class FileArchive:
             # print(n)
             if n > 0:
               while n > 0:
-                mix, state = self.getState(self.read_u32())
+                mix, state = self.read_u32(), None
+                if typ != "align_raw":
+                  mix, state = self.getState(mix)
                 # print(mix, state)
                 # print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
                 time += 1
                 n -= 1
             elif n < 0:
-              mix, state = self.getState(self.read_u32())
+              mix, state = self.read_u32(), None
+              if typ != "align_raw":
+                mix, state = self.getState(mix)
               while n < 0:
                 # print(mix, state)
                 # print(time, self.allophones[mix])
@@ -317,6 +321,7 @@ class FileArchive:
     return self._raw_read(size=fi.size, typ=typ)
 
   def getState(self, mix):
+    # See src/Tools/Archiver/Archiver.cc:getStateInfo() from Sprint source code.
     assert self.allophones
     max_states = 6
     #print("Was:", mix)
@@ -494,6 +499,8 @@ class AllophoneLabeling(object):
     self.phonemes = None
     self.phoneme_idxs = None
     self.state_tying = None
+    self.state_tying_by_allo_state_idx = None
+    self.num_allo_states = None
     if phoneme_file:
       self.phonemes = open(phoneme_file).read().splitlines()
       self.phoneme_idxs = {p: i for i, p in enumerate(self.phonemes)}
@@ -507,19 +514,48 @@ class AllophoneLabeling(object):
                           for l in open(state_tying_file).read().splitlines()
                           for (k, v) in [l.split()]}
       self.sil_label_idx = self.state_tying[silence_phone + "{#+#}@i@f.0"]
+      self.num_allo_states = self._get_num_allo_states()
+      self.state_tying_by_allo_state_idx = {
+        a + s * (1 << 26): self.state_tying["%s.%i" % (a_s, s)]
+        for (a, a_s) in enumerate(self.allophones)
+        for s in range(self.num_allo_states)
+        if ("%s.%i" % (a_s, s)) in self.state_tying}
       self.num_labels = max(self.state_tying.values()) + 1
       if verbose_out:
         print("AllophoneLabeling: State tying with %i labels." % self.num_labels, file=verbose_out)
     assert self.num_labels is not None
     assert self.state_tying or self.phoneme_idxs
 
+  def _get_num_allo_states(self):
+    assert self.state_tying
+    return max([int(s.split(".")[-1]) for s in self.state_tying.keys()]) + 1
+
+  def get_label_idx_by_allo_state_idx(self, allo_state_idx):
+    if self.state_tying_by_allo_state_idx:
+      return self.state_tying_by_allo_state_idx[allo_state_idx]
+    # See getState above().
+    max_states = 6
+    allo_idx = allo_state_idx
+    state_idx = 0
+    for state_idx in range(max_states):
+      if allo_idx >= len(self.allophones):
+        allo_idx -= (1<<26)
+      else:
+        break
+    assert allo_idx >= 0
+    return self.get_label_idx(allo_idx, state_idx)
+
   def get_label_idx(self, allo_idx, state_idx):
+    if self.state_tying_by_allo_state_idx:
+      try:
+        return self.state_tying_by_allo_state_idx[allo_idx + state_idx * (1 << 26)]
+      except KeyError:
+        allo_str = self.allophones[allo_idx]
+        r = self.state_tying.get("%s.%i" % (allo_str, state_idx))
+        raise KeyError("allo idx %i (%r), state idx %i not found; entry: %r" % (allo_idx, allo_str, state_idx, r))
     allo_str = self.allophones[allo_idx]
-    if self.state_tying:
-      return self.state_tying["%s.%i" % (allo_str, state_idx)]
-    else:
-      phone = allo_str[:allo_str.index("{")]
-      return self.phoneme_idxs[phone]
+    phone = allo_str[:allo_str.index("{")]
+    return self.phoneme_idxs[phone]
 
 
 ###############################################################################
