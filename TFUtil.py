@@ -1234,3 +1234,18 @@ def debugRegisterBetterRepr():
   tf.IndexedSlices.__repr__ = indexed_slices_repr
   tf.Operation.__repr__ = op_repr
   tf.Variable.__repr__ = var_repr
+
+
+def cond(pred, fn1, fn2, name=None):
+  if not callable(fn1):
+    raise TypeError("fn1 must be callable.")
+  if not callable(fn2):
+    raise TypeError("fn2 must be callable.")
+  pred_const = tf.tensor_util.constant_value(pred)
+  if pred_const is not None:
+    pass  # TODO...
+  if pred is True:
+    return fn1()
+  if pred is False:
+    return fn2()
+  tf.control_flow_ops.cond()
