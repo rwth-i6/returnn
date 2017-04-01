@@ -415,6 +415,8 @@ class Runner(object):
       feed_dict = None
       while self.data_provider.have_more_data():
         feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
+        if self.engine.network.train_flag is not False:
+          feed_dict[self.engine.network.train_flag] = self._should_train
         start_time = time.time()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
@@ -486,6 +488,7 @@ class Engine(object):
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
     self.train_data = None; " :type: Dataset.Dataset "
     self.start_epoch = None
+    self.use_dynamic_train_flag = False
 
   def finalize(self):
     self._close_tf_session()
@@ -592,6 +595,7 @@ class Engine(object):
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
     """
+    self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.dev_data = dev_data
     self.eval_data = eval_data
@@ -653,7 +657,10 @@ class Engine(object):
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
     tf.set_random_seed(42)
-    network = TFNetwork(rnd_seed=epoch)
+    network = TFNetwork(
+      rnd_seed=epoch,
+      train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
+      if self.use_dynamic_train_flag else False)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
@@ -863,7 +870,7 @@ class Engine(object):
       # Like tf.report_uninitialized_variables().
       var_list = tf.global_variables() + tf.local_variables()
       # Get a 1-D boolean tensor listing whether each variable is initialized.
-      var_mask = tf.logical_not(tf.pack(
+      var_mask = tf.logical_not(tf.stack(
         [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
       assert len(var_mask) == len(var_list)
       uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
