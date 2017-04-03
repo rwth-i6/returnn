@@ -693,6 +693,8 @@ class SprintCacheDataset(CachedDataset2):
           assert self.num_labels < 2 ** 31
           self.dtype = "int32"
         self.num_dims = 1
+        if self.allophone_labeling.state_tying_by_allo_state_idx:
+          self.type = "align_raw"
       elif type == "feat":
         self.num_labels = self._get_feature_dim()
         self.num_dims = 2
@@ -719,6 +721,10 @@ class SprintCacheDataset(CachedDataset2):
       res = self.sprint_cache.read(name, typ=self.type)
       if self.type == "align":
         label_seq = numpy.array([self.allophone_labeling.get_label_idx(a, s) for (t, a, s) in res], dtype=self.dtype)
+        assert label_seq.shape == (len(res),)
+        return label_seq
+      elif self.type == "align_raw":
+        label_seq = numpy.array([self.allophone_labeling.state_tying_by_allo_state_idx[a] for (t, a, s) in res], dtype=self.dtype)
         assert label_seq.shape == (len(res),)
         return label_seq
       elif self.type == "feat":

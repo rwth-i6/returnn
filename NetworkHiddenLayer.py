@@ -212,6 +212,28 @@ class WindowLayer(_NoOpLayer):
     self.make_output(out)
 
 
+class WindowContextLayer(_NoOpLayer):
+  layer_class = "window_context"
+
+  def __init__(self, window, average='uniform', p=None, **kwargs):
+    super(WindowContextLayer, self).__init__(**kwargs)
+    source, n_out = concat_sources(self.sources, unsparse=False)
+    if p is None:
+      p = 1. - 1. / window
+    p = numpy.float32(p)
+    self.set_attr('n_out', n_out)
+    self.set_attr('window', window)
+    self.set_attr('average', average)
+    from TheanoUtil import context_batched
+    out = context_batched(source, window=window)
+    #weights = T.constant(p * numpy.float32(1-p)**T.arange(1,window+1,dtype='float32')[::-1])
+    weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
+    windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
+    out = T.dot(windows, weights)
+    #out = windows[:,:,:,-1]
+    self.make_output(out)
+
+
 class DownsampleLayer(_NoOpLayer):
   """
   E.g. method == "average", axis == 0, factor == 2 -> each 2 time-frames are averaged.

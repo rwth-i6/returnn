@@ -97,6 +97,16 @@ class Data(object):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     return {key: getattr(self, key) for key in keys}
 
+  def copy(self):
+    """
+    :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
+    :rtype: Data 
+    """
+    data = Data(**self.get_kwargs())
+    data.placeholder = self.placeholder
+    data.size_placeholder = self.size_placeholder
+    return data
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
@@ -1234,3 +1244,36 @@ def debugRegisterBetterRepr():
   tf.IndexedSlices.__repr__ = indexed_slices_repr
   tf.Operation.__repr__ = op_repr
   tf.Variable.__repr__ = var_repr
+
+
+def cond(pred, fn1, fn2, name=None):
+  """
+  This is a wrapper around tf.control_flow_ops.cond().
+  This will be a branched execution, i.e. either fn1() or fn2() will be executed,
+  or at least the resulting graph will be evaluated.
+  If pred can is constant at the call, only the corresponding fn will be called.
+
+  :param tf.Tensor|bool pred:
+  :param ()->tf.Tensor fn1:
+  :param ()->tf.Tensor fn2:
+  :param str name:
+  :return: fn1() if pred else fn2()
+  :rtype: tf.Tensor
+  """
+  if not callable(fn1):
+    raise TypeError("fn1 must be callable.")
+  if not callable(fn2):
+    raise TypeError("fn2 must be callable.")
+  if pred is True:
+    return fn1()
+  if pred is False:
+    return fn2()
+  from tensorflow.python.framework import tensor_util
+  pred_const = tensor_util.constant_value(pred)
+  if pred_const is not None:
+    if pred_const:
+      return fn1()
+    else:
+      return fn2()
+  from tensorflow.python.ops import control_flow_ops
+  return control_flow_ops.cond(pred, fn1, fn2, name=name)

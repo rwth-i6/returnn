@@ -102,6 +102,38 @@ def delta_batch(source, window):
   return w[1:] - w[:-1]
 
 
+def context_batched(source, window):
+  """
+  same as windowed_batch but with window center at the end of the window
+  :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
+  :param int|theano.Variable window: window size
+  :return: tensor of shape (n_time, n_batch, window * n_dim)
+  """
+  assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
+  n_time = source.shape[0]
+  n_batch = source.shape[1]
+  n_dim = source.shape[2]
+  w_left = window - 1
+  pad_left = T.zeros((w_left, n_batch, n_dim), dtype=source.dtype)
+  padded = T.concatenate([pad_left, source], axis=0)  # shape[0] == n_time + window - 1
+  tiled = T.tile(padded, (1, 1, window))  # shape[2] == n_dim * window
+  tiled_reshape = T.reshape(tiled, ((n_time + window - 1), n_batch, window, n_dim))
+  # We want to shift every dim*time block by one to the left.
+  # To do this, we interpret that we have one more time frame (i.e. n_time+window).
+  # We have to do some dimshuffling so that we get the right layout, then we can flatten,
+  # add some padding, and then dimshuffle it back.
+  # Then we can take out the first n_time frames.
+  tiled_dimshuffle = tiled_reshape.dimshuffle(2, 0, 1, 3)  # (window,n_time+window-1,batch,dim)
+  tiled_flat = T.flatten(tiled_dimshuffle)
+  rem = n_batch * n_dim * window
+  tiled_flat_pad_right = T.concatenate([tiled_flat, T.zeros((rem,), dtype=source.dtype)])
+  tiled_reshape_shift = T.reshape(tiled_flat_pad_right, (window, n_time + window, n_batch, n_dim))  # add time frame
+  final_dimshuffle = tiled_reshape_shift.dimshuffle(1, 2, 0, 3)  # (n_time+window,batch,window,dim)
+  final_sub = final_dimshuffle[:n_time]  # (n_time,batch,window,dim)
+  final_concat_dim = final_sub.reshape((n_time, n_batch, window * n_dim))
+  return final_concat_dim
+
+
 def slice_for_axis(axis, s):
   return (slice(None),) * axis + (s,)
 

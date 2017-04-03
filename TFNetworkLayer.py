@@ -216,6 +216,9 @@ def concat_sources(src_layers):
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
     return src_layers[0].output
+  network = src_layers[0].network
+  if (tuple(src_layers), 0.0) in network.concat_sources_dropout_cache:
+    return network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)].copy()
   assert not src_layers[0].output.sparse, "sparse concat not supported"
   shape = src_layers[0].output.shape  # without batch-dim
   assert shape, "source must not be a scalar of layer %r" % src_layers[0]
@@ -243,9 +246,41 @@ def concat_sources(src_layers):
     time_dim_axis=time_dim_axis,
     dtype=dtype)
   data.placeholder = tf.concat(
-    concat_dim=len(prefix_shape) + 1,  # one more because this is with batch-dim
+    axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
     values=[layer.output.placeholder for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
+  network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
+  return data
+
+
+def concat_sources_with_opt_dropout(src_layers, dropout=0):
+  """
+  :param list[LayerBase] src_layers:
+  :param float dropout: will be applied if train_flag is set
+  :return: data with placeholders set
+  :rtype: Data
+  """
+  assert src_layers, "need source layers"
+  data = concat_sources(src_layers)
+  network = src_layers[0].network
+  if network.train_flag is False:
+    # If we know that we are not training, we always disable dropout.
+    dropout = 0
+  if not dropout:
+    return data
+  if (tuple(src_layers), float(dropout)) in network.concat_sources_dropout_cache:
+    return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
+  assert 0.0 < dropout < 1.0
+  fn_train = lambda: tf.nn.dropout(
+      data.placeholder,
+      keep_prob=1 - dropout,
+      # noise_shape is like old behavior for now:
+      # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
+      noise_shape=data.default_broadcast_noise_shape,
+      seed=network.random.randint(2 ** 31))
+  fn_eval = lambda: data.placeholder
+  data.placeholder = network.cond_on_train(fn_train, fn_eval)
+  network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))] = data.copy()
   return data
 
 
@@ -256,21 +291,12 @@ class _ConcatInputLayer(LayerBase):
     :param str|None mask: "dropout" or "unity" or None
     """
     super(_ConcatInputLayer, self).__init__(**kwargs)
-    input_data = concat_sources(self.sources)
-
-    if self.network.train_flag:
-      assert mask in ['dropout', 'unity', None], "invalid mask: %r" % mask
-      if mask == "dropout" or (mask is None and dropout > 0):
-        assert 0.0 < dropout < 1.0
-        input_data.placeholder = tf.nn.dropout(
-          input_data.placeholder,
-          keep_prob=1 - dropout,
-          # noise_shape is like old behavior for now:
-          # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
-          noise_shape=input_data.default_broadcast_noise_shape,
-          seed=self.network.random.randint(2**31))
-
-    self.input_data = input_data
+    assert mask in ['dropout', 'unity', None], "invalid mask: %r" % mask
+    if mask == "unity":
+      assert not dropout
+    elif mask == "dropout":
+      assert dropout > 0
+    self.input_data = concat_sources_with_opt_dropout(self.sources, dropout=dropout)
 
 
 class CopyLayer(_ConcatInputLayer):
@@ -415,16 +441,21 @@ class RecLayer(_ConcatInputLayer):
 
   @classmethod
   def _create_rnn_cells_dict(cls):
-    from tensorflow.python.ops import rnn_cell
     import tensorflow.contrib.rnn as rnn_contrib
+    try:
+      RNNCell = rnn_contrib.RNNCell
+      rnn_cell = rnn_contrib
+    except AttributeError:
+      from tensorflow.python.ops import rnn_cell  # TF 0.12
+      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     def maybe_add(key, v):
-      if isinstance(v, type) and issubclass(v, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
+      if isinstance(v, type) and issubclass(v, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
         name = name.lower()
-        assert name not in cls._rnn_cells_dict
+        assert cls._rnn_cells_dict.get(name) in [v, None]
         cls._rnn_cells_dict[name] = v
     for key, v in vars(rnn_cell).items():
       maybe_add(key, v)
@@ -442,8 +473,13 @@ class RecLayer(_ConcatInputLayer):
     :param dict[str] kwargs: passed on to base class
     """
     super(RecLayer, self).__init__(**kwargs)
-    from tensorflow.python.ops import rnn, rnn_cell
+    from tensorflow.python.ops import rnn
     import tensorflow.contrib.rnn as rnn_contrib
+    try:
+      RNNCell = rnn_contrib.RNNCell
+    except AttributeError:
+      from tensorflow.python.ops import rnn_cell  # TF 0.12
+      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
     if unit in ["lstmp", "lstm"]:
@@ -471,7 +507,7 @@ class RecLayer(_ConcatInputLayer):
         assert n_hidden % 2 == 0
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      assert isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
@@ -482,12 +518,12 @@ class RecLayer(_ConcatInputLayer):
         assert self.input_data.time_dim_axis == 1
         x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
-      if isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+      if isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell)):
         assert not self.input_data.sparse
         assert input_projection
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
+        if isinstance(cell_fw, RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
             # Will get (time,batch,ydim/2).
             (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
@@ -602,7 +638,7 @@ class FramewiseStatisticsLayer(LayerBase):
     target_seq_lens = target.size_placeholder[0]
     target_flat = flatten_with_seq_len_mask(target.placeholder, target_seq_lens, time_major=target.is_time_major)
     target_flat.set_shape(tf.TensorShape([tf.Dimension(None)]))
-    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(output_before_softmax_flat, target_flat)
+    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output_before_softmax_flat, labels=target_flat)
     flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
     assert flat_last_dim == 1
     output_flat = flatten_with_seq_len_mask(output.placeholder, output_seq_lens, time_major=output.is_time_major)
@@ -757,7 +793,7 @@ class CrossEntropyLoss(Loss):
     with tf.name_scope("loss_ce"):
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
-          out = tf.nn.sparse_softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
           target_flat_exp = tf.pack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)

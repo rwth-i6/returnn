@@ -79,7 +79,7 @@ class OpMaker(object):
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
     """
-    import tensorflow.contrib.rnn.python.ops.lstm_ops as lstm_ops
+    from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
