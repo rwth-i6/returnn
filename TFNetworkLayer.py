@@ -246,7 +246,7 @@ def concat_sources(src_layers):
     time_dim_axis=time_dim_axis,
     dtype=dtype)
   data.placeholder = tf.concat(
-    concat_dim=len(prefix_shape) + 1,  # one more because this is with batch-dim
+    axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
     values=[layer.output.placeholder for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
