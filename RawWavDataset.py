@@ -2,6 +2,9 @@ import h5py
 from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
 from Log import log
+import tempfile
+import scipy.io.wavfile
+import numpy as np
 
 class RawWavDataset(CachedDataset2):
     """
@@ -28,38 +31,129 @@ class RawWavDataset(CachedDataset2):
       self._wavFiles = f.readlines()
     self._wavFiles = [l.strip() for l in self._wavFiles]
     self._frameLength = frameLength
+    self._frameShift = frameShift
 
     self._num_seqs = len(self._wavFiles) 
     self._seq_index_list = None
+
+    self._hdfBufferHandler, self._hdfBufferPath = self._openHdfBuffer()
+
     self.num_inputs = self._frameLength 
     self.num_outputs = self._getNumOutputs()
 
   def _collect_single_seq(self, seq_idx):
-    """returns the sequence specified by the index seq_idx
+    """
+    returns the sequence specified by the index seq_idx
 
     :type seq_idx: int
     :rtype: DatasetSeq | None
     :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
-    raise NotImplementedError
+    wavFileId = self._seq_index_list[seq_idx]
+    if not self._isInBuffer(wavFileId):
+      self._loadWavFileIdIntoBuffer(wavFileId)
 
-  def _getNumberOfSequencesFromListFile(self, listFile):
-    """
-    returns the number of lines of the listFile
+    return self._collect_single_seq_from_buffer(wavFileId, seq_idx)
 
-    :type listFile: string
-    :param listFile: path to the file containing a list of wav file pathes (on path per line)
-                     each line needs to contain exactly one wav file which is considered a sequence
+  def _collect_single_seq_from_buffer(self, wavFileId, seq_idx):
     """
-    #TBD !!!
-    pass
+    returns the sequence specified by the index seq_idx
+
+    :type wavFileId: int
+    :type seq_idx: int
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
+    """
+    inputFeatures = self._getInputFeatures(wavFileId)
+    outputFeatures = self._getOutputFeatures(wavFileId)
+    inputFeatures = inputFeatures.astype(np.float32)
+    if outputFeatures is not None:
+      outputFeatures = targets.astype(np.float32)
+    return DatasetSeq(seq_idx, inputFeatures, targets)
 
   def _getNumOutputs(self):
     """
     #TBD !!!
     """
+    if not self._hdfBufferHandler['outputs'].keys():
+      return None
+    else:
+      #TBD !!!
+      pass
+
+  def _getInputFeatures(self, wavFileId):
+    """
+
+    :type wavFileId: int
+    :param wavFileId: list index of wav file for which to return the input features
+    :rtype: 2D numpy.ndarray (frames, features)
+    :return: the 2d array containing the time signal segment for each frame
+    """
+    if not self._isInBuffer(wavFileId):
+      self._loadWavFileIdIntoBuffer(wavFileId)
+
+    timeSignal = self._hdfBufferHandler['timeSignal'][str(wavFileId)][...]
+    frameLength = self._frameLength
+    frameShift = self._frameShift
+    nrOfFrames = int(np.ceil(((timeSignal.shape[0]-frameLength)/frameShift) + 1))
+    padLength = (nrOfFrames -1) * frameShift + frameLength - timeSignal.shape[0]
+    timeSignalPad = np.zeros((timeSignal.shape[0] + padLength, ))
+    timeSignalPad[0:timeSignal.shape[0]] = timeSignal
+    inputFeatures = np.zeros((nrOfFrames, frameLength), dtype=np.float32)
+    for i1 in range(nrOfFrames):
+      inputFeatures[i1,:] = timeSignalPad[i1*frameShift:(i1*frameShift+frameLength)]
+    return inputFeatures
+
+  def _getOutputFeatures(self, wavFileId):
+    """
+
+    :type wavFileId: int
+    :param wavFileId: list index of wav file for which to return the output features
+    :rtype: #TBD !!!
+    :return: #TBD !!!
+    """
+    if not self._isInBuffer(wavFileId):
+      self._loadWavFileIdIntoBuffer(wavFileId)
     #TBD !!!
     pass
+
+  def _isInBuffer(self, wavFileId):
+    """
+    returns true if the wav file has already been loaded into the hdf file buffer
+
+    :type wavFileId: int
+    :rtype: bool
+    """
+    if wavFileId in self._hdfBufferHandler['timeSignal'].keys():
+      return True
+    else
+      return False
+
+  def _loadWavFileIdIntoBuffer(self, wavFileId):
+    """
+    loads the specified wav file into the hdf file buffer
+
+    :type wavFileId: int
+    :param wavFileId: the list index specifying the wav file to be loaded to the buffer
+    """
+    wavFilePath = self._wavFiles[wavFileId] 
+    (r, x) = scipy.io.wavfile.read(wavFilePath)
+    self._hdfBufferHandler['timeSignal'].create_dataset(str(wavFileId), data=x.astype(np.float32))
+    return True
+
+  def _openHdfBuffer(self):
+    """
+    opens creates a local hdf file used as buffer to avoid reopening wav files
+
+    :rtype: (h5py._hl.file.File, string)
+    :return: (hdf buffer file handler, path to tmp file)
+    """
+    fId, tmpHdfFilePath = tempfile.mkstemp(suffix=".hdf") 
+    fileHandler = h5py.File(tmpHdfFilePath, 'w')
+    fileHandler.create_group('timeSignal')
+    fileHandler.create_group('outputs')
+
+    return fileHandler, filePath 
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
