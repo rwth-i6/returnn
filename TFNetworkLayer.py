@@ -441,14 +441,16 @@ class RecLayer(_ConcatInputLayer):
 
   @classmethod
   def _create_rnn_cells_dict(cls):
-    try:
-      import tensorflow.contrib.rnn as rnn_cell  # TF 1.0
-    except ImportError:
-      from tensorflow.python.ops import rnn_cell  # TF 0.8
     import tensorflow.contrib.rnn as rnn_contrib
+    try:
+      RNNCell = rnn_contrib.RNNCell
+      rnn_cell = rnn_contrib
+    except AttributeError:
+      from tensorflow.python.ops import rnn_cell  # TF 0.12
+      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     def maybe_add(key, v):
-      if isinstance(v, type) and issubclass(v, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
+      if isinstance(v, type) and issubclass(v, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
@@ -472,11 +474,12 @@ class RecLayer(_ConcatInputLayer):
     """
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn
-    try:
-      import tensorflow.contrib.rnn as rnn_cell  # TF 1.0
-    except ImportError:
-      from tensorflow.python.ops import rnn_cell  # TF 0.8
     import tensorflow.contrib.rnn as rnn_contrib
+    try:
+      RNNCell = rnn_contrib.RNNCell
+    except AttributeError:
+      from tensorflow.python.ops import rnn_cell  # TF 0.12
+      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
     if unit in ["lstmp", "lstm"]:
@@ -504,7 +507,7 @@ class RecLayer(_ConcatInputLayer):
         assert n_hidden % 2 == 0
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      assert isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
@@ -515,12 +518,12 @@ class RecLayer(_ConcatInputLayer):
         assert self.input_data.time_dim_axis == 1
         x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
-      if isinstance(cell_fw, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+      if isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell)):
         assert not self.input_data.sparse
         assert input_projection
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        if isinstance(cell_fw, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
+        if isinstance(cell_fw, RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
             # Will get (time,batch,ydim/2).
             (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
