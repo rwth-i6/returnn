@@ -98,7 +98,14 @@ class Data(object):
     return {key: getattr(self, key) for key in keys}
 
   def copy(self):
-    return Data(**self.get_kwargs())
+    """
+    :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
+    :rtype: Data 
+    """
+    data = Data(**self.get_kwargs())
+    data.placeholder = self.placeholder
+    data.size_placeholder = self.size_placeholder
+    return data
 
   def _get_variable_dim_pattern(self):
     """
