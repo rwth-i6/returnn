@@ -79,8 +79,8 @@ public:
                 start = 0;
             start = 0;
             int cur_min_skip = min_skip;
-            if(labellings(s / S) == nil)
-              cur_min_skip = 0;
+            //if(labellings(s / S) == nil)
+            //  cur_min_skip = 0;
             for(int t=start; t < T; ++t)
             {
                 int cur_max_skip = M;
@@ -115,7 +115,12 @@ public:
                 next = -1;
             if(focus == FOCUS_LAST)
             {
-                if(coverage > 0)
+                if(labellings((s+1) / S) == nil)
+                {
+                  for(int i=t;i>next;--i)
+                    attention(s+1,i) = 1./((float)(t-next));
+                }
+                else if(coverage > 0)
                 {
                   for(int i=t;i>next;--i)
                   {
@@ -129,6 +134,8 @@ public:
                     }
                   }
                 }
+                else
+                  attention(s+1, t) = 1;
             }
             else if(focus == FOCUS_MAX)
             {

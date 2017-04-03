@@ -226,8 +226,7 @@ class WindowContextLayer(_NoOpLayer):
     self.set_attr('average', average)
     from TheanoUtil import context_batched
     out = context_batched(source, window=window)
-    #weights = T.constant(p * numpy.float32(1-p)**T.arange(1,window+1)[::-1])
-    weights = numpy.float32(1) / T.arange(1, window + 1)[::-1]
+    weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
     windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
     out = T.dot(windows, weights)
     #out = windows[:,:,:,-1]

@@ -90,13 +90,12 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitely
     :param ExternData|None extern_data:
     :param int rnd_seed:
-    :param bool train_flag: True if we want to use this model in training
-    :param bool eval_flag: True if we want to use this model in evaluation
+    :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
     """
     if extern_data is None:
       extern_data = ExternData()
@@ -109,7 +108,6 @@ class TFNetwork(object):
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
-    self.eval_flag = eval_flag
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
@@ -123,6 +121,7 @@ class TFNetwork(object):
     self.saver = None  # type: tf.train.Saver
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
+    self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
 
   def construct_from(self, list_or_dict):
     """
@@ -505,6 +504,19 @@ class TFNetwork(object):
       print("  (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
     print("net trainable params:", self.get_trainable_params(), file=log.v2)
+
+  def cond_on_train(self, fn_train, fn_eval):
+    """
+    Uses fn_train() or fn_eval() base on self.train_flag.
+    It will be a branched evaluation.
+
+    :param ()->tf.Tensor fn_train:
+    :param ()->tf.Tensor fn_eval:
+    :return: fn_train() if self.train_flag else fn_eval()
+    :rtype: tf.Tensor
+    """
+    from TFUtil import cond
+    return cond(self.train_flag, fn_train, fn_eval)
 
 
 class TFNetworkParamsSerialized(object):
