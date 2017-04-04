@@ -1,3 +1,6 @@
+
+from __future__ import print_function
+
 from math import sqrt
 import numpy
 from theano import tensor as T
@@ -84,7 +87,7 @@ class Container(object):
       try:
         grp.attrs[p] = v
       except TypeError:
-        print >> log.v3, "warning: invalid type of attribute %r (%s) in layer %s" % (p, type(v), self.name)
+        print("warning: invalid type of attribute %r (%s) in layer %s" % (p, type(v), self.name), file=log.v3)
 
   def load(self, head):
     """
@@ -93,7 +96,7 @@ class Container(object):
     try:
       grp = head[self.name]
     except Exception:
-      print >> log.v3, "warning: unable to load parameters for layer", self.name
+      print("warning: unable to load parameters for layer", self.name, file=log.v3)
       return
 
     grp_class = as_str(grp.attrs['class'])
@@ -101,10 +104,10 @@ class Container(object):
     if grp_class != self.layer_class:
       from NetworkLayer import get_layer_class
       if not get_layer_class(grp_class, raise_exception=False) is get_layer_class(self.layer_class):
-        print >>log.v3, "warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")"
+        print("warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")", file=log.v3)
     for p in self.params:
       if p not in grp:
-        print >> log.v4, "unable to load parameter %s in %s" % (p, self.name)
+        print("unable to load parameter %s in %s" % (p, self.name), file=log.v4)
     for p in grp:
       if p in self.params:
         if self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape:
@@ -112,15 +115,15 @@ class Container(object):
           assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
           self.params[p].set_value(array)
         else:
-          print >> log.v2, "warning: invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
+          print("warning: invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
             " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
-            " got " + str(grp[p].shape) + ")"
+            " got " + str(grp[p].shape) + ")", file=log.v2)
           #assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
           #  "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
           #  " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
           #  " got " + str(grp[p].shape) + ")"
       else:
-        print >> log.v4, "unable to match parameter %s in %s" % (p, self.name)
+        print("unable to match parameter %s in %s" % (p, self.name), file=log.v4)
     #for p in self.attrs.keys():
     #  att = grp.attrs.get(p, None)
     #  if att != None:
@@ -758,7 +761,7 @@ class Layer(Container):
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
       n_out = self.attrs['n_out']
       if n_in != n_out:
-        print >>log.v4, "Layer drop with additional projection %i -> %i" % (n_in, n_out)
+        print("Layer drop with additional projection %i -> %i" % (n_in, n_out), file=log.v4)
         if n_in > 0:
           self.W_drop = self.add_param(self.create_forward_weights(n_in, n_out, name="W_drop_%s" % self.name))
           z = T.dot(z, self.W_drop)
