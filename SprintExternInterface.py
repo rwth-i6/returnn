@@ -5,6 +5,8 @@ See SprintInterface.py for another Sprint interface.
 This Sprint interface is to be used for ExternSprintDataset, which should automatically use it.
 """
 
+from __future__ import print_function
+
 import os
 import TaskSystem
 from TaskSystem import Pickler, Unpickler
@@ -78,11 +80,11 @@ def init_PythonTrainer(inputDim, outputDim, config, targetMode, **kwargs):
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
   """
   print("SprintExternInterface[pid %i]: PythonTrainer init_PythonTrainer()" % (os.getpid(),))
-  print "inputDim:", inputDim
-  print "outputDim:", outputDim
-  print "config:", config
-  print "targetMode:", targetMode
-  print "other args:", kwargs
+  print("inputDim:", inputDim)
+  print("outputDim:", outputDim)
+  print("config:", config)
+  print("targetMode:", targetMode)
+  print("other args:", kwargs)
 
   global InputDim, OutputDim, isInitialized
   InputDim = inputDim
@@ -106,7 +108,7 @@ def _init_global_sprintDataset(inputDim, outputDim, config):
 
 
 def exit():
-  print "SprintExternInterface: PythonTrainer exit()"
+  print("SprintExternInterface: PythonTrainer exit()")
   assert isInitialized
   sprintDataset.close()
 

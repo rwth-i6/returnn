@@ -1,5 +1,7 @@
 #! /usr/bin/python2.7
 
+from __future__ import print_function
+
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2015"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
@@ -18,7 +20,7 @@ import theano
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
-from Util import try_run, NumbersDict
+from Util import try_run, NumbersDict, unicode
 
 
 class Dataset(object):
@@ -216,7 +218,7 @@ class Dataset(object):
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
       out_index = []
-      for i in xrange(bins):
+      for i in range(bins):
         if i == bins - 1:
           part = seq_index[i * len(seq_index) / bins:]
         else:
@@ -515,7 +517,7 @@ class Dataset(object):
     chunk_step = self.chunk_step
     if not recurrent_net:
       if chunk_size != 0:
-        print >> log.v4, "Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step)
+        print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
     for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
@@ -526,7 +528,7 @@ class Dataset(object):
         elif max_seq_length > 0 and length.max_value() > max_seq_length:
           continue
         if length.max_value() > batch_size:
-          print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
+          print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
         if self.rnd_seq_drop.random() < seq_drop:
           continue
         dt, ds = batch.try_sequence_as_slice(length)

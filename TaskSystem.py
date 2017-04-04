@@ -4,6 +4,7 @@ Here are all subprocess, threading etc related utilities,
 most of them quite low level.
 """
 
+from __future__ import print_function
 from threading import Lock, currentThread
 import sys
 PY3 = sys.version_info[0] >= 3

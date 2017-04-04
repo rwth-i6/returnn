@@ -598,31 +598,31 @@ class MixtureSet:
     self.dim = self.read_u32()
 
     self.nMeans = self.read_u32()
-    self.means = np.zeros([self.nMeans, self.dim], dtype=np.float64)
-    self.meanWeights = np.zeros(self.nMeans, dtype=np.float64)
+    self.means = numpy.zeros([self.nMeans, self.dim], dtype=numpy.float64)
+    self.meanWeights = numpy.zeros(self.nMeans, dtype=numpy.float64)
 
     for n in range(self.nMeans):
       size = self.read_u32()
       assert size == self.dim
       arr_f = array.array('d')
       arr_f.fromfile(self.f, self.dim)
-      self.means[n, :] = np.array(arr_f)
+      self.means[n, :] = numpy.array(arr_f)
       self.meanWeights[n] = self.read_f64()
 
     self.nCovs = self.read_u32()
-    self.covs = np.zeros([self.nCovs, self.dim], dtype=np.float64)
-    self.covWeights = np.zeros(self.nCovs, dtype=np.float64)
+    self.covs = numpy.zeros([self.nCovs, self.dim], dtype=numpy.float64)
+    self.covWeights = numpy.zeros(self.nCovs, dtype=numpy.float64)
 
     for n in range(self.nCovs):
       size = self.read_u32()
       assert size == self.dim
       arr_f = array.array('d')
       arr_f.fromfile(self.f, self.dim)
-      self.covs[n, :] = np.array(arr_f)
+      self.covs[n, :] = numpy.array(arr_f)
       self.covWeights[n] = self.read_f64()
 
     self.nDensities = self.read_u32()
-    self.densities = np.zeros((self.nDensities, 2), dtype=np.int32)
+    self.densities = numpy.zeros((self.nDensities, 2), dtype=numpy.int32)
     for n in range(self.nDensities):
       mean_idx = self.read_u32()
       cov_idx = self.read_u32()
@@ -681,10 +681,10 @@ class MixtureSet:
     self.f.close()
 
   def getMeanByIdx(self, idx):
-    return np.float32(self.means[idx, :] / self.meanWeights[idx])
+    return numpy.float32(self.means[idx, :] / self.meanWeights[idx])
 
   def getCovByIdx(self, idx):
-    return np.float32(self.covs[idx, :] / self.covWeights[idx])
+    return numpy.float32(self.covs[idx, :] / self.covWeights[idx])
 
   def getNumberMixtures(self):
     return self.nMixtures

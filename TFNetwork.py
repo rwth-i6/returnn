@@ -197,6 +197,7 @@ class TFNetwork(object):
     """
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       layer = layer_class(name=name, network=self, **layer_desc)
+      layer.post_init()
     assert layer.output
     assert layer.output.placeholder is not None
     assert layer.output.size_placeholder is not None
@@ -335,13 +336,19 @@ class TFNetwork(object):
     """
     if not self._selected_train_layers:
       self.declare_train_params()
+    trainable_vars_col = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    assert isinstance(trainable_vars_col, list)
     l = []  # type: list[tf.Variable]
     for layer_name in sorted(self._selected_train_layers):
       layer = self.layers[layer_name]
       assert isinstance(layer, LayerBase)
+      if not layer.trainable:
+        continue
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
-        l.append(param)
+        if param in trainable_vars_col:
+          l.append(param)
+          trainable_vars_col.remove(param)
     return l
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):

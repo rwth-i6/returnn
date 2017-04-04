@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 import contextlib
@@ -168,6 +170,44 @@ class Data(object):
     assert self.time_dim_axis == 1
     return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
 
+  def get_placeholder_time_flattened(self):
+    assert self.have_tim_axis()
+    seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
+    return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
+
+  def get_placeholder_flattened(self, keep_dims=False):
+    """
+    :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
+    :rtype: tf.Tensor
+    :return: placeholder where all dynamic axes are flattened into a single axis.
+      e.g. for the usual case (batch, time, dim), it becomes (time', dim).
+    """
+    x = self.placeholder
+    dyn_axes = self.get_dynamic_batch_axes()
+    num_dyn_axes = len(dyn_axes)
+    assert num_dyn_axes >= 1, "no dynamic axis, flattening does not make sense"
+    if num_dyn_axes == 1:
+      return x
+    ndim = len(self.batch_shape)
+    if self.have_tim_axis():
+      x = self.get_placeholder_time_flattened()
+      dyn_axes.remove(1)
+      ndim -= 1
+    if dyn_axes:
+      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
+      for i in dyn_axes:
+        if i > 0:
+          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
+      shape = tf.shape(x)
+      x = tf.reshape(
+        x,
+        [tf.reduce_prod([shape[i] for i in dyn_axes])] +
+        [shape[i] for i in range(ndim) if i not in dyn_axes])
+    if keep_dims and num_dyn_axes >= 2:
+      for i in range(num_dyn_axes - 1):
+        x = tf.expand_dims(x, axis=1)
+    return x
+
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -189,13 +229,26 @@ class Data(object):
       return axis
     return axis - 1
 
-  @property
-  def default_broadcast_noise_shape(self):
+  def have_tim_axis(self):
+    return self.time_dim_axis is not None
+
+  def get_dynamic_batch_axes(self):
     """
-    :return: noise-shape which will broadcast along all dynamic dimensions and time/batch dim
+    :rtype: list[int]
+    :return: list of axes which have dynamic shape, such as time and batch, and maybe others 
+    """
+    return [axis
+            for axis, dim in enumerate(self.batch_shape)
+            if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis])]
+
+  @property
+  def non_dynamic_shape(self):
+    """
+    :return: shape which will broadcast along all dynamic dimensions and time/batch dim
     :rtype: tuple[int]
     """
-    return [1 if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis]) else dim
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [1 if (axis in dyn_axes) else dim
             for axis, dim in enumerate(self.batch_shape)]
 
 
@@ -759,7 +812,7 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
       batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
       flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
-      flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
+      flat_idxs = tf.stack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
       # tf.SparseTensor requires int64 indices
       flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):
@@ -1034,16 +1087,16 @@ class OpCodeCompiler(object):
   def _make_code_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update(self.code)
+    hash.update(self.code.encode("utf8"))
     return hash.hexdigest()
 
   def _make_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update("{")
+    hash.update("{".encode("utf8"))
     for key in self._relevant_info_keys:
-      hash.update("%s:{%s}" % (key, self._info_dict[key]))
-    hash.update("}")
+      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
+    hash.update("}".encode("utf8"))
     return hash.hexdigest()
 
   def _save_info(self):
@@ -1215,6 +1268,7 @@ def debugRegisterBetterRepr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
+  This monkey-patches clazz.__repr__ of some TF classes if they are object.__repr__.
   """
 
   from tensorflow.python.framework import tensor_util
@@ -1241,9 +1295,12 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
 
-  tf.IndexedSlices.__repr__ = indexed_slices_repr
-  tf.Operation.__repr__ = op_repr
-  tf.Variable.__repr__ = var_repr
+  for cl, f in [
+        (tf.IndexedSlices, indexed_slices_repr),
+        (tf.Operation, op_repr),
+        (tf.Variable, var_repr)]:
+    if getattr(cl, "__repr__") is object.__repr__:
+      setattr(cl, "__repr__", f)
 
 
 def cond(pred, fn1, fn2, name=None):

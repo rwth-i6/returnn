@@ -25,10 +25,10 @@ InitTypes = set()
 Verbose = False  # disables all per-segment log messages
 Quiet = False # disables all but error messages
 
-def print(str):
-  import __builtin__
+_orig_print = print
+def print(*args, **kwargs):
   if not Quiet:
-    __builtin__.print(str)
+    _orig_print(*args, **kwargs)
 
 print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
@@ -124,7 +124,7 @@ class SprintNnPythonLayer:
     self.output_size = None
 
   def finalize(self):
-    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize: %r" % (os.getpid()))
+    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize" % (os.getpid(),))
 
   def setInputDimension(self, stream, size):
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (os.getpid(), stream, size))

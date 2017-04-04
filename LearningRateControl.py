@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import os
 from Util import betterRepr, simpleObjRepr, ObjAsDict
 from Log import log
@@ -79,12 +81,12 @@ class LearningRateControl(object):
     self.filename = filename
     if filename:
       if os.path.exists(filename):
-        print >> log.v4, "Learning-rate-control: loading file %s" % filename
+        print("Learning-rate-control: loading file %s" % filename, file=log.v4)
         self.load()
       else:
-        print >> log.v4, "Learning-rate-control: file %s does not exist yet" % filename
+        print("Learning-rate-control: file %s does not exist yet" % filename, file=log.v4)
     else:
-      print >> log.v4, "Learning-rate-control: no file specified, not saving history (no proper restart possible)"
+      print("Learning-rate-control: no file specified, not saving history (no proper restart possible)", file=log.v4)
 
   __repr__ = simpleObjRepr
 
@@ -175,7 +177,7 @@ class LearningRateControl(object):
     :type error: dict[str,float|dict[str,float]]
     """
     if epoch not in self.epochData:
-      print >> log.v4, "Learning rate not set for epoch %i. Assuming default." % epoch
+      print("Learning rate not set for epoch %i. Assuming default." % epoch, file=log.v4)
       self.getLearningRateForEpoch(epoch)  # This will set it.
     assert isinstance(error, dict)
     error = error.copy()
@@ -183,7 +185,7 @@ class LearningRateControl(object):
       if isinstance(v, dict):  # like error = {"dev_score": {"cost:output1": .., "cost:output2": ...}, ...}
         del error[k]
         if len(v) == 1:
-          error[k] = v.values()[0]
+          error[k] = list(v.values())[0]
           continue
         for k1, v1 in v.items():
           if ":" in k1: k1 = k1[k1.index(":") + 1:]
@@ -192,7 +194,7 @@ class LearningRateControl(object):
       assert isinstance(v, float)
     self.epochData[epoch].error.update(error)
     if epoch == 1:
-      print >> log.v4, "Learning-rate-control: error key %r from %r" % (self.getErrorKey(epoch), error)
+      print("Learning-rate-control: error key %r from %r" % (self.getErrorKey(epoch), error), file=log.v4)
 
   def getErrorKey(self, epoch):
     if epoch not in self.epochData:

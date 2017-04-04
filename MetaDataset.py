@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import NumbersDict, load_json
@@ -229,7 +231,7 @@ class ClusteringDataset(CachedDataset2):
           last_seq_name = self.get_tag(last_seq_idx)
           seq_name = self.get_tag(seq_idx)
           if self.cluster_map[last_seq_name] != self.cluster_map[seq_name]:
-            print >> log.v5, "ClusteringDataset::_generate_batches", last_seq_idx, "is not", seq_idx
+            print("ClusteringDataset::_generate_batches", last_seq_idx, "is not", seq_idx, file=log.v5)
             yield batch
             batch = Batch()
       length = t_end - t_start
@@ -238,14 +240,14 @@ class ClusteringDataset(CachedDataset2):
       elif max_seq_length > 0 and length.max_value() > max_seq_length:
         continue
       if length.max_value() > batch_size:
-        print >> log.v4, "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size)
+        print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
       if self.rnd_seq_drop.random() < seq_drop:
         continue
       dt, ds = batch.try_sequence_as_slice(length)
       if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
         yield batch
         batch = Batch()
-      print >> log.v5, "batch add slice length", length
+      print("batch add slice length", length, file=log.v5)
       batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       last_seq_idx = seq_idx
 
@@ -740,7 +742,7 @@ class ChunkShuffleDataset(CachedDataset2):
     # We have reached the end.
     if not self.added_data:
       self._num_seqs = 0
-      print >>log.v3, "warning: empty dataset"
+      print("warning: empty dataset", file=log.v3)
     else:
       self._num_seqs = self.added_data[-1].seq_idx + 1
     self.reached_final_seq = True
