@@ -11,6 +11,7 @@ class LayerBase(object):
 
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
+               batch_norm=False,
                trainable=True):
     """
     :param str name:
@@ -24,7 +25,8 @@ class LayerBase(object):
     :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
-    :param bool trainable: mostly ignored for now...
+    :param bool|dict batch_norm:
+    :param bool trainable: whether the parameters of this layer will be trained
     """
     self.name = name
     self.network = network
@@ -68,9 +70,20 @@ class LayerBase(object):
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
     self._is_output_layer = is_output_layer
+    self.use_batch_norm = batch_norm
     self.trainable = trainable
     # Stats will be collected by the engine.
     self.stats = {}  # type: dict[str,tf.Tensor]
+
+  def post_init(self):
+    """
+    This gets called right after self.__init__().
+    """
+    if self.use_batch_norm:
+      opts = {}
+      if isinstance(self.use_batch_norm, dict):
+        opts = self.use_batch_norm
+      self.output.placeholder = self.batch_norm(self.output, **opts)
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -191,6 +204,67 @@ class LayerBase(object):
       return None
     return c
 
+  def batch_norm(self, data,
+                 use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
+                 momentum=0.99, epsilon=1e-3,
+                 sample_mean=None, sample_std=None,
+                 gamma=None, beta=None):
+    """
+    :param Data data: 
+    :param bool use_shift: 
+    :param bool use_std: 
+    :param float use_sample: defaults to 0.0 which is used in training
+    :param bool force_sample: even in eval, use the use_sample factor
+    :param float momentum: for the running average of sample_mean and sample_std
+    :param float epsilon:
+    :param tf.Tensor sample_mean:
+    :param tf.Tensor sample_std:
+    :param tf.Tensor gamma: 
+    :param tf.Tensor beta: 
+    :rtype: tf.Tensor
+    """
+    with tf.name_scope("batch_norm"):
+      x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
+      mean = tf.reduce_mean(x, axis=0, keep_dims=True)
+      std = tf.sqrt(tf.reduce_mean((x - mean) ** 2, axis=0, keep_dims=True))
+      if sample_mean is None:
+        sample_mean = self.add_param(tf.Variable(
+          initial_value=tf.zeros(data.non_dynamic_shape),
+          name="%s_%s_mean" % (self.name, data.name),
+          trainable=False))
+        # Use exponential moving average of batch mean.
+        # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
+        sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
+      if sample_std is None:
+        # Note: Our Theano implementation does not use a moving average for this.
+        sample_std = self.add_param(tf.Variable(
+          initial_value=tf.ones(data.non_dynamic_shape),
+          name="%s_%s_std" % (self.name, data.name),
+          trainable=False))
+        sample_std = tf.assign_add(sample_std, (std - sample_std) * momentum)
+      # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
+      use_sample = 1.0 + tf.cast(tf.logical_or(self.network.train_flag, force_sample), tf.float32) * (use_sample - 1.0)
+      mean = (1. - use_sample) * mean + use_sample * sample_mean
+      std = (1. - use_sample) * std + use_sample * sample_std
+      mean = tf.stop_gradient(mean)
+      std = tf.stop_gradient(std)
+      bn = (data.placeholder - mean) / (std + epsilon)
+      if use_std:
+        if gamma is None:
+          gamma = self.add_param(tf.Variable(
+            initial_value=tf.ones(data.non_dynamic_shape),
+            name="%s_%s_gamma" % (self.name, data.name),
+            trainable=True))
+        bn *= gamma
+      if use_shift:
+        if beta is None:
+          beta = self.add_param(tf.Variable(
+            initial_value=tf.zeros(data.non_dynamic_shape),
+            name="%s_%s_beta" % (self.name, data.name),
+            trainable=True))
+        bn += beta
+      return bn
+
 
 class SourceLayer(LayerBase):
   layer_class = "source"
@@ -278,7 +352,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
       keep_prob=1 - dropout,
       # noise_shape is like old behavior for now:
       # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
-      noise_shape=data.default_broadcast_noise_shape,
+      noise_shape=data.non_dynamic_shape,
       seed=network.random.randint(2 ** 31))
   fn_eval = lambda: data.placeholder
   data.placeholder = network.cond_on_train(fn_train, fn_eval)

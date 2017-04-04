@@ -197,6 +197,7 @@ class TFNetwork(object):
     """
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       layer = layer_class(name=name, network=self, **layer_desc)
+      layer.post_init()
     assert layer.output
     assert layer.output.placeholder is not None
     assert layer.output.size_placeholder is not None
