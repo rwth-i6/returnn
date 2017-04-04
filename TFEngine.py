@@ -798,7 +798,7 @@ class Engine(object):
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
       sys.exit(1)
 
-    assert not any(numpy.isinf(trainer.score.values())) or any(numpy.isnan(trainer.score.values())), \
+    assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), \
       "Model is broken, got inf or nan final score: %s" % trainer.score
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):

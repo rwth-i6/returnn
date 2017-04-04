@@ -1034,16 +1034,16 @@ class OpCodeCompiler(object):
   def _make_code_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update(self.code)
+    hash.update(self.code.encode("utf8"))
     return hash.hexdigest()
 
   def _make_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update("{")
+    hash.update("{".encode("utf8"))
     for key in self._relevant_info_keys:
-      hash.update("%s:{%s}" % (key, self._info_dict[key]))
-    hash.update("}")
+      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
+    hash.update("}".encode("utf8"))
     return hash.hexdigest()
 
   def _save_info(self):

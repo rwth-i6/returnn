@@ -334,7 +334,7 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
+  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
   sys.stdout.flush()
 
 

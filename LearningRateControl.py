@@ -185,7 +185,7 @@ class LearningRateControl(object):
       if isinstance(v, dict):  # like error = {"dev_score": {"cost:output1": .., "cost:output2": ...}, ...}
         del error[k]
         if len(v) == 1:
-          error[k] = v.values()[0]
+          error[k] = list(v.values())[0]
           continue
         for k1, v1 in v.items():
           if ":" in k1: k1 = k1[k1.index(":") + 1:]
