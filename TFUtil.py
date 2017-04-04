@@ -761,7 +761,7 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
       batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
       flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
-      flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
+      flat_idxs = tf.stack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
       # tf.SparseTensor requires int64 indices
       flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):

@@ -647,7 +647,7 @@ class FramewiseStatisticsLayer(LayerBase):
     output_flat_argmax = tf.cast(tf.arg_max(output_before_softmax_flat, dimension=flat_last_dim), "int32")
     frame_error = tf.not_equal(output_flat_argmax, target_flat)
     # target_flat is shape (time,) -> index.
-    target_flat_exp = tf.pack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
+    target_flat_exp = tf.stack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
     true_label_prob = tf.gather_nd(output_flat, target_flat_exp)
     true_label_prob.set_shape(tf.TensorShape([tf.Dimension(None)]))
     true_label_prob_i32 = tf.clip_by_value(
@@ -798,7 +798,7 @@ class CrossEntropyLoss(Loss):
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
-          target_flat_exp = tf.pack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)
+          target_flat_exp = tf.stack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)
           out = tf.log(tf.gather_nd(self.output_flat, target_flat_exp))
           return -self.reduce_func(out)
       else:  # not sparse
@@ -819,7 +819,7 @@ class GenericCELoss(Loss):
     def loss(z, y, grad_f, target):
       nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
       # target is shape (time,) -> index.
-      target_exp = tf.pack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
+      target_exp = tf.stack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
       # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).
       gathered = tf.gather_nd(nlog_scores, target_exp)   # (time,)
       return self.reduce_func(gathered)
