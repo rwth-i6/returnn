@@ -175,6 +175,20 @@ public:
             }
             t = next;
         }
+
+        for(int s=N*S-2;s>=-1;--s)
+        {
+            float sum = 0;
+            for(int t=0;t<T;++t)
+            {
+                sum += attention(s,t);
+                if(sum>1)
+                {
+                    cout << "warning: multiple alignmentpoints on single frame" << endl;
+                    break;
+                }
+            }
+        }
     }
 
     void full(CSArrayF& activs, CSArrayI& labellings,
