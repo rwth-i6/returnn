@@ -71,7 +71,9 @@ def constant_zero():
 from theano.scalar.basic import UnaryScalarOp, same_out_nocomplex
 from theano.tensor.elemwise import Elemwise
 class Round3(UnaryScalarOp):
-  def c_code(self, node, name, (x, ), (z, ), sub):
+  def c_code(self, node, name, x, z, sub):
+    x, = x
+    z, = z
     return "%(z)s = round(%(x)s);" % locals()
 
   def grad(self, inputs, gout):
