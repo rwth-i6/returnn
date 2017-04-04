@@ -4,7 +4,10 @@ from __future__ import print_function
 import os
 import sys
 import time
-from Queue import Queue
+try:
+  from Queue import Queue
+except ImportError:
+  from queue import Queue
 from threading import Thread, Condition
 
 import numpy
