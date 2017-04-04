@@ -218,8 +218,8 @@ class PythonControl:
     assert not self.__class__.instance, "only one instance expected"
     self.__class__.instance = self
     self.cond = Condition()
-    self.pipe_c2p = os.fdopen(c2p_fd, "w")
-    self.pipe_p2c = os.fdopen(p2c_fd, "r")
+    self.pipe_c2p = os.fdopen(c2p_fd, "wb")
+    self.pipe_p2c = os.fdopen(p2c_fd, "rb")
     self.sprint_callback = None  # via self._init
     self.sprint_version_number = None  # via self._init
     self.callback = None  # either via Sprint, or self.own_threaded_callback

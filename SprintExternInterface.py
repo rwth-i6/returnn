@@ -200,8 +200,8 @@ class ExternSprintDatasetSource:
     :type numSegments: int | None
     :param numSegments: can be None if not known in advance
     """
-    self.pipe_c2p = os.fdopen(c2p_fd, "w")
-    self.pipe_p2c = os.fdopen(p2c_fd, "r")
+    self.pipe_c2p = os.fdopen(c2p_fd, "wb")
+    self.pipe_p2c = os.fdopen(p2c_fd, "rb")
     self._send("init", (inputDim, outputDim, numSegments))
 
   def _send(self, dataType, args=None):
