@@ -1215,6 +1215,7 @@ def debugRegisterBetterRepr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
+  This monkey-patches clazz.__repr__ of some TF classes if they are object.__repr__.
   """
 
   from tensorflow.python.framework import tensor_util
@@ -1241,9 +1242,12 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
 
-  tf.IndexedSlices.__repr__ = indexed_slices_repr
-  tf.Operation.__repr__ = op_repr
-  tf.Variable.__repr__ = var_repr
+  for cl, f in [
+        (tf.IndexedSlices, indexed_slices_repr),
+        (tf.Operation, op_repr),
+        (tf.Variable, var_repr)]:
+    if getattr(cl, "__repr__") is object.__repr__:
+      setattr(cl, "__repr__", f)
 
 
 def cond(pred, fn1, fn2, name=None):
