@@ -289,8 +289,8 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
 class _ConcatInputLayer(LayerBase):
   def __init__(self, dropout=0, mask=None, **kwargs):
     """
-    :param float dropout:
-    :param str|None mask: "dropout" or "unity" or None
+    :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
+    :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
     super(_ConcatInputLayer, self).__init__(**kwargs)
     assert mask in ['dropout', 'unity', None], "invalid mask: %r" % mask
