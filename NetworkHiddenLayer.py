@@ -220,16 +220,20 @@ class WindowContextLayer(_NoOpLayer):
     source, n_out = concat_sources(self.sources, unsparse=False)
     if p is None:
       p = 1. - 1. / window
-    p = numpy.float32(p)
     self.set_attr('n_out', n_out)
     self.set_attr('window', window)
     self.set_attr('average', average)
     from TheanoUtil import context_batched
     out = context_batched(source, window=window)
-    weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
+    if average == 'exponential':
+      weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
+    elif average == 'uniform':
+      weights = numpy.float32(1) / T.cast(window,'float32')
+    else:
+      assert False, "invalid averaging method: " + str(average)
+
     windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
     out = T.dot(windows, weights)
-    #out = windows[:,:,:,-1]
     self.make_output(out)
 
 

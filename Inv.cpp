@@ -103,7 +103,9 @@ public:
                   fwd_(s, t + M - 1) = INF;
                 else
                   fwd_(s, t + M - 1) = min_score + score;
-                bt_(s, t + M - 1) = cur_max_skip - 1 - min_index;
+                if(cur_max_skip - min_index == 0)
+                    cerr << "before " << bt_(s, t + M - 1) << " after " << cur_max_skip - min_index << endl;
+                bt_(s, t + M - 1) = cur_max_skip - min_index;
             }
         }
 
@@ -111,6 +113,14 @@ public:
         for(int s=N*S-2;s>=-1;--s)
         {
             int next = t - bt_(s+1, t+M-1);
+            if(next == t)
+            {
+                cout << "warning: loop in inverted alignment detected" << endl;
+            }
+            if(t < 0)
+            {
+                cout << "warning: negative time index detected" << endl;
+            }
             if(next < 0)
                 next = -1;
             if(focus == FOCUS_LAST)
@@ -135,7 +145,11 @@ public:
                   }
                 }
                 else
+                {
+                  if(attention(s+1, t) != 0)
+                    cout << "warning: attention at " << s+1 << " " << t << " has value " << attention(s+1,t) << endl;
                   attention(s+1, t) = 1;
+                }
             }
             else if(focus == FOCUS_MAX)
             {
