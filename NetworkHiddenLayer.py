@@ -228,7 +228,7 @@ class WindowContextLayer(_NoOpLayer):
     if average == 'exponential':
       weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
     elif average == 'uniform':
-      weights = numpy.float32(1) / T.cast(window,'float32')
+      weights = numpy.float32(1) / (T.cast(window,'float32') * T.ones((window,),'float32'))
     else:
       assert False, "invalid averaging method: " + str(average)
 
