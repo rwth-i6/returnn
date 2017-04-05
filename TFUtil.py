@@ -493,6 +493,22 @@ def get_shape_dim(x, axis):
   return tf.shape(x)[axis]
 
 
+def get_shape(x):
+  """
+  :param tf.Tensor x: 
+  :return: list of scalars, which are either int if known statically, or otherwise expressions
+  :rtype: list[int|tf.Tensor]
+  """
+  with tf.name_scope("get_shape"):
+    dyn_shape = tf.shape(x)
+    static_shape = x.get_shape()
+    assert static_shape.ndims is not None
+    return [static_shape.dims[i].value
+            if static_shape.dims[i].value is not None
+            else dyn_shape[i]
+            for i in range(static_shape.ndims)]
+
+
 def get_ndim(x):
   """
   :param tf.Tensor x:
@@ -1334,3 +1350,39 @@ def cond(pred, fn1, fn2, name=None):
       return fn2()
   from tensorflow.python.ops import control_flow_ops
   return control_flow_ops.cond(pred, fn1, fn2, name=name)
+
+
+def spatial_smoothing_energy(x, dim):
+  """
+  :param tf.Tensor x: shape (..., dim)
+  :param int dim: last dimension of x
+  :rtype: tf.Tensor
+  :return: energy of shape (...)
+
+  Via Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017.
+  Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
+  """
+  import math
+  with tf.name_scope("spatial_smoothing_energy"):
+    x = check_input_dim(x, -1, dim)
+    shape = get_shape(x)
+    w = int(math.sqrt(dim))
+    while dim % w > 0:
+      w -= 1
+      assert w > 0
+    h = dim // w
+    assert w * h == dim
+    assert w >= 3 and h >= 3, "too small"
+    # input shape: [batch, in_height=h, in_width=w, in_channels=1]
+    x = tf.reshape(x, [-1, h, w, 1])
+    # filter shape: [filter_height, filter_width, in_channels=1, out_channels=1]
+    filter = tf.reshape(tf.constant(
+      [[-0.125, -0.125, -0.125],
+       [-0.125, 1.0, -0.125],
+       [-0.125, -0.125, -0.125]]), [3, 3, 1, 1])
+    # Note: In the paper, they use circular convolution. Here we use just the inner valid activations.
+    # out shape: [batch, out_height, out_width, out_channels=1]
+    out = tf.nn.conv2d(x, filter=filter, strides=[1, 1, 1, 1], padding="VALID")
+    out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
+    # Note: Square all the filter values.
+    return tf.reduce_sum(out ** 2, axis=-1)

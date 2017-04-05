@@ -12,6 +12,7 @@ class LayerBase(object):
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
                batch_norm=False,
+               spatial_smoothing=0.0,
                trainable=True):
     """
     :param str name:
@@ -71,6 +72,7 @@ class LayerBase(object):
     self.L2 = L2
     self._is_output_layer = is_output_layer
     self.use_batch_norm = batch_norm
+    self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
     # Stats will be collected by the engine.
     self.stats = {}  # type: dict[str,tf.Tensor]
@@ -196,10 +198,23 @@ class LayerBase(object):
   def get_params_l2_norm(self):
     return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
 
+  def get_output_spatial_smoothing_energy(self):
+    from TFUtil import spatial_smoothing_energy, flatten_with_seq_len_mask
+    energy = spatial_smoothing_energy(self.output.placeholder, dim=self.output.dim)  # (batch,time)
+    assert self.output.have_tim_axis()
+    energy = flatten_with_seq_len_mask(
+      energy,
+      seq_lens=self.output.size_placeholder[self.output.time_dim_axis_excluding_batch],
+      time_major=self.output.is_time_major)  # (time')
+    energy = tf.reduce_sum(energy)
+    return energy
+
   def get_constraints_value(self):
     c = 0
     if self.L2:
       c += self.L2 * self.get_params_l2_norm()
+    if self.spatial_smoothing:
+      c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
     if c is 0:
       return None
     return c

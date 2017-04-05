@@ -148,8 +148,8 @@ class SprintSubprocessInstance:
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
-    readend = os.fdopen(readend, "r", 0)
-    writeend = os.fdopen(writeend, "w", 0)
+    readend = os.fdopen(readend, "rb", 0)
+    writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
 
   @property
