@@ -1107,7 +1107,7 @@ class MfccLayer(_NoOpLayer):
     self.set_attr('n_out', nrOfMfccCoefficients)
     self.make_output(mfccs[:,:,0:nrOfMfccCoefficients])
 
-  def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None):
+  def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None, **kwargs):
     """
     overwrite function from Layer to  change default parameters of batch_norm: use_shift, use_std and foce_sample
     """
