@@ -1352,10 +1352,87 @@ def cond(pred, fn1, fn2, name=None):
   return control_flow_ops.cond(pred, fn1, fn2, name=name)
 
 
-def spatial_smoothing_energy(x, dim):
+def single_strided_slice(x, axis, begin=None, end=None, step=None):
+  """
+  :param tf.Tensor x: 
+  :param int|tf.Tensor axis: 
+  :param int|tf.Tensor|None begin: 
+  :param int|tf.Tensor|None end: 
+  :param int|tf.Tensor|None step: 
+  :return: e.g. if axis == 0, returns x[begin:end:step], if axis == 1, returns x[:, begin:end:step], etc.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("single_strided_slice"):
+    if isinstance(axis, int):
+      if axis < 0 and x.get_shape().ndims is not None:
+        axis %= x.get_shape().ndims
+        assert axis >= 0
+      if axis >= 0:
+        return x[(slice(None),) * axis + (slice(begin, end, step),)]
+    else:
+      assert isinstance(axis, tf.Tensor)
+    axis = axis % tf.rank(x)
+    shape = tf.shape(x)
+    if begin is None:
+      begin = 0
+    if end is None:
+      end = shape[axis]
+    begins = tf.concat([tf.zeros((axis,), tf.int32), (begin,)], axis=0)
+    ends = tf.concat([shape[:axis], (end,)], axis=0)
+    if step is not None:
+      strides = tf.concat([tf.ones((axis,), tf.int32), (step,)], axis=0)
+    else:
+      strides = None
+    return tf.strided_slice(x, begin=begins, end=ends, strides=strides)
+
+
+def circular_pad(x, paddings, axes=None):
+  """
+  :param tf.Tensor x: shape (..., height, width)
+  :param int|((int,int), (int,int))|tf.Tensor paddings: how much to add ((top,bottom),(left,right))
+  :return: tensor with shape (..., top + height + bottom, left + width + right)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("circular_pad"):
+    ndim = x.get_shape().ndims
+    assert ndim is not None
+    shape = tf.shape(x)
+    if axes is None:
+      axis_height = ndim - 2
+      axis_width = ndim - 1
+    elif isinstance(axes, tf.Tensor):
+      axes = check_input_ndim(axes, 1)
+      axes = check_input_dim(axes, 0, 2)
+      axis_height, axis_width = axes[0], axes[1]
+    else:
+      axis_height, axis_width = axes
+    height, width = shape[axis_height], shape[axis_width]
+    if isinstance(paddings, tf.Tensor):
+      paddings = check_input_ndim(paddings, 2)
+      paddings = check_input_dim(paddings, 0, 2)
+      paddings = check_input_dim(paddings, 1, 2)
+      top, bottom = paddings[0, 0], paddings[0, 1]
+      left, right = paddings[1, 0], paddings[1, 1]
+    elif isinstance(paddings, int):
+      top = bottom = left = right = paddings
+    else:
+      assert isinstance(paddings, (list, tuple))
+      (top, bottom), (left, right) = paddings
+    left_x = single_strided_slice(x, begin=width - left, axis=axis_width)
+    right_x = single_strided_slice(x, end=right, axis=axis_width)
+    left_right_and_x = tf.concat([left_x, x, right_x], axis=axis_width)  # shape (..., height, left + width + right)
+    top_x = single_strided_slice(left_right_and_x, begin=height - top, axis=axis_height)
+    bottom_x = single_strided_slice(left_right_and_x, end=bottom, axis=axis_height)
+    all_combined_x = tf.concat([top_x, left_right_and_x, bottom_x], axis=axis_height)  # final shape
+    assert isinstance(all_combined_x, tf.Tensor)
+    return all_combined_x
+
+
+def spatial_smoothing_energy(x, dim, use_circular_conv=True):
   """
   :param tf.Tensor x: shape (..., dim)
   :param int dim: last dimension of x
+  :param bool use_circular_conv: whether to use circular convolution, via circular_pad
   :rtype: tf.Tensor
   :return: energy of shape (...)
 
@@ -1375,12 +1452,13 @@ def spatial_smoothing_energy(x, dim):
     assert w >= 3 and h >= 3, "too small"
     # input shape: [batch, in_height=h, in_width=w, in_channels=1]
     x = tf.reshape(x, [-1, h, w, 1])
+    if use_circular_conv:
+      x = circular_pad(x, paddings=1, axes=(1, 2))  # [batch, h+2, w+2, in_channels=1]
     # filter shape: [filter_height, filter_width, in_channels=1, out_channels=1]
     filter = tf.reshape(tf.constant(
       [[-0.125, -0.125, -0.125],
        [-0.125, 1.0, -0.125],
        [-0.125, -0.125, -0.125]]), [3, 3, 1, 1])
-    # Note: In the paper, they use circular convolution. Here we use just the inner valid activations.
     # out shape: [batch, out_height, out_width, out_channels=1]
     out = tf.nn.conv2d(x, filter=filter, strides=[1, 1, 1, 1], padding="VALID")
     out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
