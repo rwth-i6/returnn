@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import subprocess
 from subprocess import CalledProcessError
 import h5py
@@ -92,7 +94,10 @@ def cmd(s):
   """
   p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
-  result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
+  stdout = p.communicate()[0]
+  if PY3:
+    stdout = stdout.decode("utf8")
+  result = [tag.strip() for tag in stdout.split('\n')[:-1]]
   p.stdout.close()
   if p.returncode != 0:
     raise CalledProcessError(p.returncode, s, "\n".join(result))
@@ -329,7 +334,7 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
+  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
   sys.stdout.flush()
 
 
@@ -384,7 +389,7 @@ def betterRepr(o):
       return "(%s,)" % o[0]
     return "(%s)" % ", ".join(map(betterRepr, o))
   if isinstance(o, dict):
-    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.iteritems())]
+    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.items())]
     if sum([len(v) for v in l]) >= 40:
       return "{\n%s}" % "".join([v + ",\n" for v in l])
     else:
@@ -410,7 +415,7 @@ class ObjAsDict:
 
   def __getitem__(self, item):
     if not isinstance(item, (str, unicode)):
-      raise KeyError(e)
+      raise KeyError(item)
     try:
       return getattr(self.__obj, item)
     except AttributeError as e:
@@ -506,7 +511,9 @@ def find_ranges(l):
 
 
 def initThreadJoinHack():
-  import threading, thread
+  if PY3:
+    # Not sure if needed, but also, the code below is slightly broken.
+    return
   mainThread = threading.currentThread()
   assert isinstance(mainThread, threading._MainThread)
   mainThreadId = thread.get_ident()

@@ -4,6 +4,7 @@ Here are all subprocess, threading etc related utilities,
 most of them quite low level.
 """
 
+from __future__ import print_function
 from threading import Lock, currentThread
 import sys
 PY3 = sys.version_info[0] >= 3
@@ -844,8 +845,8 @@ class ExecingProcess:
     assert self.exit_status is None
     def pipeOpen():
       readend, writeend = os.pipe()
-      readend = os.fdopen(readend, "r")
-      writeend = os.fdopen(writeend, "w")
+      readend = os.fdopen(readend, "rb")
+      writeend = os.fdopen(writeend, "wb")
       return readend, writeend
     self.pipe_c2p = pipeOpen()
     self.pipe_p2c = pipeOpen()
@@ -943,8 +944,8 @@ class ExecingProcess:
       argidx = sys.argv.index("--forkExecProc")
       writeFileNo = int(sys.argv[argidx + 1])
       readFileNo = int(sys.argv[argidx + 2])
-      readend = os.fdopen(readFileNo, "r")
-      writeend = os.fdopen(writeFileNo, "w")
+      readend = os.fdopen(readFileNo, "rb")
+      writeend = os.fdopen(writeFileNo, "wb")
       unpickler = Unpickler(readend)
       name = unpickler.load()
       if ExecingProcess.Verbose: print("ExecingProcess child %s (pid %i)" % (name, os.getpid()))

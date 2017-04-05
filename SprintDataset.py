@@ -4,6 +4,8 @@ Implements the SprintDatasetBase and ExternSprintDataset classes, some Dataset s
 Note that from the main RETURNN process, you probably want ExternSprintDataset instead.
 """
 
+from __future__ import print_function
+
 import atexit
 import os
 import signal
@@ -175,8 +177,8 @@ class SprintDatasetBase(Dataset):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
-    print >> log.v5, "SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
-                     (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S"))
+    print("SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
+                     (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
     while not check():
       self.cond.wait()
 
@@ -211,11 +213,11 @@ class SprintDatasetBase(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print >> log.v5, "SprintDataset load_seqs in %s:" % currentThread().name, start, end,
+    print("SprintDataset load_seqs in %s:" % currentThread().name, start, end, end=' ', file=log.v5)
     if start == end: return
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
-      print >> log.v5, "first features shape:", self._getSeq(start).features.shape
+      print("first features shape:", self._getSeq(start).features.shape, file=log.v5)
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.
@@ -281,7 +283,7 @@ class SprintDatasetBase(Dataset):
         v = numpy.array(v, dtype="uint8")
         targets[key] = v
         continue
-      print >> log.v3, "SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v)
+      print("SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v), file=log.v3)
       self._target_black_list += [key]
       del targets[key]
 
@@ -304,7 +306,7 @@ class SprintDatasetBase(Dataset):
       self.cond.notify_all()
 
       if seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
-        print >> log.v5, "SprintDataset addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (seq_idx, T)
+        print("SprintDataset addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (seq_idx, T), file=log.v5)
         while seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMin:
           assert not self.reached_final_seq
           assert seq_idx + 1 == self.next_seq_to_be_added
@@ -440,7 +442,7 @@ class ExternSprintDataset(SprintDatasetBase):
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq
         if interrupt:
-          print >> log.v5, "ExternSprintDataset: interrupt child proc %i" % self.child_pid
+          print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
       else:
         self.child_pid = None
@@ -462,7 +464,7 @@ class ExternSprintDataset(SprintDatasetBase):
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
-    print >>log.v5, "ExternSprintDataset: epoch", epoch, "exec", args
+    print("ExternSprintDataset: epoch", epoch, "exec", args, file=log.v5)
 
     pid = os.fork()
     if pid == 0:  # child
@@ -472,7 +474,7 @@ class ExternSprintDataset(SprintDatasetBase):
         self.pipe_p2c[1].close()
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
-        print >> log.v1, "ExternSprintDataset: Error when starting Sprint %r." % args
+        print("ExternSprintDataset: Error when starting Sprint %r." % args, file=log.v1)
         sys.excepthook(*sys.exc_info())
       finally:
         os._exit(1)
@@ -490,7 +492,7 @@ class ExternSprintDataset(SprintDatasetBase):
       # Ignore num_segments. It can be totally different than the real number of sequences.
       self.setDimensions(inputDim, outputDim)
     except Exception:
-      print >> log.v1, "ExternSprintDataset: Sprint child process (%r) caused an exception." % args
+      print("ExternSprintDataset: Sprint child process (%r) caused an exception." % args, file=log.v1)
       sys.excepthook(*sys.exc_info())
       raise Exception("ExternSprintDataset Sprint init failed")
 
@@ -501,8 +503,8 @@ class ExternSprintDataset(SprintDatasetBase):
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
-    readend = os.fdopen(readend, "r", 0)
-    writeend = os.fdopen(writeend, "w", 0)
+    readend = os.fdopen(readend, "rb", 0)
+    writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
 
   @property
@@ -596,7 +598,7 @@ class ExternSprintDataset(SprintDatasetBase):
         try:
           os.remove(self.seq_list_file)
         except Exception as e:
-          print >> log.v5, "ExternSprintDataset: error when removing %r: %r" % (self.seq_list_file, e)
+          print("ExternSprintDataset: error when removing %r: %r" % (self.seq_list_file, e), file=log.v5)
         finally:
           self.seq_list_file = None
 
@@ -605,7 +607,7 @@ class ExternSprintDataset(SprintDatasetBase):
           self.finishSprintEpoch()
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print >> log.v5, "ExternSprintDataset finished reading epoch %i" % epoch
+      print("ExternSprintDataset finished reading epoch %i" % epoch, file=log.v5)
 
     except Exception:
       # Catch all standard exceptions.
@@ -613,9 +615,9 @@ class ExternSprintDataset(SprintDatasetBase):
       # when it is exiting. It's never by the user because SIGINT will always
       # trigger KeyboardInterrupt in the main thread only.
       try:
-        print >> log.v1, "ExternSprintDataset reader failed"
+        print("ExternSprintDataset reader failed", file=log.v1)
         sys.excepthook(*sys.exc_info())
-        print ""
+        print("")
       finally:
         # Exceptions are fatal. If we can recover, we should handle it in run_inner().
         interrupt_main()

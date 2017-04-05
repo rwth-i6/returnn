@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import sys
 from TaskSystem import AsyncTask
 
@@ -15,7 +17,7 @@ def start():
   asyncTask.join()
 
 def print_action():
-  print "Hello"
+  print("Hello")
   return 42
 
 def process(asyncTask):
