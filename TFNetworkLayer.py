@@ -395,12 +395,39 @@ class _ConcatInputLayer(LayerBase):
 
 
 class CopyLayer(_ConcatInputLayer):
+  """
+  This layer does nothing, it copies its input.
+  If multiple sources are provided, they are concatenated in the feature-dim.
+  """
+
   layer_class = "copy"
 
   def __init__(self, **kwargs):
     # Dummy out_type for now, will reset layer.
     super(CopyLayer, self).__init__(out_type={"shape": ()}, **kwargs)
     self.output = self.input_data
+
+
+class ActivationLayer(CopyLayer):
+  """
+  This layer just applies an activation function.
+  """
+
+  layer_class = "activation"
+
+  def __init__(self, activation, **kwargs):
+    """
+    :param str activation: e.g. "relu", "tanh", etc
+    """
+    super(ActivationLayer, self).__init__(**kwargs)
+    x = self.input_data.placeholder
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(x)
+    self.output.placeholder = self.output_before_activation.y
 
 
 class BatchNormLayer(CopyLayer):
