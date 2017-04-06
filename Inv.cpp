@@ -11,7 +11,7 @@
 #define COVERAGE_DENSE 4
 
 #define VERBOSE 1
-#define AUTO_INCREASE_SKIP 0
+#define AUTO_INCREASE_SKIP 1
 
 class Inv
 {
@@ -59,17 +59,17 @@ public:
             for(int s=0; s < N * S; ++s)
             {
                 score_(s,t) = fwd_(s,t) = INF;
-                bt_(s,t) = 1;
+                bt_(s,t) = -1;
             }
 
         for(int t=0; t < T; ++t)
             for(int s=0; s < N * S; ++s)
                 score_(s,t+M-1) = activs(t, labellings(s / S));
 
-        for(int m = M-1 + min_skip; m < 2*M-2; ++m)
+        for(int m = M-1; m < 2*M-2; ++m)
         {
             fwd_(0, m) = score_(0, m);
-            bt_(0, m) = m - M + 1;
+            bt_(0, m) = m - M + 2;
         }
 
         for(int s=1; s < N * S; ++s)
@@ -78,18 +78,19 @@ public:
             if(start < 0)
                 start = 0;
             start = 0;
+            start = s + 1;
             int cur_min_skip = min_skip;
             //if(labellings(s / S) == nil)
             //  cur_min_skip = 0;
             for(int t=start; t < T; ++t)
             {
                 int cur_max_skip = M;
-                if(labellings(s / S) == nil)
-                  cur_max_skip = T - t;
+                //if(labellings(s / S) == nil)
+                //  cur_max_skip = T - t;
                 float score = score_(s, t + M - 1);
                 float min_score = INF;
-                int min_index = M - cur_min_skip;
-                for(int m=t + cur_min_skip; m < t + cur_max_skip; ++m)
+                int min_index = cur_max_skip;
+                for(int m=t; m < t + cur_max_skip - 1; ++m)
                 {
                     float prev = fwd_(s - 1, m);
                     if(prev < min_score)
@@ -99,13 +100,15 @@ public:
                     }
                 }
 
+                //cerr << s << " " << t << " " << min_score << " " << min_index << endl;
+
                 if(min_score == INF)
                   fwd_(s, t + M - 1) = INF;
                 else
+                {
                   fwd_(s, t + M - 1) = min_score + score;
-                if(cur_max_skip - min_index == 0)
-                    cerr << "before " << bt_(s, t + M - 1) << " after " << cur_max_skip - min_index << endl;
-                bt_(s, t + M - 1) = cur_max_skip - min_index;
+                  bt_(s, t + M - 1) = cur_max_skip - 1 - min_index;
+                }
             }
         }
 
@@ -113,9 +116,14 @@ public:
         for(int s=N*S-2;s>=-1;--s)
         {
             int next = t - bt_(s+1, t+M-1);
+            //cout << s+1 << ": " << t << " -> " << next << " (" << T << "," << N << ")" << endl;
+            if(next > t)
+            {
+                cout << "warning: backward trace detected " << s+1 << " " << t << " -> " << next << endl;
+            }
             if(next == t)
             {
-                cout << "warning: loop in inverted alignment detected" << endl;
+                cout << "warning: loop in inverted alignment detected at " << s+1 << " " << t << endl;
             }
             if(t < 0)
             {
@@ -181,10 +189,11 @@ public:
             float sum = 0;
             for(int t=0;t<T;++t)
             {
-                sum += attention(s,t);
+                sum += attention(s+1,t);
                 if(sum>1)
                 {
-                    cout << "warning: multiple alignmentpoints on single frame" << endl;
+                    cout << "warning: multiple alignment points on single frame at " << s << " " << t << endl;
+                    throw std::out_of_range("alignment error");
                     break;
                 }
             }
