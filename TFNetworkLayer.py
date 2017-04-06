@@ -49,6 +49,8 @@ class LayerBase(object):
       out_type = {"dim": n_out}
     out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % self.name)
+    if sources:
+      out_type.setdefault("dtype", sources[0].output.dtype)
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
@@ -571,7 +573,11 @@ class ConvLayer(_ConcatInputLayer):
     from TFUtil import check_input_dim
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
     assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
-    out_type = {"dim": n_out, "batch_dim_axis": 0, "shape": [None] * len(filter_size) + [n_out]}
+    out_type = {
+      "dim": n_out,
+      "shape": [None] * len(filter_size) + [n_out],
+      "batch_dim_axis": 0,
+      "sparse": False}
     super(ConvLayer, self).__init__(out_type=out_type, **kwargs)
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
@@ -669,7 +675,6 @@ class PoolLayer(_ConcatInputLayer):
     from TFUtil import check_input_dim
     mode = mode.upper()
     assert mode in ["MAX", "AVG"]
-    assert len(pool_size) in (1, 2, 3)
     padding = padding.upper()
     assert padding in ["VALID", "SAME"]
     if isinstance(dilation_rate, int):
@@ -695,6 +700,8 @@ class PoolLayer(_ConcatInputLayer):
       name="%s_output" % self.name,
       shape=(None,) * len(pool_size) + (self.input_data.dim,),
       dim=self.input_data.dim,
+      dtype=self.input_data.dtype,
+      sparse=False,
       batch_dim_axis=0)
     self.output.placeholder = y
     self.output.size_placeholder = {
@@ -707,6 +714,76 @@ class PoolLayer(_ConcatInputLayer):
         self.output.size_placeholder[i] = s - pool_size[i] + 1
     else:
       assert False
+
+
+class ReduceLayer(_ConcatInputLayer):
+  layer_class = "reduce"
+
+  def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
+    """
+    :param str mode: "sum" or "max" 
+    :param int|list[int]|str axis: one axis or multiple axis to reduce.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial" or "F"|"feature"
+    :param bool keep_dims: if dimensions should be kept (will be 1)
+    :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+      e.g. 0: will convert the input into batch-major format if not already like that.
+    """
+    from TFUtil import swapaxes
+    assert "n_out" not in kwargs
+    assert "out_type" not in kwargs
+    mode = mode.lower()
+    assert mode in ["max", "sum", "avg", "mean"]
+    # Dummy out_type for now, will reset layer.
+    super(ReduceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    assert not self.input_data.sparse
+    x = self.input_data.placeholder
+    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
+      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
+    if isinstance(axis, str):
+      axis = axis.lower()
+      if axis in ["b", "batch"]:
+        axis = 0
+      elif axis == "spatial":
+        axis = self.input_data.get_dynamic_batch_axes()
+      elif axis in ["f", "feature"]:
+        axis = self.input_data.get_non_dynamic_axes()
+      else:
+        raise Exception("invalid axis mode %r" % axis)
+    if isinstance(axis, int):
+      axis = [axis]
+    assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
+    axis = [i % self.input_data.batch_ndim for i in axis]
+    if mode == "max":
+      f = tf.reduce_max
+    elif mode == "sum":
+      f = tf.reduce_sum
+    elif mode in ["avg", "mean"]:
+      f = tf.reduce_mean
+    else:
+      assert False
+    y = f(x, axis=axis, keep_dims=keep_dims)
+    y_shape = list(self.input_data.batch_shape)
+    y_dyn_sizes = self.input_data.size_placeholder.copy()
+    if keep_dims:
+      for i in axis:
+        y_shape[i] = 1
+        if i in y_dyn_sizes:
+          y_dyn_sizes[i] = 1
+    else:
+      for i in reversed(sorted(axis)):
+        del y_shape[i]
+        if i in y_dyn_sizes:
+          del y_dyn_sizes[i]
+        y_dyn_sizes = {(j if (j < i) else (j - 1)): s
+                       for (j, s) in list(y_dyn_sizes.items())}
+    self.output = Data(
+      name="%s_output" % self.name,
+      shape=tuple(y_shape[1:]),
+      dtype=self.input_data.dtype,
+      sparse=False)
+    self.output.placeholder = y
+    self.output.size_placeholder = y_dyn_sizes
 
 
 class RecLayer(_ConcatInputLayer):
