@@ -527,6 +527,7 @@ class SoftmaxLayer(LinearLayer):
 
 class ConvLayer(_ConcatInputLayer):
   layer_class = "conv"
+  recurrent = True  # we must not allow any shuffling in the time-dim or so
 
   def __init__(self, n_out, filter_size, padding, strides=1,
                input_expand_dims=0, input_add_feature_dim=False,
@@ -750,23 +751,48 @@ class FsaLayer(LayerBase):
 class CombineLayer(LayerBase):
   layer_class = "combine"
 
-  # All ops require the same input shape and yield the same output shape. (For now)
-  @classmethod
-  def _op_kind_average(cls, sources):
+  def _check_same_dense_dim(self, sources):
+    """
+    :param list[LayerBase] sources:
+    """
+    assert not self.output.sparse
+    for source in sources:
+      assert not source.output.sparse
+      assert source.output.dim == self.output.dim
+
+  # Requires the same input shape and yield the same output shape.
+  def _op_kind_add(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
+    self._check_same_dense_dim(sources)
+    from TFUtil import swapaxes
     x = sources[0].output.placeholder
+    batch_axis = sources[0].output.batch_dim_axis
     for source in sources[1:]:
-      x += source.output.placeholder
+      x2 = source.output.placeholder
+      if source.output.batch_dim_axis != batch_axis:
+        x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
+      x += x2
+    return x
+
+  # Requires the same input shape and yield the same output shape.
+  def _op_kind_average(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    x = self._op_kind_add(sources)
     x /= len(sources)
     return x
 
-  def __init__(self, kind, sources, **kwargs):
+  def __init__(self, kind, sources, activation=None, with_bias=False, **kwargs):
     """
-    :param str kind:
+    :param str kind: e.g. "average"
     :param list[LayerBase] sources:
+    :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
+    :param bool with_bias: if given , will add a bias
     """
     assert sources
     kwargs = kwargs.copy()
@@ -774,13 +800,22 @@ class CombineLayer(LayerBase):
       kwargs["out_type"] = sources[0].output.get_kwargs()
       kwargs["out_type"]["name"] = "%s_output" % kwargs["name"]
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
-    assert not self.output.sparse
-    for source in sources:
-      assert source.output.shape == self.output.shape
-      assert source.output.batch_dim_axis == self.output.batch_dim_axis
-      assert source.output.time_dim_axis == self.output.time_dim_axis
     op = getattr(self, "_op_kind_%s" % kind)
-    self.output.placeholder = op(sources)
+    x = op(sources)
+    if with_bias:
+      b = self.add_param(tf.Variable(
+        name="b",
+        initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+          shape=(self.output.dim,))))
+      x += b
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(x)
+    x = self.output_before_activation.y
+    self.output.placeholder = x
 
 
 class FramewiseStatisticsLayer(LayerBase):
