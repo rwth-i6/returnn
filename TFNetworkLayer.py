@@ -552,7 +552,7 @@ class ConvLayer(_ConcatInputLayer):
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
-               input_expand_dims=0, input_add_feature_dim=False,
+               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                with_bias=False,
                activation=None,
                **kwargs):
@@ -562,15 +562,20 @@ class ConvLayer(_ConcatInputLayer):
       the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
       it will automatically swap the batch-dim to the first axis of the input data.
     :param str padding: "same" or "valid"
-    :param int|tuple[int] strides: strides for the conv-dims,
+    :param int|tuple[int] strides: strides for the spatial dims,
       i.e. length of this tuple should be the same as filter_size, or a single int.
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
-      and use the original input feature-dim as a conv-dim.
+      and use the original input feature-dim as a spatial dim.
+    :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
+      which is of value input_split_feature_dim, and the original input feature dim
+      will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+    :param bool with_bias: if True, will add a bias to the output features
+    :param None|str activation: if set, will apply this function at the end
     """
+    from TFUtil import check_input_dim, get_shape
     padding = padding.upper()
     assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
-    from TFUtil import check_input_dim
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
     assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
     out_type = {
@@ -600,10 +605,17 @@ class ConvLayer(_ConcatInputLayer):
     static_axes = self.input_data.get_non_dynamic_axes()  # feature-dims
     assert dyn_axes + static_axes == list(range(self.input_data.ndim)), (
       "we expect the static dims at the end. input data is: %r" % self.input_data.get_description())
+    if input_split_feature_dim:
+      # Split the last two dimensions.
+      assert self.input_data.dim % input_split_feature_dim == 0, "must be a multiple of the input feature dim"
+      x = tf.reshape(
+        x, get_shape(x)[:-1] + [self.input_data.dim // input_split_feature_dim, input_split_feature_dim])
+      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
+      input_num_features = input_split_feature_dim
     if input_add_feature_dim:
       # Add a dimension at the very end; any other static dims will be used as dynamic dims below.
-      x = tf.expand_dims(x, axis=self.input_data.batch_ndim, name="input_use_feature_dim")
-      static_axes += [self.input_data.ndim]
+      x = tf.expand_dims(x, axis=x.get_shape().ndims, name="input_use_feature_dim")
+      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
       input_num_features = 1
     if len(static_axes) > 1:
       # Just treat them as dynamic axes, except the last.
