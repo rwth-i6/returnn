@@ -237,6 +237,8 @@ class LayerBase(object):
     :param tf.Tensor gamma: 
     :param tf.Tensor beta: 
     :rtype: tf.Tensor
+    
+    http://arxiv.org/abs/1502.03167
     """
     with tf.name_scope("batch_norm"):
       x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
@@ -399,6 +401,19 @@ class CopyLayer(_ConcatInputLayer):
     self.output = self.input_data
 
 
+class BatchNormLayer(CopyLayer):
+  layer_class = "batch_norm"
+
+  def __init__(self, **kwargs):
+    kwargs = kwargs.copy()
+    import inspect
+    batch_norm_kwargs = inspect.getargspec(self.batch_norm).args[1:]  # first is self, ignore
+    batch_norm_opts = {key: kwargs.pop(key)
+                       for key in batch_norm_kwargs
+                       if key in kwargs}
+    super(BatchNormLayer, self).__init__(use_batch_norm=batch_norm_opts or True, **kwargs)
+
+
 class SliceLayer(_ConcatInputLayer):
   layer_class = "slice"
 
@@ -531,6 +546,8 @@ class ConvLayer(_ConcatInputLayer):
 
   def __init__(self, n_out, filter_size, padding, strides=1,
                input_expand_dims=0, input_add_feature_dim=False,
+               with_bias=False,
+               activation=None,
                **kwargs):
     """
     :param int n_out: number of outgoing features
@@ -544,6 +561,8 @@ class ConvLayer(_ConcatInputLayer):
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a conv-dim.
     """
+    padding = padding.upper()
+    assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     from TFUtil import check_input_dim
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
     assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
@@ -599,8 +618,32 @@ class ConvLayer(_ConcatInputLayer):
       y = tf.nn.conv3d(x, filter=filters, strides=[1] + strides + [1], padding=padding)
     else:
       assert False
-    # Output shape is [batch] + dynamic_dims + [n_out].
+    # y shape is [batch] + dynamic_dims + [n_out].
+    if with_bias:
+      b = self.add_param(tf.Variable(
+        name="bias",
+        initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+          shape=(n_out,))))
+      y += b
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(y, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(y)
+    y = self.output_before_activation.y
     self.output.placeholder = y
+    self.output.size_placeholder = {
+      i: self.input_data.size_placeholder[i]
+      for i in dyn_axes
+      if i in self.input_data.size_placeholder}
+    if padding == "SAME":
+      pass
+    elif padding == "VALID":
+      for i, s in list(self.output.size_placeholder.items()):
+        self.output.size_placeholder[i] = s - filter_size[i] + 1
+    else:
+      assert False
 
 
 class RecLayer(_ConcatInputLayer):
