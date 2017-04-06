@@ -256,7 +256,8 @@ class Data(object):
   def get_dynamic_batch_axes(self):
     """
     :rtype: list[int]
-    :return: list of axes which have dynamic shape, such as time and batch, and maybe others 
+    :return: list of axes which have dynamic shape, such as time and batch, and maybe others.
+      such other dynamic axes are currently defined as such where self.batch_shape[i] is None.
     """
     return [axis
             for axis, dim in enumerate(self.batch_shape)
@@ -283,7 +284,7 @@ class Data(object):
             if axis not in dyn_axes]
 
   @property
-  def non_dynamic_shape(self):
+  def non_dynamic_batch_shape(self):
     """
     :return: shape which will broadcast along all dynamic dimensions and time/batch dim
     :rtype: tuple[int]
