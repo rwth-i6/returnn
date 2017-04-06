@@ -59,7 +59,7 @@ public:
             for(int s=0; s < N * S; ++s)
             {
                 score_(s,t) = fwd_(s,t) = INF;
-                bt_(s,t) = -1;
+                bt_(s,t) = min_skip;
             }
 
         for(int t=0; t < T; ++t)
@@ -103,7 +103,10 @@ public:
                 //cerr << s << " " << t << " " << min_score << " " << min_index << endl;
 
                 if(min_score == INF)
+                {
                   fwd_(s, t + M - 1) = INF;
+                  bt_(s, t + M - 1) = cur_min_skip;
+                }
                 else
                 {
                   fwd_(s, t + M - 1) = min_score + score;
@@ -115,11 +118,11 @@ public:
         int t = T - 1;
         for(int s=N*S-2;s>=-1;--s)
         {
-            int next = t - bt_(s+1, t+M-1);
+            int next = t - bt_(s+1, t + M - 1);
             //cout << s+1 << ": " << t << " -> " << next << " (" << T << "," << N << ")" << endl;
             if(next > t)
             {
-                cout << "warning: backward trace detected " << s+1 << " " << t << " -> " << next << endl;
+                cout << "warning: backward trace detected at " << s+1 << ": " << t << " -> " << next << endl;
             }
             if(next == t)
             {
