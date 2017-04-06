@@ -525,6 +525,83 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
+class ConvLayer(_ConcatInputLayer):
+  layer_class = "conv"
+
+  def __init__(self, n_out, filter_size, padding, strides=1,
+               input_expand_dims=0, input_add_feature_dim=False,
+               **kwargs):
+    """
+    :param int n_out: number of outgoing features
+    :param tuple[int] filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
+      the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
+      it will automatically swap the batch-dim to the first axis of the input data.
+    :param str padding: "SAME" or "VALID"
+    :param int|tuple[int] strides: strides for the conv-dims,
+      i.e. length of this tuple should be the same as filter_size, or a single int.
+    :param int input_expand_dims: number of dynamic dims to add to the input
+    :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
+      and use the original input feature-dim as a conv-dim.
+    """
+    from TFUtil import check_input_dim
+    assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
+    assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
+    out_type = {"dim": n_out, "batch_dim_axis": 0, "shape": [None] * len(filter_size) + [n_out]}
+    super(ConvLayer, self).__init__(out_type=out_type, **kwargs)
+    if isinstance(strides, int):
+      strides = [strides] * len(filter_size)
+    else:
+      strides = list(strides)
+    assert len(strides) == len(filter_size)
+    assert not self.input_data.sparse
+    # We want to prepare the input data such that the batch-dim is the very first,
+    # the feature-dim is the very last, and all in between are where we convolve over.
+    # In the common terminology, this is the "NHWC" format, which is the default for TF convolution.
+    x = self.input_data.get_placeholder_as_batch_major()
+    x = check_input_dim(x, -1, self.input_data.dim)
+    input_num_features = self.input_data.dim
+    dyn_axes = self.input_data.get_dynamic_axes()  # conv-dims
+    static_axes = self.input_data.get_non_dynamic_axes()  # feature-dims
+    assert dyn_axes + static_axes == list(range(self.input_data.ndim)), (
+      "we expect the static dims at the end. input data is: %r" % self.input_data.get_description())
+    assert len(static_axes) > 0
+    if input_add_feature_dim:
+      # Add a dimension at the very end; any other static dims will be used as dynamic dims below.
+      x = tf.expand_dims(x, axis=self.input_data.batch_ndim, name="input_use_feature_dim")
+      static_axes += [self.input_data.ndim]
+      input_num_features = 1
+    if len(static_axes) > 1:
+      # Just treat them as dynamic axes, except the last.
+      dyn_axes += static_axes[:-1]
+      del static_axes[:-1]
+    assert len(static_axes) == 1, "this should be our single input feature dim now"
+    while input_expand_dims:
+      x = tf.expand_dims(x, axis=len(dyn_axes) + 1, name="input_expand_dims")  # axis including batch-dim
+      dyn_axes += [len(dyn_axes)]
+      static_axes = [axis + 1 for axis in static_axes]
+      input_expand_dims -= 1
+    assert dyn_axes == list(range(len(filter_size))), (
+      "filter-size-dimension does not match the input data. "
+      "consider using input_expand_dims or input_use_feature_dim. "
+      "input data shape is: %r" % self.input_data.get_description())
+    filter_shape = list(filter_size) + [input_num_features, n_out]
+    filters = self.add_param(
+      tf.Variable(
+        name="W",
+        initial_value=tf.contrib.layers.xavier_initializer(seed=self.network.random.randint(2**31))(
+          shape=filter_shape)))
+    if len(filter_size) == 1:
+      y = tf.nn.conv1d(x, filters=filters, stride=strides[0], padding=padding)
+    elif len(filter_size) == 2:
+      y = tf.nn.conv2d(x, filter=filters, strides=[1] + strides + [1], padding=padding)
+    elif len(filter_size) == 3:
+      y = tf.nn.conv3d(x, filter=filters, strides=[1] + strides + [1], padding=padding)
+    else:
+      assert False
+    # Output shape is [batch] + dynamic_dims + [n_out].
+    self.output.placeholder = y
+
+
 class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
   recurrent = True

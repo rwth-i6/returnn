@@ -150,6 +150,22 @@ class Data(object):
     return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
 
   @property
+  def ndim(self):
+    """
+    :rtype: int
+    :return: ndim counted without batch-dim
+    """
+    return len(self.shape)
+
+  @property
+  def batch_ndim(self):
+    """
+    :rtype: int
+    :return: ndim counted with batch-dim
+    """
+    return self.ndim + 1
+
+  @property
   def is_time_major(self):
     """
     :return: whether this is in time-major format, i.e. (time,batch,...)
@@ -169,6 +185,11 @@ class Data(object):
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
     return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+
+  def get_placeholder_as_batch_major(self):
+    if self.batch_dim_axis == 0:
+      return self.placeholder
+    return swapaxes(self.placeholder, 0, self.batch_dim_axis)  # (time,batch,dim)
 
   def get_placeholder_time_flattened(self):
     assert self.have_tim_axis()
@@ -240,6 +261,26 @@ class Data(object):
     return [axis
             for axis, dim in enumerate(self.batch_shape)
             if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis])]
+
+  def get_dynamic_axes(self):
+    """
+    :rtype: list[int]
+    :return: like self.get_dynamic_batch_axes() but counted without batch-dim
+    """
+    return [self.get_batch_axis_excluding_batch(axis)
+            for axis in self.get_dynamic_batch_axes()
+            if not axis == self.batch_dim_axis]
+
+  def get_non_dynamic_axes(self):
+    """
+    :rtype: list[int]
+    :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
+    """
+    all_axes = self.get_axes(exclude_batch=True)
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [self.get_batch_axis_excluding_batch(axis)
+            for axis in all_axes
+            if axis not in dyn_axes]
 
   @property
   def non_dynamic_shape(self):
