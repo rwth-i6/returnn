@@ -1220,12 +1220,24 @@ class OpCodeCompiler(object):
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
+    import time
     if self._should_cleanup_old_mydir:
       if os.path.exists(self._mod_path):
         self._cleanup_old_path(self._mod_path, reason="need recompile")
     if not os.path.exists(self._mod_path):
       print("OpCompiler create dir: %s" % self._mod_path)
-      os.makedirs(self._mod_path)
+      try:
+        os.makedirs(self._mod_path)
+      except OSError as exc:
+        print("OpCompiler create dir exception: %s" % exc)
+        # Just continue, might be created by another process in the meantime.
+        # However, to reduce the probability of conflicts, wait a bit and recheck if we need to recompile.
+        print("OpCompiler: waiting 5 secs...")
+        time.sleep(5)
+        if not self._need_recompile():
+          print("OpCompiler: don't need to recompile anymore")
+          return
+        print("OpCompiler: still need to recompile...")
     with open(self._cc_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2", "-std=c++11"]
