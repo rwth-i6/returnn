@@ -54,6 +54,8 @@ class LayerBase(object):
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
+    if sources:
+      out_type.setdefault("shape", sources[0].output.shape[:-1] + (out_type.get("dim", sources[0].output.dim),))
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
@@ -764,7 +766,7 @@ class ReduceLayer(_ConcatInputLayer):
     :param str mode: "sum" or "max" 
     :param int|list[int]|str axis: one axis or multiple axis to reduce.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
-      it also accepts the special tokens "B"|"batch", "spatial" or "F"|"feature"
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
@@ -786,6 +788,11 @@ class ReduceLayer(_ConcatInputLayer):
         axis = 0
       elif axis == "spatial":
         axis = self.input_data.get_dynamic_batch_axes()
+        axis.remove(self.input_data.batch_dim_axis)
+      elif axis == "spatial_except_time":
+        axis = self.input_data.get_dynamic_batch_axes()
+        axis.remove(self.input_data.batch_dim_axis)
+        axis.remove(self.input_data.time_dim_axis)
       elif axis in ["f", "feature"]:
         axis = self.input_data.get_non_dynamic_axes()
       else:
@@ -793,6 +800,7 @@ class ReduceLayer(_ConcatInputLayer):
     if isinstance(axis, int):
       axis = [axis]
     assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
+    assert len(axis) > 0, "no axis to reduce. input_data: %s" % (self.input_data,)
     axis = [i % self.input_data.batch_ndim for i in axis]
     if mode == "max":
       f = tf.reduce_max
@@ -1169,11 +1177,27 @@ class Loss(object):
       self.output_before_softmax_flat = None
       if output_with_activation:
         assert output_with_activation.y is output.placeholder
-      if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
-      else:
-        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+      if self.output.have_tim_axis():
+        time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
+        assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
+        if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
+          self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+        else:
+          self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+      self._check_init()
+
+  def _check_init(self):
+    """
+    Does some checks on self.target and self.output, e.g. if the dense shapes matches.
+    You can overwrite this if those checks don't make sense for your derived loss class.
+    """
+    assert self.target.ndim_dense == self.output.ndim_dense, (
+      "Number of dimensions missmatch. Target: %s, output: %s" % (self.target, self.output))
+    expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
+    assert expected_output_dim == self.output.dim, (
+      "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
+      "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
     """
@@ -1181,6 +1205,7 @@ class Loss(object):
     :rtype: tf.Tensor
     """
     with tf.name_scope("loss_frame_error"):
+      assert self.output.ndim_dense == self.target.ndim_dense
       from TFUtil import check_input_ndim, check_shape_equal
       output_flat = self.output_before_softmax_flat
       if output_flat is None:
@@ -1217,6 +1242,7 @@ class CrossEntropyLoss(Loss):
 
   def get_value(self):
     with tf.name_scope("loss_ce"):
+      assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)

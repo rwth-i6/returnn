@@ -136,6 +136,10 @@ class Data(object):
     if self.sparse:
       keys.append("sparse")
       keys.append("dim")
+    if self.batch_dim_axis != 0:
+      keys.append("batch_dim_axis")
+    if self.time_dim_axis is None or self.time_dim_axis >= 2:
+      keys.append("time_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
@@ -160,6 +164,16 @@ class Data(object):
     :return: ndim counted without batch-dim
     """
     return len(self.shape)
+
+  @property
+  def ndim_dense(self):
+    """
+    :rtype: int
+    :return: ndim counted without batch-dim, added by 1 if we are sparse
+    """
+    if self.sparse:
+      return self.ndim + 1
+    return self.ndim
 
   @property
   def batch_ndim(self):
@@ -197,6 +211,8 @@ class Data(object):
 
   def get_placeholder_time_flattened(self):
     assert self.have_tim_axis()
+    # flatten_with_seq_len_mask only works for these two cases at the moment:
+    assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
     return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
 
@@ -205,20 +221,27 @@ class Data(object):
     :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
     :rtype: tf.Tensor
     :return: placeholder where all dynamic axes are flattened into a single axis.
-      e.g. for the usual case (batch, time, dim), it becomes (time', dim).
+      e.g. for the usual case (batch, time, dim), it becomes (time', dim),
+      or (batch, time, height, dim) will also become (time', dim).
+      with keep_dims, (batch, time, height, dim) will become (time', 1, 1, dim).
     """
     x = self.placeholder
     dyn_axes = self.get_dynamic_batch_axes()
-    num_dyn_axes = len(dyn_axes)
-    assert num_dyn_axes >= 1, "no dynamic axis, flattening does not make sense"
-    if num_dyn_axes == 1:
+    if not dyn_axes:
       return x
+    assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
+    if len(dyn_axes) == 1:
+      return x
+    orig_num_dyn_axes = len(dyn_axes)
     ndim = len(self.batch_shape)
     if self.have_tim_axis():
       x = self.get_placeholder_time_flattened()
-      dyn_axes.remove(1)
+      removed_axis = max(self.time_dim_axis, self.batch_dim_axis)
+      dyn_axes.remove(removed_axis)
+      dyn_axes = [(i if (i < removed_axis) else (i - 1))
+                  for i in dyn_axes]
       ndim -= 1
-    if dyn_axes:
+    if len(dyn_axes) > 1:
       assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
       for i in dyn_axes:
         if i > 0:
@@ -228,8 +251,10 @@ class Data(object):
         x,
         [tf.reduce_prod([shape[i] for i in dyn_axes])] +
         [shape[i] for i in range(ndim) if i not in dyn_axes])
-    if keep_dims and num_dyn_axes >= 2:
-      for i in range(num_dyn_axes - 1):
+      dyn_axes = [0]
+    assert dyn_axes == [0]
+    if keep_dims and orig_num_dyn_axes >= 2:
+      for i in range(orig_num_dyn_axes - 1):
         x = tf.expand_dims(x, axis=1)
     return x
 
