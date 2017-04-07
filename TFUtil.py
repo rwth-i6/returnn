@@ -59,7 +59,7 @@ class Data(object):
         shape = (None,)  # assume common (time,)
       else:
         shape = (None, dim)  # assume common (time,feat)
-    self.shape = shape  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
