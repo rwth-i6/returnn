@@ -313,6 +313,9 @@ def _at_exit_handler():
   if not isExited:
     print("SprintInterface[pid %i] atexit handler, exit() was not called, calling it now" % (os.getpid(),))
     exit()
+    print("All threads:")
+    import Debug
+    Debug.dumpAllThreadTracebacks()
 
 
 def initBase(configfile=None, targetMode=None, epoch=None):
