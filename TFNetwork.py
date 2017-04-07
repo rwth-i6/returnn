@@ -48,7 +48,7 @@ class ExternData(object):
 
   def register_data(self, data):
     """
-    :param ExternData.Data data:
+    :param Data data: will use data.name as the key
     """
     assert data.name not in self.data
     self.data[data.name] = data
@@ -92,7 +92,7 @@ class ExternData(object):
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False):
     """
-    :param Config.Config config: only needed to init extern_data if not specified explicitely
+    :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
@@ -304,6 +304,18 @@ class TFNetwork(object):
     if len(output_layers) == 1:
       return output_layers[1]
     return None  # no sensible default
+
+  def get_default_output_layer(self, must_exist=True):
+    """
+    :param bool must_exist: if it does not exist, will raise an exception
+    :rtype: LayerBase|None
+    :return: the default output layer
+    """
+    name = self.get_default_output_layer_name()
+    if not name:
+      assert not must_exist, "default output layer does not exist"
+      return None
+    return self.layers[name]
 
   def get_params_list(self):
     """

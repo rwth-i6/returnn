@@ -1049,6 +1049,43 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
 
+class SubnetworkLayer(LayerBase):
+  """
+  You can define a whole subnetwork as a single layer by this class.
+  """
+
+  layer_class = "subnetwork"
+  recurrent = True  # we don't know. depends on the subnetwork.
+
+  def __init__(self, subnetwork, concat_sources=True, **kwargs):
+    """
+    :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
+    :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
+    """
+    # Dummy out_type for now, will overwrite layer.
+    super(SubnetworkLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    from TFNetwork import TFNetwork, ExternData
+    sub_extern_data = ExternData()
+    if concat_sources:
+      sub_extern_data.data[sub_extern_data.default_input] = \
+        concat_sources_with_opt_dropout(self.sources, dropout=kwargs.get("dropout", 0))
+    else:
+      assert not kwargs.get("dropout", 0), "not supported without concat_sources"
+      for source in self.sources:
+        assert isinstance(source, LayerBase)
+        sub_extern_data.data[source.name] = source.output
+    net = TFNetwork(
+      rnd_seed=self.network.random.randint(2**31),
+      train_flag=self.network.train_flag,
+      extern_data=sub_extern_data)
+    net.construct_from_dict(subnetwork)
+    self.subnetwork = net
+    self.output = net.get_default_output_layer().output
+    for layer in net.layers.values():
+      assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
+      self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params})
+
+
 class FramewiseStatisticsLayer(LayerBase):
   layer_class = "framewise_statistics"
 
