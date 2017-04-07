@@ -493,6 +493,7 @@ def forward(segmentName, features):
   :return numpy.ndarray, format (output-dim,time)
   """
   print("Sprint forward", segmentName, features.shape)
+  start_time = time.time()
   assert engine is not None, "not initialized"
   assert sprintDataset
 
@@ -535,7 +536,7 @@ def forward(segmentName, features):
   posteriors = posteriors.transpose()
   assert posteriors.shape == (OutputDim, T)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
-  print("posteriors min/max/mean/std:", stats)
+  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print("posteriors:", posteriors)
     debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
