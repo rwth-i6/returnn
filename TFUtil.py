@@ -132,14 +132,18 @@ class Data(object):
     return self._get_var_len_axes() == other._get_var_len_axes()
 
   def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype", "sparse"]
+    keys = ["shape", "dtype"]
     if self.sparse:
+      keys.append("sparse")
       keys.append("dim")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  def __repr__(self):
+    return self.get_description()
 
   @property
   def batch_shape(self):
