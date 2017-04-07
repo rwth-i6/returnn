@@ -1083,7 +1083,7 @@ class SubnetworkLayer(LayerBase):
     self.output = net.get_default_output_layer().output
     for layer in net.layers.values():
       assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
-      self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params})
+      self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
 
 
 class FramewiseStatisticsLayer(LayerBase):
