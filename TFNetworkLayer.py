@@ -655,9 +655,10 @@ class ConvLayer(_ConcatInputLayer):
       static_axes = [axis + 1 for axis in static_axes]
       input_expand_dims -= 1
     assert dyn_axes == list(range(len(filter_size))), (
-      "filter-size-dimension does not match the input data. "
-      "consider using input_expand_dims or input_use_feature_dim. "
-      "input data shape is: %r" % self.input_data.get_description())
+      "filter-size-dimension does not match the input data. " +
+      "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
+        len(filter_size), len(dyn_axes), self.input_data.get_description()) +
+      "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_num_features, n_out]
     filters = self.add_param(
       tf.Variable(
