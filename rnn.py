@@ -277,8 +277,14 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def crnnGreeting():
+def crnnGreeting(configFilename=None, commandLineOptions=None):
   print("CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid()), file=log.v3)
+  if configFilename:
+    print("CRNN config: %s" % configFilename, file=log.v4)
+    if os.path.islink(configFilename):
+      print("CRNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
+  if commandLineOptions is not None:
+    print("CRNN command line options: %s" % (commandLineOptions,), file=log.v4)
 
 
 def initBackendEngine():
@@ -298,7 +304,7 @@ def init(configFilename=None, commandLineOptions=()):
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initLog()
-  crnnGreeting()
+  crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
