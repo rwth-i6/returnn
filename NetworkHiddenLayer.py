@@ -40,13 +40,15 @@ class HiddenLayer(Layer):
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
-  def get_linear_forward_output(self, with_bias=True):
+  def get_linear_forward_output(self, with_bias=True, sources=None):
     if with_bias:
       z = self.b
     else:
       z = 0
-    assert len(self.sources) == len(self.masks) == len(self.W_in)
-    for s, m, W_in in zip(self.sources, self.masks, self.W_in):
+    if sources is None:
+      sources = self.sources
+    assert len(sources) == len(self.masks) == len(self.W_in)
+    for s, m, W_in in zip(sources, self.masks, self.W_in):
       if s.attrs['sparse']:
         if s.output.ndim == 3: out_dim = s.output.shape[2]
         elif s.output.ndim == 2: out_dim = 1
@@ -215,16 +217,20 @@ class WindowLayer(_NoOpLayer):
 class WindowContextLayer(_NoOpLayer):
   layer_class = "window_context"
 
-  def __init__(self, window, average='uniform', p=None, **kwargs):
+  def __init__(self, window, average='uniform', scan=False, n_out=None, **kwargs):
     super(WindowContextLayer, self).__init__(**kwargs)
-    source, n_out = concat_sources(self.sources, unsparse=False)
-    if p is None:
-      p = 1. - 1. / window
+    source, n_in = concat_sources(self.sources, unsparse=False)
+    if n_out is not None:
+      b = self.create_bias(n_out)
+      W = self.create_forward_weights(n_in,n_out)
+      source = b + T.dot(source, W)
+    else:
+      n_out = n_in
+
     self.set_attr('n_out', n_out)
     self.set_attr('window', window)
     self.set_attr('average', average)
-    from TheanoUtil import context_batched
-    out = context_batched(source, window=window)
+
     if average == 'exponential':
       weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
     elif average == 'uniform':
@@ -232,9 +238,18 @@ class WindowContextLayer(_NoOpLayer):
     else:
       assert False, "invalid averaging method: " + str(average)
 
-    windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
-    out = T.dot(windows, weights)
-    self.make_output(out)
+    if scan:
+      inp = T.concatenate([T.zeros((window - 1, source.shape[1], source.shape[2]), 'float32'), source], axis=0)
+      def wnd(x, i, inp, weights):
+        return T.dot(inp[i:i + window].dimshuffle(1, 2, 0), weights), i
+      mapped_out, _ = theano.map(wnd, sequences=[source, T.arange(source.shape[0])], non_sequences=[inp, weights])
+      self.make_output(mapped_out[0])
+    else:
+      from TheanoUtil import context_batched
+      tiled_out = context_batched(source, window=window)
+      windows = tiled_out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
+      out = T.dot(windows, weights)
+      self.make_output(out)
 
 
 class DownsampleLayer(_NoOpLayer):
@@ -2928,7 +2943,7 @@ class CAlignmentLayer(ForwardLayer):
     if self.train_flag or search == 'align':
       from theano.tensor.extra_ops import cpu_contiguous
       from Inv import InvOp
-      self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, coverage, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
+      self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
       self.attention = theano.gradient.disconnected_grad(self.attention) # NBT
       self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
         (self.index.shape[0] * nstates, self.index.shape[1]))
@@ -2964,8 +2979,23 @@ class CAlignmentLayer(ForwardLayer):
       norm = T.sum(rindex) / T.sum(self.sources[0].index,dtype='float32')
       self.index = rindex = self.sources[0].index
     else:
-      x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
-      z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+      #if mode == 'viterbi':
+      #  ap = self.attention.argmax(axis=2) # NB
+
+      #  ap = self.attention.dimshuffle(2,1,0)
+      #  ap = T.argmax(ap.reshape((ap.shape[0]*ap.shape[1],ap.shape[2]))
+      #  x_out = x_in.reshape((x_in.shape[0]*x_in.shape[1],x_in.shape[2]))[(self.attention.dimshuffle(2,1,0).flatten()>0).nonzero()]
+      x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1)  # NBD
+
+      #x_out = x_in[:self.attention.shape[0]] #T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
+      #z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+
+      #z_out = self.b
+      #for src, W in zip(self.sources,self.W_in):
+      #  z_out += T.dot(T.batched_dot(src.output.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1),W)
+      #src = T.sum([ T.batched_dot(s.output.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) for s in self.sources ])
+      #z_out = self.get_linear_forward_output(sources=src)
+      z_out = self.b + T.dot(x_out,T.concatenate(self.W_in,axis=0))
 
     if reduce_output:
       self.output = z_out if output_z else x_out
