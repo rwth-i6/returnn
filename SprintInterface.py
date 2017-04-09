@@ -39,6 +39,7 @@ DefaultSprintCrnnConfig = "config/crnn.config"
 startTime = None
 isInitialized = False
 isTrainThreadStarted = False
+isExited = False
 InputDim = None
 OutputDim = None
 TargetMode = None
@@ -180,15 +181,20 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
 
 
 def exit():
-  print("Python train exit()")
+  print("SprintInterface[pid %i] exit()" % (os.getpid(),))
   assert isInitialized
+  global isExited
+  if isExited:
+    print("SprintInterface[pid %i] exit called multiple times" % (os.getpid(),))
+    return
+  isExited = True
   if isTrainThreadStarted:
     engine.stop_train_after_epoch_request = True
     sprintDataset.finishSprintEpoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
     sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
     trainThread.join()
   rnn.finalize()
-  print("elapsed total time: %f" % (time.time() - startTime), file=log.v3)
+  print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
 
 
 def feedInput(features, weights=None, segmentName=None):
@@ -303,6 +309,15 @@ def setTargetMode(mode):
   config.set("task", task)
 
 
+def _at_exit_handler():
+  if not isExited:
+    print("SprintInterface[pid %i] atexit handler, exit() was not called, calling it now" % (os.getpid(),))
+    exit()
+    print("All threads:")
+    import Debug
+    Debug.dumpAllThreadTracebacks()
+
+
 def initBase(configfile=None, targetMode=None, epoch=None):
   """
   :type configfile: str | None
@@ -326,11 +341,11 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.initConfig(configfile, [])
+    rnn.initConfig(configFilename=configfile)
     config = rnn.config
 
     rnn.initLog()
-    rnn.crnnGreeting()
+    rnn.crnnGreeting(configFilename=configfile)
     rnn.initBackendEngine()
     rnn.initFaulthandler(sigusr1_chain=True)
     rnn.initConfigJsonNetwork()
@@ -340,6 +355,9 @@ def initBase(configfile=None, targetMode=None, epoch=None):
       import TFEngine
       global Engine
       Engine = TFEngine.Engine
+
+    import atexit
+    atexit.register(_at_exit_handler)
 
   if targetMode:
     setTargetMode(targetMode)
@@ -493,6 +511,7 @@ def forward(segmentName, features):
   :return numpy.ndarray, format (output-dim,time)
   """
   print("Sprint forward", segmentName, features.shape)
+  start_time = time.time()
   assert engine is not None, "not initialized"
   assert sprintDataset
 
@@ -535,7 +554,7 @@ def forward(segmentName, features):
   posteriors = posteriors.transpose()
   assert posteriors.shape == (OutputDim, T)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
-  print("posteriors min/max/mean/std:", stats)
+  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print("posteriors:", posteriors)
     debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()

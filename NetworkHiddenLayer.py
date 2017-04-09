@@ -520,6 +520,7 @@ class SubnetworkLayer(_NoOpLayer):
     :param list[str] data_map: maps the sources (from) of the layer to data input.
       the list should be as long as the sources.
       default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
     :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
     :param bool trainable: if we take over all params from the subnetwork
     """

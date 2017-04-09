@@ -49,9 +49,13 @@ class LayerBase(object):
       out_type = {"dim": n_out}
     out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % self.name)
+    if sources:
+      out_type.setdefault("dtype", sources[0].output.dtype)
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
+    if sources:
+      out_type.setdefault("shape", sources[0].output.shape[:-1] + (out_type.get("dim", sources[0].output.dim),))
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
@@ -237,6 +241,8 @@ class LayerBase(object):
     :param tf.Tensor gamma: 
     :param tf.Tensor beta: 
     :rtype: tf.Tensor
+    
+    http://arxiv.org/abs/1502.03167
     """
     with tf.name_scope("batch_norm"):
       x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
@@ -244,7 +250,7 @@ class LayerBase(object):
       std = tf.sqrt(tf.reduce_mean((x - mean) ** 2, axis=0, keep_dims=True))
       if sample_mean is None:
         sample_mean = self.add_param(tf.Variable(
-          initial_value=tf.zeros(data.non_dynamic_shape),
+          initial_value=tf.zeros(data.non_dynamic_batch_shape),
           name="%s_%s_mean" % (self.name, data.name),
           trainable=False))
         # Use exponential moving average of batch mean.
@@ -253,7 +259,7 @@ class LayerBase(object):
       if sample_std is None:
         # Note: Our Theano implementation does not use a moving average for this.
         sample_std = self.add_param(tf.Variable(
-          initial_value=tf.ones(data.non_dynamic_shape),
+          initial_value=tf.ones(data.non_dynamic_batch_shape),
           name="%s_%s_std" % (self.name, data.name),
           trainable=False))
         sample_std = tf.assign_add(sample_std, (std - sample_std) * momentum)
@@ -267,14 +273,14 @@ class LayerBase(object):
       if use_std:
         if gamma is None:
           gamma = self.add_param(tf.Variable(
-            initial_value=tf.ones(data.non_dynamic_shape),
+            initial_value=tf.ones(data.non_dynamic_batch_shape),
             name="%s_%s_gamma" % (self.name, data.name),
             trainable=True))
         bn *= gamma
       if use_shift:
         if beta is None:
           beta = self.add_param(tf.Variable(
-            initial_value=tf.zeros(data.non_dynamic_shape),
+            initial_value=tf.zeros(data.non_dynamic_batch_shape),
             name="%s_%s_beta" % (self.name, data.name),
             trainable=True))
         bn += beta
@@ -367,7 +373,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
       keep_prob=1 - dropout,
       # noise_shape is like old behavior for now:
       # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
-      noise_shape=data.non_dynamic_shape,
+      noise_shape=data.non_dynamic_batch_shape,
       seed=network.random.randint(2 ** 31))
   fn_eval = lambda: data.placeholder
   data.placeholder = network.cond_on_train(fn_train, fn_eval)
@@ -391,12 +397,52 @@ class _ConcatInputLayer(LayerBase):
 
 
 class CopyLayer(_ConcatInputLayer):
+  """
+  This layer does nothing, it copies its input.
+  If multiple sources are provided, they are concatenated in the feature-dim.
+  """
+
   layer_class = "copy"
 
   def __init__(self, **kwargs):
     # Dummy out_type for now, will reset layer.
     super(CopyLayer, self).__init__(out_type={"shape": ()}, **kwargs)
     self.output = self.input_data
+
+
+class ActivationLayer(CopyLayer):
+  """
+  This layer just applies an activation function.
+  """
+
+  layer_class = "activation"
+
+  def __init__(self, activation, **kwargs):
+    """
+    :param str activation: e.g. "relu", "tanh", etc
+    """
+    super(ActivationLayer, self).__init__(**kwargs)
+    x = self.input_data.placeholder
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(x)
+    self.output.placeholder = self.output_before_activation.y
+
+
+class BatchNormLayer(CopyLayer):
+  layer_class = "batch_norm"
+
+  def __init__(self, **kwargs):
+    kwargs = kwargs.copy()
+    import inspect
+    batch_norm_kwargs = inspect.getargspec(self.batch_norm).args[1:]  # first is self, ignore
+    batch_norm_opts = {key: kwargs.pop(key)
+                       for key in batch_norm_kwargs
+                       if key in kwargs}
+    super(BatchNormLayer, self).__init__(use_batch_norm=batch_norm_opts or True, **kwargs)
 
 
 class SliceLayer(_ConcatInputLayer):
@@ -526,34 +572,57 @@ class SoftmaxLayer(LinearLayer):
 
 
 class ConvLayer(_ConcatInputLayer):
+  """
+  A generic convolution layer which supports 1D, 2D and 3D convolution.
+  Pooling can be done in the separate "pool" layer.
+  """
+
   layer_class = "conv"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-  def __init__(self, n_out, filter_size, padding, strides=1,
-               input_expand_dims=0, input_add_feature_dim=False,
+  def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
+               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+               with_bias=False,
+               activation=None,
                **kwargs):
     """
     :param int n_out: number of outgoing features
     :param tuple[int] filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
       the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
       it will automatically swap the batch-dim to the first axis of the input data.
-    :param str padding: "SAME" or "VALID"
-    :param int|tuple[int] strides: strides for the conv-dims,
+    :param str padding: "same" or "valid"
+    :param int|tuple[int] strides: strides for the spatial dims,
       i.e. length of this tuple should be the same as filter_size, or a single int.
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
-      and use the original input feature-dim as a conv-dim.
+      and use the original input feature-dim as a spatial dim.
+    :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
+      which is of value input_split_feature_dim, and the original input feature dim
+      will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+    :param bool with_bias: if True, will add a bias to the output features
+    :param None|str activation: if set, will apply this function at the end
     """
-    from TFUtil import check_input_dim
+    from TFUtil import check_input_dim, get_shape
+    padding = padding.upper()
+    assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
     assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
-    out_type = {"dim": n_out, "batch_dim_axis": 0, "shape": [None] * len(filter_size) + [n_out]}
+    out_type = {
+      "dim": n_out,
+      "shape": [None] * len(filter_size) + [n_out],
+      "batch_dim_axis": 0,
+      "sparse": False}
     super(ConvLayer, self).__init__(out_type=out_type, **kwargs)
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
       strides = list(strides)
     assert len(strides) == len(filter_size)
+    if isinstance(dilation_rate, int):
+      dilation_rate = [dilation_rate] * len(filter_size)
+    else:
+      dilation_rate = list(dilation_rate)
+    assert len(dilation_rate) == len(filter_size)
     assert not self.input_data.sparse
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
@@ -561,46 +630,208 @@ class ConvLayer(_ConcatInputLayer):
     x = self.input_data.get_placeholder_as_batch_major()
     x = check_input_dim(x, -1, self.input_data.dim)
     input_num_features = self.input_data.dim
-    dyn_axes = self.input_data.get_dynamic_axes()  # conv-dims
+    dyn_axes = self.input_data.get_dynamic_axes()  # conv-dims, or also called spatial dims
     static_axes = self.input_data.get_non_dynamic_axes()  # feature-dims
     assert dyn_axes + static_axes == list(range(self.input_data.ndim)), (
       "we expect the static dims at the end. input data is: %r" % self.input_data.get_description())
-    assert len(static_axes) > 0
+    if input_split_feature_dim:
+      # Split the last two dimensions.
+      assert self.input_data.dim % input_split_feature_dim == 0, "must be a multiple of the input feature dim"
+      x = tf.reshape(
+        x, get_shape(x)[:-1] + [self.input_data.dim // input_split_feature_dim, input_split_feature_dim])
+      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
+      input_num_features = input_split_feature_dim
     if input_add_feature_dim:
       # Add a dimension at the very end; any other static dims will be used as dynamic dims below.
-      x = tf.expand_dims(x, axis=self.input_data.batch_ndim, name="input_use_feature_dim")
-      static_axes += [self.input_data.ndim]
+      x = tf.expand_dims(x, axis=x.get_shape().ndims, name="input_use_feature_dim")
+      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
       input_num_features = 1
     if len(static_axes) > 1:
       # Just treat them as dynamic axes, except the last.
       dyn_axes += static_axes[:-1]
       del static_axes[:-1]
-    assert len(static_axes) == 1, "this should be our single input feature dim now"
+    assert len(static_axes) == 1, "this should be our single input feature dim now. otherwise use input_add_feature_dim"
     while input_expand_dims:
       x = tf.expand_dims(x, axis=len(dyn_axes) + 1, name="input_expand_dims")  # axis including batch-dim
       dyn_axes += [len(dyn_axes)]
       static_axes = [axis + 1 for axis in static_axes]
       input_expand_dims -= 1
     assert dyn_axes == list(range(len(filter_size))), (
-      "filter-size-dimension does not match the input data. "
-      "consider using input_expand_dims or input_use_feature_dim. "
-      "input data shape is: %r" % self.input_data.get_description())
+      "filter-size-dimension does not match the input data. " +
+      "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
+        len(filter_size), len(dyn_axes), self.input_data.get_description()) +
+      "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_num_features, n_out]
     filters = self.add_param(
       tf.Variable(
         name="W",
         initial_value=tf.contrib.layers.xavier_initializer(seed=self.network.random.randint(2**31))(
           shape=filter_shape)))
-    if len(filter_size) == 1:
-      y = tf.nn.conv1d(x, filters=filters, stride=strides[0], padding=padding)
-    elif len(filter_size) == 2:
-      y = tf.nn.conv2d(x, filter=filters, strides=[1] + strides + [1], padding=padding)
-    elif len(filter_size) == 3:
-      y = tf.nn.conv3d(x, filter=filters, strides=[1] + strides + [1], padding=padding)
+    y = tf.nn.convolution(x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate)
+    # y shape is [batch] + dynamic_dims + [n_out].
+    if with_bias:
+      b = self.add_param(tf.Variable(
+        name="bias",
+        initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+          shape=(n_out,))))
+      y += b
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(y, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(y)
+    y = self.output_before_activation.y
+    self.output.placeholder = y
+    self.output.size_placeholder = {
+      i: (self.input_data.size_placeholder[i] if i in self.input_data.size_placeholder else tf.shape(y)[i + 1])
+      for i in dyn_axes}
+    if padding == "SAME":
+      pass
+    elif padding == "VALID":
+      for i, s in list(self.output.size_placeholder.items()):
+        self.output.size_placeholder[i] = s - filter_size[i] + 1
     else:
       assert False
-    # Output shape is [batch] + dynamic_dims + [n_out].
+
+
+class PoolLayer(_ConcatInputLayer):
+  """
+  A generic N-D pooling layer.
+  This would usually be done after a convolution for down-sampling.
+  """
+
+  layer_class = "pool"
+  recurrent = True  # we should not shuffle in the time-dimension
+
+  def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None, **kwargs):
+    """
+    :param str mode: "max" or "avg"
+    :param tuple[int] pool_size: shape of the window of each reduce
+    :param str padding: "valid" or "same"
+    :param tuple[int]|int dilation_rate:
+    :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+    """
+    assert "n_out" not in kwargs
+    assert "out_type" not in kwargs
+    from TFUtil import check_input_dim
+    mode = mode.upper()
+    assert mode in ["MAX", "AVG"]
+    padding = padding.upper()
+    assert padding in ["VALID", "SAME"]
+    if isinstance(dilation_rate, int):
+      dilation_rate = [dilation_rate] * len(pool_size)
+    assert len(dilation_rate) == len(pool_size)
+    if strides is None:
+      strides = pool_size
+    elif isinstance(strides, int):
+      strides = [strides] * len(pool_size)
+    assert len(strides) == len(pool_size)
+    # Dummy out_type for now, will reset layer.
+    super(PoolLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    # We want to prepare the input data such that the batch-dim is the very first,
+    # the feature-dim is the very last, and all in between are where we convolve over.
+    # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
+    x = self.input_data.get_placeholder_as_batch_major()
+    x = check_input_dim(x, -1, self.input_data.dim)
+    y = tf.nn.pool(
+      x, window_shape=pool_size, pooling_type=mode, padding=padding,
+      dilation_rate=dilation_rate, strides=strides)
+    # y shape is [batch] + spatial_dims + [n_out].
+    self.output = Data(
+      name="%s_output" % self.name,
+      shape=(None,) * len(pool_size) + (self.input_data.dim,),
+      dim=self.input_data.dim,
+      dtype=self.input_data.dtype,
+      sparse=False,
+      batch_dim_axis=0)
     self.output.placeholder = y
+    self.output.size_placeholder = {
+      i: (self.input_data.size_placeholder[i] if i in self.input_data.size_placeholder else tf.shape(y)[i + 1])
+      for i in range(len(pool_size))}
+    if padding == "SAME":
+      pass
+    elif padding == "VALID":
+      for i, s in list(self.output.size_placeholder.items()):
+        self.output.size_placeholder[i] = s - pool_size[i] + 1
+    else:
+      assert False
+
+
+class ReduceLayer(_ConcatInputLayer):
+  layer_class = "reduce"
+
+  def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
+    """
+    :param str mode: "sum" or "max" 
+    :param int|list[int]|str axis: one axis or multiple axis to reduce.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param bool keep_dims: if dimensions should be kept (will be 1)
+    :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+      e.g. 0: will convert the input into batch-major format if not already like that.
+    """
+    from TFUtil import swapaxes
+    assert "n_out" not in kwargs
+    assert "out_type" not in kwargs
+    mode = mode.lower()
+    assert mode in ["max", "sum", "avg", "mean"]
+    # Dummy out_type for now, will reset layer.
+    super(ReduceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    assert not self.input_data.sparse
+    x = self.input_data.placeholder
+    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
+      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
+    if isinstance(axis, str):
+      axis = axis.lower()
+      if axis in ["b", "batch"]:
+        axis = 0
+      elif axis == "spatial":
+        axis = self.input_data.get_dynamic_batch_axes()
+        axis.remove(self.input_data.batch_dim_axis)
+      elif axis == "spatial_except_time":
+        axis = self.input_data.get_dynamic_batch_axes()
+        axis.remove(self.input_data.batch_dim_axis)
+        axis.remove(self.input_data.time_dim_axis)
+      elif axis in ["f", "feature"]:
+        axis = self.input_data.get_non_dynamic_axes()
+      else:
+        raise Exception("invalid axis mode %r" % axis)
+    if isinstance(axis, int):
+      axis = [axis]
+    assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
+    assert len(axis) > 0, "no axis to reduce. input_data: %s" % (self.input_data,)
+    axis = [i % self.input_data.batch_ndim for i in axis]
+    if mode == "max":
+      f = tf.reduce_max
+    elif mode == "sum":
+      f = tf.reduce_sum
+    elif mode in ["avg", "mean"]:
+      f = tf.reduce_mean
+    else:
+      assert False
+    y = f(x, axis=axis, keep_dims=keep_dims)
+    y_shape = list(self.input_data.batch_shape)
+    y_dyn_sizes = self.input_data.size_placeholder.copy()
+    if keep_dims:
+      for i in axis:
+        y_shape[i] = 1
+        if i in y_dyn_sizes:
+          y_dyn_sizes[i] = 1
+    else:
+      for i in reversed(sorted(axis)):
+        del y_shape[i]
+        if i in y_dyn_sizes:
+          del y_dyn_sizes[i]
+        y_dyn_sizes = {(j if (j < i) else (j - 1)): s
+                       for (j, s) in list(y_dyn_sizes.items())}
+    self.output = Data(
+      name="%s_output" % self.name,
+      shape=tuple(y_shape[1:]),
+      dtype=self.input_data.dtype,
+      sparse=False)
+    self.output.placeholder = y
+    self.output.size_placeholder = y_dyn_sizes
 
 
 class RecLayer(_ConcatInputLayer):
@@ -818,6 +1049,43 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
 
+class SubnetworkLayer(LayerBase):
+  """
+  You can define a whole subnetwork as a single layer by this class.
+  """
+
+  layer_class = "subnetwork"
+  recurrent = True  # we don't know. depends on the subnetwork.
+
+  def __init__(self, subnetwork, concat_sources=True, **kwargs):
+    """
+    :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
+    :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
+    """
+    # Dummy out_type for now, will overwrite layer.
+    super(SubnetworkLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    from TFNetwork import TFNetwork, ExternData
+    sub_extern_data = ExternData()
+    if concat_sources:
+      sub_extern_data.data[sub_extern_data.default_input] = \
+        concat_sources_with_opt_dropout(self.sources, dropout=kwargs.get("dropout", 0))
+    else:
+      assert not kwargs.get("dropout", 0), "not supported without concat_sources"
+      for source in self.sources:
+        assert isinstance(source, LayerBase)
+        sub_extern_data.data[source.name] = source.output
+    net = TFNetwork(
+      rnd_seed=self.network.random.randint(2**31),
+      train_flag=self.network.train_flag,
+      extern_data=sub_extern_data)
+    net.construct_from_dict(subnetwork)
+    self.subnetwork = net
+    self.output = net.get_default_output_layer().output
+    for layer in net.layers.values():
+      assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
+      self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+
+
 class FramewiseStatisticsLayer(LayerBase):
   layer_class = "framewise_statistics"
 
@@ -946,11 +1214,27 @@ class Loss(object):
       self.output_before_softmax_flat = None
       if output_with_activation:
         assert output_with_activation.y is output.placeholder
-      if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
-        self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
-      else:
-        self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+      if self.output.have_tim_axis():
+        time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
+        assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
+        if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
+          self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+        else:
+          self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+      self._check_init()
+
+  def _check_init(self):
+    """
+    Does some checks on self.target and self.output, e.g. if the dense shapes matches.
+    You can overwrite this if those checks don't make sense for your derived loss class.
+    """
+    assert self.target.ndim_dense == self.output.ndim_dense, (
+      "Number of dimensions missmatch. Target: %s, output: %s" % (self.target, self.output))
+    expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
+    assert expected_output_dim == self.output.dim, (
+      "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
+      "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
     """
@@ -958,6 +1242,7 @@ class Loss(object):
     :rtype: tf.Tensor
     """
     with tf.name_scope("loss_frame_error"):
+      assert self.output.ndim_dense == self.target.ndim_dense
       from TFUtil import check_input_ndim, check_shape_equal
       output_flat = self.output_before_softmax_flat
       if output_flat is None:
@@ -994,6 +1279,7 @@ class CrossEntropyLoss(Loss):
 
   def get_value(self):
     with tf.name_scope("loss_ce"):
+      assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)

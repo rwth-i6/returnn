@@ -59,7 +59,7 @@ class Data(object):
         shape = (None,)  # assume common (time,)
       else:
         shape = (None, dim)  # assume common (time,feat)
-    self.shape = shape  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -132,14 +132,22 @@ class Data(object):
     return self._get_var_len_axes() == other._get_var_len_axes()
 
   def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype", "sparse"]
+    keys = ["shape", "dtype"]
     if self.sparse:
+      keys.append("sparse")
       keys.append("dim")
+    if self.batch_dim_axis != 0:
+      keys.append("batch_dim_axis")
+    if self.time_dim_axis is None or self.time_dim_axis >= 2:
+      keys.append("time_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  def __repr__(self):
+    return self.get_description()
 
   @property
   def batch_shape(self):
@@ -156,6 +164,16 @@ class Data(object):
     :return: ndim counted without batch-dim
     """
     return len(self.shape)
+
+  @property
+  def ndim_dense(self):
+    """
+    :rtype: int
+    :return: ndim counted without batch-dim, added by 1 if we are sparse
+    """
+    if self.sparse:
+      return self.ndim + 1
+    return self.ndim
 
   @property
   def batch_ndim(self):
@@ -193,6 +211,8 @@ class Data(object):
 
   def get_placeholder_time_flattened(self):
     assert self.have_tim_axis()
+    # flatten_with_seq_len_mask only works for these two cases at the moment:
+    assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
     return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
 
@@ -201,20 +221,27 @@ class Data(object):
     :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
     :rtype: tf.Tensor
     :return: placeholder where all dynamic axes are flattened into a single axis.
-      e.g. for the usual case (batch, time, dim), it becomes (time', dim).
+      e.g. for the usual case (batch, time, dim), it becomes (time', dim),
+      or (batch, time, height, dim) will also become (time', dim).
+      with keep_dims, (batch, time, height, dim) will become (time', 1, 1, dim).
     """
     x = self.placeholder
     dyn_axes = self.get_dynamic_batch_axes()
-    num_dyn_axes = len(dyn_axes)
-    assert num_dyn_axes >= 1, "no dynamic axis, flattening does not make sense"
-    if num_dyn_axes == 1:
+    if not dyn_axes:
       return x
+    assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
+    if len(dyn_axes) == 1:
+      return x
+    orig_num_dyn_axes = len(dyn_axes)
     ndim = len(self.batch_shape)
     if self.have_tim_axis():
       x = self.get_placeholder_time_flattened()
-      dyn_axes.remove(1)
+      removed_axis = max(self.time_dim_axis, self.batch_dim_axis)
+      dyn_axes.remove(removed_axis)
+      dyn_axes = [(i if (i < removed_axis) else (i - 1))
+                  for i in dyn_axes]
       ndim -= 1
-    if dyn_axes:
+    if len(dyn_axes) > 1:
       assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
       for i in dyn_axes:
         if i > 0:
@@ -224,8 +251,10 @@ class Data(object):
         x,
         [tf.reduce_prod([shape[i] for i in dyn_axes])] +
         [shape[i] for i in range(ndim) if i not in dyn_axes])
-    if keep_dims and num_dyn_axes >= 2:
-      for i in range(num_dyn_axes - 1):
+      dyn_axes = [0]
+    assert dyn_axes == [0]
+    if keep_dims and orig_num_dyn_axes >= 2:
+      for i in range(orig_num_dyn_axes - 1):
         x = tf.expand_dims(x, axis=1)
     return x
 
@@ -256,7 +285,8 @@ class Data(object):
   def get_dynamic_batch_axes(self):
     """
     :rtype: list[int]
-    :return: list of axes which have dynamic shape, such as time and batch, and maybe others 
+    :return: list of axes which have dynamic shape, such as time and batch, and maybe others.
+      such other dynamic axes are currently defined as such where self.batch_shape[i] is None.
     """
     return [axis
             for axis, dim in enumerate(self.batch_shape)
@@ -283,7 +313,7 @@ class Data(object):
             if axis not in dyn_axes]
 
   @property
-  def non_dynamic_shape(self):
+  def non_dynamic_batch_shape(self):
     """
     :return: shape which will broadcast along all dynamic dimensions and time/batch dim
     :rtype: tuple[int]
@@ -1190,12 +1220,24 @@ class OpCodeCompiler(object):
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
+    import time
     if self._should_cleanup_old_mydir:
       if os.path.exists(self._mod_path):
         self._cleanup_old_path(self._mod_path, reason="need recompile")
     if not os.path.exists(self._mod_path):
       print("OpCompiler create dir: %s" % self._mod_path)
-      os.makedirs(self._mod_path)
+      try:
+        os.makedirs(self._mod_path)
+      except OSError as exc:
+        print("OpCompiler create dir exception: %s" % exc)
+        # Just continue, might be created by another process in the meantime.
+        # However, to reduce the probability of conflicts, wait a bit and recheck if we need to recompile.
+        print("OpCompiler: waiting 5 secs...")
+        time.sleep(5)
+        if not self._need_recompile():
+          print("OpCompiler: don't need to recompile anymore")
+          return
+        print("OpCompiler: still need to recompile...")
     with open(self._cc_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2", "-std=c++11"]

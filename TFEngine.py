@@ -485,6 +485,7 @@ class Engine(object):
     self.devices_config = self._get_devices_config()
     self._check_devices()
     self.tf_session = None  # type: tf.Session
+    self.network = None  # type: TFNetwork
     self.updater = None  # type: Updater
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
@@ -495,6 +496,10 @@ class Engine(object):
 
   def finalize(self):
     self._close_tf_session()
+    tf.reset_default_graph()
+    self.network = None
+    self.updater = None
+    self._merge_all_summaries = None
 
   def _get_devices_config(self):
     """
