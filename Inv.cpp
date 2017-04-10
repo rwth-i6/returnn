@@ -140,7 +140,7 @@ public:
                 if(labellings((s+1) / S) == nil)
                 {
                   for(int i=t;i>next;--i)
-                    attention(s+1,i) = 1.; // /((float)(t-next));
+                    attention(s+1,i) = 1. /((float)(t-next));
                 }
                 else if(coverage > 0)
                 {
