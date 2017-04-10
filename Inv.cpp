@@ -10,6 +10,7 @@
 #define COVERAGE_CONSTANT 3
 #define COVERAGE_DENSE 4
 
+#define DEBUG 0
 #define VERBOSE 1
 #define AUTO_INCREASE_SKIP 1
 
@@ -139,7 +140,7 @@ public:
                 if(labellings((s+1) / S) == nil)
                 {
                   for(int i=t;i>next;--i)
-                    attention(s+1,i) = 1./((float)(t-next));
+                    attention(s+1,i) = 1.; // /((float)(t-next));
                 }
                 else if(coverage > 0)
                 {
@@ -187,19 +188,22 @@ public:
             t = next;
         }
 
-        for(int s=N*S-2;s>=-1;--s)
+        if(DEBUG)
         {
-            float sum = 0;
-            for(int t=0;t<T;++t)
-            {
-                sum += attention(s+1,t);
-                if(sum>1)
-                {
-                    cout << "warning: multiple alignment points on single frame at " << s << " " << t << endl;
-                    throw std::out_of_range("alignment error");
-                    break;
-                }
-            }
+          for(int s=N*S-2;s>=-1;--s)
+          {
+              float sum = 0;
+              for(int t=0;t<T;++t)
+              {
+                  sum += attention(s+1,t);
+                  if(sum>1)
+                  {
+                      cout << "warning: multiple alignment points on single frame at " << s << " " << t << endl;
+                      throw std::out_of_range("alignment error");
+                      break;
+                  }
+              }
+          }
         }
     }
 

@@ -222,8 +222,8 @@ class WindowContextLayer(_NoOpLayer):
     source, n_in = concat_sources(self.sources, unsparse=False)
     if n_out is not None:
       b = self.create_bias(n_out)
-      W = self.create_forward_weights(n_in,n_out)
-      source = b + T.dot(source, W)
+      W = self.create_random_normal_weights(n_in, n_out)
+      source = T.tanh(b + T.dot(source, W))
     else:
       n_out = n_in
 
