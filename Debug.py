@@ -40,12 +40,24 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       # http://bugs.python.org/issue17094
       # Note that this leaves out all threads not created via the threading module.
       if tid not in threads: continue
-      print("Thread %s:" % threads.get(tid, "unnamed with id %i" % tid))
+      tags = []
+      thread = threads.get(tid)
+      if thread:
+        assert isinstance(thread, threading.Thread)
+        if thread is threading.currentThread():
+          tags += ["current"]
+        if isinstance(thread, threading._MainThread):
+          tags += ["main"]
+        tags += [str(thread)]
+      else:
+        tags += ["unknown with id %i" % tid]
+      print("Thread %s:" % ", ".join(tags))
       if tid in global_exclude_thread_ids:
         print("(Auto-ignored traceback.)")
       else:
-        better_exchook.print_tb(stack)
+        better_exchook.print_tb(stack, file=sys.stdout)
       print("")
+    print("That were all threads.")
   else:
     print("Does not have sys._current_frames, cannot get thread tracebacks.")
 
