@@ -245,19 +245,20 @@ class TFNetwork(object):
       self.total_objective = self.total_loss + self.total_constraints
       tf.summary.scalar("objective", self.total_objective)
 
-  def get_all_losses(self):
+  def maybe_construct_objective(self):
     if self.total_objective is None:
       self.construct_objective()
+
+  def get_all_losses(self):
+    self.maybe_construct_objective()
     return self.loss_by_layer
 
   def get_all_errors(self):
-    if self.total_objective is None:
-      self.construct_objective()
+    self.maybe_construct_objective()
     return self.error_by_layer
 
   def get_objective(self):
-    if self.total_objective is None:
-      self.construct_objective()
+    self.maybe_construct_objective()
     return self.total_objective
 
   def get_used_targets(self):

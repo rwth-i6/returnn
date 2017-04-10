@@ -1086,6 +1086,32 @@ class SubnetworkLayer(LayerBase):
       assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
 
+  def get_constraints_value(self):
+    self.subnetwork.maybe_construct_objective()
+    v = self.subnetwork.total_constraints
+    if v is 0:
+      return None
+    return v
+
+  def get_loss_value(self):
+    self.subnetwork.maybe_construct_objective()
+    v = self.subnetwork.total_loss
+    if v is 0:
+      return None
+    return v
+
+  def get_error_value(self):
+    self.subnetwork.maybe_construct_objective()
+    errors = self.subnetwork.get_all_errors()
+    if not errors:
+      return None
+    if len(errors) == 1:
+      return list(errors.values())[0]
+    name = self.subnetwork.get_default_output_layer_name()
+    if name in errors:
+      return errors[name]
+    return sorted(errors.items())[0][1]  # first alphabetically
+
 
 class FramewiseStatisticsLayer(LayerBase):
   layer_class = "framewise_statistics"

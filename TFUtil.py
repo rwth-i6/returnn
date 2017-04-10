@@ -366,19 +366,16 @@ def variable_summaries(var, name):
     tf.summary.scalar('%s_stddev' % name, stddev)
     tf.summary.scalar('%s_max' % name, tf.reduce_max(var))
     tf.summary.scalar('%s_min' % name, tf.reduce_min(var))
-    tf.histogram_summary('%s_histogram' % name, var)
+    tf.summary.histogram('%s_histogram' % name, var)
 
 
-def get_current_name_scope(graph=None):
+def get_current_name_scope():
   """
-  :param tf.Graph|None graph:
   :return: current name scope
   :rtype: str
   """
-  if graph is None:
-    graph = tf.get_default_graph()
-  assert isinstance(graph, tf.Graph)
-  return graph._name_stack
+  v = tf.get_variable_scope()
+  return v.name
 
 
 @contextlib.contextmanager
@@ -389,16 +386,15 @@ def reuse_name_scope(name):
   http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
   """
   assert name
-  g = tf.get_default_graph()
-  assert isinstance(g, tf.Graph)
-  current_name_scope = get_current_name_scope(g)
+  current_name_scope = get_current_name_scope()
   if current_name_scope:
     name = current_name_scope + "/" + name
   if name[-1] != "/":
     name += "/"
   # Actually, tf.variable_scope doesn't fully support the absolute name-scope with ending "/"
   # but it uses tf.name_scope internally which uses this syntax.
-  with tf.variable_scope(name) as scope:
+  dummy_var_scope = tf.VariableScope(reuse=False, name=name)
+  with tf.variable_scope(dummy_var_scope) as scope:
     assert isinstance(scope, tf.VariableScope)
     # remove "/" from the end of the var-scope.
     # This is a work-around to fix up the variable scope behavior for nested variable scopes.
@@ -406,6 +402,7 @@ def reuse_name_scope(name):
     assert scope.name is scope._name
     assert scope.name[-1] == "/"
     scope._name = scope._name[:-1]
+    assert name == scope.name + "/", "%r" % current_name_scope
     yield scope
 
 
