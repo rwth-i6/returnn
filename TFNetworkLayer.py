@@ -226,7 +226,7 @@ class LayerBase(object):
   def batch_norm(self, data,
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
                  momentum=0.99, epsilon=1e-3,
-                 sample_mean=None, sample_std=None,
+                 sample_mean=None, sample_variance=None,
                  gamma=None, beta=None):
     """
     :param Data data: 
@@ -237,17 +237,20 @@ class LayerBase(object):
     :param float momentum: for the running average of sample_mean and sample_std
     :param float epsilon:
     :param tf.Tensor sample_mean:
-    :param tf.Tensor sample_std:
+    :param tf.Tensor sample_variance:
     :param tf.Tensor gamma: 
     :param tf.Tensor beta: 
     :rtype: tf.Tensor
     
     http://arxiv.org/abs/1502.03167
+    
+    Also see:
+      tf.nn.batch_normalization()
+      https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
     with tf.name_scope("batch_norm"):
       x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
-      mean = tf.reduce_mean(x, axis=0, keep_dims=True)
-      std = tf.sqrt(tf.reduce_mean((x - mean) ** 2, axis=0, keep_dims=True))
+      mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
       if sample_mean is None:
         sample_mean = self.add_param(tf.Variable(
           initial_value=tf.zeros(data.non_dynamic_batch_shape),
@@ -256,20 +259,18 @@ class LayerBase(object):
         # Use exponential moving average of batch mean.
         # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
         sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
-      if sample_std is None:
+      if sample_variance is None:
         # Note: Our Theano implementation does not use a moving average for this.
-        sample_std = self.add_param(tf.Variable(
+        sample_variance = self.add_param(tf.Variable(
           initial_value=tf.ones(data.non_dynamic_batch_shape),
-          name="%s_%s_std" % (self.name, data.name),
+          name="%s_%s_variance" % (self.name, data.name),
           trainable=False))
-        sample_std = tf.assign_add(sample_std, (std - sample_std) * momentum)
+        sample_variance = tf.assign_add(sample_variance, (variance - sample_variance) * momentum)
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       use_sample = 1.0 + tf.cast(tf.logical_or(self.network.train_flag, force_sample), tf.float32) * (use_sample - 1.0)
       mean = (1. - use_sample) * mean + use_sample * sample_mean
-      std = (1. - use_sample) * std + use_sample * sample_std
-      mean = tf.stop_gradient(mean)
-      std = tf.stop_gradient(std)
-      bn = (data.placeholder - mean) / (std + epsilon)
+      variance = (1. - use_sample) * variance + use_sample * sample_variance
+      bn = (data.placeholder - mean) * tf.rsqrt(variance + epsilon)
       if use_std:
         if gamma is None:
           gamma = self.add_param(tf.Variable(
@@ -324,10 +325,10 @@ def concat_sources(src_layers):
   dtype = src_layers[0].output.dtype
   batch_dim_axis = src_layers[0].output.batch_dim_axis
   time_dim_axis = src_layers[0].output.time_dim_axis
+  time_dim_axis_excluding_batch = src_layers[0].output.time_dim_axis_excluding_batch
   for layer in src_layers:
     assert layer.output.dtype == dtype, "incompatible dtype with layer %r" % layer
-    assert layer.output.batch_dim_axis == batch_dim_axis
-    assert layer.output.time_dim_axis == time_dim_axis
+    assert layer.output.time_dim_axis_excluding_batch == time_dim_axis_excluding_batch
     shape = layer.output.shape
     assert layer.output.placeholder.get_shape().ndims == len(shape) + 1  # with batch-dim
     assert shape, "source must not be a scalar of layer %r" % layer
@@ -344,7 +345,7 @@ def concat_sources(src_layers):
     dtype=dtype)
   data.placeholder = tf.concat(
     axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
-    values=[layer.output.placeholder for layer in src_layers])
+    values=[layer.output.get_placeholder_with_specific_batch_dim_axis(batch_dim_axis) for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
   return data
