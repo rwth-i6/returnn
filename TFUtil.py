@@ -209,6 +209,11 @@ class Data(object):
       return self.placeholder
     return swapaxes(self.placeholder, 0, self.batch_dim_axis)  # (time,batch,dim)
 
+  def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
+    if self.batch_dim_axis == batch_dim_axis:
+      return self.placeholder
+    return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
+
   def get_placeholder_time_flattened(self):
     assert self.have_tim_axis()
     # flatten_with_seq_len_mask only works for these two cases at the moment:

@@ -324,10 +324,10 @@ def concat_sources(src_layers):
   dtype = src_layers[0].output.dtype
   batch_dim_axis = src_layers[0].output.batch_dim_axis
   time_dim_axis = src_layers[0].output.time_dim_axis
+  time_dim_axis_excluding_batch = src_layers[0].output.time_dim_axis_excluding_batch
   for layer in src_layers:
     assert layer.output.dtype == dtype, "incompatible dtype with layer %r" % layer
-    assert layer.output.batch_dim_axis == batch_dim_axis
-    assert layer.output.time_dim_axis == time_dim_axis
+    assert layer.output.time_dim_axis_excluding_batch == time_dim_axis_excluding_batch
     shape = layer.output.shape
     assert layer.output.placeholder.get_shape().ndims == len(shape) + 1  # with batch-dim
     assert shape, "source must not be a scalar of layer %r" % layer
@@ -344,7 +344,7 @@ def concat_sources(src_layers):
     dtype=dtype)
   data.placeholder = tf.concat(
     axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
-    values=[layer.output.placeholder for layer in src_layers])
+    values=[layer.output.get_placeholder_with_specific_batch_dim_axis(batch_dim_axis) for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
   return data
