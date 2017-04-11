@@ -3,7 +3,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal
+from nose.tools import assert_equal, assert_is_instance
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -57,3 +57,69 @@ def test_circular_pad():
      [[8], [6], [7], [8], [6]],
      [[2], [0], [1], [2], [0]]])
   numpy.testing.assert_equal(y.eval(), y_ref)
+
+
+def test_reuse_name_scope_double():
+  with reuse_name_scope("double"):
+    assert_equal(tf.get_default_graph()._name_stack, "double")
+    with reuse_name_scope("sub"):
+      assert_equal(tf.get_default_graph()._name_stack, "double/sub")
+      assert_equal(get_current_name_scope(), "double/sub")
+
+
+def test_reuse_name_scope_mix1():
+  with reuse_name_scope("mix1"):
+    assert_equal(tf.get_default_graph()._name_stack, "mix1")
+    with tf.name_scope("sub"):
+      assert_equal(tf.get_default_graph()._name_stack, "mix1/sub")
+      # The following is not true because get_current_name_scope is only var-scope:
+      # assert_equal(get_current_name_scope(), "mix1/sub")
+
+
+def test_reuse_name_scope_mix2():
+  with tf.name_scope("mix2"):
+    with reuse_name_scope("sub"):
+      assert_equal(tf.get_default_graph()._name_stack, "mix2/sub")
+      # The following is not true because get_current_name_scope is only var-scope:
+      # assert_equal(get_current_name_scope(), "mix2/sub")
+
+
+def test_reuse_name_scope_mix3():
+  with reuse_name_scope("mix3"):
+    with tf.variable_scope("sub"):
+      assert_equal(get_current_name_scope(), "mix3/sub")
+
+
+def test_reuse_name_scope_mix4():
+  with tf.variable_scope("mix4"):
+    with reuse_name_scope("sub"):
+      assert_equal(get_current_name_scope(), "mix4/sub")
+
+
+def test_reuse_name_scope_2():
+  with reuse_name_scope("lstm2"):
+    with reuse_name_scope("rec") as scope:
+      assert_is_instance(scope, tf.VariableScope)
+      assert_equal(scope.name, "lstm2/rec")
+      assert_equal(get_current_name_scope(), "lstm2/rec")
+      with tf.name_scope("sub"):
+        assert_equal(get_current_name_scope(), "lstm2/rec/sub")
+
+
+def test_reuse_name_scope():
+  with reuse_name_scope("lstm0"):
+    with tf.variable_scope("rec"):
+      a = tf.get_variable("a", shape=(3, 4))
+      assert_is_instance(a, tf.Variable)
+      assert_equal(a.name, "lstm0/rec/a:0")
+
+      b = tf.Variable(name="b", initial_value=tf.zeros((2,)))
+      assert_equal(b.name, "lstm0/rec/b:0")
+
+  with reuse_name_scope("lstm0"):
+    with reuse_name_scope("rec"):
+      c = tf.Variable(name="c", initial_value=tf.zeros((2,)))
+      assert_equal(c.name, "lstm0/rec/c:0")
+
+      c2 = tf.Variable(name="c", initial_value=tf.zeros((2,)))
+      assert_equal(c2.name, "lstm0/rec/c_1:0")

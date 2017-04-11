@@ -102,7 +102,7 @@ class Data(object):
   def copy(self):
     """
     :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
-    :rtype: Data 
+    :rtype: Data
     """
     data = Data(**self.get_kwargs())
     data.placeholder = self.placeholder
@@ -369,13 +369,26 @@ def variable_summaries(var, name):
     tf.summary.histogram('%s_histogram' % name, var)
 
 
-def get_current_name_scope():
+def get_current_var_scope_name():
   """
-  :return: current name scope
+  :return: current absolute variable scope name, via tf.variable_scope
   :rtype: str
   """
   v = tf.get_variable_scope()
   return v.name
+
+
+def get_current_name_scope():
+  """
+  :return: current absolute name scope, via tf.name_scope
+  :rtype: str
+
+  http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
+
+  Note that this is a private member and might break at some point.
+  Note also that this does not need to be the same as get_current_var_scope_name().
+  """
+  return tf.get_default_graph()._name_stack
 
 
 @contextlib.contextmanager
@@ -383,27 +396,38 @@ def reuse_name_scope(name):
   """
   :param str name: relative name scope
 
-  http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
+  We try to both set the variable scope and the name scope.
   """
   assert name
+  # First figure out the absolute name scope which we want to reuse/set.
+  # The current name scope is more reliable because tf.variable_scope
+  # will always also set the name scope.
   current_name_scope = get_current_name_scope()
   if current_name_scope:
     name = current_name_scope + "/" + name
-  if name[-1] != "/":
-    name += "/"
-  # Actually, tf.variable_scope doesn't fully support the absolute name-scope with ending "/"
-  # but it uses tf.name_scope internally which uses this syntax.
-  dummy_var_scope = tf.VariableScope(reuse=False, name=name)
-  with tf.variable_scope(dummy_var_scope) as scope:
-    assert isinstance(scope, tf.VariableScope)
-    # remove "/" from the end of the var-scope.
-    # This is a work-around to fix up the variable scope behavior for nested variable scopes.
-    # WARNING: This might break at some future point.
-    assert scope.name is scope._name
-    assert scope.name[-1] == "/"
-    scope._name = scope._name[:-1]
-    assert name == scope.name + "/", "%r" % current_name_scope
-    yield scope
+  assert name[-1] != "/"
+  # tf.name_scope with a scope-name ending with "/" will interpret is as absolute name,
+  # and use it as-is.
+  # In all other cases, it would create a new name-scope with a new unique name,
+  # which is not what we want.
+  with tf.name_scope(name + "/"):
+    # tf.name_scope will not set the variable scope.
+    # tf.variable_scope will also set the name scope, but the logic is broken
+    # for absolute name scopes, thus we had to do the tf.name_scope manually above.
+    # We create the dummy_var_scope to force it to reuse that name.
+    # Note that the reuse-argument might be miss-leading in this context:
+    # It means that tf.get_variable() will search for existing variables and errors otherwise.
+    dummy_var_scope = tf.VariableScope(reuse=None, name=name + "/")
+    with tf.variable_scope(dummy_var_scope) as scope:
+      assert isinstance(scope, tf.VariableScope)
+      # remove "/" from the end of the var-scope.
+      # This is a work-around to fix up the variable scope behavior for nested variable scopes.
+      # Warning: This might break at some future point.
+      assert scope.name is scope._name
+      assert scope.name[-1] == "/"
+      scope._name = scope._name[:-1]
+      assert name == scope.name, "%r" % current_name_scope
+      yield scope
 
 
 class FlipGradientBuilder(object):
@@ -568,7 +592,7 @@ def get_shape_dim(x, axis):
 
 def get_shape(x):
   """
-  :param tf.Tensor x: 
+  :param tf.Tensor x:
   :return: list of scalars, which are either int if known statically, or otherwise expressions
   :rtype: list[int|tf.Tensor]
   """
@@ -1439,11 +1463,11 @@ def cond(pred, fn1, fn2, name=None):
 
 def single_strided_slice(x, axis, begin=None, end=None, step=None):
   """
-  :param tf.Tensor x: 
-  :param int|tf.Tensor axis: 
-  :param int|tf.Tensor|None begin: 
-  :param int|tf.Tensor|None end: 
-  :param int|tf.Tensor|None step: 
+  :param tf.Tensor x:
+  :param int|tf.Tensor axis:
+  :param int|tf.Tensor|None begin:
+  :param int|tf.Tensor|None end:
+  :param int|tf.Tensor|None step:
   :return: e.g. if axis == 0, returns x[begin:end:step], if axis == 1, returns x[:, begin:end:step], etc.
   :rtype: tf.Tensor
   """
