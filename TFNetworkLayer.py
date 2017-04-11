@@ -873,6 +873,41 @@ class ReduceLayer(_ConcatInputLayer):
     self.output.size_placeholder = y_dyn_sizes
 
 
+class GetLastHiddenStateLayer(LayerBase):
+  """
+  Will combine (concat or add or so) all the last hidden states from all sources.
+  """
+
+  layer_class = "get_last_hidden_state"
+
+  def __init__(self, n_out, combine="concat", **kwargs):
+    """
+    :param int n_out: dimension. output will be of shape (batch, n_out)
+    :param str combine: "concat" or "add"
+    """
+    super(GetLastHiddenStateLayer, self).__init__(
+      out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
+    assert len(self.sources) > 0
+    sources = [s.get_last_hidden_state() for s in self.sources]
+    assert all([s is not None for s in sources])
+    if len(sources) == 1:
+      h = sources[0]
+    else:
+      if combine == "concat":
+        h = tf.concat(sources, axis=1, name="concat_hidden_states")
+      elif combine == "add":
+        h = tf.add_n(sources, name="add_hidden_states")
+      else:
+        raise Exception("invalid hidden states combine mode %r" % combine)
+    from TFUtil import check_input_ndim, check_input_dim
+    h = check_input_ndim(h, 2)
+    h = check_input_dim(h, 1, n_out)
+    self.output.placeholder = h
+
+  def get_last_hidden_state(self):
+    return self.output.placeholder
+
+
 class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
   recurrent = True
