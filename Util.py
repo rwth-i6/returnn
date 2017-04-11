@@ -198,6 +198,14 @@ def describe_tensorflow_version():
     git_info = "<unknown(git exception: %r)>" % e
   return "%s (%s in %s)" % (version, git_info, tdir)
 
+def get_tensorflow_version_tuple():
+  """
+  :return: tuple of ints, first entry is the major version
+  :rtype: tuple[int]
+  """
+  import tensorflow as tf
+  return tuple([int(s) for s in tf.__version__.split(".")])
+
 def eval_shell_env(token):
   if token.startswith("$"):
     return os.environ.get(token[1:], "")

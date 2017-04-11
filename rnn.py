@@ -29,7 +29,7 @@ from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_cla
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine
+  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 
 
 config = None; """ :type: Config """
@@ -293,6 +293,8 @@ def initBackendEngine():
     print("Theano:", describe_theano_version(), file=log.v3)
   elif BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
+    if get_tensorflow_version_tuple()[0] == 0:
+      print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
     from TFUtil import debugRegisterBetterRepr
     debugRegisterBetterRepr()
   else:
