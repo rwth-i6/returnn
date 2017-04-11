@@ -2970,11 +2970,12 @@ class CAlignmentLayer(ForwardLayer):
     if train_skips:
       y_out = T.dot(self.attention, T.arange(x_in.shape[0],dtype='float32')) # NB
       y_out = T.concatenate([T.zeros_like(y_out[:1]), y_out],axis=0) # (N+1)B
-      y_out = T.round(y_out[1:] - y_out[:-1]) # NB
+      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(self.index,'float32'),'int32') # NB
 
       W_skip = self.add_param(self.create_forward_weights(n_out, max_skip, name="W_skip_%s" % self.name))
       b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
-      z_out = T.dot(x_in, W_skip) + b_skip
+      z_out = T.dot(x_out, W_skip) + b_skip
+      self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
     else:
       y_out = self.y_out
 
@@ -2990,6 +2991,24 @@ class CAlignmentLayer(ForwardLayer):
   def errors(self):
     return self.error_val
 
+class InvBacktrackLayer(_NoOpLayer):
+  layer_class = "ibt"
+
+  def __init__(self, **kwargs):
+    target = kwargs['target'] if 'target' in kwargs else 'classes'
+    kwargs['n_out'] = kwargs['y_in'][target].n_out  # + blank
+    n_cls = kwargs['y_in'][target].n_out
+    super(InvBacktrackLayer, self).__init__(**kwargs)
+    self.index = self.network.j[target]
+    self.cost_scale_val = numpy.float32(1)
+
+    q_in = self.sources[0].q_in
+
+  def cost(self):
+    return self.cost_val * self.cost_scale_val, None
+
+  def errors(self):
+    return self.error_val
 
 class FAlignmentLayer(ForwardLayer):
   layer_class = "falign"
