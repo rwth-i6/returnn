@@ -1,5 +1,7 @@
 
 import tensorflow as tf
+import sys
+sys.path += ["."]  # Python 3 hack
 from TFUtil import *
 from nose.tools import assert_equal
 import numpy.testing
