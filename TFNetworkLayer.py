@@ -432,7 +432,10 @@ class _ConcatInputLayer(LayerBase):
       assert not dropout
     elif mask == "dropout":
       assert dropout > 0
-    self.input_data = concat_sources_with_opt_dropout(self.sources, dropout=dropout)
+    if self.sources:
+      self.input_data = concat_sources_with_opt_dropout(self.sources, dropout=dropout)
+    else:
+      self.input_data = None
 
 
 class CopyLayer(_ConcatInputLayer):
@@ -948,10 +951,29 @@ class RecLayer(_ConcatInputLayer):
       else:
         d["initial_state"] = tf.concat(sources, axis=1, name="concat_hidden_state")
 
+  class OutputFeedback(object):
+    def __init__(self, parent, target=None):
+      """
+      :param RecLayer parent:
+      :param str|None target:
+      """
+      self.parent = parent
+      # TODO: sampling mode, embedding, etc
+
+  class Attention(object):
+    def __init__(self, parent, use_prev_as_input=True):
+      """
+      :param RecLayer parent:
+      :param bool use_prev_as_input: will be concatenated to the cell input
+      """
+      self.parent = parent
+
   def __init__(self,
                unit="lstm",
                bidirectional=False, direction=None, input_projection=True,
                initial_state=None,
+               output_feedback=False,
+               attention=False,
                **kwargs):
     """
     :param str unit: the RNNCell/etc name, e.g. "nativelstm". see comment below
@@ -959,6 +981,8 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param tf.Tensor|None initial_state:
+    :param dict[str]|bool output_feed_back: feedback mode opts, see OutputFeedback
+    :param dict[str]|bool attention: attention opts, see Attention
     :param dict[str] kwargs: passed on to base class
     """
     super(RecLayer, self).__init__(**kwargs)
@@ -966,14 +990,18 @@ class RecLayer(_ConcatInputLayer):
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
-    if unit in ["lstmp", "lstm"]:
-      # Some possible LSTM implementations are:
-      # * BasicLSTM, via official TF, pure TF implementation
-      # * LSTMBlockFused, via tf.contrib.rnn (both CPU and GPU). should be much faster than BasicLSTM
-      # * NativeLSTM, our own native LSTM (both CPU and GPU). should be faster than LSTMBlockFused
+    if unit.lower() in ["lstmp", "lstm"]:
+      # Some possible LSTM implementations are (in all cases for both CPU and GPU):
+      # * BasicLSTM (the cell), via official TF, pure TF implementation
+      # * LSTMBlock (the cell), via tf.contrib.rnn.
+      # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+      # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
       # We default to the fastest one, i.e. NativeLSTM.
       # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
-      unit = "nativelstm"
+      if not output_feedback and not attention:
+        unit = "nativelstm"
+      else:
+        unit = "lstmblock"
     if direction is not None:
       assert not bidirectional
       assert direction in [-1, 1]
@@ -997,12 +1025,15 @@ class RecLayer(_ConcatInputLayer):
         cell_bw = rnn_cell_class(n_hidden)
       else:
         cell_bw = None
-      x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
-      if not self.input_data.is_time_major:
-        assert self.input_data.batch_dim_axis == 0
-        assert self.input_data.time_dim_axis == 1
-        x = swapaxes(x, 0, 1)   # (time,batch,[dim])
-      seq_len = self.input_data.size_placeholder[0]
+      if self.input_data:
+        x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
+        if not self.input_data.is_time_major:
+          assert self.input_data.batch_dim_axis == 0
+          assert self.input_data.time_dim_axis == 1
+          x = swapaxes(x, 0, 1)   # (time,batch,[dim])
+        seq_len = self.input_data.size_placeholder[0]
+      else:
+        x = seq_len = None
       if isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
         assert not self.input_data.sparse
         assert input_projection
@@ -1010,14 +1041,18 @@ class RecLayer(_ConcatInputLayer):
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell_fw, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
+            assert not attention and not output_feedback
             # Will get (time,batch,ydim/2).
             (y_fw, y_bw), final_states = rnn.bidirectional_dynamic_rnn(
               cell_fw=cell_fw, cell_bw=cell_bw,
               inputs=x, time_major=True, sequence_length=seq_len,
               initial_state_fw=initial_state, initial_state_bw=initial_state,
               dtype=tf.float32)
-            y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
+            y = tf.concat(axis=2, values=(y_fw, y_bw))  # (time,batch,ydim)
             self._last_hidden_state = tf.concat(final_states, axis=1)
+          elif attention or output_feedback:
+            # TODO...
+            raise NotImplementedError
           else:
             # Will get (time,batch,ydim).
             y, final_state = rnn.dynamic_rnn(
@@ -1025,6 +1060,7 @@ class RecLayer(_ConcatInputLayer):
               initial_state=initial_state)
             self._last_hidden_state = final_state
         elif isinstance(cell_fw, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
+          assert not attention
           if bidirectional:
             raise NotImplementedError
           # Will get (time,batch,ydim).
@@ -1037,6 +1073,7 @@ class RecLayer(_ConcatInputLayer):
         if direction == -1:
           y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
+        assert not attention
         assert not bidirectional
         if input_projection:
           W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
