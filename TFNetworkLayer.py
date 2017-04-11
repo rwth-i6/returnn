@@ -305,6 +305,26 @@ class LayerBase(object):
         bn += beta
       return bn
 
+  def get_last_hidden_state(self):
+    """
+    If this is a recurrent layer, this would return the last hidden state.
+    If not, as a fallback, we recursively check our sources.
+    :rtype: tf.Tensor | None
+    :return: optional tensor with shape (batch, dim)
+    """
+    # This is the generic fallback code.
+    hidden_states = []
+    for s in self.sources:
+      h = s.get_last_hidden_state()
+      if h is not None:
+        assert h.get_shape().ndims == 2
+        hidden_states += [h]
+    if not hidden_states:
+      return None
+    if len(hidden_states) == 1:
+      return hidden_states[0]
+    return tf.concat(hidden_states, axis=1, name="concat_hidden_states")
+
 
 class SourceLayer(LayerBase):
   layer_class = "source"
@@ -875,12 +895,35 @@ class RecLayer(_ConcatInputLayer):
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
 
-  def __init__(self, unit="lstm", bidirectional=False, direction=None, input_projection=True, **kwargs):
+  @classmethod
+  def transform_config_dict(cls, d, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(RecLayer, cls).transform_config_dict(d, get_layer)
+    initial_state = d.pop("initial_state", None)
+    if initial_state:
+      if not isinstance(initial_state, (list, tuple)):
+        initial_state = [initial_state]
+      assert len(initial_state) > 0
+      sources = [get_layer(s).get_last_hidden_state() for s in initial_state]
+      if len(sources) == 1:
+        d["initial_state"] = sources[0]
+      else:
+        d["initial_state"] = tf.concat(sources, axis=1, name="concat_hidden_state")
+
+  def __init__(self,
+               unit="lstm",
+               bidirectional=False, direction=None, input_projection=True,
+               initial_state=None,
+               **kwargs):
     """
     :param str unit: the RNNCell/etc name, e.g. "nativelstm". see comment below
     :param bool bidirectional: whether we should combine a forward and backward cell
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
+    :param tf.Tensor|None initial_state:
     :param dict[str] kwargs: passed on to base class
     """
     super(RecLayer, self).__init__(**kwargs)
@@ -902,6 +945,7 @@ class RecLayer(_ConcatInputLayer):
     if not self._rnn_cells_dict:
       self._create_rnn_cells_dict()
     rnn_cell_class = self._rnn_cells_dict[unit.lower()]
+    self._last_hidden_state = None
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -932,19 +976,27 @@ class RecLayer(_ConcatInputLayer):
         if isinstance(cell_fw, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
             # Will get (time,batch,ydim/2).
-            (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
+            (y_fw, y_bw), final_states = rnn.bidirectional_dynamic_rnn(
               cell_fw=cell_fw, cell_bw=cell_bw,
               inputs=x, time_major=True, sequence_length=seq_len,
+              initial_state_fw=initial_state, initial_state_bw=initial_state,
               dtype=tf.float32)
             y = tf.concat(2, (y_fw, y_bw))  # (time,batch,ydim)
+            self._last_hidden_state = tf.concat(final_states, axis=1)
           else:
             # Will get (time,batch,ydim).
-            y, _ = rnn.dynamic_rnn(cell=cell_fw, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32)
+            y, final_state = rnn.dynamic_rnn(
+              cell=cell_fw, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
+              initial_state=initial_state)
+            self._last_hidden_state = final_state
         elif isinstance(cell_fw, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
           if bidirectional:
             raise NotImplementedError
           # Will get (time,batch,ydim).
-          y, _ = cell_fw(inputs=x, sequence_length=seq_len, dtype=tf.float32)
+          y, final_state = cell_fw(
+            inputs=x, sequence_length=seq_len, dtype=tf.float32,
+            initial_state=initial_state)
+          self._last_hidden_state = final_state
         else:
           raise Exception("invalid type: %s" % type(cell_fw))
         if direction == -1:
@@ -963,7 +1015,10 @@ class RecLayer(_ConcatInputLayer):
         b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
         x += b
         index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
-        y = cell_fw(inputs=directed(x, direction), index=directed(index, direction))
+        y, final_state = cell_fw(
+          inputs=directed(x, direction), index=directed(index, direction),
+          initial_state=initial_state)
+        self._last_hidden_state = final_state
         y = directed(y, direction)
       else:
         raise Exception("invalid type: %s" % type(cell_fw))
@@ -973,6 +1028,11 @@ class RecLayer(_ConcatInputLayer):
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+
+  def get_last_hidden_state(self):
+    assert self._last_hidden_state is not None, (
+      "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
+    return self._last_hidden_state
 
 
 class FsaLayer(LayerBase):
@@ -1116,6 +1176,12 @@ class SubnetworkLayer(LayerBase):
     if name in errors:
       return errors[name]
     return sorted(errors.items())[0][1]  # first alphabetically
+
+  def get_last_hidden_state(self):
+    h = self.subnetwork.get_default_output_layer().get_last_hidden_state()
+    if h is not None:
+      return h
+    return super(SubnetworkLayer, self).get_last_hidden_state()
 
 
 class FramewiseStatisticsLayer(LayerBase):
