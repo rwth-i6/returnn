@@ -229,21 +229,21 @@ class LayerBase(object):
                  sample_mean=None, sample_variance=None,
                  gamma=None, beta=None):
     """
-    :param Data data: 
-    :param bool use_shift: 
-    :param bool use_std: 
+    :param Data data:
+    :param bool use_shift:
+    :param bool use_std:
     :param float use_sample: defaults to 0.0 which is used in training
     :param bool force_sample: even in eval, use the use_sample factor
     :param float momentum: for the running average of sample_mean and sample_std
     :param float epsilon:
     :param tf.Tensor sample_mean:
     :param tf.Tensor sample_variance:
-    :param tf.Tensor gamma: 
-    :param tf.Tensor beta: 
+    :param tf.Tensor gamma:
+    :param tf.Tensor beta:
     :rtype: tf.Tensor
-    
+
     http://arxiv.org/abs/1502.03167
-    
+
     Also see:
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
@@ -764,7 +764,7 @@ class ReduceLayer(_ConcatInputLayer):
 
   def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
     """
-    :param str mode: "sum" or "max" 
+    :param str mode: "sum" or "max"
     :param int|list[int]|str axis: one axis or multiple axis to reduce.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
@@ -843,23 +843,15 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def _create_rnn_cells_dict(cls):
     import tensorflow.contrib.rnn as rnn_contrib
-    try:
-      RNNCell = rnn_contrib.RNNCell
-      rnn_cell = rnn_contrib
-    except AttributeError:
-      from tensorflow.python.ops import rnn_cell  # TF 0.12
-      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     def maybe_add(key, v):
-      if isinstance(v, type) and issubclass(v, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
+      if isinstance(v, type) and issubclass(v, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
         name = name.lower()
         assert cls._rnn_cells_dict.get(name) in [v, None]
         cls._rnn_cells_dict[name] = v
-    for key, v in vars(rnn_cell).items():
-      maybe_add(key, v)
     for key, v in vars(rnn_contrib).items():
       maybe_add(key, v)
     for key, v in vars(TFNativeOp).items():
@@ -876,11 +868,6 @@ class RecLayer(_ConcatInputLayer):
     super(RecLayer, self).__init__(**kwargs)
     from tensorflow.python.ops import rnn
     import tensorflow.contrib.rnn as rnn_contrib
-    try:
-      RNNCell = rnn_contrib.RNNCell
-    except AttributeError:
-      from tensorflow.python.ops import rnn_cell  # TF 0.12
-      RNNCell = rnn_cell.RNNCell
     import TFNativeOp
     from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
     if unit in ["lstmp", "lstm"]:
@@ -908,7 +895,7 @@ class RecLayer(_ConcatInputLayer):
         assert n_hidden % 2 == 0
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      assert isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
@@ -919,12 +906,12 @@ class RecLayer(_ConcatInputLayer):
         assert self.input_data.time_dim_axis == 1
         x = swapaxes(x, 0, 1)   # (time,batch,[dim])
       seq_len = self.input_data.size_placeholder[0]
-      if isinstance(cell_fw, (RNNCell, rnn_contrib.FusedRNNCell)):
+      if isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
         assert not self.input_data.sparse
         assert input_projection
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        if isinstance(cell_fw, RNNCell):  # e.g. BasicLSTMCell
+        if isinstance(cell_fw, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
             # Will get (time,batch,ydim/2).
             (y_fw, y_bw), _ = rnn.bidirectional_dynamic_rnn(
