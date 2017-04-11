@@ -91,7 +91,7 @@ public:
                 float score = score_(s, t + M - 1);
                 float min_score = INF;
                 int min_index = cur_max_skip;
-                for(int m=t; m < t + cur_max_skip - 1; ++m)
+                for(int m=t + min_skip; m < t + cur_max_skip - 1; ++m)
                 {
                     float prev = fwd_(s - 1, m);
                     if(prev < min_score)
