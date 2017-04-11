@@ -103,6 +103,24 @@ class LayerBase(object):
     """
     return name.replace(":", "__")
 
+  @classmethod
+  def transform_config_dict(cls, d, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+
+    Will modify `d` such that it becomes the kwargs for `self.__init__()`.
+    Mostly leaves `d` as-is.
+    This is used by TFNetwork.construct_from_dict().
+    """
+    src_names = d.pop("from", ["data"])
+    if not isinstance(src_names, (list, tuple)):
+      src_names = [src_names]
+    d["sources"] = [
+      get_layer(src_name)
+      for src_name in src_names
+      if not src_name == "none"]
+
   @property
   def tf_scope_name(self):
     return self.cls_get_tf_scope_name(name=self.name)
@@ -1464,7 +1482,7 @@ def _init_layer_class_dict():
 def get_layer_class(name):
   """
   :param str name: matches layer_class
-  :rtype: () -> LayerBase
+  :rtype: (() -> LayerBase) | LayerBase
   """
   if not _LayerClassDict:
     _init_layer_class_dict()

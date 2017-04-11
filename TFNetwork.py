@@ -161,6 +161,7 @@ class TFNetwork(object):
       """
       :param str name:
       :param dict[str] layer_desc:
+      :rtype: LayerBase
       """
       if name in self.layers:
         return self.layers[name]
@@ -177,13 +178,7 @@ class TFNetwork(object):
       layer_desc = layer_desc.copy()
       class_name = layer_desc.pop("class")
       layer_class = get_layer_class(class_name)
-      src_names = layer_desc.pop("from", ["data"])
-      if not isinstance(src_names, (list, tuple)):
-        src_names = [src_names]
-      layer_desc["sources"] = [
-        _construct_layer(src_name)
-        for src_name in src_names
-        if not src_name == "none"]
+      layer_class.transform_config_dict(layer_desc, _construct_layer)
       return self.add_layer(name=name, layer_class=layer_class, **layer_desc)
 
     for name, layer_desc in sorted(net_dict.items()):
