@@ -9,7 +9,7 @@ class LayerBase(object):
   layer_class = None
   recurrent = False
 
-  def __init__(self, name, network, n_out=None, out_type=None, sources=(),
+  def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, L2=None, is_output_layer=None,
                batch_norm=False,
                spatial_smoothing=0.0,
@@ -17,6 +17,7 @@ class LayerBase(object):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
+    :param Data output:
     :param None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources: via self.transform_config_dict()
@@ -36,16 +37,11 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
-    out_type = self.get_out_type_from_opts(
-      out_type=out_type, n_out=n_out, network=network, name=name, target=target, sources=sources, loss=loss)
-    self.output = Data(**out_type)
-    # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
-    # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
-    # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
-    # We check for this case and preset it by that if possible.
-    # If you want to have it different in your layer, just overwrite it.
-    if sources and sources[0].output.matches_dim_pattern(self.output):
-      self.output.size_placeholder = sources[0].output.size_placeholder.copy()
+    if output:
+      self.output = output
+    else:
+      self.output = self.get_out_data_from_opts(
+        out_type=out_type, n_out=n_out, network=network, name=name, target=target, sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
@@ -68,7 +64,10 @@ class LayerBase(object):
       self.output.placeholder = self.batch_norm(self.output, **opts)
 
   @classmethod
-  def get_out_type_from_opts(cls, out_type, n_out, network, name, target=None, sources=(), loss=None, **kwargs):
+  def get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, sources=(), loss=None,
+                             **kwargs):
+    if loss and not target:
+      target = network.extern_data.default_target
     if out_type is None and n_out is None and target:
       n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
       if loss:
@@ -91,7 +90,15 @@ class LayerBase(object):
     if sources and "batch_dim_axis" not in out_type:
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
-    return out_type
+    output = Data(**out_type)
+    # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
+    # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
+    # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
+    # We check for this case and preset it by that if possible.
+    # If you want to have it different in your layer, just overwrite it.
+    if sources and sources[0].output.matches_dim_pattern(output):
+      output.size_placeholder = sources[0].output.size_placeholder.copy()
+    return output
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -363,9 +370,15 @@ class SourceLayer(LayerBase):
     if data_key is None:
       data_key = network.extern_data.default_input
     assert not sources, "source layer does not expect sources"
-    data = network.get_extern_data(data_key)
-    super(SourceLayer, self).__init__(out_type=data.get_kwargs(), network=network, **kwargs)
+    data = network.get_extern_data(data_key, mark_data_key_as_used=True)
+    super(SourceLayer, self).__init__(network=network, **kwargs)
     self.output = data
+
+  @classmethod
+  def get_out_data_from_opts(cls, network, data_key=None, **kwargs):
+    if data_key is None:
+      data_key = network.extern_data.default_input
+    return network.get_extern_data(data_key, mark_data_key_as_used=False)
 
 
 def concat_sources(src_layers):
@@ -380,37 +393,45 @@ def concat_sources(src_layers):
   network = src_layers[0].network
   if (tuple(src_layers), 0.0) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)].copy()
-  assert not src_layers[0].output.sparse, "sparse concat not supported"
-  shape = src_layers[0].output.shape  # without batch-dim
-  assert shape, "source must not be a scalar of layer %r" % src_layers[0]
-  prefix_shape = shape[:-1]
-  dim = 0
-  dtype = src_layers[0].output.dtype
-  batch_dim_axis = src_layers[0].output.batch_dim_axis
-  time_dim_axis = src_layers[0].output.time_dim_axis
-  time_dim_axis_excluding_batch = src_layers[0].output.time_dim_axis_excluding_batch
+  data = get_concat_sources_data_template(src_layers)
+  prefix_shape = data.shape[:-1]  # without batch-dim
   for layer in src_layers:
-    assert layer.output.dtype == dtype, "incompatible dtype with layer %r" % layer
-    assert layer.output.time_dim_axis_excluding_batch == time_dim_axis_excluding_batch
+    assert not layer.output.sparse, "sparse concat not supported"
+    assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
+    assert layer.output.time_dim_axis_excluding_batch == data.time_dim_axis_excluding_batch
     shape = layer.output.shape
     assert layer.output.placeholder.get_shape().ndims == len(shape) + 1  # with batch-dim
     assert shape, "source must not be a scalar of layer %r" % layer
     assert shape[:-1] == prefix_shape, "incompatible concat with layer %r" % layer
     assert shape[-1], "source last-dim must be specified of layer %r" % layer
+  data.placeholder = tf.concat(
+    axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
+    values=[layer.output.get_placeholder_with_specific_batch_dim_axis(data.batch_dim_axis) for layer in src_layers])
+  data.size_placeholder = src_layers[0].output.size_placeholder.copy()
+  network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
+  return data
+
+
+def get_concat_sources_data_template(src_layers):
+  """
+  :param list[LayerBase] src_layers:
+  :return: data with no placeholders set
+  :rtype: Data
+  """
+  assert src_layers, "need source layers"
+  dim = 0
+  for layer in src_layers:
+    shape = layer.output.shape
+    assert shape[-1], "source last-dim must be specified of layer %r" % layer
     dim += shape[-1]
   data = Data(
     name="concat_sources",
-    shape=prefix_shape + (dim,),
+    shape=src_layers[0].output.shape[:-1] + (dim,),
     dim=dim,
     sparse=False,
-    batch_dim_axis=batch_dim_axis,
-    time_dim_axis=time_dim_axis,
-    dtype=dtype)
-  data.placeholder = tf.concat(
-    axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
-    values=[layer.output.get_placeholder_with_specific_batch_dim_axis(batch_dim_axis) for layer in src_layers])
-  data.size_placeholder = src_layers[0].output.size_placeholder.copy()
-  network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
+    batch_dim_axis=src_layers[0].output.batch_dim_axis,
+    time_dim_axis=src_layers[0].output.time_dim_axis,
+    dtype=src_layers[0].output.dtype)
   return data
 
 
@@ -471,9 +492,12 @@ class CopyLayer(_ConcatInputLayer):
   layer_class = "copy"
 
   def __init__(self, **kwargs):
-    # Dummy out_type for now, will reset layer.
-    super(CopyLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    super(CopyLayer, self).__init__(**kwargs)
     self.output = self.input_data
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources=(), **kwargs):
+    return get_concat_sources_data_template(sources)
 
 
 class ActivationLayer(CopyLayer):
@@ -525,35 +549,11 @@ class SliceLayer(_ConcatInputLayer):
     :param int|None slice_step:
     :param int|None n_out:
     """
-    # Dummy out_type for now, will reset layer.
-    super(SliceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
-    if axis is not None:
-      assert not axis_kind
-      assert 0 <= axis < len(self.input_data.batch_shape)
-    else:
-      assert axis_kind
-      axis_kind = axis_kind.upper()
-      if axis_kind == "T":
-        assert self.input_data.time_dim_axis is not None
-        axis = self.input_data.time_dim_axis
-      elif axis_kind == "B":
-        assert self.input_data.batch_dim_axis is not None
-        axis = self.input_data.batch_dim_axis
-      elif axis_kind == "F":
-        axes = self.input_data.get_axes(exclude_time=True, exclude_batch=True)
-        assert len(axes) == 1
-        axis = axes[0]
+    super(SliceLayer, self).__init__( **kwargs)
+    axis = self._get_axis(axis=axis, axis_kind=axis_kind, input_data=self.input_data)
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
-    out_type = self.input_data.get_kwargs()
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
-    if axis_wo_batch is not None:
-      out_type["shape"] = list(out_type["shape"])
-      if out_type["shape"][axis_wo_batch] is not None:
-        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
-      if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
-        out_type["dim"] = out_type["shape"][axis_wo_batch]
-    self.output = Data(**out_type)
     self.output.size_placeholder = self.input_data.size_placeholder
     if axis == self.input_data.time_dim_axis:
       if slice_start:
@@ -571,6 +571,50 @@ class SliceLayer(_ConcatInputLayer):
     elif axis_wo_batch is not None:
       assert axis_wo_batch not in self.output.size_placeholder
     self.output.placeholder = self.input_data.placeholder[slices]
+
+  @classmethod
+  def _get_axis(cls, axis, axis_kind, input_data):
+    """
+    :param int|None axis:
+    :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
+    :param Data input_data:
+    :return: axis
+    :rtype: int
+    """
+    if axis is not None:
+      assert not axis_kind
+      assert 0 <= axis < len(input_data.batch_shape)
+    else:
+      assert axis_kind
+      axis_kind = axis_kind.upper()
+      if axis_kind == "T":
+        assert input_data.time_dim_axis is not None
+        axis = input_data.time_dim_axis
+      elif axis_kind == "B":
+        assert input_data.batch_dim_axis is not None
+        axis = input_data.batch_dim_axis
+      elif axis_kind == "F":
+        axes = input_data.get_axes(exclude_time=True, exclude_batch=True)
+        assert len(axes) == 1
+        axis = axes[0]
+    return axis
+
+  @classmethod
+  def get_out_data_from_opts(
+        cls, axis=None, axis_kind=None, sources=(),
+        slice_start=None, slice_end=None, slice_step=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    axis = cls._get_axis(axis=axis, axis_kind=axis_kind, input_data=input_data)
+    out_type = input_data.get_kwargs()
+    axis_wo_batch = input_data.get_batch_axis_excluding_batch(axis)
+    dim_slice = slice(slice_start, slice_end, slice_step)
+    if axis_wo_batch is not None:
+      out_type["shape"] = list(out_type["shape"])
+      if out_type["shape"][axis_wo_batch] is not None:
+        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
+      if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
+        out_type["dim"] = out_type["shape"][axis_wo_batch]
+    return Data(**out_type)
 
 
 class LinearLayer(_ConcatInputLayer):
@@ -625,8 +669,8 @@ class LinearLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(x)
     x = self.output_before_activation.y
 
-    self.output.batch_dim_axis = self.input_data.batch_dim_axis
-    self.output.time_dim_axis = self.input_data.time_dim_axis
+    assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
+    assert self.output.time_dim_axis == self.input_data.time_dim_axis
     self.output.placeholder = x
 
 
@@ -673,12 +717,7 @@ class ConvLayer(_ConcatInputLayer):
     assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
     assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
-    out_type = {
-      "dim": n_out,
-      "shape": [None] * len(filter_size) + [n_out],
-      "batch_dim_axis": 0,
-      "sparse": False}
-    super(ConvLayer, self).__init__(out_type=out_type, **kwargs)
+    super(ConvLayer, self).__init__(**kwargs)
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -760,6 +799,19 @@ class ConvLayer(_ConcatInputLayer):
     else:
       assert False
 
+  @classmethod
+  def _get_out_type_from_opts(cls, n_out, filter_size, **kwargs):
+    return {
+      "dim": n_out,
+      "shape": [None] * len(filter_size) + [n_out],
+      "batch_dim_axis": 0,
+      "sparse": False}
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    out_type = cls._get_out_type_from_opts(**kwargs)
+    return super(ConvLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
 
 class PoolLayer(_ConcatInputLayer):
   """
@@ -793,8 +845,7 @@ class PoolLayer(_ConcatInputLayer):
     elif isinstance(strides, int):
       strides = [strides] * len(pool_size)
     assert len(strides) == len(pool_size)
-    # Dummy out_type for now, will reset layer.
-    super(PoolLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    super(PoolLayer, self).__init__(**kwargs)
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
     # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
@@ -804,13 +855,6 @@ class PoolLayer(_ConcatInputLayer):
       x, window_shape=pool_size, pooling_type=mode, padding=padding,
       dilation_rate=dilation_rate, strides=strides)
     # y shape is [batch] + spatial_dims + [n_out].
-    self.output = Data(
-      name="%s_output" % self.name,
-      shape=(None,) * len(pool_size) + (self.input_data.dim,),
-      dim=self.input_data.dim,
-      dtype=self.input_data.dtype,
-      sparse=False,
-      batch_dim_axis=0)
     self.output.placeholder = y
     self.output.size_placeholder = {
       i: (self.input_data.size_placeholder[i] if i in self.input_data.size_placeholder else tf.shape(y)[i + 1])
@@ -822,6 +866,18 @@ class PoolLayer(_ConcatInputLayer):
         self.output.size_placeholder[i] = s - pool_size[i] + 1
     else:
       assert False
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, pool_size, sources, **kwargs):
+    # y shape is [batch] + spatial_dims + [n_out].
+    input_data = get_concat_sources_data_template(sources)
+    return Data(
+      name="%s_output" % name,
+      shape=(None,) * len(pool_size) + (input_data.dim,),
+      dim=input_data.dim,
+      dtype=input_data.dtype,
+      sparse=False,
+      batch_dim_axis=0)
 
 
 class ReduceLayer(_ConcatInputLayer):
@@ -842,32 +898,12 @@ class ReduceLayer(_ConcatInputLayer):
     assert "out_type" not in kwargs
     mode = mode.lower()
     assert mode in ["max", "sum", "avg", "mean"]
-    # Dummy out_type for now, will reset layer.
-    super(ReduceLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    super(ReduceLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
     if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
       x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
-    if isinstance(axis, str):
-      axis = axis.lower()
-      if axis in ["b", "batch"]:
-        axis = 0
-      elif axis == "spatial":
-        axis = self.input_data.get_dynamic_batch_axes()
-        axis.remove(self.input_data.batch_dim_axis)
-      elif axis == "spatial_except_time":
-        axis = self.input_data.get_dynamic_batch_axes()
-        axis.remove(self.input_data.batch_dim_axis)
-        axis.remove(self.input_data.time_dim_axis)
-      elif axis in ["f", "feature"]:
-        axis = self.input_data.get_non_dynamic_axes()
-      else:
-        raise Exception("invalid axis mode %r" % axis)
-    if isinstance(axis, int):
-      axis = [axis]
-    assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
-    assert len(axis) > 0, "no axis to reduce. input_data: %s" % (self.input_data,)
-    axis = [i % self.input_data.batch_ndim for i in axis]
+    axis = self._get_axis(axis, input_data=self.input_data)
     if mode == "max":
       f = tf.reduce_max
     elif mode == "sum":
@@ -877,27 +913,66 @@ class ReduceLayer(_ConcatInputLayer):
     else:
       assert False
     y = f(x, axis=axis, keep_dims=keep_dims)
-    y_shape = list(self.input_data.batch_shape)
     y_dyn_sizes = self.input_data.size_placeholder.copy()
     if keep_dims:
       for i in axis:
-        y_shape[i] = 1
         if i in y_dyn_sizes:
           y_dyn_sizes[i] = 1
     else:
       for i in reversed(sorted(axis)):
-        del y_shape[i]
         if i in y_dyn_sizes:
           del y_dyn_sizes[i]
         y_dyn_sizes = {(j if (j < i) else (j - 1)): s
                        for (j, s) in list(y_dyn_sizes.items())}
-    self.output = Data(
-      name="%s_output" % self.name,
-      shape=tuple(y_shape[1:]),
-      dtype=self.input_data.dtype,
-      sparse=False)
     self.output.placeholder = y
     self.output.size_placeholder = y_dyn_sizes
+
+  @classmethod
+  def _get_axis(cls, axis, input_data):
+    """
+    :param axis: see self.__init__()
+    :param Data input_data:
+    :return: list of axes
+    :rtype: list[int]
+    """
+    if isinstance(axis, str):
+      axis = axis.lower()
+      if axis in ["b", "batch"]:
+        axis = 0
+      elif axis == "spatial":
+        axis = input_data.get_dynamic_batch_axes()
+        axis.remove(input_data.batch_dim_axis)
+      elif axis == "spatial_except_time":
+        axis = input_data.get_dynamic_batch_axes()
+        axis.remove(input_data.batch_dim_axis)
+        axis.remove(input_data.time_dim_axis)
+      elif axis in ["f", "feature"]:
+        axis = input_data.get_non_dynamic_axes()
+      else:
+        raise Exception("invalid axis mode %r" % axis)
+    if isinstance(axis, int):
+      axis = [axis]
+    assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
+    assert len(axis) > 0, "no axis to reduce. input_data: %s" % (input_data,)
+    axis = [i % input_data.batch_ndim for i in axis]
+    return axis
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, keep_dims, axis, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    axis = cls._get_axis(axis=axis, input_data=input_data)
+    y_shape = list(input_data.batch_shape)
+    if keep_dims:
+      for i in axis:
+        y_shape[i] = 1
+    else:
+      for i in reversed(sorted(axis)):
+        del y_shape[i]
+    return Data(
+      name="%s_output" % name,
+      shape=tuple(y_shape[1:]),
+      dtype=input_data.dtype,
+      sparse=False)
 
 
 class GetLastHiddenStateLayer(LayerBase):
@@ -912,8 +987,7 @@ class GetLastHiddenStateLayer(LayerBase):
     :param int n_out: dimension. output will be of shape (batch, n_out)
     :param str combine: "concat" or "add"
     """
-    super(GetLastHiddenStateLayer, self).__init__(
-      out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
+    super(GetLastHiddenStateLayer, self).__init__(**kwargs)
     assert len(self.sources) > 0
     sources = [s.get_last_hidden_state() for s in self.sources]
     assert all([s is not None for s in sources])
@@ -933,6 +1007,11 @@ class GetLastHiddenStateLayer(LayerBase):
 
   def get_last_hidden_state(self):
     return self.output.placeholder
+
+  @classmethod
+  def get_out_data_from_opts(cls, n_out, **kwargs):
+    return super(GetLastHiddenStateLayer, cls).get_out_data_from_opts(
+      out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
 
 
 class RnnCellLayer(_ConcatInputLayer):
@@ -1263,10 +1342,6 @@ class CombineLayer(LayerBase):
     :param bool with_bias: if given , will add a bias
     """
     assert sources
-    kwargs = kwargs.copy()
-    if "n_out" not in kwargs and "out_type" not in kwargs:
-      kwargs["out_type"] = sources[0].output.get_kwargs()
-      kwargs["out_type"]["name"] = "%s_output" % kwargs["name"]
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
     op = getattr(self, "_op_kind_%s" % kind)
     x = op(sources)
@@ -1285,6 +1360,13 @@ class CombineLayer(LayerBase):
     x = self.output_before_activation.y
     self.output.placeholder = x
 
+  @classmethod
+  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
+    if not n_out and not out_type:
+      out_type = sources[0].output.get_kwargs()
+      out_type["name"] = "%s_output" % kwargs["name"]
+    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+
 
 class SubnetworkLayer(LayerBase):
   """
@@ -1299,8 +1381,11 @@ class SubnetworkLayer(LayerBase):
     :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
     """
-    # Dummy out_type for now, will overwrite layer.
-    super(SubnetworkLayer, self).__init__(out_type={"shape": ()}, **kwargs)
+    kwargs = kwargs.copy()
+    if "out_type" not in kwargs and "n_out" not in kwargs:
+      # Dummy out_type, will anyway be overwritten later.
+      kwargs["out_type"] = {"shape": ()}
+    super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork, ExternData
     sub_extern_data = ExternData()
     if concat_sources:
@@ -1359,8 +1444,7 @@ class FramewiseStatisticsLayer(LayerBase):
   layer_class = "framewise_statistics"
 
   def __init__(self, sil_label_idx, histogram_num_bins=20, **kwargs):
-    # n_out=1 is a workaround for now. Our output should not be used. We have none.
-    super(FramewiseStatisticsLayer, self).__init__(n_out=1, **kwargs)
+    super(FramewiseStatisticsLayer, self).__init__(**kwargs)
     self.output.placeholder = tf.constant(0, name="dummy")
     assert self.sources, "give me some sources"
     # Currently, a bit hardcoded.
@@ -1445,6 +1529,11 @@ class FramewiseStatisticsLayer(LayerBase):
     self.stats["accumulated_loss_perplexity"] = tf.exp(self.stats["accumulated_loss_ce"])
     self.stats["accumulated_loss_perplexity_sil"] = tf.exp(self.stats["accumulated_loss_ce_sil"])
     self.stats["accumulated_loss_perplexity_no_sil"] = tf.exp(self.stats["accumulated_loss_ce_no_sil"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    # n_out=1 is a workaround for now. Our output should not be used. We have none.
+    return super(FramewiseStatisticsLayer, cls).get_out_data_from_opts(n_out=1, **kwargs)
 
 
 class Loss(object):

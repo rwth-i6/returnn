@@ -188,10 +188,17 @@ class TFNetwork(object):
   def add_layer(self, name, layer_class, **layer_desc):
     """
     :param str name:
-    :param ()->LayerBase layer_class:
+    :param (()->LayerBase)|LayerBase layer_class:
     """
+    layer_desc = layer_desc.copy()
+    assert "name" not in layer_desc
+    assert "network" not in layer_desc
+    assert "output" not in layer_desc
+    layer_desc["name"] = name
+    layer_desc["network"] = self
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
-      layer = layer_class(name=name, network=self, **layer_desc)
+      output = layer_class.get_out_data_from_opts(**layer_desc)
+      layer = layer_class(output=output, **layer_desc)
       layer.post_init()
     assert layer.output
     assert layer.output.placeholder is not None
