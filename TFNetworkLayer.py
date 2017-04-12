@@ -951,23 +951,6 @@ class RecLayer(_ConcatInputLayer):
       else:
         d["initial_state"] = tf.concat(sources, axis=1, name="concat_hidden_state")
 
-  class OutputFeedback(object):
-    def __init__(self, parent, target=None):
-      """
-      :param RecLayer parent:
-      :param str|None target:
-      """
-      self.parent = parent
-      # TODO: sampling mode, embedding, etc
-
-  class Attention(object):
-    def __init__(self, parent, use_prev_as_input=True):
-      """
-      :param RecLayer parent:
-      :param bool use_prev_as_input: will be concatenated to the cell input
-      """
-      self.parent = parent
-
   def __init__(self,
                unit="lstm",
                bidirectional=False, direction=None, input_projection=True,
@@ -999,9 +982,10 @@ class RecLayer(_ConcatInputLayer):
       # We default to the fastest one, i.e. NativeLSTM.
       # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
       if not output_feedback and not attention:
-        unit = "nativelstm"
+        unit = "nativelstm"  # TFNativeOp.NativeLstmCell
       else:
-        unit = "lstmblock"
+        # Must be a cell-type because we do our own modified loop.
+        unit = "lstmblock"  # rnn_contrib.LSTMBlockCell
     if direction is not None:
       assert not bidirectional
       assert direction in [-1, 1]
@@ -1021,10 +1005,19 @@ class RecLayer(_ConcatInputLayer):
         n_hidden //= 2
       cell_fw = rnn_cell_class(n_hidden)
       assert isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      self.cell = cell_fw
       if bidirectional:
         cell_bw = rnn_cell_class(n_hidden)
       else:
         cell_bw = None
+      if attention:
+        if attention is True:
+          attention = {}
+        attention = self.create_attention(**attention)
+      if output_feedback:
+        if output_feedback is True:
+          output_feedback = {}
+        output_feedback = self.create_output_feedback(**output_feedback)
       if self.input_data:
         x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
         if not self.input_data.is_time_major:
@@ -1034,14 +1027,19 @@ class RecLayer(_ConcatInputLayer):
         seq_len = self.input_data.size_placeholder[0]
       else:
         x = seq_len = None
-      if isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+      if attention or output_feedback:
+        assert isinstance(cell_fw, rnn_contrib.RNNCell)  # we must do our own loop, thus no fused cell here
+        assert not bidirectional, "not supported currently"
+        y, y_seq_lens = self.attention_loop(x, attention=attention, output_feedback=output_feedback)
+        self.output.size_placeholder[0] = y_seq_lens
+      elif isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
         assert not self.input_data.sparse
         assert input_projection
+        assert x is not None
         if direction == -1:
           x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell_fw, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
           if bidirectional:
-            assert not attention and not output_feedback
             # Will get (time,batch,ydim/2).
             (y_fw, y_bw), final_states = rnn.bidirectional_dynamic_rnn(
               cell_fw=cell_fw, cell_bw=cell_bw,
@@ -1050,9 +1048,6 @@ class RecLayer(_ConcatInputLayer):
               dtype=tf.float32)
             y = tf.concat(axis=2, values=(y_fw, y_bw))  # (time,batch,ydim)
             self._last_hidden_state = tf.concat(final_states, axis=1)
-          elif attention or output_feedback:
-            # TODO...
-            raise NotImplementedError
           else:
             # Will get (time,batch,ydim).
             y, final_state = rnn.dynamic_rnn(
@@ -1060,9 +1055,7 @@ class RecLayer(_ConcatInputLayer):
               initial_state=initial_state)
             self._last_hidden_state = final_state
         elif isinstance(cell_fw, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
-          assert not attention
-          if bidirectional:
-            raise NotImplementedError
+          assert not bidirectional, "not supported currently"
           # Will get (time,batch,ydim).
           y, final_state = cell_fw(
             inputs=x, sequence_length=seq_len, dtype=tf.float32,
@@ -1073,8 +1066,8 @@ class RecLayer(_ConcatInputLayer):
         if direction == -1:
           y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
       elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
-        assert not attention
-        assert not bidirectional
+        assert x is not None
+        assert not bidirectional, "not supported currently"
         if input_projection:
           W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
           if self.input_data.sparse:
@@ -1105,6 +1098,44 @@ class RecLayer(_ConcatInputLayer):
     assert self._last_hidden_state is not None, (
       "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
     return self._last_hidden_state
+
+  class OutputFeedback(object):
+    def __init__(self, parent, target=None):
+      """
+      :param RecLayer parent:
+      :param str|None target:
+      """
+      self.parent = parent
+      # TODO: sampling mode, embedding, etc
+
+  def create_output_feedback(self, **kwargs):
+    return self.OutputFeedback(parent=self, **kwargs)
+
+  class Attention(object):
+    def __init__(self, parent, use_prev_as_input=True):
+      """
+      :param RecLayer parent:
+      :param bool use_prev_as_input: will be concatenated to the cell input
+      """
+      self.parent = parent
+
+  def create_attention(self, **kwargs):
+    return self.Attention(parent=self, **kwargs)
+
+  def attention_loop(self, x, attention, output_feedback):
+    """
+    :param tf.Tensor|None x: input_data, format (time,batch,dim)
+    :param RecLayer.Attention attention:
+    :param RecLayer.OutputFeedback output_feedback:
+    :return: tuple (y, y_seq_lens),
+      where y is of shape (y_time,batch,n_out)
+      and y_seq_lens is of shape (batch,) and describes the output length, and y_time >= max(y_seq_lens).
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    if x is not None:
+      assert x.get_shape().ndims == 3
+      assert x.get_shape().dims[2].value
+    # TODO...
 
 
 class FsaLayer(LayerBase):
