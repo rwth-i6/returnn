@@ -10,7 +10,7 @@ class LayerBase(object):
   recurrent = False
 
   def __init__(self, name, network, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, loss_opts=None, L2=None, is_output_layer=None,
+               target=None, loss=None, L2=None, is_output_layer=None,
                batch_norm=False,
                spatial_smoothing=0.0,
                trainable=True):
@@ -19,11 +19,10 @@ class LayerBase(object):
     :param TFNetwork.TFNetwork network:
     :param None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
-    :param list[LayerBase] sources:
+    :param list[LayerBase] sources: via self.transform_config_dict()
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
       alternatively, this also can be a layer name.
-    :param str|None loss: if set, via get_loss
-    :param dict[str]|None loss_opts: kwargs for Loss class, if loss is set
+    :param Loss|None loss: via self.transform_config_dict()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
     :param bool|dict batch_norm:
@@ -34,34 +33,11 @@ class LayerBase(object):
     if loss and not target:
       target = self.network.extern_data.default_target
     self.target = target
-    self.loss = None  # type: Loss
-    if loss:
-      loss_class = get_loss_class(loss)
-      self.loss = loss_class(**(loss_opts or {}))
-      if self.loss.recurrent:
-        self.recurrent = True
-    if out_type is None and n_out is None and target:
-      n_out = self._get_target_value(mark_data_key_as_used=False).dim
-      if self.loss:
-        n_out = self.loss.get_auto_output_layer_dim(n_out)
-    if out_type is None:
-      assert n_out
-      out_type = {"dim": n_out}
-    out_type = out_type.copy()
-    out_type.setdefault("name", "%s_output" % self.name)
-    if sources:
-      out_type.setdefault("dtype", sources[0].output.dtype)
-    if n_out is not None:
-      out_type.setdefault("dim", n_out)
-      assert out_type["dim"] == n_out
-    if sources:
-      out_type.setdefault("shape", sources[0].output.shape[:-1] + (out_type.get("dim", sources[0].output.dim),))
-    # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
-    # as well as check the inputs if they are as you would suggest.
-    # However, a good default is often to use the same as the input.
-    if sources and "batch_dim_axis" not in out_type:
-      out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
-      out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
+    self.loss = loss
+    if self.loss and self.loss.recurrent:
+      self.recurrent = True
+    out_type = self.get_out_type_from_opts(
+      out_type=out_type, n_out=n_out, network=network, name=name, target=target, sources=sources, loss=loss)
     self.output = Data(**out_type)
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
@@ -90,6 +66,32 @@ class LayerBase(object):
       if isinstance(self.use_batch_norm, dict):
         opts = self.use_batch_norm
       self.output.placeholder = self.batch_norm(self.output, **opts)
+
+  @classmethod
+  def get_out_type_from_opts(cls, out_type, n_out, network, name, target=None, sources=(), loss=None, **kwargs):
+    if out_type is None and n_out is None and target:
+      n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+      if loss:
+        n_out = loss.get_auto_output_layer_dim(n_out)
+    if out_type is None:
+      assert n_out
+      out_type = {"dim": n_out}
+    out_type = out_type.copy()
+    out_type.setdefault("name", "%s_output" % name)
+    if sources:
+      out_type.setdefault("dtype", sources[0].output.dtype)
+    if n_out is not None:
+      out_type.setdefault("dim", n_out)
+      assert out_type["dim"] == n_out
+    if sources:
+      out_type.setdefault("shape", sources[0].output.shape[:-1] + (out_type.get("dim", sources[0].output.dim),))
+    # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
+    # as well as check the inputs if they are as you would suggest.
+    # However, a good default is often to use the same as the input.
+    if sources and "batch_dim_axis" not in out_type:
+      out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
+      out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
+    return out_type
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -120,6 +122,9 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
+    if d.get("loss"):
+      loss_class = get_loss_class(d["loss"])
+      d["loss"] = loss_class(**d.pop("loss_opts", {}))
 
   @property
   def tf_scope_name(self):
@@ -174,18 +179,29 @@ class LayerBase(object):
       d[param_name] = param.eval(session)
     return d
 
+  @staticmethod
+  def _static_get_target_value(target, network, mark_data_key_as_used=True):
+    """
+    :param str target: 
+    :param TFNetwork.TFNetwork network: 
+    :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
+    :rtype: Data | None
+    """
+    if not target or target == "none":
+      return None
+    if network.extern_data.has_data(target):
+      return network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
+    if target in network.layers:
+      return network.layers[target].output
+    raise Exception("target %r unknown" % target)
+
   def _get_target_value(self, mark_data_key_as_used=True):
     """
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :rtype: Data | None
     """
-    if not self.target or self.target == "none":
-      return None
-    if self.network.extern_data.has_data(self.target):
-      return self.network.get_extern_data(self.target, mark_data_key_as_used=mark_data_key_as_used)
-    if self.target in self.network.layers:
-      return self.network.layers[self.target].output
-    raise Exception("target %r unknown" % self.target)
+    return self._static_get_target_value(
+      target=self.target, network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _init_loss(self):
     if self.loss.output is self.output:
@@ -304,6 +320,15 @@ class LayerBase(object):
             trainable=True))
         bn += beta
       return bn
+
+  def get_hidden_state(self):
+    """
+    If this is a recurrent layer, this would return the hidden state.
+    This is used e.g. for the RnnCellLayer class.
+    :rtype: tf.Tensor | list[tf.Tensor] | None
+    :return: optional tensor(s) with shape (time, batch, dim)
+    """
+    return None
 
   def get_last_hidden_state(self):
     """
@@ -432,10 +457,9 @@ class _ConcatInputLayer(LayerBase):
       assert not dropout
     elif mask == "dropout":
       assert dropout > 0
+    self.input_data = None
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(self.sources, dropout=dropout)
-    else:
-      self.input_data = None
 
 
 class CopyLayer(_ConcatInputLayer):
@@ -911,6 +935,40 @@ class GetLastHiddenStateLayer(LayerBase):
     return self.output.placeholder
 
 
+class RnnCellLayer(_ConcatInputLayer):
+  layer_class = "rnn_cell"
+
+  def __init__(self, unit, prev_state, **kwargs):
+    import tensorflow.contrib.rnn as rnn_contrib
+    super(RnnCellLayer, self).__init__(**kwargs)
+    rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
+    assert issubclass(rnn_cell_class, rnn_contrib.RNNCell)
+    with tf.variable_scope(
+          "rec",
+          initializer=tf.contrib.layers.xavier_initializer(
+            seed=self.network.random.randint(2**31))) as scope:
+      assert isinstance(scope, tf.VariableScope)
+      scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
+      self.cell = rnn_cell_class()
+      assert isinstance(self.cell, rnn_contrib.RNNCell)
+      self.output.time_dim_axis = None
+      self.output.batch_dim_axis = 0
+      self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
+      self._hidden_state = state
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+      assert params
+      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+
+  def get_hidden_state(self):
+    return self._hidden_state
+
+  def get_last_hidden_state(self):
+    from tensorflow.python.util import nest
+    if nest.is_sequence(self._hidden_state):
+      return tf.concat(self._hidden_state, axis=1)
+    return self._hidden_state
+
+
 class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
   recurrent = True
@@ -932,6 +990,16 @@ class RecLayer(_ConcatInputLayer):
       maybe_add(key, v)
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
+
+  @classmethod
+  def get_rnn_cell_class(cls, name):
+    """
+    :param str name: cell name, minus the "Cell" at the end 
+    :rtype: () -> tensorflow.contrib.rnn.RNNCell
+    """
+    if not cls._rnn_cells_dict:
+      cls._create_rnn_cells_dict()
+    return cls._rnn_cells_dict[name.lower()]
 
   @classmethod
   def transform_config_dict(cls, d, get_layer):
@@ -959,7 +1027,9 @@ class RecLayer(_ConcatInputLayer):
                attention=False,
                **kwargs):
     """
-    :param str unit: the RNNCell/etc name, e.g. "nativelstm". see comment below
+    :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
+      alternatively a whole subnetwork, which will be executed step by step,
+      and which can include "prev" in addition to "from" to refer to previous steps.
     :param bool bidirectional: whether we should combine a forward and backward cell
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
@@ -989,9 +1059,7 @@ class RecLayer(_ConcatInputLayer):
     if direction is not None:
       assert not bidirectional
       assert direction in [-1, 1]
-    if not self._rnn_cells_dict:
-      self._create_rnn_cells_dict()
-    rnn_cell_class = self._rnn_cells_dict[unit.lower()]
+    rnn_cell_class = self.get_rnn_cell_class(unit)
     self._last_hidden_state = None
     with tf.variable_scope(
           "rec",
