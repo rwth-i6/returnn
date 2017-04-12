@@ -1174,7 +1174,10 @@ class OpCodeCompiler(object):
     print("OpCompiler delete old, %s: %s" % (reason, p))
     assert os.path.exists(p)
     import shutil
-    shutil.rmtree(p)
+    try:
+      shutil.rmtree(p)
+    except OSError as exc:
+      print("OpCompiler delete exception (%s). Will ignore and try to continue anyway." % exc)
 
   def _load_info(self):
     filename = self._info_filename
