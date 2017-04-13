@@ -90,12 +90,13 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, parent=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
+    :param TFNetworkLayer.LayerBase|None parent:
     """
     if extern_data is None:
       extern_data = ExternData()
@@ -108,6 +109,7 @@ class TFNetwork(object):
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
+    self.parent = parent
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
@@ -157,33 +159,40 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     """
-    def _construct_layer(name):
-      """
-      :param str name:
-      :param dict[str] layer_desc:
-      :rtype: LayerBase
-      """
-      if name in self.layers:
-        return self.layers[name]
-      if name not in net_dict:
-        if name == "data":
-          layer_desc = {"class": "source", "from": []}
-        elif name.startswith("data:"):
-          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
-        else:
-          raise Exception("layer not found: %r" % name)
-      else:
-        layer_desc = net_dict[name]
-      self.layers_desc[name] = layer_desc
-      layer_desc = layer_desc.copy()
-      class_name = layer_desc.pop("class")
-      layer_class = get_layer_class(class_name)
-      layer_class.transform_config_dict(layer_desc, _construct_layer)
-      return self.add_layer(name=name, layer_class=layer_class, **layer_desc)
-
     for name, layer_desc in sorted(net_dict.items()):
       if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
-        _construct_layer(name)
+        self._construct_layer(net_dict, name)
+
+  def _construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
+    """
+    :param dict[str,dict[str]] net_dict:
+    :param str name: layer name
+    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict
+    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: self.add_layer
+    :rtype: LayerBase
+    """
+    if name in self.layers:
+      return self.layers[name]
+    if name not in net_dict:
+      if name == "data":
+        layer_desc = {"class": "source", "from": []}
+      elif name.startswith("data:"):
+        layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
+      else:
+        raise Exception("layer not found: %r" % name)
+    else:
+      layer_desc = net_dict[name]
+    if not get_layer:
+      def get_layer(src_name):
+        return self._construct_layer(net_dict=net_dict, name=src_name)
+    if not add_layer:
+      add_layer = self.add_layer
+    self.layers_desc[name] = layer_desc
+    layer_desc = layer_desc.copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    layer_class.transform_config_dict(layer_desc, get_layer=get_layer)
+    return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def add_layer(self, name, layer_class, **layer_desc):
     """

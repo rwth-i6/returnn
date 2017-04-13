@@ -109,6 +109,21 @@ class Data(object):
     data.size_placeholder = self.size_placeholder
     return data
 
+  def copy_template_excluding_time_dim(self, name=None):
+    """
+    :param str|None name: if set, this will be the new name
+    :return: copy of myself excluding the time-dimension without placeholder 
+    """
+    assert self.time_dim_axis is not None
+    new_shape = list(self.shape)
+    del new_shape[self.time_dim_axis_excluding_batch]
+    kwargs = self.get_kwargs()
+    kwargs["time_dim_axis"] = None
+    kwargs["shape"] = new_shape
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.

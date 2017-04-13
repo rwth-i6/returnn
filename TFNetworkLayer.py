@@ -73,6 +73,11 @@ class LayerBase(object):
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     """
+    Gets a Data template (i.e. shape etc is set but not the placeholder) for our __init__ args.
+    The purpose of having this as a separate classmethod is to be able to infer the shape information
+    without having to construct the layer.
+    This function should not create any nodes in the computation graph.
+
     :param dict[str] kwargs: all the same kwargs as for self.__init__() 
     :return: Data template (placeholder not set)
     :rtype: Data
@@ -84,6 +89,7 @@ class LayerBase(object):
                                    **kwargs):
     """
     Called via BaseLayer.get_out_data_from_opts().
+
     :param TFNetwork.TFNetwork network:
     :param str name:
     :param dict[str]|None out_type:
@@ -1303,13 +1309,105 @@ class RecLayer(_ConcatInputLayer):
     return y
 
   class SubnetworkCell(object):
-    def __init__(self, net_dict):
+    def __init__(self, parent, net_dict):
       """
+      :param RecLayer parent:
       :param dict[str] net_dict:
       """
+      self.parent = parent
       self.net_dict = net_dict
+      from TFNetwork import TFNetwork, ExternData
+      self.net = TFNetwork(extern_data=ExternData(), train_flag=parent.network.train_flag, parent=parent)
+      if parent.input_data:
+        self.net.extern_data.data[self.net.extern_data.default_input] = \
+          parent.input_data.copy_template_excluding_time_dim()
+      if parent.target:
+        self.net.extern_data.data[self.net.extern_data.default_target] = \
+          parent.network.extern_data.data[parent.target].copy_template_excluding_time_dim()
+      self.layer_data_templates = {}  # type: dict[str,RecLayer.SubnetworkCell._TemplateLayer]
+      self.prev_layers_needed = set()  # type: set[str]
+      self._construct_template()
+
+    class _TemplateLayer(LayerBase):
+      def __init__(self, layer_class, template_type="template", **kwargs):
+        """
+        :param LayerBase layer_class:
+        :param str template_type:
+        :param dict[str] kwargs: 
+        """
+        super(RecLayer.SubnetworkCell._TemplateLayer, self).__init__(**kwargs)
+        self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
+        self._layer_class = layer_class
+        self._kwargs = kwargs
+
+      def copy(self, template_type):
+        """
+        :param str template_type: e.g. "prev"
+        :return: new _TemplateLayer
+        :rtype: RecLayer.SubnetworkCell._TemplateLayer
+        """
+        return self.__class__(layer_class=self._layer_class, template_type=template_type, **self._kwargs)
+
+    def _construct_template(self):
+      """
+      Without creating any computation graph, create _TemplateLayer instances.
+      """
+      def add_layer(name, layer_class, **layer_desc):
+        """
+        :param str name: 
+        :param LayerBase layer_class: 
+        :param dict[str] layer_desc: 
+        :rtype: LayerBase
+        """
+        layer_desc = layer_desc.copy()
+        layer_desc["name"] = name
+        layer_desc["network"] = self.net
+        output = layer_class.get_out_data_from_opts(**layer_desc)
+        return self._TemplateLayer(output=output, layer_class=layer_class, **layer_desc)
+
+      def get_templated_layer(name):
+        """
+        :param str name: 
+        :rtype: RecLayer.SubnetworkCell._TemplateLayer
+        """
+        if name in self.layer_data_templates:
+          return self.layer_data_templates[name]
+        if name.startswith(":prev:"):
+          name = name[len(":prev:"):]
+          self.prev_layers_needed.add(name)
+        if name == "data":
+          pass
+        return self.net._construct_layer(self.net_dict, name, get_layer=get_templated_layer, add_layer=add_layer)
+
+      get_templated_layer("output")
+      assert "output" in self.layer_data_templates
+
+    def construct(self, prev):
+      """
+      :param dict[str,tf.Tensor] prev: outputs of the layers from the previous step
+      """
+      prev_layers = {}  # type: dict[str,RecLayer.SubnetworkCell._TemplateLayer]
+      for name in prev.keys():
+        layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
+        layer.output.placeholder = prev[name]
+        layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
+
+      def get_layer(name):
+        if name.startswith(":prev:"):
+          return prev_layers[name[len(":prev:"):]]
+        return self.net._construct_layer(self.net_dict, name, get_layer=get_layer)
+
+      get_layer("output")
+      assert "output" in self.net.layers
 
     def get_initializer(self):
+      # TODO:
+      # In the while-loop, what we need to output is:
+      # * next step counter (i)
+      # * all outputs from layers which are in self.prev_layers_needed
+      # * all hidden states from RnnCellLayer
+      # * accumulated TensorArray of outputs from the output-layer for each step
+      # For each of this, we need a sensible init, which we are supposed to return here.
       pass
 
   def _get_output_subnet_unit(self, cell):
@@ -1321,10 +1419,64 @@ class RecLayer(_ConcatInputLayer):
       x, seq_len = self._get_input()
       assert x.get_shape().ndims == 3
       assert x.get_shape().dims[2].value
+      sources = [x]
     else:
-      x = None
+      sources = []
       seq_len = self.output.size_placeholder[0]  # see BaseLayer.__init__()
-    # TODO...
+
+    # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
+    # tf.scan() would do that but tf.scan() will loop over some input sequence -
+    # however, that would not work because the input sequence is not fixed initially.
+    # So, similar as tf.scan() does it, we collect all intermediate values.
+    from tensorflow.python.util import nest
+    initializer = cell.get_initializer()
+    output_is_sequence = nest.is_sequence(initializer)
+    output_flatten = lambda x: nest.flatten(x) if output_is_sequence else [x]
+
+    def output_pack(x):
+      return (nest.pack_sequence_as(initializer, x)
+              if output_is_sequence else x[0])
+
+    initializer_flat = output_flatten(initializer)
+    a_flat = [tf.convert_to_tensor(init) for init in initializer_flat]
+    i = tf.constant(0)
+    max_out_len = tf.reduce_max(seq_len)
+    min_out_len = max_out_len
+    # Create a tensor array to store the intermediate values.
+    accs_ta = [
+      tf.TensorArray(
+        dtype=init.dtype,
+        size=min_out_len,
+        dynamic_size=True,  # we will automatically grow it when needed
+        infer_shape=True)
+      for init in a_flat]
+
+    def body(i, a_flat, tas):
+      """
+      The loop body of scan.
+
+      :param tf.Tensor i: loop counter, scalar
+      :param list[tf.Tensor] a_flat: the accumulator value(s), flattened.
+      :param list[tf.TensorArray] tas: the output accumulator TensorArray(s), flattened.
+      :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
+      :rtype: (tf.Tensor, list[tf.Tensor], list[tf.TensorArray])
+
+      Raises:
+        TypeError: if initializer and fn() output structure do not match
+        ValueType: if initializer and fn() output lengths do not match
+      """
+
+      a_out = None  # outputs, or next inputs
+      nest.assert_same_structure(initializer, a_out)
+      flat_a_out = output_flatten(a_out)
+      tas = [ta.write(i, value) for (ta, value) in zip(tas, flat_a_out)]
+      return (i + 1, flat_a_out, tas)
+
+    def cond(i, a_flat, tas):
+      pass  # TODO...
+
+    _, _, r_a = tf.while_loop(cond=cond, body=body, loop_vars=(i, a_flat, accs_ta))
+    results_flat = [r.stack() for r in r_a]
 
   def get_last_hidden_state(self):
     assert self._last_hidden_state is not None, (
@@ -1442,7 +1594,8 @@ class SubnetworkLayer(LayerBase):
     net = TFNetwork(
       rnd_seed=self.network.random.randint(2**31),
       train_flag=self.network.train_flag,
-      extern_data=sub_extern_data)
+      extern_data=sub_extern_data,
+      parent=self)
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     self.output = net.get_default_output_layer().output
