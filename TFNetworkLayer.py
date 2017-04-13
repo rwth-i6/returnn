@@ -64,8 +64,30 @@ class LayerBase(object):
       self.output.placeholder = self.batch_norm(self.output, **opts)
 
   @classmethod
-  def get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, sources=(), loss=None,
-                             **kwargs):
+  def get_out_data_from_opts(cls, **kwargs):
+    """
+    :param dict[str] kwargs: all the same kwargs as for self.__init__() 
+    :return: Data template (placeholder not set)
+    :rtype: Data
+    """
+    return cls._base_get_out_data_from_opts(**kwargs)
+
+  @classmethod
+  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, sources=(), loss=None,
+                                   **kwargs):
+    """
+    Called via BaseLayer.get_out_data_from_opts().
+    :param TFNetwork.TFNetwork network:
+    :param str name:
+    :param dict[str]|None out_type:
+    :param int|None n_out:
+    :param str|None target: 
+    :param list[LayerBase] sources: 
+    :param Loss|None loss: 
+    :param kwargs: remaining kwargs of self.__init__(), ignored here
+    :return: Data template (placeholder not set)
+    :rtype: Data
+    """
     if loss and not target:
       target = network.extern_data.default_target
     if out_type is None and n_out is None and target:
@@ -1381,10 +1403,6 @@ class SubnetworkLayer(LayerBase):
     :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
     """
-    kwargs = kwargs.copy()
-    if "out_type" not in kwargs and "n_out" not in kwargs:
-      # Dummy out_type, will anyway be overwritten later.
-      kwargs["out_type"] = {"shape": ()}
     super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork, ExternData
     sub_extern_data = ExternData()
@@ -1406,6 +1424,29 @@ class SubnetworkLayer(LayerBase):
     for layer in net.layers.values():
       assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+
+  @classmethod
+  def get_out_data_from_opts(cls, subnetwork, n_out=None, out_type=None, **kwargs):
+    """
+    :param dict[str,dict[str]] subnetwork:
+    :param int|None n_out:
+    :param dict[str]|None out_type:
+    :rtype: Data 
+    """
+    if n_out or out_type:
+      return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+    layer_desc = subnetwork["output"].copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    def _get_layer(name):
+      raise Exception("not available at this point; provide n_out or out_type explicitly.")
+    layer_desc["from"] = []  # that wont work here
+    layer_class.transform_config_dict(layer_desc, get_layer=_get_layer)
+    layer_desc["name"] = "output"
+    layer_desc["network"] = None
+    # Note: This can likely fail because we don't provide all the right args.
+    # In that case, you must provide n_out or out_type explicitly.
+    return layer_class.get_out_data_from_opts(**layer_desc)
 
   def get_constraints_value(self):
     self.subnetwork.maybe_construct_objective()
