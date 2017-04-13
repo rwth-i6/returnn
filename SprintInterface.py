@@ -194,7 +194,10 @@ def exit():
     sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
     trainThread.join()
   rnn.finalize()
-  print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
+  if startTime:
+    print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
+  else:
+    print("SprintInterface[pid %i]: finished (unknown start time)", file=log.v3)
 
 
 def feedInput(features, weights=None, segmentName=None):
