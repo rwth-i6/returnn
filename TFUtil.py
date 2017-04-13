@@ -118,13 +118,14 @@ class Data(object):
     return tuple([dim is None for dim in self.shape])
 
   def _get_var_len_axes(self):
-    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d is None])
+    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d])
 
-  def matches_dim_pattern(self, other):
+  def matches_var_dim_pattern(self, other):
     """
     :param Data other:
-    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time dim,
-      excluding batch-dim.
+    :return: whether the variable-dims pattern matches,
+      i.e. same variable dims (get_variable_dim_pattern), same time dim, excluding batch-dim.
+      i.e. the size_placeholder should be compatible.
     :rtype: bool
     """
     if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:

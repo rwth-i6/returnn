@@ -39,6 +39,13 @@ class LayerBase(object):
       self.recurrent = True
     if output:
       self.output = output
+      if n_out:
+        assert self.output.dim == n_out
+      if out_type:
+        if "shape" in out_type:
+          assert self.output.shape == out_type["shape"]
+        if "dim" in out_type:
+          assert self.output.dim == out_type["dim"]
     else:
       self.output = self.get_out_data_from_opts(
         out_type=out_type, n_out=n_out, network=network, name=name, target=target, sources=sources, loss=loss)
@@ -118,8 +125,13 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    if sources and sources[0].output.matches_dim_pattern(output):
+    if sources and sources[0].output.matches_var_dim_pattern(output):
       output.size_placeholder = sources[0].output.size_placeholder.copy()
+    elif target:
+      # TODO: In training, this is ok. Maybe as well as for eval but not clear.
+      # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
+      output.size_placeholder = cls._static_get_target_value(
+        target=target, network=network, mark_data_key_as_used=True).size_placeholder.copy()
     return output
 
   def __repr__(self):
@@ -1037,21 +1049,27 @@ class GetLastHiddenStateLayer(LayerBase):
 
 
 class RnnCellLayer(_ConcatInputLayer):
+  """
+  Wrapper around tf.contrib.rnn.RNNCell.
+  This will operate a single step, i.e. there is no time dimension,
+  i.e. we expect a (batch,n_in) input, and our output is (batch,n_out).
+  """
+
   layer_class = "rnn_cell"
 
-  def __init__(self, unit, prev_state, **kwargs):
-    import tensorflow.contrib.rnn as rnn_contrib
+  def __init__(self, unit, prev_state, unit_opts=None, **kwargs):
+    """
+    :param str|tf.contrib.rnn.RNNCell unit: 
+    :param dict[str]|None unit_opts: 
+    """
     super(RnnCellLayer, self).__init__(**kwargs)
-    rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
-    assert issubclass(rnn_cell_class, rnn_contrib.RNNCell)
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
             seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
-      self.cell = rnn_cell_class()
-      assert isinstance(self.cell, rnn_contrib.RNNCell)
+      self.cell = self._get_cell(unit=unit, unit_opts=unit_opts)
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
       self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
@@ -1059,6 +1077,36 @@ class RnnCellLayer(_ConcatInputLayer):
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+
+  @classmethod
+  def _get_cell(cls, unit, unit_opts=None):
+    """
+    :param str|tf.contrib.rnn.RNNCell unit: 
+    :param dict[str]|None unit_opts: 
+    :rtype: tf.contrib.rnn.RNNCell
+    """
+    import tensorflow.contrib.rnn as rnn_contrib
+    if isinstance(unit, rnn_contrib.RNNCell):
+      return unit
+    rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
+    assert issubclass(rnn_cell_class, rnn_contrib.RNNCell)
+    assert isinstance(unit_opts, dict)
+    # This should not have any side-effects, i.e. it should not add to the current computation graph,
+    # it should also not create any vars yet, etc.
+    cell = rnn_cell_class(**unit_opts)
+    assert isinstance(cell, rnn_contrib.RNNCell)
+    return cell
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, unit, unit_opts=None, **kwargs):
+    cell = cls._get_cell(unit=unit, unit_opts=unit_opts)
+    dim = cell.output_size
+    assert isinstance(dim, int)
+    return Data(
+      name="%s_output" % name,
+      shape=(dim,), dim=dim,
+      batch_dim_axis=0,
+      time_dim_axis=None)
 
   def get_hidden_state(self):
     return self._hidden_state
@@ -1122,16 +1170,13 @@ class RecLayer(_ConcatInputLayer):
 
   def __init__(self,
                unit="lstm",
-               bidirectional=False, direction=None, input_projection=True,
+               direction=None, input_projection=True,
                initial_state=None,
-               output_feedback=False,
-               attention=False,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
       alternatively a whole subnetwork, which will be executed step by step,
       and which can include "prev" in addition to "from" to refer to previous steps.
-    :param bool bidirectional: whether we should combine a forward and backward cell
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param tf.Tensor|None initial_state:
@@ -1140,122 +1185,29 @@ class RecLayer(_ConcatInputLayer):
     :param dict[str] kwargs: passed on to base class
     """
     super(RecLayer, self).__init__(**kwargs)
-    from tensorflow.python.ops import rnn
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
-    from TFUtil import swapaxes, dot, sequence_mask_time_major, directed
-    if unit.lower() in ["lstmp", "lstm"]:
-      # Some possible LSTM implementations are (in all cases for both CPU and GPU):
-      # * BasicLSTM (the cell), via official TF, pure TF implementation
-      # * LSTMBlock (the cell), via tf.contrib.rnn.
-      # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
-      # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
-      # We default to the fastest one, i.e. NativeLSTM.
-      # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
-      if not output_feedback and not attention:
-        unit = "nativelstm"  # TFNativeOp.NativeLstmCell
-      else:
-        # Must be a cell-type because we do our own modified loop.
-        unit = "lstmblock"  # rnn_contrib.LSTMBlockCell
     if direction is not None:
-      assert not bidirectional
       assert direction in [-1, 1]
-    rnn_cell_class = self.get_rnn_cell_class(unit)
     self._last_hidden_state = None
+    self._direction = direction
+    self._initial_state = initial_state
+    self._input_projection = input_projection
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
             seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
-      n_hidden = self.output.dim
-      if bidirectional:
-        assert n_hidden % 2 == 0
-        n_hidden //= 2
-      cell_fw = rnn_cell_class(n_hidden)
-      assert isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
-      self.cell = cell_fw
-      if bidirectional:
-        cell_bw = rnn_cell_class(n_hidden)
+      self.cell = self._get_cell(unit)
+      if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+        y = self._get_output_cell(self.cell)
+      elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
+        y = self._get_output_native_rec_op(self.cell)
+      elif isinstance(self.cell, self.SubnetworkCell):
+        y = self._get_output_subnet_unit(self.cell)
       else:
-        cell_bw = None
-      if attention:
-        if attention is True:
-          attention = {}
-        attention = self.create_attention(**attention)
-      if output_feedback:
-        if output_feedback is True:
-          output_feedback = {}
-        output_feedback = self.create_output_feedback(**output_feedback)
-      if self.input_data:
-        x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
-        if not self.input_data.is_time_major:
-          assert self.input_data.batch_dim_axis == 0
-          assert self.input_data.time_dim_axis == 1
-          x = swapaxes(x, 0, 1)   # (time,batch,[dim])
-        seq_len = self.input_data.size_placeholder[0]
-      else:
-        x = seq_len = None
-      if attention or output_feedback:
-        assert isinstance(cell_fw, rnn_contrib.RNNCell)  # we must do our own loop, thus no fused cell here
-        assert not bidirectional, "not supported currently"
-        y, y_seq_lens = self.attention_loop(x, attention=attention, output_feedback=output_feedback)
-        self.output.size_placeholder[0] = y_seq_lens
-      elif isinstance(cell_fw, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
-        assert not self.input_data.sparse
-        assert input_projection
-        assert x is not None
-        if direction == -1:
-          x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        if isinstance(cell_fw, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
-          if bidirectional:
-            # Will get (time,batch,ydim/2).
-            (y_fw, y_bw), final_states = rnn.bidirectional_dynamic_rnn(
-              cell_fw=cell_fw, cell_bw=cell_bw,
-              inputs=x, time_major=True, sequence_length=seq_len,
-              initial_state_fw=initial_state, initial_state_bw=initial_state,
-              dtype=tf.float32)
-            y = tf.concat(axis=2, values=(y_fw, y_bw))  # (time,batch,ydim)
-            self._last_hidden_state = tf.concat(final_states, axis=1)
-          else:
-            # Will get (time,batch,ydim).
-            y, final_state = rnn.dynamic_rnn(
-              cell=cell_fw, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
-              initial_state=initial_state)
-            self._last_hidden_state = final_state
-        elif isinstance(cell_fw, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
-          assert not bidirectional, "not supported currently"
-          # Will get (time,batch,ydim).
-          y, final_state = cell_fw(
-            inputs=x, sequence_length=seq_len, dtype=tf.float32,
-            initial_state=initial_state)
-          self._last_hidden_state = final_state
-        else:
-          raise Exception("invalid type: %s" % type(cell_fw))
-        if direction == -1:
-          y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-      elif isinstance(cell_fw, TFNativeOp.RecSeqCellOp):
-        assert x is not None
-        assert not bidirectional, "not supported currently"
-        if input_projection:
-          W = tf.get_variable(name="W", shape=(self.input_data.dim, cell_fw.n_input_dim), dtype=tf.float32)
-          if self.input_data.sparse:
-            x = tf.nn.embedding_lookup(W, x)
-          else:
-            x = dot(x, W)
-        else:
-          assert not self.input_data.sparse
-          assert self.input_data.dim == cell_fw.n_input_dim
-        b = tf.get_variable(name="b", shape=(cell_fw.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
-        x += b
-        index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
-        y, final_state = cell_fw(
-          inputs=directed(x, direction), index=directed(index, direction),
-          initial_state=initial_state)
-        self._last_hidden_state = final_state
-        y = directed(y, direction)
-      else:
-        raise Exception("invalid type: %s" % type(cell_fw))
+        raise Exception("invalid type: %s" % type(self.cell))
       self.output.time_dim_axis = 0
       self.output.batch_dim_axis = 1
       self.output.placeholder = y
@@ -1263,48 +1215,121 @@ class RecLayer(_ConcatInputLayer):
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
+  def _get_input(self):
+    """
+    :return: (x, seq_len), where x is (time,batch,dim) and seq_len is (batch,)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    assert self.input_data
+    x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
+    if not self.input_data.is_time_major:
+      assert self.input_data.batch_dim_axis == 0
+      assert self.input_data.time_dim_axis == 1
+      from TFUtil import swapaxes
+      x = swapaxes(x, 0, 1)  # (time,batch,[dim])
+    seq_len = self.input_data.size_placeholder[0]
+    return x, seq_len
+
+  def _get_cell(self, unit):
+    import tensorflow.contrib.rnn as rnn_contrib
+    import TFNativeOp
+    if isinstance(unit, dict):
+      return self.SubnetworkCell(unit)
+    else:
+      assert isinstance(unit, str)
+      if unit.lower() in ["lstmp", "lstm"]:
+        # Some possible LSTM implementations are (in all cases for both CPU and GPU):
+        # * BasicLSTM (the cell), via official TF, pure TF implementation
+        # * LSTMBlock (the cell), via tf.contrib.rnn.
+        # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+        # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
+        # We default to the fastest one, i.e. NativeLSTM.
+        # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
+        unit = "nativelstm"  # TFNativeOp.NativeLstmCell
+    rnn_cell_class = self.get_rnn_cell_class(unit)
+    n_hidden = self.output.dim
+    cell = rnn_cell_class(n_hidden)
+    assert isinstance(
+      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+    return cell
+
+  def _get_output_cell(self, cell):
+    from tensorflow.python.ops import rnn
+    import tensorflow.contrib.rnn as rnn_contrib
+    assert self.input_data
+    assert not self.input_data.sparse
+    x, seq_len = self._get_input()
+    if self._direction == -1:
+      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    if isinstance(cell, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
+      # Will get (time,batch,ydim).
+      y, final_state = rnn.dynamic_rnn(
+        cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
+        initial_state=self._initial_state)
+      self._last_hidden_state = final_state
+    elif isinstance(cell, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
+      # Will get (time,batch,ydim).
+      y, final_state = cell(
+        inputs=x, sequence_length=seq_len, dtype=tf.float32,
+        initial_state=self._initial_state)
+      self._last_hidden_state = final_state
+    else:
+      raise Exception("invalid type: %s" % type(cell))
+    if self._direction == -1:
+      y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    return y
+
+  def _get_output_native_rec_op(self, cell):
+    from TFUtil import dot, sequence_mask_time_major, directed
+    assert self.input_data
+    x, seq_len = self._get_input()
+    if self._input_projection:
+      W = tf.get_variable(name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32)
+      if self.input_data.sparse:
+        x = tf.nn.embedding_lookup(W, x)
+      else:
+        x = dot(x, W)
+    else:
+      assert not self.input_data.sparse
+      assert self.input_data.dim == cell.n_input_dim
+    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
+    x += b
+    index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
+    y, final_state = cell(
+      inputs=directed(x, self._direction), index=directed(index, self._direction),
+      initial_state=self._initial_state)
+    self._last_hidden_state = final_state
+    y = directed(y, self._direction)
+    return y
+
+  class SubnetworkCell(object):
+    def __init__(self, net_dict):
+      """
+      :param dict[str] net_dict:
+      """
+      self.net_dict = net_dict
+
+    def get_initializer(self):
+      pass
+
+  def _get_output_subnet_unit(self, cell):
+    """
+    :param RecLayer.SubnetworkCell cell: 
+    """
+    if self.input_data:
+      assert not self.input_data.sparse
+      x, seq_len = self._get_input()
+      assert x.get_shape().ndims == 3
+      assert x.get_shape().dims[2].value
+    else:
+      x = None
+      seq_len = self.output.size_placeholder[0]  # see BaseLayer.__init__()
+    # TODO...
+
   def get_last_hidden_state(self):
     assert self._last_hidden_state is not None, (
       "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
     return self._last_hidden_state
-
-  class OutputFeedback(object):
-    def __init__(self, parent, target=None):
-      """
-      :param RecLayer parent:
-      :param str|None target:
-      """
-      self.parent = parent
-      # TODO: sampling mode, embedding, etc
-
-  def create_output_feedback(self, **kwargs):
-    return self.OutputFeedback(parent=self, **kwargs)
-
-  class Attention(object):
-    def __init__(self, parent, use_prev_as_input=True):
-      """
-      :param RecLayer parent:
-      :param bool use_prev_as_input: will be concatenated to the cell input
-      """
-      self.parent = parent
-
-  def create_attention(self, **kwargs):
-    return self.Attention(parent=self, **kwargs)
-
-  def attention_loop(self, x, attention, output_feedback):
-    """
-    :param tf.Tensor|None x: input_data, format (time,batch,dim)
-    :param RecLayer.Attention attention:
-    :param RecLayer.OutputFeedback output_feedback:
-    :return: tuple (y, y_seq_lens),
-      where y is of shape (y_time,batch,n_out)
-      and y_seq_lens is of shape (batch,) and describes the output length, and y_time >= max(y_seq_lens).
-    :rtype: (tf.Tensor, tf.Tensor)
-    """
-    if x is not None:
-      assert x.get_shape().ndims == 3
-      assert x.get_shape().dims[2].value
-    # TODO...
 
 
 class FsaLayer(LayerBase):
