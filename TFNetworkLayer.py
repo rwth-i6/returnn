@@ -1365,7 +1365,7 @@ class CombineLayer(LayerBase):
     if not n_out and not out_type:
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
-    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
 
 
 class SubnetworkLayer(LayerBase):
