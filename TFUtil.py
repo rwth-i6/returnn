@@ -118,6 +118,10 @@ class Data(object):
     new_shape = list(self.shape)
     del new_shape[self.time_dim_axis_excluding_batch]
     kwargs = self.get_kwargs()
+    kwargs["batch_dim_axis"] = (
+      self.batch_dim_axis
+      if (self.batch_dim_axis < self.time_dim_axis)
+      else (self.batch_dim_axis - 1))
     kwargs["time_dim_axis"] = None
     kwargs["shape"] = new_shape
     if name:
