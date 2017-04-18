@@ -998,7 +998,7 @@ class ReduceLayer(_ConcatInputLayer):
     return axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, keep_dims, axis, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, **kwargs):
     input_data = get_concat_sources_data_template(sources)
     axis = cls._get_axis(axis=axis, input_data=input_data)
     y_shape = list(input_data.batch_shape)
