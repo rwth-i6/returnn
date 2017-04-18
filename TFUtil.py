@@ -1166,7 +1166,7 @@ class OpCodeCompiler(object):
     if not os.path.exists(base_mod_path):
       return
     import time
-    from Util import hms
+    from Util import hms, LockFile
     cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
     for p in os.listdir(base_mod_path):
       if p == my_mod_path_name:
@@ -1174,6 +1174,10 @@ class OpCodeCompiler(object):
       full_dir_path = "%s/%s" % (base_mod_path, p)
       if not os.path.isdir(full_dir_path):
         continue  # ignore for now
+      lock = LockFile(full_dir_path)
+      if lock.is_locked():
+        continue
+      lock.maybe_remove_old_lockfile()
       info_path = "%s/info.py" % full_dir_path
       if not os.path.exists(info_path):
         self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
@@ -1265,24 +1269,17 @@ class OpCodeCompiler(object):
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
-    import time
-    if self._should_cleanup_old_mydir:
+    from Util import LockFile
+    lock = LockFile(self._mod_path)
+    if self._should_cleanup_old_mydir and not lock.is_locked():
       if os.path.exists(self._mod_path):
         self._cleanup_old_path(self._mod_path, reason="need recompile")
-    if not os.path.exists(self._mod_path):
-      print("OpCompiler create dir: %s" % self._mod_path)
-      try:
-        os.makedirs(self._mod_path)
-      except OSError as exc:
-        print("OpCompiler create dir exception: %s" % exc)
-        # Just continue, might be created by another process in the meantime.
-        # However, to reduce the probability of conflicts, wait a bit and recheck if we need to recompile.
-        print("OpCompiler: waiting 5 secs...")
-        time.sleep(5)
-        if not self._need_recompile():
-          print("OpCompiler: don't need to recompile anymore")
-          return
-        print("OpCompiler: still need to recompile...")
+    with lock:
+      self._maybe_compile_inner()
+
+  def _maybe_compile_inner(self):
+    # Directory should be created by the locking mechanism.
+    assert os.path.exists(self._mod_path)
     with open(self._cc_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2", "-std=c++11"]

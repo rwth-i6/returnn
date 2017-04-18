@@ -97,6 +97,7 @@ class OpMaker(object):
   @property
   def support_native_op_cpp_filename(self):
     my_dir = os.path.abspath(os.path.dirname(__file__) or os.getcwd())
+    my_dir = os.path.realpath(my_dir)  # Make canonical path-name.
     support_native_op_cpp_filename = "%s/NativeOp.cpp" % my_dir
     assert os.path.exists(support_native_op_cpp_filename)
     return support_native_op_cpp_filename
