@@ -1521,8 +1521,7 @@ class RecLayer(_ConcatInputLayer):
       prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
       assert len(prev_hidden_states_flat) == len(self.layers_with_hidden_state)
       prev_states = {k: v for (k, v) in zip(sorted(self.layers_with_hidden_state), prev_hidden_states_flat)}
-      with tf.variable_scope("subnetwork"):
-        self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes)
+      self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes)
       outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
       states_flat = [self.net.layers[k].get_hidden_state() for k in sorted(self.layers_with_hidden_state)]
       return outputs_flat, states_flat
@@ -1740,8 +1739,7 @@ class SubnetworkLayer(LayerBase):
       train_flag=self.network.train_flag,
       extern_data=sub_extern_data,
       parent=self)
-    with tf.variable_scope("subnetwork"):
-      net.construct_from_dict(subnetwork)
+    net.construct_from_dict(subnetwork)
     self.subnetwork = net
     self.output = net.get_default_output_layer().output
     for layer in net.layers.values():
