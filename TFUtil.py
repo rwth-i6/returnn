@@ -404,23 +404,33 @@ def get_current_name_scope():
   Note that this is a private member and might break at some point.
   Note also that this does not need to be the same as get_current_var_scope_name().
   """
-  return tf.get_default_graph()._name_stack
+  return tf.get_default_graph()._name_stack or ""
 
 
 @contextlib.contextmanager
-def reuse_name_scope(name):
+def reuse_name_scope(name, absolute=None):
   """
-  :param str name: relative name scope
+  :param str|tf.VariableScope name: relative name scope (absolute if absolute=True or if tf.VariableScope)
+  :param bool absolute: if True it will be absolute
 
   We try to both set the variable scope and the name scope.
   """
+  if isinstance(name, tf.VariableScope):
+    name = name.name
+    if absolute is not None:
+      assert absolute is True
+    absolute = True
+  assert isinstance(name, str)
   assert name
-  # First figure out the absolute name scope which we want to reuse/set.
-  # The current name scope is more reliable because tf.variable_scope
-  # will always also set the name scope.
-  current_name_scope = get_current_name_scope()
-  if current_name_scope:
-    name = current_name_scope + "/" + name
+  if not absolute:
+    # First figure out the absolute name scope which we want to reuse/set.
+    # The current name scope is more reliable because tf.variable_scope
+    # will always also set the name scope.
+    current_name_scope = get_current_name_scope()
+    if current_name_scope:
+      name = current_name_scope + "/" + name
+  else:
+    current_name_scope = None  # not needed
   assert name[-1] != "/"
   # tf.name_scope with a scope-name ending with "/" will interpret is as absolute name,
   # and use it as-is.
@@ -769,7 +779,6 @@ def swapaxes(x, axis1, axis2):
   :rtype: tf.Tensor
   """
   with tf.name_scope("swapaxes"):
-    shape = tf.shape(x)
     ndim = x.get_shape().ndims
     if ndim is not None:
       if isinstance(axis1, tf.Tensor) or isinstance(axis2, tf.Tensor):
