@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFUtil import Data, OutputWithActivation
+from TFUtil import Data, OutputWithActivation, reuse_name_scope
 
 
 class LayerBase(object):
@@ -112,7 +112,7 @@ class LayerBase(object):
       out_type = {"dim": n_out}
     out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
-    if sources:
+    if sources and not sources[0].output.sparse:
       out_type.setdefault("dtype", sources[0].output.dtype)
     if n_out is not None:
       out_type.setdefault("dim", n_out)
@@ -696,6 +696,8 @@ class LinearLayer(_ConcatInputLayer):
       ndim = x.get_shape().ndims
 
       if self.input_data.sparse:
+        if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
+          x = tf.cast(x, tf.int32)
         x = tf.nn.embedding_lookup(W, x)
         ndim += 1
       else:
@@ -1119,7 +1121,8 @@ class RnnCellLayer(_ConcatInputLayer):
       name="%s_output" % name,
       shape=(n_out,), dim=n_out,
       batch_dim_axis=0,
-      time_dim_axis=None)
+      time_dim_axis=None,
+      size_placeholder={})
 
   @classmethod
   def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
@@ -1147,22 +1150,58 @@ class AttentionBaseLayer(_ConcatInputLayer):
   and we are supposed to return the attention output, e.g. (batch,att_dim).
   """
 
-  def __init__(self, base, **kwargs):
+  def __init__(self, base, base_ctx, **kwargs):
     """
     :param LayerBase base: encoder output to attend on
+    :param LayerBase base_ctx: encoder output used to calculate the attention weights
     """
-    self.base = base
     super(AttentionBaseLayer, self).__init__(**kwargs)
+    self.base = base
+    self.base_ctx = base_ctx
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(AttentionBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["base"] = get_layer(d["base"])
+    d["base_ctx"] = get_layer(d["base_ctx"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, base, **kwargs):
+    """
+    :param LayerBase base:
+    """
+    return base.output.copy_template_excluding_time_dim()
 
 
-class GlobalAttentionLayer(AttentionBaseLayer):
-  layer_class = "global_attention"
-  # TODO...
+class GlobalAttentionContextLayer(AttentionBaseLayer):
+  layer_class = "global_attention_context"
+
+  def __init__(self, **kwargs):
+    super(GlobalAttentionContextLayer, self).__init__(**kwargs)
+    # We expect input_data of shape (batch, inner),
+    # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
+    assert self.input_data.batch_ndim == 2
+    assert self.input_data.time_dim_axis is None
+    assert self.base.output.batch_ndim == 3
+    assert self.base_ctx.output.batch_ndim == 3
+    assert self.input_data.dim == self.base_ctx.output.dim
+    # And we want to do a dot product so that we get (batch, base_time).
+    with tf.name_scope("att_energy"):
+      # Get base of shape (batch, base_time, inner).
+      base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
+      # Get source of shape (batch, inner, 1).
+      source = tf.expand_dims(self.input_data.placeholder, axis=2)
+      energy = tf.matmul(base_ctx, source)
+      energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
+      energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
+      base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(base_weights, axis=1)  # (batch, 1, base_time)
+      out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
+      out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
+      out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      self.output.placeholder = out
+      self.output.size_placeholder = {}
 
 
 class RecLayer(_ConcatInputLayer):
@@ -1262,6 +1301,7 @@ class RecLayer(_ConcatInputLayer):
           initializer=tf.contrib.layers.xavier_initializer(
             seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
+      self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(unit)
       if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
@@ -1499,6 +1539,7 @@ class RecLayer(_ConcatInputLayer):
         layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
         layer.output.placeholder = prev_outputs[name]
         layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
+        layer.output.size_placeholder = {}  # must be set
 
       from copy import deepcopy
       net_dict = deepcopy(self.net_dict)
@@ -1515,6 +1556,9 @@ class RecLayer(_ConcatInputLayer):
       assert not self.net.layers, "do not call this multiple times"
       get_layer("output")
       assert "output" in self.net.layers
+      # Might not be resolved otherwise:
+      for name in self.prev_layers_needed:
+        get_layer(name)
 
     def _get_init_output(self, name, batch_dim):
       """
@@ -1581,7 +1625,8 @@ class RecLayer(_ConcatInputLayer):
       prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
       assert len(prev_hidden_states_flat) == len(self.layers_with_hidden_state)
       prev_states = {k: v for (k, v) in zip(sorted(self.layers_with_hidden_state), prev_hidden_states_flat)}
-      self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes)
+      with reuse_name_scope(self.parent._rec_scope):
+        self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes)
       outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
       states_flat = [self.net.layers[k].get_hidden_state() for k in sorted(self.layers_with_hidden_state)]
       return outputs_flat, states_flat
@@ -1670,12 +1715,13 @@ class RecLayer(_ConcatInputLayer):
         TypeError: if initializer and fn() output structure do not match
         ValueType: if initializer and fn() output lengths do not match
       """
-      net_vars = cell.get_next_loop_vars(
-        net_vars,
-        data=x_ta.read(i) if x_ta else None,
-        classes=y_ta.read(i) if y_ta else None)
-      acc_ta = acc_ta.write(i, cell.net.layers["output"].output.placeholder)
-      return i + 1, net_vars, acc_ta
+      with reuse_name_scope(self._rec_scope.name + "/while_loop_body"):
+        net_vars = cell.get_next_loop_vars(
+          net_vars,
+          data=x_ta.read(i) if x_ta else None,
+          classes=y_ta.read(i) if y_ta else None)
+        acc_ta = acc_ta.write(i, cell.net.layers["output"].output.placeholder)
+        return i + 1, net_vars, acc_ta
 
     def cond(i, net_vars, acc_ta):
       return tf.less(i, max_out_len)
