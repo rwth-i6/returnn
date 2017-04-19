@@ -191,7 +191,7 @@ class TFNetwork(object):
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, get_layer=get_layer)
+    layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def add_layer(self, name, layer_class, **layer_desc):

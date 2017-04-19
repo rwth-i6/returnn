@@ -44,13 +44,9 @@ class Data(object):
     """
     self.name = name
     if sparse is None:
-      if dtype and dtype.startswith("int"):
+      if dtype and (dtype.startswith("int") or dtype.startswith("uint")):
         sparse = True
-      elif name == "classes":
-        sparse = True
-      elif shape is not None and len(shape) == 1:
-        sparse = True
-      if sparse is None:
+      else:
         sparse = False
     self.sparse = sparse
     if shape is None:
