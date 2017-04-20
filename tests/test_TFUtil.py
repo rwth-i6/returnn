@@ -1,4 +1,6 @@
 
+# start test like this:  nosetests-2.7  tests/test_TFUtil.py  --nologcapture
+
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
@@ -160,3 +162,27 @@ def test_name_var_scope_mixing():
           with reuse_name_scope(scope):
             assert_equal(get_current_var_scope_name(), "mv1/v2")
             assert_equal(get_current_name_scope(), "mv1/v2")
+
+
+def test_loop_var_creation():
+  # Related TF bugs:
+  # https://github.com/tensorflow/tensorflow/issues/3114
+  # https://github.com/tensorflow/tensorflow/issues/4478
+  # https://github.com/tensorflow/tensorflow/issues/8604
+
+  # tf.reset_default_graph()  # Strange, this does not work.
+  i = tf.constant(0)
+
+  def body(i):
+    # None of these works, with error:
+    # InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
+    # The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
+    # w = tf.Variable(tf.constant(1))
+    # w = tf.Variable(tf.constant_initializer(value=1, dtype=tf.int32)(shape=()))
+    # However, resetting the control dependencies will also reset the frame.
+    with var_creation_scope():
+      w = tf.Variable(tf.constant(1))
+    return [i + w]
+
+  loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
+  session.run(tf.global_variables_initializer())

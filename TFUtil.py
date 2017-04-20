@@ -456,6 +456,24 @@ def reuse_name_scope(name, absolute=None):
       yield scope
 
 
+@contextlib.contextmanager
+def var_creation_scope():
+  """
+  If you create a variable inside of a while-loop, you might get the following error:
+    InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
+    The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
+  Also see tests/test_TFUtil.py:test_loop_var_creation().
+  Related TF bugs:
+    https://github.com/tensorflow/tensorflow/issues/3114
+    https://github.com/tensorflow/tensorflow/issues/4478
+    https://github.com/tensorflow/tensorflow/issues/8604
+  The solution is to reset the current frame.
+  Resetting all control dependencies has this effect.
+  """
+  with tf.control_dependencies(None) as dep:
+    yield dep
+
+
 class FlipGradientBuilder(object):
   """
   Gradient Reversal Layer.
