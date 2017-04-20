@@ -1655,6 +1655,7 @@ class RecLayer(_ConcatInputLayer):
         x, seq_len = self._get_input()  # x will be (time,batch,..,dim)
         x_shape = tf.shape(x)
         x_ta = tf.TensorArray(
+          name="x_ta",
           dtype=self.input_data.dtype,
           element_shape=tf.TensorShape(self.input_data.copy_template_excluding_time_dim().batch_shape),
           size=x_shape[0],
@@ -1668,6 +1669,7 @@ class RecLayer(_ConcatInputLayer):
       data = self.network.extern_data.get_default_input_data()
       with tf.name_scope("batch_dim"):
         batch_dim = tf.shape(data.placeholder)[data.batch_dim_axis]
+    max_out_len = tf.reduce_max(seq_len)
 
     # TODO: Better check for train_flag.
     # Maybe more generic via sampling options later.
@@ -1675,10 +1677,17 @@ class RecLayer(_ConcatInputLayer):
     if self.target and self.network.train_flag is not False:
       y_data = self.network.get_extern_data(self.target, mark_data_key_as_used=True)
       y = y_data.get_placeholder_as_time_major()
+      y_max_len = tf.shape(y)[0]
+      with tf.control_dependencies([tf.assert_equal(max_out_len, y_max_len,
+          ["RecLayer %r with sources %r." % (self.name, self.sources),
+           " The length of the sources (", max_out_len,
+           ") differ from the length of the target (", y_max_len, ")."])]):
+        y_max_len = tf.identity(y_max_len)
       y_ta = tf.TensorArray(
+        name="y_ta",
         dtype=y_data.dtype,
         element_shape=tf.TensorShape(y_data.copy_template_excluding_time_dim().batch_shape),
-        size=tf.shape(y)[0],
+        size=y_max_len,
         infer_shape=True)
       y_ta = y_ta.unstack(y)
 
@@ -1696,10 +1705,10 @@ class RecLayer(_ConcatInputLayer):
 
     init_net_vars = cell.get_init_loop_vars(batch_dim=batch_dim)
     init_i = tf.constant(0)
-    max_out_len = tf.reduce_max(seq_len)
     min_out_len = max_out_len
     # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
     init_acc_ta = tf.TensorArray(
+      name="acc_ta",
       dtype=cell.layer_data_templates["output"].output.dtype,
       element_shape=tf.TensorShape(cell.layer_data_templates["output"].output.batch_shape),
       size=min_out_len,
@@ -1720,7 +1729,8 @@ class RecLayer(_ConcatInputLayer):
         TypeError: if initializer and fn() output structure do not match
         ValueType: if initializer and fn() output lengths do not match
       """
-      with reuse_name_scope(self._rec_scope.name + "/while_loop_body"):
+      # The inner scope name is a bit screwed up and this is nicer anyway.
+      with reuse_name_scope(self._rec_scope.name + "/while_loop_body", absolute=True):
         net_vars = cell.get_next_loop_vars(
           net_vars,
           data=x_ta.read(i) if x_ta else None,
