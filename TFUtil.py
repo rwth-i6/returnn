@@ -1616,3 +1616,27 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
     out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
     # Note: Square all the filter values.
     return tf.reduce_sum(out ** 2, axis=-1)
+
+
+def nan_to_num(x, nan_num=0, inf_num=1e30):
+  """
+  Like numpy.nan_to_num().
+  
+  :param tf.Tensor x: 
+  :param float|tf.Tensor nan_num: 
+  :param float|tf.Tensor inf_num: 
+  :return: x with replaced nan and inf 
+  """
+  with tf.name_scope("nan_to_num"):
+    nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
+    inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
+    # Note that tf.where() does not support broadcasting at the moment,
+    # so we need the same shape. The following will do that.
+    # This should be removed once tf.where() supports broadcasting.
+    # https://github.com/tensorflow/tensorflow/issues/3945
+    nan_num = tf.ones_like(x) * nan_num
+    inf_num = tf.ones_like(x) * inf_num
+    x = tf.where(tf.is_nan(x), nan_num, x)
+    x = tf.where(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
+    x = tf.where(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
+    return x
