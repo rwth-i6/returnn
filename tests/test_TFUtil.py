@@ -140,3 +140,23 @@ def test_reuse_var_scope():
         with reuse_name_scope(scope):
           assert_equal(get_current_var_scope_name(), "v1/v2")
           assert_equal(get_current_name_scope(), "v1/v2")
+
+
+def test_name_var_scope_mixing():
+  with tf.variable_scope("mv1"):
+    assert_equal(get_current_var_scope_name(), "mv1")
+    assert_equal(get_current_name_scope(), "mv1")
+    with tf.variable_scope("v2") as scope:
+      assert_equal(get_current_var_scope_name(), "mv1/v2")
+      assert_equal(get_current_name_scope(), "mv1/v2")
+      with tf.name_scope("v3"):
+        assert_equal(get_current_name_scope(), "mv1/v2/v3")
+        assert_equal(get_current_var_scope_name(), "mv1/v2")
+        assert_equal(scope.name, "mv1/v2")
+        # Note: tf.variable_scope("v4") is broken here.
+        with reuse_name_scope("v4"):
+          assert_equal(get_current_var_scope_name(), "mv1/v2/v3/v4")
+          assert_equal(get_current_name_scope(), "mv1/v2/v3/v4")
+          with reuse_name_scope(scope):
+            assert_equal(get_current_var_scope_name(), "mv1/v2")
+            assert_equal(get_current_name_scope(), "mv1/v2")
