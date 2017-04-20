@@ -48,7 +48,7 @@ class ExternData(object):
 
   def register_data(self, data):
     """
-    :param ExternData.Data data:
+    :param Data data: will use data.name as the key
     """
     assert data.name not in self.data
     self.data[data.name] = data
@@ -90,13 +90,13 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, eval_flag=False):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, parent=None):
     """
-    :param Config.Config config: only needed to init extern_data if not specified explicitely
+    :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
     :param int rnd_seed:
-    :param bool train_flag: True if we want to use this model in training
-    :param bool eval_flag: True if we want to use this model in evaluation
+    :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
+    :param TFNetworkLayer.LayerBase|None parent:
     """
     if extern_data is None:
       extern_data = ExternData()
@@ -109,7 +109,7 @@ class TFNetwork(object):
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     self.train_flag = train_flag
-    self.eval_flag = eval_flag
+    self.parent = parent
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
@@ -123,6 +123,7 @@ class TFNetwork(object):
     self.saver = None  # type: tf.train.Saver
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
+    self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
 
   def construct_from(self, list_or_dict):
     """
@@ -158,46 +159,56 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     """
-    def _construct_layer(name):
-      """
-      :param str name:
-      :param dict[str] layer_desc:
-      """
-      if name in self.layers:
-        return self.layers[name]
-      if name not in net_dict:
-        if name == "data":
-          layer_desc = {"class": "source", "from": []}
-        elif name.startswith("data:"):
-          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
-        else:
-          raise Exception("layer not found: %r" % name)
-      else:
-        layer_desc = net_dict[name]
-      self.layers_desc[name] = layer_desc
-      layer_desc = layer_desc.copy()
-      class_name = layer_desc.pop("class")
-      layer_class = get_layer_class(class_name)
-      src_names = layer_desc.pop("from", ["data"])
-      if not isinstance(src_names, (list, tuple)):
-        src_names = [src_names]
-      layer_desc["sources"] = [
-        _construct_layer(src_name)
-        for src_name in src_names
-        if not src_name == "none"]
-      return self.add_layer(name=name, layer_class=layer_class, **layer_desc)
-
     for name, layer_desc in sorted(net_dict.items()):
       if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
-        _construct_layer(name)
+        self._construct_layer(net_dict, name)
+
+  def _construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
+    """
+    :param dict[str,dict[str]] net_dict:
+    :param str name: layer name
+    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict
+    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: self.add_layer
+    :rtype: LayerBase
+    """
+    if name in self.layers:
+      return self.layers[name]
+    if name not in net_dict:
+      if name == "data":
+        layer_desc = {"class": "source", "from": []}
+      elif name.startswith("data:"):
+        layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
+      else:
+        raise Exception("layer not found: %r" % name)
+    else:
+      layer_desc = net_dict[name]
+    if not get_layer:
+      def get_layer(src_name):
+        return self._construct_layer(net_dict=net_dict, name=src_name)
+    if not add_layer:
+      add_layer = self.add_layer
+    self.layers_desc[name] = layer_desc
+    layer_desc = layer_desc.copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+    return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def add_layer(self, name, layer_class, **layer_desc):
     """
     :param str name:
-    :param ()->LayerBase layer_class:
+    :param (()->LayerBase)|LayerBase layer_class:
     """
+    layer_desc = layer_desc.copy()
+    assert "name" not in layer_desc
+    assert "network" not in layer_desc
+    assert "output" not in layer_desc
+    layer_desc["name"] = name
+    layer_desc["network"] = self
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
-      layer = layer_class(name=name, network=self, **layer_desc)
+      output = layer_class.get_out_data_from_opts(**layer_desc)
+      layer = layer_class(output=output, **layer_desc)
+      layer.post_init()
     assert layer.output
     assert layer.output.placeholder is not None
     assert layer.output.size_placeholder is not None
@@ -245,19 +256,20 @@ class TFNetwork(object):
       self.total_objective = self.total_loss + self.total_constraints
       tf.summary.scalar("objective", self.total_objective)
 
-  def get_all_losses(self):
+  def maybe_construct_objective(self):
     if self.total_objective is None:
       self.construct_objective()
+
+  def get_all_losses(self):
+    self.maybe_construct_objective()
     return self.loss_by_layer
 
   def get_all_errors(self):
-    if self.total_objective is None:
-      self.construct_objective()
+    self.maybe_construct_objective()
     return self.error_by_layer
 
   def get_objective(self):
-    if self.total_objective is None:
-      self.construct_objective()
+    self.maybe_construct_objective()
     return self.total_objective
 
   def get_used_targets(self):
@@ -305,6 +317,18 @@ class TFNetwork(object):
       return output_layers[1]
     return None  # no sensible default
 
+  def get_default_output_layer(self, must_exist=True):
+    """
+    :param bool must_exist: if it does not exist, will raise an exception
+    :rtype: LayerBase|None
+    :return: the default output layer
+    """
+    name = self.get_default_output_layer_name()
+    if not name:
+      assert not must_exist, "default output layer does not exist"
+      return None
+    return self.layers[name]
+
   def get_params_list(self):
     """
     :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step
@@ -336,13 +360,19 @@ class TFNetwork(object):
     """
     if not self._selected_train_layers:
       self.declare_train_params()
+    trainable_vars_col = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    assert isinstance(trainable_vars_col, list)
     l = []  # type: list[tf.Variable]
     for layer_name in sorted(self._selected_train_layers):
       layer = self.layers[layer_name]
       assert isinstance(layer, LayerBase)
+      if not layer.trainable:
+        continue
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
-        l.append(param)
+        if param in trainable_vars_col:
+          l.append(param)
+          trainable_vars_col.remove(param)
     return l
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
@@ -505,6 +535,19 @@ class TFNetwork(object):
       print("  (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
     print("net trainable params:", self.get_trainable_params(), file=log.v2)
+
+  def cond_on_train(self, fn_train, fn_eval):
+    """
+    Uses fn_train() or fn_eval() base on self.train_flag.
+    It will be a branched evaluation.
+
+    :param ()->tf.Tensor fn_train:
+    :param ()->tf.Tensor fn_eval:
+    :return: fn_train() if self.train_flag else fn_eval()
+    :rtype: tf.Tensor
+    """
+    from TFUtil import cond
+    return cond(self.train_flag, fn_train, fn_eval)
 
 
 class TFNetworkParamsSerialized(object):

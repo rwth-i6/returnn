@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 import contextlib
@@ -42,13 +44,9 @@ class Data(object):
     """
     self.name = name
     if sparse is None:
-      if dtype and dtype.startswith("int"):
+      if dtype and (dtype.startswith("int") or dtype.startswith("uint")):
         sparse = True
-      elif name == "classes":
-        sparse = True
-      elif shape is not None and len(shape) == 1:
-        sparse = True
-      if sparse is None:
+      else:
         sparse = False
     self.sparse = sparse
     if shape is None:
@@ -57,7 +55,7 @@ class Data(object):
         shape = (None,)  # assume common (time,)
       else:
         shape = (None, dim)  # assume common (time,feat)
-    self.shape = shape  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -97,6 +95,35 @@ class Data(object):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     return {key: getattr(self, key) for key in keys}
 
+  def copy(self):
+    """
+    :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
+    :rtype: Data
+    """
+    data = Data(**self.get_kwargs())
+    data.placeholder = self.placeholder
+    data.size_placeholder = self.size_placeholder
+    return data
+
+  def copy_template_excluding_time_dim(self, name=None):
+    """
+    :param str|None name: if set, this will be the new name
+    :return: copy of myself excluding the time-dimension without placeholder 
+    """
+    assert self.time_dim_axis is not None
+    new_shape = list(self.shape)
+    del new_shape[self.time_dim_axis_excluding_batch]
+    kwargs = self.get_kwargs()
+    kwargs["batch_dim_axis"] = (
+      self.batch_dim_axis
+      if (self.batch_dim_axis < self.time_dim_axis)
+      else (self.batch_dim_axis - 1))
+    kwargs["time_dim_axis"] = None
+    kwargs["shape"] = new_shape
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
@@ -106,13 +133,14 @@ class Data(object):
     return tuple([dim is None for dim in self.shape])
 
   def _get_var_len_axes(self):
-    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d is None])
+    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d])
 
-  def matches_dim_pattern(self, other):
+  def matches_var_dim_pattern(self, other):
     """
     :param Data other:
-    :return: whether the dim pattern matches, i.e. same variable dims (get_variable_dim_pattern), same time dim,
-      excluding batch-dim.
+    :return: whether the variable-dims pattern matches,
+      i.e. same variable dims (get_variable_dim_pattern), same time dim, excluding batch-dim.
+      i.e. the size_placeholder should be compatible.
     :rtype: bool
     """
     if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
@@ -120,14 +148,22 @@ class Data(object):
     return self._get_var_len_axes() == other._get_var_len_axes()
 
   def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype", "sparse"]
+    keys = ["shape", "dtype"]
     if self.sparse:
+      keys.append("sparse")
       keys.append("dim")
+    if self.batch_dim_axis != 0:
+      keys.append("batch_dim_axis")
+    if self.time_dim_axis is None or self.time_dim_axis >= 2:
+      keys.append("time_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  def __repr__(self):
+    return self.get_description()
 
   @property
   def batch_shape(self):
@@ -136,6 +172,32 @@ class Data(object):
     :rtype: tuple[int|None]
     """
     return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+
+  @property
+  def ndim(self):
+    """
+    :rtype: int
+    :return: ndim counted without batch-dim
+    """
+    return len(self.shape)
+
+  @property
+  def ndim_dense(self):
+    """
+    :rtype: int
+    :return: ndim counted without batch-dim, added by 1 if we are sparse
+    """
+    if self.sparse:
+      return self.ndim + 1
+    return self.ndim
+
+  @property
+  def batch_ndim(self):
+    """
+    :rtype: int
+    :return: ndim counted with batch-dim
+    """
+    return self.ndim + 1
 
   @property
   def is_time_major(self):
@@ -158,6 +220,65 @@ class Data(object):
     assert self.time_dim_axis == 1
     return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
 
+  def get_placeholder_as_batch_major(self):
+    if self.batch_dim_axis == 0:
+      return self.placeholder
+    return swapaxes(self.placeholder, 0, self.batch_dim_axis)  # (time,batch,dim)
+
+  def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
+    if self.batch_dim_axis == batch_dim_axis:
+      return self.placeholder
+    return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
+
+  def get_placeholder_time_flattened(self):
+    assert self.have_tim_axis()
+    # flatten_with_seq_len_mask only works for these two cases at the moment:
+    assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
+    seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
+    return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
+
+  def get_placeholder_flattened(self, keep_dims=False):
+    """
+    :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
+    :rtype: tf.Tensor
+    :return: placeholder where all dynamic axes are flattened into a single axis.
+      e.g. for the usual case (batch, time, dim), it becomes (time', dim),
+      or (batch, time, height, dim) will also become (time', dim).
+      with keep_dims, (batch, time, height, dim) will become (time', 1, 1, dim).
+    """
+    x = self.placeholder
+    dyn_axes = self.get_dynamic_batch_axes()
+    if not dyn_axes:
+      return x
+    assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
+    if len(dyn_axes) == 1:
+      return x
+    orig_num_dyn_axes = len(dyn_axes)
+    ndim = len(self.batch_shape)
+    if self.have_tim_axis():
+      x = self.get_placeholder_time_flattened()
+      removed_axis = max(self.time_dim_axis, self.batch_dim_axis)
+      dyn_axes.remove(removed_axis)
+      dyn_axes = [(i if (i < removed_axis) else (i - 1))
+                  for i in dyn_axes]
+      ndim -= 1
+    if len(dyn_axes) > 1:
+      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
+      for i in dyn_axes:
+        if i > 0:
+          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
+      shape = tf.shape(x)
+      x = tf.reshape(
+        x,
+        [tf.reduce_prod([shape[i] for i in dyn_axes])] +
+        [shape[i] for i in range(ndim) if i not in dyn_axes])
+      dyn_axes = [0]
+    assert dyn_axes == [0]
+    if keep_dims and orig_num_dyn_axes >= 2:
+      for i in range(orig_num_dyn_axes - 1):
+        x = tf.expand_dims(x, axis=1)
+    return x
+
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -179,13 +300,47 @@ class Data(object):
       return axis
     return axis - 1
 
-  @property
-  def default_broadcast_noise_shape(self):
+  def have_tim_axis(self):
+    return self.time_dim_axis is not None
+
+  def get_dynamic_batch_axes(self):
     """
-    :return: noise-shape which will broadcast along all dynamic dimensions and time/batch dim
+    :rtype: list[int]
+    :return: list of axes which have dynamic shape, such as time and batch, and maybe others.
+      such other dynamic axes are currently defined as such where self.batch_shape[i] is None.
+    """
+    return [axis
+            for axis, dim in enumerate(self.batch_shape)
+            if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis])]
+
+  def get_dynamic_axes(self):
+    """
+    :rtype: list[int]
+    :return: like self.get_dynamic_batch_axes() but counted without batch-dim
+    """
+    return [self.get_batch_axis_excluding_batch(axis)
+            for axis in self.get_dynamic_batch_axes()
+            if not axis == self.batch_dim_axis]
+
+  def get_non_dynamic_axes(self):
+    """
+    :rtype: list[int]
+    :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
+    """
+    all_axes = self.get_axes(exclude_batch=True)
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [self.get_batch_axis_excluding_batch(axis)
+            for axis in all_axes
+            if axis not in dyn_axes]
+
+  @property
+  def non_dynamic_batch_shape(self):
+    """
+    :return: shape which will broadcast along all dynamic dimensions and time/batch dim
     :rtype: tuple[int]
     """
-    return [1 if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis]) else dim
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [1 if (axis in dyn_axes) else dim
             for axis, dim in enumerate(self.batch_shape)]
 
 
@@ -227,47 +382,96 @@ def variable_summaries(var, name):
     tf.summary.scalar('%s_stddev' % name, stddev)
     tf.summary.scalar('%s_max' % name, tf.reduce_max(var))
     tf.summary.scalar('%s_min' % name, tf.reduce_min(var))
-    tf.histogram_summary('%s_histogram' % name, var)
+    tf.summary.histogram('%s_histogram' % name, var)
 
 
-def get_current_name_scope(graph=None):
+def get_current_var_scope_name():
   """
-  :param tf.Graph|None graph:
-  :return: current name scope
+  :return: current absolute variable scope name, via tf.variable_scope
   :rtype: str
   """
-  if graph is None:
-    graph = tf.get_default_graph()
-  assert isinstance(graph, tf.Graph)
-  return graph._name_stack
+  v = tf.get_variable_scope()
+  return v.name
+
+
+def get_current_name_scope():
+  """
+  :return: current absolute name scope, via tf.name_scope
+  :rtype: str
+
+  http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
+
+  Note that this is a private member and might break at some point.
+  Note also that this does not need to be the same as get_current_var_scope_name().
+  """
+  return tf.get_default_graph()._name_stack or ""
 
 
 @contextlib.contextmanager
-def reuse_name_scope(name):
+def reuse_name_scope(name, absolute=None):
   """
-  :param str name: relative name scope
+  :param str|tf.VariableScope name: relative name scope (absolute if absolute=True or if tf.VariableScope)
+  :param bool absolute: if True it will be absolute
 
-  http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
+  We try to both set the variable scope and the name scope.
   """
+  if isinstance(name, tf.VariableScope):
+    name = name.name
+    if absolute is not None:
+      assert absolute is True
+    absolute = True
+  assert isinstance(name, str)
   assert name
-  g = tf.get_default_graph()
-  assert isinstance(g, tf.Graph)
-  current_name_scope = get_current_name_scope(g)
-  if current_name_scope:
-    name = current_name_scope + "/" + name
-  if name[-1] != "/":
-    name += "/"
-  # Actually, tf.variable_scope doesn't fully support the absolute name-scope with ending "/"
-  # but it uses tf.name_scope internally which uses this syntax.
-  with tf.variable_scope(name) as scope:
-    assert isinstance(scope, tf.VariableScope)
-    # remove "/" from the end of the var-scope.
-    # This is a work-around to fix up the variable scope behavior for nested variable scopes.
-    # WARNING: This might break at some future point.
-    assert scope.name is scope._name
-    assert scope.name[-1] == "/"
-    scope._name = scope._name[:-1]
-    yield scope
+  if not absolute:
+    # First figure out the absolute name scope which we want to reuse/set.
+    # The current name scope is more reliable because tf.variable_scope
+    # will always also set the name scope.
+    current_name_scope = get_current_name_scope()
+    if current_name_scope:
+      name = current_name_scope + "/" + name
+  else:
+    current_name_scope = None  # not needed
+  assert name[-1] != "/"
+  # tf.name_scope with a scope-name ending with "/" will interpret is as absolute name,
+  # and use it as-is.
+  # In all other cases, it would create a new name-scope with a new unique name,
+  # which is not what we want.
+  with tf.name_scope(name + "/"):
+    # tf.name_scope will not set the variable scope.
+    # tf.variable_scope will also set the name scope, but the logic is broken
+    # for absolute name scopes, thus we had to do the tf.name_scope manually above.
+    # We create the dummy_var_scope to force it to reuse that name.
+    # Note that the reuse-argument might be miss-leading in this context:
+    # It means that tf.get_variable() will search for existing variables and errors otherwise.
+    dummy_var_scope = tf.VariableScope(reuse=None, name=name + "/")
+    with tf.variable_scope(dummy_var_scope) as scope:
+      assert isinstance(scope, tf.VariableScope)
+      # remove "/" from the end of the var-scope.
+      # This is a work-around to fix up the variable scope behavior for nested variable scopes.
+      # Warning: This might break at some future point.
+      assert scope.name is scope._name
+      assert scope.name[-1] == "/"
+      scope._name = scope._name[:-1]
+      assert name == scope.name, "%r" % current_name_scope
+      yield scope
+
+
+@contextlib.contextmanager
+def var_creation_scope():
+  """
+  If you create a variable inside of a while-loop, you might get the following error:
+    InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
+    The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
+  Also see tests/test_TFUtil.py:test_loop_var_creation().
+  Related TF bugs:
+    https://github.com/tensorflow/tensorflow/issues/3114
+    https://github.com/tensorflow/tensorflow/issues/4478
+    https://github.com/tensorflow/tensorflow/issues/8604
+  The solution is to reset the current frame.
+  Resetting all control dependencies has this effect.
+  """
+  with tf.control_dependencies(None) as dep:
+    yield dep
 
 
 class FlipGradientBuilder(object):
@@ -430,6 +634,22 @@ def get_shape_dim(x, axis):
   return tf.shape(x)[axis]
 
 
+def get_shape(x):
+  """
+  :param tf.Tensor x:
+  :return: list of scalars, which are either int if known statically, or otherwise expressions
+  :rtype: list[int|tf.Tensor]
+  """
+  with tf.name_scope("get_shape"):
+    dyn_shape = tf.shape(x)
+    static_shape = x.get_shape()
+    assert static_shape.ndims is not None
+    return [static_shape.dims[i].value
+            if static_shape.dims[i].value is not None
+            else dyn_shape[i]
+            for i in range(static_shape.ndims)]
+
+
 def get_ndim(x):
   """
   :param tf.Tensor x:
@@ -577,7 +797,6 @@ def swapaxes(x, axis1, axis2):
   :rtype: tf.Tensor
   """
   with tf.name_scope("swapaxes"):
-    shape = tf.shape(x)
     ndim = x.get_shape().ndims
     if ndim is not None:
       if isinstance(axis1, tf.Tensor) or isinstance(axis2, tf.Tensor):
@@ -749,7 +968,7 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
       flat_time_idxs = tf.boolean_mask(time_idxs, mask)  # (N,)
       batch_idxs = expand_dims_unbroadcast(tf.range(batch_size), 1, max_time)  # shape (batch,time)
       flat_batch_idxs = tf.boolean_mask(batch_idxs, mask)  # (N,)
-      flat_idxs = tf.pack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
+      flat_idxs = tf.stack([flat_batch_idxs, flat_time_idxs], axis=1)  # shape (N, 2)
       # tf.SparseTensor requires int64 indices
       flat_idxs = tf.cast(flat_idxs, tf.int64)
     with tf.name_scope("shape"):
@@ -974,7 +1193,7 @@ class OpCodeCompiler(object):
     if not os.path.exists(base_mod_path):
       return
     import time
-    from Util import hms
+    from Util import hms, LockFile
     cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
     for p in os.listdir(base_mod_path):
       if p == my_mod_path_name:
@@ -982,6 +1201,10 @@ class OpCodeCompiler(object):
       full_dir_path = "%s/%s" % (base_mod_path, p)
       if not os.path.isdir(full_dir_path):
         continue  # ignore for now
+      lock = LockFile(full_dir_path)
+      if lock.is_locked():
+        continue
+      lock.maybe_remove_old_lockfile()
       info_path = "%s/info.py" % full_dir_path
       if not os.path.exists(info_path):
         self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
@@ -998,7 +1221,10 @@ class OpCodeCompiler(object):
     print("OpCompiler delete old, %s: %s" % (reason, p))
     assert os.path.exists(p)
     import shutil
-    shutil.rmtree(p)
+    try:
+      shutil.rmtree(p)
+    except OSError as exc:
+      print("OpCompiler delete exception (%s). Will ignore and try to continue anyway." % exc)
 
   def _load_info(self):
     filename = self._info_filename
@@ -1024,16 +1250,16 @@ class OpCodeCompiler(object):
   def _make_code_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update(self.code)
+    hash.update(self.code.encode("utf8"))
     return hash.hexdigest()
 
   def _make_hash(self):
     import hashlib
     hash = hashlib.md5()
-    hash.update("{")
+    hash.update("{".encode("utf8"))
     for key in self._relevant_info_keys:
-      hash.update("%s:{%s}" % (key, self._info_dict[key]))
-    hash.update("}")
+      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
+    hash.update("}".encode("utf8"))
     return hash.hexdigest()
 
   def _save_info(self):
@@ -1070,12 +1296,17 @@ class OpCodeCompiler(object):
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
-    if self._should_cleanup_old_mydir:
+    from Util import LockFile
+    lock = LockFile(self._mod_path)
+    if self._should_cleanup_old_mydir and not lock.is_locked():
       if os.path.exists(self._mod_path):
         self._cleanup_old_path(self._mod_path, reason="need recompile")
-    if not os.path.exists(self._mod_path):
-      print("OpCompiler create dir: %s" % self._mod_path)
-      os.makedirs(self._mod_path)
+    with lock:
+      self._maybe_compile_inner()
+
+  def _maybe_compile_inner(self):
+    # Directory should be created by the locking mechanism.
+    assert os.path.exists(self._mod_path)
     with open(self._cc_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2", "-std=c++11"]
@@ -1205,6 +1436,7 @@ def debugRegisterBetterRepr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
+  This monkey-patches clazz.__repr__ of some TF classes if they are object.__repr__.
   """
 
   from tensorflow.python.framework import tensor_util
@@ -1231,21 +1463,180 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
 
-  tf.IndexedSlices.__repr__ = indexed_slices_repr
-  tf.Operation.__repr__ = op_repr
-  tf.Variable.__repr__ = var_repr
+  for cl, f in [
+        (tf.IndexedSlices, indexed_slices_repr),
+        (tf.Operation, op_repr),
+        (tf.Variable, var_repr)]:
+    if getattr(cl, "__repr__") is object.__repr__:
+      setattr(cl, "__repr__", f)
 
 
 def cond(pred, fn1, fn2, name=None):
+  """
+  This is a wrapper around tf.control_flow_ops.cond().
+  This will be a branched execution, i.e. either fn1() or fn2() will be executed,
+  or at least the resulting graph will be evaluated.
+  If pred can is constant at the call, only the corresponding fn will be called.
+
+  :param tf.Tensor|bool pred:
+  :param ()->tf.Tensor fn1:
+  :param ()->tf.Tensor fn2:
+  :param str name:
+  :return: fn1() if pred else fn2()
+  :rtype: tf.Tensor
+  """
   if not callable(fn1):
     raise TypeError("fn1 must be callable.")
   if not callable(fn2):
     raise TypeError("fn2 must be callable.")
-  pred_const = tf.tensor_util.constant_value(pred)
-  if pred_const is not None:
-    pass  # TODO...
   if pred is True:
     return fn1()
   if pred is False:
     return fn2()
-  tf.control_flow_ops.cond()
+  from tensorflow.python.framework import tensor_util
+  pred_const = tensor_util.constant_value(pred)
+  if pred_const is not None:
+    if pred_const:
+      return fn1()
+    else:
+      return fn2()
+  from tensorflow.python.ops import control_flow_ops
+  return control_flow_ops.cond(pred, fn1, fn2, name=name)
+
+
+def single_strided_slice(x, axis, begin=None, end=None, step=None):
+  """
+  :param tf.Tensor x:
+  :param int|tf.Tensor axis:
+  :param int|tf.Tensor|None begin:
+  :param int|tf.Tensor|None end:
+  :param int|tf.Tensor|None step:
+  :return: e.g. if axis == 0, returns x[begin:end:step], if axis == 1, returns x[:, begin:end:step], etc.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("single_strided_slice"):
+    if isinstance(axis, int):
+      if axis < 0 and x.get_shape().ndims is not None:
+        axis %= x.get_shape().ndims
+        assert axis >= 0
+      if axis >= 0:
+        return x[(slice(None),) * axis + (slice(begin, end, step),)]
+    else:
+      assert isinstance(axis, tf.Tensor)
+    axis = axis % tf.rank(x)
+    shape = tf.shape(x)
+    if begin is None:
+      begin = 0
+    if end is None:
+      end = shape[axis]
+    begins = tf.concat([tf.zeros((axis,), tf.int32), (begin,)], axis=0)
+    ends = tf.concat([shape[:axis], (end,)], axis=0)
+    if step is not None:
+      strides = tf.concat([tf.ones((axis,), tf.int32), (step,)], axis=0)
+    else:
+      strides = None
+    return tf.strided_slice(x, begin=begins, end=ends, strides=strides)
+
+
+def circular_pad(x, paddings, axes=None):
+  """
+  :param tf.Tensor x: shape (..., height, width)
+  :param int|((int,int), (int,int))|tf.Tensor paddings: how much to add ((top,bottom),(left,right))
+  :return: tensor with shape (..., top + height + bottom, left + width + right)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("circular_pad"):
+    ndim = x.get_shape().ndims
+    assert ndim is not None
+    shape = tf.shape(x)
+    if axes is None:
+      axis_height = ndim - 2
+      axis_width = ndim - 1
+    elif isinstance(axes, tf.Tensor):
+      axes = check_input_ndim(axes, 1)
+      axes = check_input_dim(axes, 0, 2)
+      axis_height, axis_width = axes[0], axes[1]
+    else:
+      axis_height, axis_width = axes
+    height, width = shape[axis_height], shape[axis_width]
+    if isinstance(paddings, tf.Tensor):
+      paddings = check_input_ndim(paddings, 2)
+      paddings = check_input_dim(paddings, 0, 2)
+      paddings = check_input_dim(paddings, 1, 2)
+      top, bottom = paddings[0, 0], paddings[0, 1]
+      left, right = paddings[1, 0], paddings[1, 1]
+    elif isinstance(paddings, int):
+      top = bottom = left = right = paddings
+    else:
+      assert isinstance(paddings, (list, tuple))
+      (top, bottom), (left, right) = paddings
+    left_x = single_strided_slice(x, begin=width - left, axis=axis_width)
+    right_x = single_strided_slice(x, end=right, axis=axis_width)
+    left_right_and_x = tf.concat([left_x, x, right_x], axis=axis_width)  # shape (..., height, left + width + right)
+    top_x = single_strided_slice(left_right_and_x, begin=height - top, axis=axis_height)
+    bottom_x = single_strided_slice(left_right_and_x, end=bottom, axis=axis_height)
+    all_combined_x = tf.concat([top_x, left_right_and_x, bottom_x], axis=axis_height)  # final shape
+    assert isinstance(all_combined_x, tf.Tensor)
+    return all_combined_x
+
+
+def spatial_smoothing_energy(x, dim, use_circular_conv=True):
+  """
+  :param tf.Tensor x: shape (..., dim)
+  :param int dim: last dimension of x
+  :param bool use_circular_conv: whether to use circular convolution, via circular_pad
+  :rtype: tf.Tensor
+  :return: energy of shape (...)
+
+  Via Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017.
+  Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
+  """
+  import math
+  with tf.name_scope("spatial_smoothing_energy"):
+    x = check_input_dim(x, -1, dim)
+    shape = get_shape(x)
+    w = int(math.sqrt(dim))
+    while dim % w > 0:
+      w -= 1
+      assert w > 0
+    h = dim // w
+    assert w * h == dim
+    assert w >= 3 and h >= 3, "too small"
+    # input shape: [batch, in_height=h, in_width=w, in_channels=1]
+    x = tf.reshape(x, [-1, h, w, 1])
+    if use_circular_conv:
+      x = circular_pad(x, paddings=1, axes=(1, 2))  # [batch, h+2, w+2, in_channels=1]
+    # filter shape: [filter_height, filter_width, in_channels=1, out_channels=1]
+    filter = tf.reshape(tf.constant(
+      [[-0.125, -0.125, -0.125],
+       [-0.125, 1.0, -0.125],
+       [-0.125, -0.125, -0.125]]), [3, 3, 1, 1])
+    # out shape: [batch, out_height, out_width, out_channels=1]
+    out = tf.nn.conv2d(x, filter=filter, strides=[1, 1, 1, 1], padding="VALID")
+    out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
+    # Note: Square all the filter values.
+    return tf.reduce_sum(out ** 2, axis=-1)
+
+
+def nan_to_num(x, nan_num=0, inf_num=1e30):
+  """
+  Like numpy.nan_to_num().
+  
+  :param tf.Tensor x: 
+  :param float|tf.Tensor nan_num: 
+  :param float|tf.Tensor inf_num: 
+  :return: x with replaced nan and inf 
+  """
+  with tf.name_scope("nan_to_num"):
+    nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
+    inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
+    # Note that tf.where() does not support broadcasting at the moment,
+    # so we need the same shape. The following will do that.
+    # This should be removed once tf.where() supports broadcasting.
+    # https://github.com/tensorflow/tensorflow/issues/3945
+    nan_num = tf.ones_like(x) * nan_num
+    inf_num = tf.ones_like(x) * inf_num
+    x = tf.where(tf.is_nan(x), nan_num, x)
+    x = tf.where(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
+    x = tf.where(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
+    return x

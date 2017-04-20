@@ -79,7 +79,7 @@ class OpMaker(object):
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
     """
-    import tensorflow.contrib.rnn.python.ops.lstm_ops as lstm_ops
+    from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
@@ -97,6 +97,7 @@ class OpMaker(object):
   @property
   def support_native_op_cpp_filename(self):
     my_dir = os.path.abspath(os.path.dirname(__file__) or os.getcwd())
+    my_dir = os.path.realpath(my_dir)  # Make canonical path-name.
     support_native_op_cpp_filename = "%s/NativeOp.cpp" % my_dir
     assert os.path.exists(support_native_op_cpp_filename)
     return support_native_op_cpp_filename
@@ -406,12 +407,13 @@ class RecSeqCellOp(object):
     self.n_hidden = n_hidden
     self.n_input_dim = n_hidden
 
-  def __call__(self, inputs, index):
+  def __call__(self, inputs, index, initial_state=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_input_dim)
     :param tf.Tensor index: shape (time,batch)
-    :returns: shape (time,batch,n_hidden)
-    :rtype: tf.Tensor
+    :param tf.Tensor|None initial_state: optional initial state of shape (batch,n_hidden)
+    :returns: output fused tensor shape (time,batch,n_hidden), last hidden state (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
     """
     raise NotImplementedError
 
@@ -423,12 +425,13 @@ class NativeLstmCell(RecSeqCellOp):
     self.op = make_lstm_op()
 
   @classmethod
-  def map_layer_inputs_to_op(cls, Z, V_h, i):
+  def map_layer_inputs_to_op(cls, Z, V_h, i, initial_state=None):
     """
     Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
     :param tf.Tensor Z: inputs: shape (time,batch,n_hidden*4)
     :param tf.Tensor V_h: W_re: shape (n_hidden,n_hidden*4)
     :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
     :rtype: (tf.Tensor,tf.Tensor,tf.Tensor,tf.Tensor)
     """
     assert Z.get_shape().ndims == 3
@@ -438,22 +441,25 @@ class NativeLstmCell(RecSeqCellOp):
       i = tf.cast(i, dtype=tf.float32)
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
-    c = tf.zeros((n_batch, n_out), dtype=tf.float32)
+    if initial_state is not None:
+      c = initial_state
+    else:
+      c = tf.zeros((n_batch, n_out), dtype=tf.float32)
     return Z, V_h, c, i
 
-  def __call__(self, inputs, index):
+  def __call__(self, inputs, index, initial_state=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
     :param tf.Tensor index: shape (time,batch)
-    :returns: shape (time,batch,n_hidden)
-    :rtype: tf.Tensor
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
     """
     W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
     lstm_op = make_lstm_op()
-    op_out = lstm_op(*self.map_layer_inputs_to_op(inputs, W_re, index))
-    from TFUtil import make_var_tuple
-    out = NativeOp.LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
-    return out
+    out, _, final_state = lstm_op(
+      *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
+    return out, final_state
 
 
 def demo():

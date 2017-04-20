@@ -40,13 +40,15 @@ class HiddenLayer(Layer):
                  for s in self.sources]
     self.set_attr('from', ",".join([s.name for s in self.sources]))
 
-  def get_linear_forward_output(self, with_bias=True):
+  def get_linear_forward_output(self, with_bias=True, sources=None):
     if with_bias:
       z = self.b
     else:
       z = 0
-    assert len(self.sources) == len(self.masks) == len(self.W_in)
-    for s, m, W_in in zip(self.sources, self.masks, self.W_in):
+    if sources is None:
+      sources = self.sources
+    assert len(sources) == len(self.masks) == len(self.W_in)
+    for s, m, W_in in zip(sources, self.masks, self.W_in):
       if s.attrs['sparse']:
         if s.output.ndim == 3: out_dim = s.output.shape[2]
         elif s.output.ndim == 2: out_dim = 1
@@ -215,21 +217,39 @@ class WindowLayer(_NoOpLayer):
 class WindowContextLayer(_NoOpLayer):
   layer_class = "window_context"
 
-  def __init__(self, window, average='uniform', p=None, **kwargs):
+  def __init__(self, window, average='uniform', scan=False, n_out=None, **kwargs):
     super(WindowContextLayer, self).__init__(**kwargs)
-    source, n_out = concat_sources(self.sources, unsparse=False)
-    if p is None:
-      p = 1. - 1. / window
-    p = numpy.float32(p)
+    source, n_in = concat_sources(self.sources, unsparse=False)
+    if n_out is not None:
+      b = self.create_bias(n_out)
+      W = self.create_random_normal_weights(n_in, n_out)
+      source = T.tanh(b + T.dot(source, W))
+    else:
+      n_out = n_in
+
     self.set_attr('n_out', n_out)
     self.set_attr('window', window)
     self.set_attr('average', average)
-    from TheanoUtil import context_batched
-    out = context_batched(source, window=window)
-    weights = p * numpy.float32(1-p)**T.arange(1,window+1)[::-1]
-    windows = out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
-    out = T.dot(windows, weights)
-    self.make_output(out)
+
+    if average == 'exponential':
+      weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
+    elif average == 'uniform':
+      weights = numpy.float32(1) / (T.cast(window,'float32') * T.ones((window,),'float32'))
+    else:
+      assert False, "invalid averaging method: " + str(average)
+
+    if scan:
+      inp = T.concatenate([T.zeros((window - 1, source.shape[1], source.shape[2]), 'float32'), source], axis=0)
+      def wnd(x, i, inp, weights):
+        return T.dot(inp[i:i + window].dimshuffle(1, 2, 0), weights), i
+      mapped_out, _ = theano.map(wnd, sequences=[source, T.arange(source.shape[0])], non_sequences=[inp, weights])
+      self.make_output(mapped_out[0])
+    else:
+      from TheanoUtil import context_batched
+      tiled_out = context_batched(source, window=window)
+      windows = tiled_out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
+      out = T.dot(windows, weights)
+      self.make_output(out)
 
 
 class DownsampleLayer(_NoOpLayer):
@@ -500,6 +520,7 @@ class SubnetworkLayer(_NoOpLayer):
     :param list[str] data_map: maps the sources (from) of the layer to data input.
       the list should be as long as the sources.
       default is ["data"], i.e. it expects one source and maps it as data in the subnetwork.
+    :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
     :param str load: load string. filename but can have placeholders via str.format. Or "<random>" for no load.
     :param bool trainable: if we take over all params from the subnetwork
     """
@@ -1105,7 +1126,7 @@ class MfccLayer(_NoOpLayer):
     self.set_attr('n_out', nrOfMfccCoefficients)
     self.make_output(mfccs[:,:,0:nrOfMfccCoefficients])
 
-  def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None):
+  def batch_norm(self, h, dim, use_shift=False, use_std=False, use_sample=0.0, force_sample=True, index=None, **kwargs):
     """
     overwrite function from Layer to  change default parameters of batch_norm: use_shift, use_std and foce_sample
     """
@@ -2913,54 +2934,25 @@ class CAlignmentLayer(ForwardLayer):
         search = 'align'
     z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
-    self.p_y_given_x = p_in
     y_in = self.y_in[target].reshape(self.index.shape)
-    if train_skips:
-      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
-      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
-      t_in = T.dot(x_in,W_skip) + b_skip
-      q_in = T.nnet.softmax(t_in.reshape((t_in.shape[0]*t_in.shape[1],t_in.shape[2]))).reshape(t_in.shape)
-    if self.train_flag or search == 'align':
-      from theano.tensor.extra_ops import cpu_contiguous
-      from Inv import InvOp
-      self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, coverage, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-      self.attention = theano.gradient.disconnected_grad(self.attention) # NBT
-      self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
-        (self.index.shape[0] * nstates, self.index.shape[1]))
-      rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
-        (self.index.shape[0] * nstates, self.index.shape[1]))
-      norm = numpy.float32(1./nstates)
-      index = theano.gradient.disconnected_grad(rindex)
-    elif search in ['search','decode']:
-      from theano.tensor.extra_ops import cpu_contiguous
-      from Inv import InvOp
-      emi = T.argmax(q_in,axis=2)
-      ratt = att = att_flat = (emi.flatten() > 0).nonzero()
-      max_length_y = T.max(T.sum(emi, axis=0))
-      idx, _ = theano.map(lambda l_t, m_t: T.concatenate([T.ones((l_t,), 'int8'), T.zeros((m_t - l_t,), 'int8')]),
-                          sequences=[T.sum(emi, axis=0)], non_sequences=[max_length_y + 1])
-      rindex = idx.dimshuffle(1, 0)[:-1]
-      self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
-        (self.index.shape[0] * nstates, self.index.shape[1]))
-      if not self.eval_flag:
-        ratt, emi = InvOp(min_skip, max_skip, nstates, focus, mode)(-T.log(self.p_y_given_x), cpu_contiguous(y_in), T.sum(self.sources[0].index,axis=0,dtype='int32'), T.sum(self.index,axis=0,dtype='int32'))
-        rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
-          (self.index.shape[0] * nstates, self.index.shape[1]))
-        att = att_flat = ratt.flatten()
-        max_length_y = self.y_out.shape[0]
-      index = theano.gradient.disconnected_grad(rindex)
-    else:
-      assert search == 'time'
+    from theano.tensor.extra_ops import cpu_contiguous
+    from Inv import InvOp
+    self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in),
+                                                                                    T.sum(self.sources[0].index, axis=0,
+                                                                                          dtype='int32'),
+                                                                                    T.sum(self.index, axis=0,
+                                                                                          dtype='int32'))
+    self.attention = theano.gradient.disconnected_grad(self.attention)  # NBT
+    self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    index = theano.gradient.disconnected_grad(rindex)
+    norm = numpy.float32(1. / nstates)
 
-    if coverage == 4 and mode == 'viterbi':
-      x_out = x_in
-      z_out = self.z
-      self.y_out = T.cast(self.attention[0].dimshuffle(1,0),'int32')
-      norm = T.sum(rindex) / T.sum(self.sources[0].index,dtype='float32')
-      self.index = rindex = self.sources[0].index
-    else:
-      x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBD
-      z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1)  # NBD
+    #z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+    z_out = self.b + T.dot(x_out,T.concatenate(self.W_in,axis=0))
 
     if reduce_output:
       self.output = z_out if output_z else x_out
@@ -2974,43 +2966,24 @@ class CAlignmentLayer(ForwardLayer):
 
     self.p_y_given_x = p_in
 
-    if search in ['align', 'decode', 'search']:
-      idx = (rindex.flatten() > 0).nonzero()
-      if train_skips:
-        idx = (self.sources[0].index.flatten() > 0).nonzero()
-        tt = t_in.reshape((self.z.shape[0] * self.z.shape[1], t_in.shape[2]))
-        nll, _ = T.nnet.crossentropy_softmax_1hot(x=tt[idx], y_idx=emi.flatten()[idx])
-        norm = T.sum(self.index, dtype='float32') / T.sum(self.sources[0].index, dtype='float32')
-        self.cost_val = norm * T.sum(nll)
-        self.error_val = norm * T.sum(T.neq(T.argmax(tt[idx], axis=1), emi.flatten()[idx]))
-      else:
-        z_out = z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))
-        y_out = self.y_out.flatten()
-        nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-        self.cost_val = norm * T.sum(nll)
-        self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
-        if blank is not None:
-          jdx = self.sources[0].index.dimshuffle(1,0).flatten()
-          jdx = T.set_subtensor(jdx[att_flat],numpy.int32(0))
-          norm = self.index.sum(dtype='float32') / jdx.sum(dtype='float32')
-          jdx = (jdx.reshape(self.sources[0].index.shape).dimshuffle(1,0).flatten() > 0).nonzero()
-          z_tot = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))[jdx]
-          bnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_tot,
-                                                     y_idx=T.zeros(z_tot.shape[:1],'int32') + numpy.int32(blank))
-          rnll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out,
-                                                     y_idx=T.zeros(z_out.shape[:1], 'int32') + numpy.int32(blank))
-          self.cost_val += norm * T.sum(bnll) #- T.sum(rnll)
-    elif search == 'search':
-      z_out = self.z.dimshuffle(1, 0, 2).reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))[ratt.flatten()]
-      if train_skips:
-        y_out = self.y_out * len(tdps)
-        y_out = T.inc_subtensor(y_out[1:], att[1:] - att[:-1]).flatten()
-      else:
-        y_out = self.y_out
-      idx = (rindex.flatten() > 0).nonzero()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
-      self.cost_val = norm * T.sum(nll)
-      self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+    idx = (rindex.flatten() > 0).nonzero()
+    if train_skips:
+      y_out = T.dot(self.attention, T.arange(x_in.shape[0],dtype='float32')) # NB
+      y_out = T.concatenate([T.zeros_like(y_out[:1]), y_out],axis=0) # (N+1)B
+      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(self.index,'float32'),'int32') # NB
+
+      W_skip = self.add_param(self.create_forward_weights(n_out, max_skip, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
+      z_out = T.dot(x_out, W_skip) + b_skip
+      self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
+    else:
+      y_out = self.y_out
+
+    y_out = y_out.flatten()
+    z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+    self.cost_val = norm * T.sum(nll)
+    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
   def cost(self):
     return self.cost_val * self.cost_scale_val, None
@@ -3018,6 +2991,24 @@ class CAlignmentLayer(ForwardLayer):
   def errors(self):
     return self.error_val
 
+class InvBacktrackLayer(_NoOpLayer):
+  layer_class = "ibt"
+
+  def __init__(self, **kwargs):
+    target = kwargs['target'] if 'target' in kwargs else 'classes'
+    kwargs['n_out'] = kwargs['y_in'][target].n_out  # + blank
+    n_cls = kwargs['y_in'][target].n_out
+    super(InvBacktrackLayer, self).__init__(**kwargs)
+    self.index = self.network.j[target]
+    self.cost_scale_val = numpy.float32(1)
+
+    q_in = self.sources[0].q_in
+
+  def cost(self):
+    return self.cost_val * self.cost_scale_val, None
+
+  def errors(self):
+    return self.error_val
 
 class FAlignmentLayer(ForwardLayer):
   layer_class = "falign"

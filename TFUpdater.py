@@ -303,6 +303,9 @@ class Updater(object):
         assert grad_clip_global_norm > 0
         grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
         grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+      if self.config.bool("gradient_nan_inf_filter", False):
+        from TFUtil import nan_to_num
+        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
       apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")

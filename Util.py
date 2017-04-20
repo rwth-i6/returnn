@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import subprocess
 from subprocess import CalledProcessError
 import h5py
@@ -92,7 +94,10 @@ def cmd(s):
   """
   p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
                        env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
-  result = [ tag.strip() for tag in p.communicate()[0].split('\n')[:-1]]
+  stdout = p.communicate()[0]
+  if PY3:
+    stdout = stdout.decode("utf8")
+  result = [tag.strip() for tag in stdout.split('\n')[:-1]]
   p.stdout.close()
   if p.returncode != 0:
     raise CalledProcessError(p.returncode, s, "\n".join(result))
@@ -192,6 +197,14 @@ def describe_tensorflow_version():
   except Exception as e:
     git_info = "<unknown(git exception: %r)>" % e
   return "%s (%s in %s)" % (version, git_info, tdir)
+
+def get_tensorflow_version_tuple():
+  """
+  :return: tuple of ints, first entry is the major version
+  :rtype: tuple[int]
+  """
+  import tensorflow as tf
+  return tuple([int(s) for s in tf.__version__.split(".")])
 
 def eval_shell_env(token):
   if token.startswith("$"):
@@ -329,7 +342,7 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)/2] + " " + progress + " " + bar[len(bar)/2:] + "]" + suffix)
+  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
   sys.stdout.flush()
 
 
@@ -384,7 +397,7 @@ def betterRepr(o):
       return "(%s,)" % o[0]
     return "(%s)" % ", ".join(map(betterRepr, o))
   if isinstance(o, dict):
-    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.iteritems())]
+    l = [betterRepr(k) + ": " + betterRepr(v) for (k,v) in sorted(o.items())]
     if sum([len(v) for v in l]) >= 40:
       return "{\n%s}" % "".join([v + ",\n" for v in l])
     else:
@@ -410,7 +423,7 @@ class ObjAsDict:
 
   def __getitem__(self, item):
     if not isinstance(item, (str, unicode)):
-      raise KeyError(e)
+      raise KeyError(item)
     try:
       return getattr(self.__obj, item)
     except AttributeError as e:
@@ -506,7 +519,9 @@ def find_ranges(l):
 
 
 def initThreadJoinHack():
-  import threading, thread
+  if PY3:
+    # Not sure if needed, but also, the code below is slightly broken.
+    return
   mainThread = threading.currentThread()
   assert isinstance(mainThread, threading._MainThread)
   mainThreadId = thread.get_ident()
@@ -1287,3 +1302,77 @@ def get_temp_dir():
     if dirname:
       return "%s/%s" % (dirname, username)
   return "/tmp/%s" % username
+
+
+class LockFile(object):
+  def __init__(self, directory, name="lock_file", lock_timeout=1 * 60 * 60):
+    """
+    :param str directory: 
+    :param int|float lock_timeout: in seconds
+    """
+    self.directory = directory
+    self.name = name
+    self.fd = None
+    self.lock_timeout = lock_timeout
+    self.lockfile = "%s/%s" % (directory, name)
+
+  def is_old_lockfile(self):
+    try:
+      mtime = os.path.getmtime(self.lockfile)
+    except OSError:
+      mtime = None
+    if mtime and (abs(time.time() - mtime) > self.lock_timeout):
+      return True
+    return False
+
+  def maybe_remove_old_lockfile(self):
+    if not self.is_old_lockfile():
+      return
+    print("Removing old lockfile %r (probably crashed proc)." % self.lockfile)
+    try:
+      os.remove(self.lockfile)
+    except OSError as exc:
+      print("Remove lockfile exception %r. Ignoring it." % exc)
+
+  def is_locked(self):
+    if self.is_old_lockfile():
+      return False
+    try:
+      return os.path.exists(self.lockfile)
+    except OSError:
+      return False
+
+  def lock(self):
+    import time
+    import errno
+    while True:
+      # Try to create directory if it does not exist.
+      try:
+        os.makedirs(self.directory)
+      except OSError:
+        pass  # Ignore any errors.
+      # Now try to create the lock.
+      try:
+        self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        return
+      except OSError as exc:
+        # Possible errors:
+        # ENOENT (No such file or directory), e.g. if the directory was deleted.
+        # EEXIST (File exists), if the lock already exists.
+        if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+          raise  # Other error, so reraise.
+      # We did not get the lock.
+      # Check if it is a really old one.
+      self.maybe_remove_old_lockfile()
+      # Wait a bit, and then retry.
+      time.sleep(1)
+
+  def unlock(self):
+    os.close(self.fd)
+    os.remove(self.lockfile)
+
+  def __enter__(self):
+    self.lock()
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    self.unlock()

@@ -11,6 +11,8 @@ e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 
 # We expect that Theano works in the current Python env.
 
+from __future__ import print_function
+
 import os
 print("CRNN Python SprintInterface module load, pid %i" % os.getpid())
 
@@ -37,6 +39,7 @@ DefaultSprintCrnnConfig = "config/crnn.config"
 startTime = None
 isInitialized = False
 isTrainThreadStarted = False
+isExited = False
 InputDim = None
 OutputDim = None
 TargetMode = None
@@ -130,11 +133,11 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
   """
   print("SprintInterface[pid %i] init()" % (os.getpid(),))
-  print "inputDim:", inputDim
-  print "outputDim:", outputDim
-  print "config:", config
-  print "targetMode:", targetMode
-  print "other args:", kwargs
+  print("inputDim:", inputDim)
+  print("outputDim:", outputDim)
+  print("config:", config)
+  print("targetMode:", targetMode)
+  print("other args:", kwargs)
   global InputDim, OutputDim
   InputDim = inputDim
   OutputDim = outputDim
@@ -178,15 +181,23 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
 
 
 def exit():
-  print "Python train exit()"
+  print("SprintInterface[pid %i] exit()" % (os.getpid(),))
   assert isInitialized
+  global isExited
+  if isExited:
+    print("SprintInterface[pid %i] exit called multiple times" % (os.getpid(),))
+    return
+  isExited = True
   if isTrainThreadStarted:
     engine.stop_train_after_epoch_request = True
     sprintDataset.finishSprintEpoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
     sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
     trainThread.join()
   rnn.finalize()
-  print >> log.v3, ("elapsed total time: %f" % (time.time() - startTime))
+  if startTime:
+    print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
+  else:
+    print("SprintInterface[pid %i]: finished (unknown start time)", file=log.v3)
 
 
 def feedInput(features, weights=None, segmentName=None):
@@ -203,7 +214,7 @@ def feedInput(features, weights=None, segmentName=None):
 
 
 def finishDiscard():
-  print "finishDiscard()"
+  print("finishDiscard()")
   raise NotImplementedError # TODO ...
 
 
@@ -260,14 +271,14 @@ def feedInputForwarding(features, weights=None, segmentName=None):
 
 
 def dumpFlags():
-  print "available GPUs:", get_gpu_names()
+  print("available GPUs:", get_gpu_names())
 
   import theano.sandbox.cuda as theano_cuda
-  print "CUDA via", theano_cuda.__file__
-  print "CUDA available:", theano_cuda.cuda_available
+  print("CUDA via", theano_cuda.__file__)
+  print("CUDA available:", theano_cuda.cuda_available)
 
-  print "THEANO_FLAGS:", rnn.TheanoFlags
-  print "CUDA_LAUNCH_BLOCKING:", os.environ.get("CUDA_LAUNCH_BLOCKING")
+  print("THEANO_FLAGS:", rnn.TheanoFlags)
+  print("CUDA_LAUNCH_BLOCKING:", os.environ.get("CUDA_LAUNCH_BLOCKING"))
 
 
 def setTargetMode(mode):
@@ -301,6 +312,15 @@ def setTargetMode(mode):
   config.set("task", task)
 
 
+def _at_exit_handler():
+  if not isExited:
+    print("SprintInterface[pid %i] atexit handler, exit() was not called, calling it now" % (os.getpid(),))
+    exit()
+    print("All threads:")
+    import Debug
+    Debug.dumpAllThreadTracebacks()
+
+
 def initBase(configfile=None, targetMode=None, epoch=None):
   """
   :type configfile: str | None
@@ -324,11 +344,11 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.initConfig(configfile, [])
+    rnn.initConfig(configFilename=configfile)
     config = rnn.config
 
     rnn.initLog()
-    rnn.crnnGreeting()
+    rnn.crnnGreeting(configFilename=configfile)
     rnn.initBackendEngine()
     rnn.initFaulthandler(sigusr1_chain=True)
     rnn.initConfigJsonNetwork()
@@ -338,6 +358,9 @@ def initBase(configfile=None, targetMode=None, epoch=None):
       import TFEngine
       global Engine
       Engine = TFEngine.Engine
+
+    import atexit
+    atexit.register(_at_exit_handler)
 
   if targetMode:
     setTargetMode(targetMode)
@@ -397,7 +420,7 @@ def startTrainThread(epoch=None):
 
     except BaseException:  # Catch all, even SystemExit. We must stop the main thread then.
       try:
-        print "CRNN train failed"
+        print("CRNN train failed")
         sys.excepthook(*sys.exc_info())
       finally:
         # Exceptions are fatal. Stop now.
@@ -490,7 +513,8 @@ def forward(segmentName, features):
   :param numpy.ndarray features: format (input-feature,time) (via Sprint)
   :return numpy.ndarray, format (output-dim,time)
   """
-  print "Sprint forward", segmentName, features.shape
+  print("Sprint forward", segmentName, features.shape)
+  start_time = time.time()
   assert engine is not None, "not initialized"
   assert sprintDataset
 
@@ -533,12 +557,12 @@ def forward(segmentName, features):
   posteriors = posteriors.transpose()
   assert posteriors.shape == (OutputDim, T)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
-  print "posteriors min/max/mean/std:", stats
+  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
-    print "posteriors:", posteriors
+    print("posteriors:", posteriors)
     debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
     debug_post_fn = "/tmp/crnn.pid%i.sprintinterface.debug.posteriors.txt" % os.getpid()
-    print "Wrote to files %s, %s" % (debug_feat_fn, debug_post_fn)
+    print("Wrote to files %s, %s" % (debug_feat_fn, debug_post_fn))
     numpy.savetxt(debug_feat_fn, features)
     numpy.savetxt(debug_post_fn, posteriors)
     assert False, "Error, posteriors contain invalid numbers."
@@ -579,11 +603,11 @@ class Criterion(theano.Op):
     self.gotPosteriors.set()
 
     if numpy.isnan(posteriors).any():
-      print >> log.v1, 'posteriors contain NaN!'
+      print('posteriors contain NaN!', file=log.v1)
     if numpy.isinf(posteriors).any():
-      print >> log.v1, 'posteriors contain Inf!'
+      print('posteriors contain Inf!', file=log.v1)
       numpy.set_printoptions(threshold=numpy.nan)
-      print >> log.v1, 'posteriors:', posteriors
+      print('posteriors:', posteriors, file=log.v1)
 
     self.gotErrorSignal.wait()
     loss, errsig = self.error, self.errorSignal
@@ -592,13 +616,13 @@ class Criterion(theano.Op):
     outputs[0][0] = loss
     outputs[1][0] = errsig
 
-    print >> log.v5, 'avg frame loss for segments:', loss.sum() / seq_lengths.sum(),
-    print >> log.v5, 'time-frames:', seq_lengths.sum()
+    print('avg frame loss for segments:', loss.sum() / seq_lengths.sum(), end=" ", file=log.v5)
+    print('time-frames:', seq_lengths.sum(), file=log.v5)
 
 
 def demo():
-  print "Note: Load this module via Sprint python-trainer to really use it."
-  print "We are running a demo now."
+  print("Note: Load this module via Sprint python-trainer to really use it.")
+  print("We are running a demo now.")
   init(inputDim=493, outputDim=4501, config="",  # hardcoded, just a demo...
        targetMode="criterion-by-sprint", cudaEnabled=False, cudaActiveGpu=-1)
   assert os.path.exists("input-features.npy"), "run Sprint with python-trainer=dump first"
@@ -606,7 +630,7 @@ def demo():
   posteriors = feedInput(features)
   if not os.path.exists("posteriors.npy"):
     numpy.save("posteriors.npy", posteriors)
-    print "Saved posteriors.npy. Now run Sprint with python-trainer=dump again."
+    print("Saved posteriors.npy. Now run Sprint with python-trainer=dump again.")
     sys.exit()
   old_posteriors = numpy.load("posteriors.npy")
   assert numpy.array_equal(posteriors, old_posteriors)

@@ -4,6 +4,8 @@
 This is the main entry point. You can execute this file.
 """
 
+from __future__ import print_function
+
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
@@ -27,7 +29,7 @@ from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_cla
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine
+  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 
 
 config = None; """ :type: Config """
@@ -83,7 +85,7 @@ def initConfig(configFilename=None, commandLineOptions=()):
   parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
   parser.add_option("-z", "--max_sequences", dest = "max_seqs", help = "[INTEGER] Maximal number of sequences per batch.")
   parser.add_option("--config", dest="load_config", help="[STRING] load config")
-  (options, args) = parser.parse_args(commandLineOptions)
+  (options, args) = parser.parse_args(list(commandLineOptions))
   options = vars(options)
   for opt in options.keys():
     if options[opt] is not None:
@@ -115,7 +117,7 @@ def initConfigJsonNetwork():
   if config.has('initialize_from_json'):
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
-    print >> log.v5, "loading network topology from json:", json_file
+    print("loading network topology from json:", json_file, file=log.v5)
     config.network_topology_json = open(json_file).read().encode('utf8')
 
 
@@ -127,15 +129,15 @@ def initDevices():
   if BackendEngine.is_tensorflow_selected():
     if os.environ.get("TF_DEVICE"):
       config.set("device", os.environ.get("TF_DEVICE"))
-      print >> log.v4, "Devices: Use %s via TF_DEVICE instead of %s." % \
-                       (os.environ.get("TF_DEVICE"), oldDeviceConfig)
+      print("Devices: Use %s via TF_DEVICE instead of %s." % \
+                       (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
     config.set("device", TheanoFlags["device"])
-    print >> log.v4, "Devices: Use %s via THEANO_FLAGS instead of %s." % \
-                     (TheanoFlags["device"], oldDeviceConfig)
+    print("Devices: Use %s via THEANO_FLAGS instead of %s." % \
+                     (TheanoFlags["device"], oldDeviceConfig), file=log.v4)
   devArgs = getDevicesInitArgs(config)
   assert len(devArgs) > 0
   devices = [Device(**kwargs) for kwargs in devArgs]
@@ -143,9 +145,9 @@ def initDevices():
     while not device.initialized:
       time.sleep(0.25)
   if devices[0].blocking:
-    print >> log.v4, "Devices: Used in blocking / single proc mode."
+    print("Devices: Used in blocking / single proc mode.", file=log.v4)
   else:
-    print >> log.v4, "Devices: Used in multiprocessing mode."
+    print("Devices: Used in multiprocessing mode.", file=log.v4)
   return devices
 
 
@@ -238,26 +240,26 @@ def printTaskProperties(devices=None):
   """
 
   if train_data:
-    print >> log.v2, "Train data:"
-    print >> log.v2, "  input:", train_data.num_inputs, "x", train_data.window
-    print >> log.v2, "  output:", train_data.num_outputs
-    print >> log.v2, " ", train_data.len_info() or "no info"
+    print("Train data:", file=log.v2)
+    print("  input:", train_data.num_inputs, "x", train_data.window, file=log.v2)
+    print("  output:", train_data.num_outputs, file=log.v2)
+    print(" ", train_data.len_info() or "no info", file=log.v2)
   if dev_data:
-    print >> log.v2, "Dev data:"
-    print >> log.v2, " ", dev_data.len_info() or "no info"
+    print("Dev data:", file=log.v2)
+    print(" ", dev_data.len_info() or "no info", file=log.v2)
   if eval_data:
-    print >> log.v2, "Eval data:"
-    print >> log.v2, " ", eval_data.len_info() or "no info"
+    print("Eval data:", file=log.v2)
+    print(" ", eval_data.len_info() or "no info", file=log.v2)
 
   if devices:
-    print >> log.v3, "Devices:"
+    print("Devices:", file=log.v3)
     for device in devices:
-      print >> log.v3, "  %s: %s" % (device.name, device.device_name),
-      print >> log.v3, "(units:", device.get_device_shaders(), \
+      print("  %s: %s" % (device.name, device.device_name), end=' ', file=log.v3)
+      print("(units:", device.get_device_shaders(), \
                        "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
-                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)",
-      print >> log.v3, "working on", device.num_batches, "batches" if device.num_batches > 1 else "batch",
-      print >> log.v3, "(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)"
+                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
+      print("working on", device.num_batches, "batches" if device.num_batches > 1 else "batch", end=' ', file=log.v3)
+      print("(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)", file=log.v3)
 
 
 def initEngine(devices):
@@ -275,20 +277,26 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def crnnGreeting():
-  print >> log.v3, "CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid())
+def crnnGreeting(configFilename=None, commandLineOptions=None):
+  print("CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid()), file=log.v3)
+  if configFilename:
+    print("CRNN config: %s" % configFilename, file=log.v4)
+    if os.path.islink(configFilename):
+      print("CRNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
+  if commandLineOptions is not None:
+    print("CRNN command line options: %s" % (commandLineOptions,), file=log.v4)
 
 
 def initBackendEngine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
-    print >> log.v3, "Theano:", describe_theano_version()
+    print("Theano:", describe_theano_version(), file=log.v3)
   elif BackendEngine.is_tensorflow_selected():
-    print >> log.v3, "TensorFlow:", describe_tensorflow_version()
-    from Util import to_bool
+    print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
+    if get_tensorflow_version_tuple()[0] == 0:
+      print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
     from TFUtil import debugRegisterBetterRepr
-    if os.environ.get("DEBUG_TF_BETTER_REPR") and to_bool(os.environ.get("DEBUG_TF_BETTER_REPR")):
-      debugRegisterBetterRepr()
+    debugRegisterBetterRepr()
   else:
     raise NotImplementedError
 
@@ -298,7 +306,7 @@ def init(configFilename=None, commandLineOptions=()):
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initLog()
-  crnnGreeting()
+  crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
@@ -346,7 +354,7 @@ def executeMainTask():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.epoch = config.int("epoch", None)
     assert engine.epoch
-    print >> log.v4, "Evaluate epoch", engine.epoch
+    print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model()
   elif task == 'forward':
     assert eval_data is not None, 'no eval data provided'
@@ -370,7 +378,7 @@ def executeMainTask():
     for task in config.list('theano_graph.task', ['train']):
       func = engine.devices[-1].get_compute_func(task)
       prefix = config.value("theano_graph.prefix", "current") + ".task"
-      print >>log.v1, "dumping to %s.* ..." % prefix
+      print("dumping to %s.* ..." % prefix, file=log.v1)
       theano.printing.debugprint(func, file=open("%s.optimized_func.txt" % prefix, "w"))
       assert isinstance(func.maker, theano.compile.function_module.FunctionMaker)
       for inp in func.maker.inputs:
@@ -397,14 +405,14 @@ def executeMainTask():
   else:
     assert False, "unknown task: %s" % task
 
-  print >> log.v3, ("elapsed: %f" % (time.time() - st))
+  print(("elapsed: %f" % (time.time() - st)), file=log.v3)
 
 
 def analyze_data(config):
   dss = config.value('analyze_dataset', 'train')
   ds = {"train": train_data, "dev": dev_data, "eval": eval_data}[dss]
   epoch = config.int('epoch', 1)
-  print >> log.v1, "Analyze dataset", dss, "epoch", epoch
+  print("Analyze dataset", dss, "epoch", epoch, file=log.v1)
   ds.init_seq_order(epoch=epoch)
   stat_prefix = config.value('statistics_save_prefix', 'statistics')
   dtype = config.value('statistics_dtype', 'float64')
@@ -437,17 +445,17 @@ def analyze_data(config):
   log_priors = numpy.log(priors)
   log_priors -= numpy.log(NumbersDict(ds.get_num_timesteps())[target])
   var = numpy.sqrt(mean_sq - mean * mean)
-  print >> log.v1, "Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len)
+  print("Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len), file=log.v1)
   priors_fn = stat_prefix + ".log_priors.txt"
   mean_fn = stat_prefix + ".mean.txt"
   var_fn = stat_prefix + ".var.txt"
-  print >> log.v1, "Dump priors to", priors_fn
+  print("Dump priors to", priors_fn, file=log.v1)
   numpy.savetxt(priors_fn, log_priors)
-  print >> log.v1, "Dump mean to", mean_fn
+  print("Dump mean to", mean_fn, file=log.v1)
   numpy.savetxt(mean_fn, mean)
-  print >> log.v1, "Dump var to", var_fn
+  print("Dump var to", var_fn, file=log.v1)
   numpy.savetxt(var_fn, var)
-  print >> log.v1, "Done."
+  print("Done.", file=log.v1)
 
 
 def main(argv):
@@ -458,7 +466,7 @@ def main(argv):
     executeMainTask()
   except KeyboardInterrupt:
     return_code = 1
-    print >> getattr(log, "v3", sys.stderr), "KeyboardInterrupt"
+    print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))
   finalize()
   if return_code:
     sys.exit(return_code)

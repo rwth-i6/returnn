@@ -753,18 +753,20 @@ def layer_normalization(x, bias=None, scale=None, eps=1e-5):
   return output
 
 
-def print_to_file(filename, x, argmax=False, shape=False):
+def print_to_file(filename, x, argmax=None, sum=None, shape=False):
   def theano_print_to_file(op,x):
-    opt = numpy.get_printoptions()
-    numpy.set_printoptions(threshold='nan')
     with open(filename, 'a') as f:
-      if argmax:
-        f.write(str(x.argmax(axis=-1)) + '\n')
+      if argmax is not None:
+        f.write(str(x.argmax(axis=argmax)) + '\n')
+      elif sum is not None:
+        f.write(str(x.sum(axis=sum)) + '\n')
       elif shape:
         f.write(str(x.shape) + '\n')
       else:
+        opt = numpy.get_printoptions()
+        numpy.set_printoptions(threshold='nan')
         f.write(str(x) + '\n')
-    numpy.set_printoptions(opt)
+        numpy.set_printoptions(opt)
   return theano.printing.Print(global_fn=theano_print_to_file)(x)
 
 

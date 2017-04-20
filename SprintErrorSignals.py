@@ -7,6 +7,8 @@ to transfer the posteriors and get back the loss and error signal.
 It uses the SprintControl Sprint interface for the communication.
 """
 
+from __future__ import print_function
+
 import theano
 import theano.tensor as T
 import numpy
@@ -76,7 +78,7 @@ class SprintSubprocessInstance:
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = should_interrupt
         if interrupt:
-          print >> log.v5, "SprintSubprocessInstance: interrupt child proc %i" % self.child_pid
+          print("SprintSubprocessInstance: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
         else:
           try: self._send(("exit",))
@@ -112,11 +114,11 @@ class SprintSubprocessInstance:
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
-    print >>log.v5, "SprintSubprocessInstance: exec", args
+    print("SprintSubprocessInstance: exec", args, file=log.v5)
 
     pid = os.fork()
     if pid == 0:  # child
-      print >> log.v5, "SprintSubprocessInstance: starting, pid %i" % os.getpid()
+      print("SprintSubprocessInstance: starting, pid %i" % os.getpid(), file=log.v5)
       try:
         self._env_update_child()
         sys.stdin.close()  # Force no tty stdin.
@@ -124,7 +126,7 @@ class SprintSubprocessInstance:
         self.pipe_p2c[1].close()
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
-        print >> log.v1, "SprintSubprocessInstance: Error when starting Sprint %r." % args
+        print("SprintSubprocessInstance: Error when starting Sprint %r." % args, file=log.v1)
         sys.excepthook(*sys.exc_info())
       finally:
         os._exit(1)
@@ -140,14 +142,14 @@ class SprintSubprocessInstance:
       ret = self._read()
       assert ret[0] == "ok" and len(ret) >= 3 and ret[2] == self.Version
     except Exception:
-      print >> log.v1, "SprintSubprocessInstance: Sprint child process (%r) caused an exception." % args
+      print("SprintSubprocessInstance: Sprint child process (%r) caused an exception." % args, file=log.v1)
       sys.excepthook(*sys.exc_info())
       raise Exception("SprintSubprocessInstance Sprint init failed")
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
-    readend = os.fdopen(readend, "r", 0)
-    writeend = os.fdopen(writeend, "w", 0)
+    readend = os.fdopen(readend, "rb", 0)
+    writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
 
   @property
@@ -511,8 +513,8 @@ class SeqTrainParallelControlDevHost:
       if not sprint: break  # Nothing we can do at the moment.
       forward_data = self.forward_data_queue.pop(0)
       assert isinstance(forward_data, self.ForwardData)
-      print >>log.v4, "SeqTrainParallelControlDevHost, get_loss_and_error_signal seq idx:%i tag:%r len:%i" % (
-        forward_data.seq_idx, forward_data.seq_tag, forward_data.posteriors.shape[0])
+      print("SeqTrainParallelControlDevHost, get_loss_and_error_signal seq idx:%i tag:%r len:%i" % (
+        forward_data.seq_idx, forward_data.seq_tag, forward_data.posteriors.shape[0]), file=log.v4)
       assert numpy.prod(forward_data.posteriors.shape) > 0
       log_posteriors = numpy.log(forward_data.posteriors)
       assert not numpy.isnan(log_posteriors).any(), "posteriors: %r" % forward_data.posteriors
@@ -672,14 +674,14 @@ class SprintErrorSigOp(theano.Op):
     log_posteriors, seq_lengths = inputs
 
     if numpy.isnan(log_posteriors).any():
-      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain NaN!'
+      print('SprintErrorSigOp: log_posteriors contain NaN!', file=log.v1)
     if numpy.isinf(log_posteriors).any():
-      print >> log.v1, 'SprintErrorSigOp: log_posteriors contain Inf!'
+      print('SprintErrorSigOp: log_posteriors contain Inf!', file=log.v1)
       #numpy.set_printoptions(threshold=numpy.nan)
-      print >> log.v1, 'SprintErrorSigOp: log_posteriors:', log_posteriors
+      print('SprintErrorSigOp: log_posteriors:', log_posteriors, file=log.v1)
 
     if self.sprint_instance_pool is None:
-      print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
+      print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
       self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
     loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(log_posteriors, seq_lengths)
@@ -687,18 +689,18 @@ class SprintErrorSigOp(theano.Op):
     output_storage[0][0] = loss
     output_storage[1][0] = errsig
 
-    print >> log.v5, 'SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum()
+    print('SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum(), file=log.v5)
     end_time = time.time()
     if self.debug_perform_time is None:
       from Config import get_global_config
       config = get_global_config()
       self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
     if self.debug_perform_time:
-      print >>log.v1, "SprintErrorSigOp perform time:", end_time - start_time
+      print("SprintErrorSigOp perform time:", end_time - start_time, file=log.v1)
       from Device import deviceInstance
       assert deviceInstance.is_device_proc()
       forward_time = start_time - deviceInstance.compute_start_time
-      print >> log.v1, "SprintErrorSigOp forward time:", forward_time
+      print("SprintErrorSigOp forward time:", forward_time, file=log.v1)
 
 
 class SprintAlignmentAutomataOp(theano.Op):
@@ -722,7 +724,7 @@ class SprintAlignmentAutomataOp(theano.Op):
     tags = inputs[0]
 
     if self.sprint_instance_pool is None:
-      print >> log.v3, "SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts
+      print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
       self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
     edges, weights, start_end_states = self.sprint_instance_pool.get_automata_for_batch(tags)
@@ -749,7 +751,7 @@ def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posterio
     import Device
     if Device.is_device_host_proc():
       if Device.deviceInstance.config.is_typed("seq_train_parallel"):
-        print >>log.v3, "sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name
+        print("sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name, file=log.v3)
         assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
         control = \
           SeqTrainParallelControlDevHost(

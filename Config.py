@@ -1,4 +1,5 @@
-#! /usr/bin/python2.7
+
+from __future__ import print_function
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
@@ -7,6 +8,18 @@ __license__ = "GPL"
 __version__ = "0.9"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
+
+import sys
+PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  import builtins
+  unicode = str
+  long = int
+else:
+  import __builtin__ as builtins
+  unicode = builtins.unicode
+  long = builtins.long
 
 
 class Config:
@@ -58,8 +71,8 @@ class Config:
   def add_line(self, key, value):
     """
     Adds one specific configuration (key,value) pair to the inner set of parameters
-    :type key: string
-    :type value: object
+    :type key: str
+    :type value: str
     """
     if value.find(',') > 0:
       value = value.split(',')
@@ -124,7 +137,7 @@ class Config:
     if key in self.typed_dict:
       l = self.typed_dict[key]
       if index is None:
-        if isinstance(l, (list,tuple)):
+        if isinstance(l, (list, tuple)):
           return list_join_str.join([str(v) for v in l])
         else:
           return str(l)
@@ -148,7 +161,7 @@ class Config:
     value = self.typed_dict.get(key, default)
     if index is not None:
       assert isinstance(index, int)
-      if isinstance(value, (list,tuple)):
+      if isinstance(value, (list, tuple)):
         value = value[index]
       else:
         assert index == 0

@@ -25,10 +25,10 @@ InitTypes = set()
 Verbose = False  # disables all per-segment log messages
 Quiet = False # disables all but error messages
 
-def print(str):
-  import __builtin__
+_orig_print = print
+def print(*args, **kwargs):
   if not Quiet:
-    __builtin__.print(str)
+    _orig_print(*args, **kwargs)
 
 print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
@@ -124,7 +124,7 @@ class SprintNnPythonLayer:
     self.output_size = None
 
   def finalize(self):
-    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize: %r" % (os.getpid()))
+    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize" % (os.getpid(),))
 
   def setInputDimension(self, stream, size):
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (os.getpid(), stream, size))
@@ -218,8 +218,8 @@ class PythonControl:
     assert not self.__class__.instance, "only one instance expected"
     self.__class__.instance = self
     self.cond = Condition()
-    self.pipe_c2p = os.fdopen(c2p_fd, "w")
-    self.pipe_p2c = os.fdopen(p2c_fd, "r")
+    self.pipe_c2p = os.fdopen(c2p_fd, "wb")
+    self.pipe_p2c = os.fdopen(p2c_fd, "rb")
     self.sprint_callback = None  # via self._init
     self.sprint_version_number = None  # via self._init
     self.callback = None  # either via Sprint, or self.own_threaded_callback
