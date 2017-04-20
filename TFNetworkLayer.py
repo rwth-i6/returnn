@@ -2086,14 +2086,14 @@ class Loss(object):
         output_flat = self.output_flat
       output_flat = check_input_ndim(output_flat, ndim=2)
       last_dim = tf.rank(output_flat) - 1  # should be 1
-      output_label = tf.cast(tf.arg_max(output_flat, dimension=last_dim), "int32")
       if self.target.sparse:
         target_label = check_input_ndim(self.target_flat, ndim=1)
       else:
         target_flat = check_shape_equal(self.target_flat, output_flat)
-        target_label = tf.cast(tf.arg_max(target_flat, dimension=last_dim), "int32")
+        target_label = tf.cast(tf.arg_max(target_flat, dimension=last_dim), tf.int32)
+      output_label = tf.cast(tf.arg_max(output_flat, dimension=last_dim), target_label.dtype)
       not_equal = tf.not_equal(output_label, target_label)
-      return self.reduce_func(tf.cast(not_equal, "float32"))
+      return self.reduce_func(tf.cast(not_equal, tf.float32))
 
   def get_value(self):
     """
@@ -2119,10 +2119,13 @@ class CrossEntropyLoss(Loss):
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
-          out = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
-          target_flat_exp = tf.stack([tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), self.target_flat], axis=1)  # (time,2)
+          target_flat_exp = tf.stack(
+            [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
+             tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
           out = tf.log(tf.gather_nd(self.output_flat, target_flat_exp))
           return -self.reduce_func(out)
       else:  # not sparse
