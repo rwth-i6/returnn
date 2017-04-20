@@ -1245,7 +1245,7 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
 
     # Fixed std for now.
     # std = std_min + a[:, 1] * (std_max - std_min)  # (batch,)
-    std = tf.convert_to_tensor(std)
+    std = tf.expand_dims(tf.convert_to_tensor(std), axis=0)  # (batch,)
     std_t_bc = tf.expand_dims(std, axis=0)  # (beam,batch)
 
     assert self.input_data.shape == (1,)
