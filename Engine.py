@@ -574,10 +574,10 @@ class Engine:
   # ret = rpc.classify({"data":[[23],[0]], "classes" : [0,0], "classes-1" : [0,0], "classes-2" : [0,0], "classes-3" : [0,0], "classes-4" : [0,0]})
   # print rpc.result(ret['result']['hash'])
 
-  def daemon(self):
+  def daemon(self, config):
     network = self.network
     devices = self.devices
-    classifiers = {}
+    workers = {}
 
     def _classify(params):
       ret = { }
@@ -607,18 +607,22 @@ class Engine:
         else:
           batches = data.generate_batches(recurrent_net=network.recurrent,
                                           batch_size=sys.maxsize, max_seqs=1)
-          if not hash in classifiers:
-            classifiers[hash] = ClassificationTaskThread(network, devices, data, batches)
-            classifiers[hash].json_params = params
-            print >> log.v3, "classifier started:", hash
+          if not hash in workers:
+            workers[hash] = ClassificationTaskThread(network, devices, data, batches)
+            workers[hash].json_params = params
+            print >> log.v3, "worker started:", hash
           ret['result'] = { 'hash' : hash }
       return ret
 
+    def _backprob(params):
+      ret = {}
+
+
     def _result(hash):
-      if not classifiers[hash].isAlive():
-        return { 'result' : { k : classifiers[hash].result[k].tolist() for k in classifiers[hash].result } }
+      if not workers[hash].isAlive():
+        return { 'result' : { k : workers[hash].result[k].tolist() for k in workers[hash].result } }
       else:
-        return { 'error' : "classification in progress"}
+        return { 'error' : "working ..."}
 
 
     class RequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
@@ -660,11 +664,11 @@ class Engine:
           ret = { 'error' : "" }
           self.path = self.path[1:].split('/')
           if self.path[0] in ['result']:
-            if self.path[1] in classifiers:
-              if not classifiers[self.path[1]].isAlive():
-                ret['result'] = { k : classifiers[self.path[1]].result[k].tolist() for k in classifiers[self.path[1]].result }
+            if self.path[1] in workers:
+              if not workers[self.path[1]].isAlive():
+                ret['result'] = { k : workers[self.path[1]].result[k] for k in workers[self.path[1]].result }
               else:
-                ret['error'] = "classification in progress"
+                ret['error'] = "working ..."
             else:
               ret['error'] = "unknown hash: " % self.path[1]
           else:
@@ -679,8 +683,9 @@ class Engine:
     class ThreadingServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
       pass
 
-    httpd = ThreadingServer(("", 3333), RequestHandler)
-    print >> log.v3, "httpd listening on port", 3333
+    port = config.int('daemon.port', 3333)
+    httpd = ThreadingServer(("", port), RequestHandler)
+    print >> log.v3, "httpd listening on port", port
     try:
       from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
     except Exception:
@@ -688,11 +693,14 @@ class Engine:
     else:
       from thread import start_new_thread
       start_new_thread(httpd.serve_forever, ())
-      server = SimpleJSONRPCServer(('0.0.0.0', 3334))
+      server = SimpleJSONRPCServer(('0.0.0.0', port+1))
       server.register_function(_classify, 'classify')
       server.register_function(_result, 'result')
-      print >> log.v3, "json-rpc listening on port", 3334
+      server.register_function(_backprob, 'backprob')
+      print >> log.v3, "json-rpc listening on port", port+1
       server.serve_forever()
+
+###################################################################################
 
   def classify(self, data, output_file):
     out = open(output_file, 'w')

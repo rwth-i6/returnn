@@ -393,7 +393,7 @@ def executeMainTask():
     engine.classify(engine.devices[0], eval_data, label_file)
   elif task == "daemon":
     engine.init_network_from_config(config)
-    engine.daemon()
+    engine.daemon(config)
   else:
     assert False, "unknown task: %s" % task
 
