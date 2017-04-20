@@ -1155,20 +1155,17 @@ class AttentionBaseLayer(_ConcatInputLayer):
   and we are supposed to return the attention output, e.g. (batch,att_dim).
   """
 
-  def __init__(self, base, base_ctx, **kwargs):
+  def __init__(self, base, **kwargs):
     """
     :param LayerBase base: encoder output to attend on
-    :param LayerBase base_ctx: encoder output used to calculate the attention weights
     """
     super(AttentionBaseLayer, self).__init__(**kwargs)
     self.base = base
-    self.base_ctx = base_ctx
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(AttentionBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["base"] = get_layer(d["base"])
-    d["base_ctx"] = get_layer(d["base_ctx"])
 
   @classmethod
   def get_out_data_from_opts(cls, base, **kwargs):
@@ -1178,11 +1175,29 @@ class AttentionBaseLayer(_ConcatInputLayer):
     return base.output.copy_template_excluding_time_dim()
 
 
-class GlobalAttentionContextLayer(AttentionBaseLayer):
-  layer_class = "global_attention_context"
+class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
+  def __init__(self, base_ctx, **kwargs):
+    """
+    :param LayerBase base_ctx: encoder output used to calculate the attention weights
+    """
+    super(GlobalAttentionContextBaseLayer, self).__init__(**kwargs)
+    self.base_ctx = base_ctx
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(GlobalAttentionContextBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["base_ctx"] = get_layer(d["base_ctx"])
+
+
+class DotAttentionLayer(GlobalAttentionContextBaseLayer):
+  """
+  Classic global attention: Dot-product as similarity measure between base_ctx and source.
+  """
+
+  layer_class = "dot_attention"
 
   def __init__(self, **kwargs):
-    super(GlobalAttentionContextLayer, self).__init__(**kwargs)
+    super(DotAttentionLayer, self).__init__(**kwargs)
     # We expect input_data of shape (batch, inner),
     # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
     assert self.input_data.batch_ndim == 2
@@ -1207,6 +1222,62 @@ class GlobalAttentionContextLayer(AttentionBaseLayer):
       out = tf.squeeze(out, axis=1)  # (batch, n_out)
       self.output.placeholder = out
       self.output.size_placeholder = {}
+
+
+class GaussWindowAttentionLayer(AttentionBaseLayer):
+  """
+  Interprets the incoming source as the location (float32, shape (batch,))
+  and returns a gauss-window-weighting of the base around the location.
+  The window size is fixed (TODO: but the variance can optionally be dynamic).
+  """
+
+  layer_class = "gauss_window_attention"
+
+  def __init__(self, window_size, std=1., **kwargs):
+    super(GaussWindowAttentionLayer, self).__init__(**kwargs)
+
+    # Code partly adapted from our Theano-based AttentionTimeGauss.
+    # The beam is the window around the location center.
+
+    base = self.base.output.get_placeholder_as_time_major()  # (base_time,batch,n_in)
+    base_seq_lens = self.base.output.size_placeholder[0]  # (batch,)
+    base_seq_lens_bc = tf.expand_dims(base_seq_lens, axis=0)  # (beam,batch)
+
+    # Fixed std for now.
+    # std = std_min + a[:, 1] * (std_max - std_min)  # (batch,)
+    std = tf.convert_to_tensor(std)
+    std_t_bc = tf.expand_dims(std, axis=0)  # (beam,batch)
+
+    assert self.input_data.shape == (1,)
+    t = tf.squeeze(self.input_data.get_placeholder_as_batch_major(), axis=1)
+    t_bc = tf.expand_dims(t, axis=0)  # (beam,batch)
+    # Now calculate int32 indices for the window.
+    t_round = tf.cast(tf.round(t), tf.int32)  # (batch,)
+    start_idxs = t_round - window_size // 2  # (batch,), beams, centered around t_int
+    idxs_0 = tf.expand_dims(tf.range(window_size), axis=1)  # (beam,batch). all on cpu, but static, no round trip
+    idxs = idxs_0 + tf.expand_dims(start_idxs, axis=0)  # (beam,batch). centered around t_int
+    # Handle clipping for idxs.
+    idxs = tf.clip_by_value(idxs, 0, tf.shape(base)[0] - 1)
+    idxs = tf.where(tf.less(idxs, base_seq_lens_bc), idxs, tf.ones_like(idxs) * base_seq_lens_bc - 1)
+
+    # gauss window
+    f_e = tf.exp(-(tf.cast(t_bc - tf.cast(idxs, tf.float32), tf.float32) ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
+    from math import pi, sqrt
+    norm = 1. / (std_t_bc * sqrt(2. * pi))  # (beam,batch)
+    w_t = f_e * norm  # (beam,batch)
+    w_t_bc = tf.expand_dims(w_t, axis=2)  # (beam,batch,n_in)
+
+    # We don't have multi_batch_beam for TF yet.
+    # But tf.gather_nd or so might anyway be better to use here.
+    # If that will not result in a sparse gradient in the while-loop,
+    # some slicing with min(idxs)..max(idxs) might be anther option to at least reduce it a bit.
+    batches_idxs = tf.range(tf.shape(idxs)[1], dtype=tf.int32)  # (batch,)
+    batches_idxs_bc = tf.expand_dims(batches_idxs, axis=0)  # (beam,batch)
+    idxs_exp = tf.stack([idxs, batches_idxs_bc], axis=2)  # (beam,batch,2), where the 2 stands for (base_time,batch)
+    # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
+    gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
+    att = tf.reduce_sum(gathered * w_t_bc, axis=0)  # (batch,n_in)
+    self.output.placeholder = att
 
 
 class RecLayer(_ConcatInputLayer):
