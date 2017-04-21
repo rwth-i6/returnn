@@ -1337,7 +1337,7 @@ class RecLayer(_ConcatInputLayer):
       for sub in d["unit"].values():
         assert isinstance(sub, dict)
         if "initial_state" in sub:
-          assert(sub["initial_state"], str)
+          assert isinstance(sub["initial_state"], str)
           if sub["initial_state"].startswith("base:"):
             sub["initial_state"] = get_layer(sub["initial_state"][len("base:"):]).get_last_hidden_state()
         if "class" in sub:
