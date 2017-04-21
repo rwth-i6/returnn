@@ -1323,8 +1323,8 @@ class OpCodeCompiler(object):
       common_opts += compiler_opts
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
-    common_opts += self.ld_flags
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
+    opts += self.ld_flags
     cmd_bin = "g++"
     if self._cuda_env:
       cmd_bin = self._cuda_env.get_compiler_bin()
