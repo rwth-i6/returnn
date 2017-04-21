@@ -285,6 +285,12 @@ class LayerBase(object):
     with tf.name_scope("error"):
       return self.loss.get_error()
 
+  def get_loss_normalization_factor(self):
+    if not self.loss:
+      return None
+    self._init_loss()
+    return self.loss.get_normalization_factor()
+
   def get_params_l2_norm(self):
     return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
 
@@ -2148,6 +2154,7 @@ class Loss(object):
     self.target_flat = None  # type: tf.Tensor
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
+    self.loss_norm_factor = None  # type: tf.Tensor
 
   def init(self, output, output_with_activation=None, target=None):
     """
@@ -2168,12 +2175,15 @@ class Loss(object):
       if output_with_activation:
         assert output_with_activation.y is output.placeholder
       if self.output.have_tim_axis():
+        self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
         assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
           self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
         else:
           self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+      else:
+        self.loss_norm_factor = 1.0
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
       self._check_init()
 
@@ -2217,6 +2227,13 @@ class Loss(object):
     :rtype: tf.Tensor
     """
     raise NotImplementedError
+
+  def get_normalization_factor(self):
+    """
+    :return: factor as a float scalar, usually 1.0 / num_frames. see self.reduce_func.
+    :rtype: tf.Tensor
+    """
+    return self.loss_norm_factor
 
   def get_auto_output_layer_dim(self, target_dim):
     """
