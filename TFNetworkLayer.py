@@ -1762,70 +1762,71 @@ class RecLayer(_ConcatInputLayer):
     """
     :param RecLayer.SubnetworkCell cell:
     """
-    if self.input_data:
-      with tf.name_scope("x_tensor_array"):
-        x, seq_len = self._get_input()  # x will be (time,batch,..,dim)
-        x_shape = tf.shape(x)
-        x_ta = tf.TensorArray(
-          name="x_ta",
-          dtype=self.input_data.dtype,
-          element_shape=tf.TensorShape(self.input_data.copy_template_excluding_time_dim().batch_shape),
-          size=x_shape[0],
+    with tf.name_scope("subnet_base"):
+      if self.input_data:
+        with tf.name_scope("x_tensor_array"):
+          x, seq_len = self._get_input()  # x will be (time,batch,..,dim)
+          x_shape = tf.shape(x)
+          x_ta = tf.TensorArray(
+            name="x_ta",
+            dtype=self.input_data.dtype,
+            element_shape=tf.TensorShape(self.input_data.copy_template_excluding_time_dim().batch_shape),
+            size=x_shape[0],
+            infer_shape=True)
+          x_ta = x_ta.unstack(x)
+        with tf.name_scope("batch_dim"):
+          batch_dim = x_shape[1]
+      else:
+        x_ta = None
+        seq_len = self.output.size_placeholder[0]  # see BaseLayer.__init__()
+        data = self.network.extern_data.get_default_input_data()
+        with tf.name_scope("batch_dim"):
+          batch_dim = tf.shape(data.placeholder)[data.batch_dim_axis]
+      max_out_len = tf.reduce_max(seq_len)
+
+      # TODO: Better check for train_flag.
+      # Maybe more generic via sampling options later.
+      y_ta = None
+      if self.target and self.network.train_flag is not False:
+        y_data = self.network.get_extern_data(self.target, mark_data_key_as_used=True)
+        y = y_data.get_placeholder_as_time_major()
+        y_max_len = tf.shape(y)[0]
+        with tf.control_dependencies([tf.assert_equal(max_out_len, y_max_len,
+            ["RecLayer %r with sources %r." % (self.name, self.sources),
+             " The length of the sources (", max_out_len,
+             ") differ from the length of the target (", y_max_len, ")."])]):
+          y_max_len = tf.identity(y_max_len)
+        y_ta = tf.TensorArray(
+          name="y_ta",
+          dtype=y_data.dtype,
+          element_shape=tf.TensorShape(y_data.copy_template_excluding_time_dim().batch_shape),
+          size=y_max_len,
           infer_shape=True)
-        x_ta = x_ta.unstack(x)
-      with tf.name_scope("batch_dim"):
-        batch_dim = x_shape[1]
-    else:
-      x_ta = None
-      seq_len = self.output.size_placeholder[0]  # see BaseLayer.__init__()
-      data = self.network.extern_data.get_default_input_data()
-      with tf.name_scope("batch_dim"):
-        batch_dim = tf.shape(data.placeholder)[data.batch_dim_axis]
-    max_out_len = tf.reduce_max(seq_len)
+        y_ta = y_ta.unstack(y)
 
-    # TODO: Better check for train_flag.
-    # Maybe more generic via sampling options later.
-    y_ta = None
-    if self.target and self.network.train_flag is not False:
-      y_data = self.network.get_extern_data(self.target, mark_data_key_as_used=True)
-      y = y_data.get_placeholder_as_time_major()
-      y_max_len = tf.shape(y)[0]
-      with tf.control_dependencies([tf.assert_equal(max_out_len, y_max_len,
-          ["RecLayer %r with sources %r." % (self.name, self.sources),
-           " The length of the sources (", max_out_len,
-           ") differ from the length of the target (", y_max_len, ")."])]):
-        y_max_len = tf.identity(y_max_len)
-      y_ta = tf.TensorArray(
-        name="y_ta",
-        dtype=y_data.dtype,
-        element_shape=tf.TensorShape(y_data.copy_template_excluding_time_dim().batch_shape),
-        size=y_max_len,
+      # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
+      # tf.scan() would do that but tf.scan() will loop over some input sequence -
+      # however, that would not work because the input sequence is not fixed initially.
+      # So, similar as tf.scan() does it, we collect all intermediate values.
+
+      # In the while-loop, what we need to output is:
+      # * next step counter (i)
+      # * all outputs from layers which are in self.prev_layers_needed
+      # * all hidden states from RnnCellLayer
+      # * accumulated TensorArray of outputs from the output-layer for each step
+      # For each of this, we need a sensible init, which we are supposed to return here.
+
+      init_net_vars = cell.get_init_loop_vars(batch_dim=batch_dim)
+      init_i = tf.constant(0)
+      min_out_len = max_out_len
+      # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
+      init_acc_ta = tf.TensorArray(
+        name="acc_ta",
+        dtype=cell.layer_data_templates["output"].output.dtype,
+        element_shape=tf.TensorShape(cell.layer_data_templates["output"].output.batch_shape),
+        size=min_out_len,
+        dynamic_size=True,  # we will automatically grow it when needed
         infer_shape=True)
-      y_ta = y_ta.unstack(y)
-
-    # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
-    # tf.scan() would do that but tf.scan() will loop over some input sequence -
-    # however, that would not work because the input sequence is not fixed initially.
-    # So, similar as tf.scan() does it, we collect all intermediate values.
-
-    # In the while-loop, what we need to output is:
-    # * next step counter (i)
-    # * all outputs from layers which are in self.prev_layers_needed
-    # * all hidden states from RnnCellLayer
-    # * accumulated TensorArray of outputs from the output-layer for each step
-    # For each of this, we need a sensible init, which we are supposed to return here.
-
-    init_net_vars = cell.get_init_loop_vars(batch_dim=batch_dim)
-    init_i = tf.constant(0)
-    min_out_len = max_out_len
-    # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
-    init_acc_ta = tf.TensorArray(
-      name="acc_ta",
-      dtype=cell.layer_data_templates["output"].output.dtype,
-      element_shape=tf.TensorShape(cell.layer_data_templates["output"].output.batch_shape),
-      size=min_out_len,
-      dynamic_size=True,  # we will automatically grow it when needed
-      infer_shape=True)
 
     def body(i, net_vars, acc_ta):
       """
