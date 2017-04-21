@@ -779,11 +779,21 @@ def dot(a, b):
     return res
 
 
+def identity(x):
+  """
+  :param tf.Tensor x: 
+  :rtype: tf.Tensor
+  """
+  return x
+
+
 def get_activation_function(s):
   """
-  :param str s:
+  :param str|None s:
   :rtype: (tf.Tensor) -> tf.Tensor
   """
+  if not s or s == "none":
+    return identity
   act_func = getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
   return act_func
 

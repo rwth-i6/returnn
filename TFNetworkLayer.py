@@ -732,6 +732,35 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
+class GatingLayer(_ConcatInputLayer):
+  layer_class = "gating"
+
+  def __init__(self, activation, gate_activation="sigmoid", **kwargs):
+    super(GatingLayer, self).__init__(**kwargs)
+    from TFUtil import get_activation_function
+    act_func = get_activation_function(activation)
+    gate_act_func = get_activation_function(gate_activation)
+    a, b = tf.split(self.input_data.placeholder, 2, axis=self.input_data.batch_ndim - 1)
+    self.output.placeholder = act_func(a) * gate_act_func(b)
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, n_out=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
+    assert input_data.dim % 2 == 0
+    dim = input_data.dim // 2
+    if n_out:
+      assert n_out == dim
+    return Data(
+      name="%s_output" % name,
+      dtype=input_data.dtype,
+      shape=input_data.shape[:-1] + (dim,),
+      sparse=False,
+      batch_dim_axis=input_data.batch_dim_axis,
+      time_dim_axis=input_data.time_dim_axis)
+
+
 class ConvLayer(_ConcatInputLayer):
   """
   A generic convolution layer which supports 1D, 2D and 3D convolution.
