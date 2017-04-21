@@ -1168,11 +1168,17 @@ class AttentionBaseLayer(_ConcatInputLayer):
     d["base"] = get_layer(d["base"])
 
   @classmethod
-  def get_out_data_from_opts(cls, base, **kwargs):
+  def get_out_data_from_opts(cls, base, n_out=None, **kwargs):
     """
     :param LayerBase base:
+    :rtype: Data
     """
-    return base.output.copy_template_excluding_time_dim()
+    out = base.output.copy_template_excluding_time_dim()
+    if n_out:
+      assert out.dim == n_out, (
+        "The default attention selects some frame-weighted input of shape [batch, frame, dim=%i]," % out.dim +
+        " thus resulting in [batch, dim=%i] but you specified n_out=%i." % (out.dim, n_out))
+    return out
 
 
 class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
