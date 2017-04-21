@@ -277,7 +277,7 @@ class OpMaker(object):
     code_header += """
     typedef float real;
     typedef int integer;
-    extern "C"
+    extern "C" {
     extern int sgemm_(char *transa, char *transb,
       integer *m, integer *n, integer *k,
       const real *alpha,
@@ -285,6 +285,7 @@ class OpMaker(object):
       const real *b, integer *ldb,
       const real *beta,
       real *c, integer *ldc);
+    }
     """
     code_register = """
     REGISTER_OP("%(op_name)s")
@@ -350,7 +351,7 @@ class OpMaker(object):
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
-      ld_flags=["-lblas"],
+      ld_flags=["-lblas", "-lf77blas"],
       **dict(self.compiler_opts))
     mod = comp.load_module()
     self.mod_cache[self.cache_key] = mod
