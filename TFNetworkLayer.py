@@ -1188,6 +1188,16 @@ class AttentionBaseLayer(_ConcatInputLayer):
   We get the whole encoder output over all encoder frames (the base), e.g. (batch,enc_time,enc_dim),
   and some current decoder context, e.g. (batch,dec_att_dim),
   and we are supposed to return the attention output, e.g. (batch,att_dim).
+  
+  Some sources:
+  * Bahdanau, Bengio, Montreal, Neural Machine Translation by Jointly Learning to Align and Translate, 2015, https://arxiv.org/abs/1409.0473 
+  * Luong, Stanford, Effective Approaches to Attention-based Neural Machine Translation, 2015, https://arxiv.org/abs/1508.04025
+    -> dot, general, concat, location attention; comparison to Bahdanau
+  * https://github.com/ufal/neuralmonkey/blob/master/neuralmonkey/decoders/decoder.py
+  * https://google.github.io/seq2seq/
+    https://github.com/google/seq2seq/blob/master/seq2seq/contrib/seq2seq/decoder.py
+    https://github.com/google/seq2seq/blob/master/seq2seq/decoders/attention_decoder.py
+  * https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/attention.py
   """
 
   def __init__(self, base, **kwargs):
