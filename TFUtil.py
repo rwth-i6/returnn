@@ -89,6 +89,8 @@ class Data(object):
             # For each batch a separate size.
             size_placeholder[i] = tf.placeholder(
               name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
+    if not size_placeholder and self.ndim_dense <= 1:
+      size_placeholder = {}
     self.size_placeholder = size_placeholder
 
   def get_kwargs(self):
@@ -172,6 +174,12 @@ class Data(object):
     :rtype: tuple[int|None]
     """
     return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+
+  @property
+  def shape_dense(self):
+    if self.sparse:
+      return self.shape + (self.dim,)
+    return self.shape
 
   @property
   def ndim(self):

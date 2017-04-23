@@ -10,7 +10,8 @@ class LayerBase(object):
   recurrent = False
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, L2=None, is_output_layer=None,
+               target=None, loss=None, size_target=None,
+               L2=None, is_output_layer=None,
                batch_norm=False,
                spatial_smoothing=0.0,
                trainable=True):
@@ -23,6 +24,7 @@ class LayerBase(object):
     :param list[LayerBase] sources: via self.transform_config_dict()
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
       alternatively, this also can be a layer name.
+    :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via self.transform_config_dict()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
@@ -48,7 +50,9 @@ class LayerBase(object):
           assert self.output.dim == out_type["dim"]
     else:
       self.output = self.get_out_data_from_opts(
-        out_type=out_type, n_out=n_out, network=network, name=name, target=target, sources=sources, loss=loss)
+        out_type=out_type, n_out=n_out,
+        network=network, name=name, target=target, size_target=size_target,
+        sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
@@ -78,14 +82,15 @@ class LayerBase(object):
     without having to construct the layer.
     This function should not create any nodes in the computation graph.
 
-    :param dict[str] kwargs: all the same kwargs as for self.__init__()
+    :param kwargs: all the same kwargs as for self.__init__()
     :return: Data template (placeholder not set)
     :rtype: Data
     """
     return cls._base_get_out_data_from_opts(**kwargs)
 
   @classmethod
-  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, sources=(), loss=None,
+  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, size_target=None,
+                                   sources=(), loss=None,
                                    **kwargs):
     """
     Called via BaseLayer.get_out_data_from_opts().
@@ -95,6 +100,7 @@ class LayerBase(object):
     :param dict[str]|None out_type:
     :param int|None n_out:
     :param str|None target:
+    :param str|None size_target:
     :param list[LayerBase] sources:
     :param Loss|None loss:
     :param kwargs: remaining kwargs of self.__init__(), ignored here
@@ -118,7 +124,10 @@ class LayerBase(object):
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
     if sources:
-      out_type.setdefault("shape", sources[0].output.shape[:-1] + (out_type.get("dim", sources[0].output.dim),))
+      if out_type.get("sparse", False):
+        out_type.setdefault("shape", sources[0].output.shape_dense[:-1])
+      else:
+        out_type.setdefault("shape", sources[0].output.shape_dense[:-1] + (out_type.get("dim"),))
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
@@ -133,11 +142,12 @@ class LayerBase(object):
     # If you want to have it different in your layer, just overwrite it.
     if sources and sources[0].output.matches_var_dim_pattern(output):
       output.size_placeholder = sources[0].output.size_placeholder.copy()
-    elif target:
+    elif target or size_target:
       # TODO: In training, this is ok. Maybe as well as for eval but not clear.
       # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
       output.size_placeholder = cls._static_get_target_value(
-        target=target, network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+        target=target or size_target, network=network,
+        mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     return output
 
   def __repr__(self):
@@ -738,6 +748,21 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
+class ConstantLayer(LayerBase):
+  layer_class = "constant"
+
+  def __init__(self, sources, value=0, dtype="float32", **kwargs):
+    assert not sources
+    super(ConstantLayer, self).__init__(**kwargs)
+    # Add batch-dim to the constant.
+    self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=dtype), axis=0)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
+    return Data(
+      name="%s_const", shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+
+
 class GatingLayer(_ConcatInputLayer):
   layer_class = "gating"
 
@@ -1299,8 +1324,11 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
     std = tf.expand_dims(tf.convert_to_tensor(std), axis=0)  # (batch,)
     std_t_bc = tf.expand_dims(std, axis=0)  # (beam,batch)
 
-    assert self.input_data.shape == (1,)
-    t = tf.squeeze(self.input_data.get_placeholder_as_batch_major(), axis=1)
+    if self.input_data.shape == ():
+      t = self.input_data.get_placeholder_as_batch_major()
+    else:
+      assert self.input_data.shape == (1,)
+      t = tf.squeeze(self.input_data.get_placeholder_as_batch_major(), axis=1)
     t_bc = tf.expand_dims(t, axis=0)  # (beam,batch)
     # Now calculate int32 indices for the window.
     t_round = tf.cast(tf.round(t), tf.int32)  # (batch,)
@@ -1329,6 +1357,7 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
     gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
     att = tf.reduce_sum(gathered * w_t_bc, axis=0)  # (batch,n_in)
     self.output.placeholder = att
+    self.output.size_placeholder = {}
 
 
 class RecLayer(_ConcatInputLayer):
@@ -1445,6 +1474,33 @@ class RecLayer(_ConcatInputLayer):
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+
+  @classmethod
+  def get_out_data_from_opts(cls, unit, n_out=None, out_type=None, **kwargs):
+    if out_type or n_out:
+      if out_type:
+        assert out_type.get("time_dim_axis", 0) == 0
+        assert out_type.get("batch_dim_axis", 1) == 1
+      out = super(RecLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+    else:
+      out = None
+    if isinstance(unit, dict):  # subnetwork
+      if "n_out" in unit["output"] or "out_type" in unit["output"]:
+        sub_n_out = unit["output"].get("n_out")
+        sub_out_type = unit["output"].get("out_type")
+        if sub_out_type and "shape" in sub_out_type:
+          sub_out_type = sub_out_type.copy()
+          sub_out_type["shape"] = (None,) + tuple(sub_out_type["shape"])  # add time-dim
+        sub_out = cls._base_get_out_data_from_opts(n_out=sub_n_out, out_type=sub_out_type, **kwargs)
+        if out:
+          assert sub_out.dim == out.dim
+          assert sub_out.shape == out.shape
+        else:
+          out = sub_out
+    assert out
+    out.time_dim_axis = 0
+    out.batch_dim_axis = 1
+    return out
 
   def _get_input(self):
     """
@@ -1632,11 +1688,11 @@ class RecLayer(_ConcatInputLayer):
         :param str name:
         :rtype: RecLayer.SubnetworkCell.TemplateLayer|LayerBase
         """
-        if name in self.layer_data_templates:
-          return self.layer_data_templates[name]
         if name.startswith("prev:"):
           name = name[len("prev:"):]
           self.prev_layers_needed.add(name)
+        if name in self.layer_data_templates:
+          return self.layer_data_templates[name]
         if name.startswith("base:"):
           return self.parent.network.layers[name[len("base:"):]]
         # Need to create layer instance here now to not run into recursive loops.
