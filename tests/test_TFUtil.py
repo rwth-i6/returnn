@@ -186,3 +186,42 @@ def test_loop_var_creation():
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
   session.run(tf.global_variables_initializer())
+
+
+def test_gather_nd_grad():
+  # https://github.com/tensorflow/tensorflow/issues/9406
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/gather_nd_op.cc
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
+  # Fixed in TF 1.1.0.
+  assert tf.__version__.split(".")[:2] >= [1, 1]
+  n_base_time = 5
+  n_in = 7
+  n_beam = 3
+  n_batch = 1
+  base = tf.ones((n_base_time, n_batch, n_in))  # (base_time,batch,n_in)
+  idxs_exp = tf.constant(0, shape=(n_beam, n_batch, 2), name="idxs_exp")  # (beam,batch,2), where the 2 stands for (base_time,batch)
+  # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
+  gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
+  gathered_shape, _ = session.run([tf.shape(gathered), gathered])
+  assert_equal(list(gathered_shape), [n_beam, n_batch, n_in])
+
+  base_grad = tf.gradients(gathered, base)
+  assert base_grad is not None
+  session.run(base_grad)
+
+
+def test_scatter_nd():
+  # https://github.com/tensorflow/tensorflow/issues/9406
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
+  # Fixed in TF 1.1.0.
+  assert tf.__version__.split(".")[:2] >= [1, 1]
+  n_base_time = 5
+  n_in = 7
+  n_beam = 3
+  n_batch = 1
+  ref_grad = tf.scatter_nd(
+    indices=tf.zeros((n_beam, n_batch, 2), dtype=tf.int32),
+    updates=tf.ones((n_beam, n_batch, n_in)),
+    shape=(n_base_time, n_batch, n_in))
+  session.run(ref_grad)
+

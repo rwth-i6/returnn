@@ -223,6 +223,7 @@ class Data(object):
 
   def get_placeholder_as_time_major(self):
     if self.is_time_major:
+      assert self.batch_dim_axis == 1
       return self.placeholder
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
@@ -932,15 +933,16 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     return res
 
 
-def expand_dims_unbroadcast(x, axis, dim):
+def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
   :param tf.Tensor x:
   :param int|tf.Tensor axis: new axis
   :param int|tf.Tensor dim: dimension for axis
+  :param str name: scope name
   :return: if x is of shape (a,b,c) and axis=0, then we return (dim,a,b,c)
   :rtype: tf.Tensor
   """
-  with tf.name_scope("expand_dims_unbroadcast"):
+  with tf.name_scope(name):
     x = tf.expand_dims(x, axis)
     new_ndim = x.get_shape().ndims
     assert new_ndim is not None
