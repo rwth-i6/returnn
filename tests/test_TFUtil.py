@@ -193,7 +193,7 @@ def test_gather_nd_grad():
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/gather_nd_op.cc
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
   # Fixed in TF 1.1.0.
-  assert tf.__version__.split(".")[:2] >= [1, 1]
+  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
   n_base_time = 5
   n_in = 7
   n_beam = 3
@@ -214,7 +214,7 @@ def test_scatter_nd():
   # https://github.com/tensorflow/tensorflow/issues/9406
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
   # Fixed in TF 1.1.0.
-  assert tf.__version__.split(".")[:2] >= [1, 1]
+  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
   n_base_time = 5
   n_in = 7
   n_beam = 3

@@ -1342,12 +1342,13 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
       idxs_0 = tf.expand_dims(tf.range(window_size), axis=1)  # (beam,batch). all on cpu, but static, no round trip
       idxs = idxs_0 + tf.expand_dims(start_idxs, axis=0)  # (beam,batch). centered around t_int
       # Handle clipping for idxs.
-      idxs = tf.clip_by_value(idxs, 0, tf.shape(base)[0] - 1)
-      idxs = tf.where(tf.less(idxs, base_seq_lens_bc), idxs, tf.ones_like(idxs) * base_seq_lens_bc - 1)
+      cidxs = tf.clip_by_value(idxs, 0, tf.shape(base)[0] - 1)
+      cidxs = tf.where(tf.less(cidxs, base_seq_lens_bc), cidxs, tf.ones_like(cidxs) * base_seq_lens_bc - 1)
+      #cidxs = tf.Print(cidxs, ["i=", self.network.layers[":i"].output.placeholder, "t=", t, "cidxs=", cidxs[window_size // 2:]])
 
     with tf.name_scope("gauss_window"):
       # gauss window
-      f_e = tf.exp(-(tf.cast(t_bc - tf.cast(idxs, tf.float32), tf.float32) ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
+      f_e = tf.exp(-((t_bc - tf.cast(idxs, tf.float32)) ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
       from math import pi, sqrt
       norm = 1. / (std_t_bc * sqrt(2. * pi))  # (beam,batch)
       w_t = f_e * norm  # (beam,batch)
@@ -1360,10 +1361,10 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
       # some slicing with min(idxs)..max(idxs) might be anther option to at least reduce it a bit.
       # Note that gather_nd is broken up to TF 1.0 for this use case (see test_TFUtil.py),
       # so you need TF >=1.1 here.
-      assert tf.__version__.split(".")[:2] >= [1, 1]
-      batches_idxs = tf.range(tf.shape(idxs)[1], dtype=tf.int32, name="batches_idxs")  # (batch,)
-      batches_idxs_bc = expand_dims_unbroadcast(batches_idxs, axis=0, dim=tf.shape(idxs)[0], name="batches_idxs_bc")  # (beam,batch)
-      idxs_exp = tf.stack([idxs, batches_idxs_bc], axis=2, name="idxs_exp")  # (beam,batch,2), where the 2 stands for (base_time,batch)
+      assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
+      batches_idxs = tf.range(tf.shape(cidxs)[1], dtype=tf.int32, name="batches_idxs")  # (batch,)
+      batches_idxs_bc = expand_dims_unbroadcast(batches_idxs, axis=0, dim=tf.shape(cidxs)[0], name="batches_idxs_bc")  # (beam,batch)
+      idxs_exp = tf.stack([cidxs, batches_idxs_bc], axis=2, name="idxs_exp")  # (beam,batch,2), where the 2 stands for (base_time,batch)
       # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
       gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
     with tf.name_scope("att"):
@@ -1674,6 +1675,14 @@ class RecLayer(_ConcatInputLayer):
         l.init(layer_class=self._layer_class, template_type=template_type, **self._kwargs)
         return l
 
+    class StepIndexLayer(LayerBase):
+      layer_class = ":i"
+
+      def __init__(self, i, **kwargs):
+        super(RecLayer.SubnetworkCell.StepIndexLayer, self).__init__(
+          output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
+          **kwargs)
+
     def _construct_template(self):
       """
       Without creating any computation graph, create TemplateLayer instances.
@@ -1717,12 +1726,13 @@ class RecLayer(_ConcatInputLayer):
       get_templated_layer("output")
       assert "output" in self.layer_data_templates
 
-    def _construct(self, prev_outputs, prev_states, data=None, classes=None):
+    def _construct(self, prev_outputs, prev_states, data=None, classes=None, i=None):
       """
       :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
       :param dict[str,tf.Tensor] prev_states: hidden states of the previous step for layers who need it
       :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
       :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
+      :param tf.Tensor|None i: loop counter
       """
       if data is not None:
         self.net.extern_data.data["source"].placeholder = data
@@ -1749,6 +1759,8 @@ class RecLayer(_ConcatInputLayer):
         return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
       assert not self.net.layers, "do not call this multiple times"
+      if i is not None:
+        self.net.layers[":i"] = self.StepIndexLayer(i=i, name=":i", network=self.net)
       get_layer("output")
       assert "output" in self.net.layers
       # Might not be resolved otherwise:
@@ -1772,12 +1784,15 @@ class RecLayer(_ConcatInputLayer):
           (" E.g. '%s': {'initial_output': 'zeros'}." % name))
       if v is None:
         v = "zeros"
-      assert isinstance(v, str)
       shape = [batch_dim] + list(data.shape)
+      if isinstance(v, (float, int)):
+        with tf.name_scope("init_%s_const" % name):
+          return tf.ones(shape) * v
+      assert isinstance(v, str)
       if v == "zeros":
-        return tf.zeros(shape, dtype=data.dtype)
+        return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
       elif v == "ones":
-        return tf.ones(shape, dtype=data.dtype)
+        return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
       else:
         raise Exception("invalid initial output type %r for sub-layer %r" % (v, name))
 
@@ -1807,21 +1822,27 @@ class RecLayer(_ConcatInputLayer):
         return tuple([make(d) for d in dim])
       return make(dim)
 
-    def get_next_loop_vars(self, loop_vars, data=None, classes=None):
+    def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
       """
       :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars from the previous step
       :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
       :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
+      :param tf.Tensor|None i: loop counter
       :return: next loop_vars
       :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
       """
+      from TFUtil import identity_op_nested
       prev_outputs_flat, prev_hidden_states_flat = loop_vars
       assert len(prev_outputs_flat) == len(self.prev_layers_needed)
       prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
+      with tf.name_scope("prev_outputs"):
+        prev_outputs = {k: tf.identity(v, name=k) for (k, v) in prev_outputs.items()}
       assert len(prev_hidden_states_flat) == len(self.layers_with_hidden_state)
       prev_states = {k: v for (k, v) in zip(sorted(self.layers_with_hidden_state), prev_hidden_states_flat)}
+      with tf.name_scope("prev_states"):
+        prev_states = {k: identity_op_nested(v, name=k) for (k, v) in prev_states.items()}
       with reuse_name_scope(self.parent._rec_scope):
-        self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes)
+        self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes, i=i)
       outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
       states_flat = [self.net.layers[k].get_hidden_state() for k in sorted(self.layers_with_hidden_state)]
       return outputs_flat, states_flat
@@ -1925,7 +1946,8 @@ class RecLayer(_ConcatInputLayer):
         net_vars = cell.get_next_loop_vars(
           net_vars,
           data=x_ta.read(i) if x_ta else None,
-          classes=y_ta.read(i) if y_ta else None)
+          classes=y_ta.read(i) if y_ta else None,
+          i=i)
         acc_ta = acc_ta.write(i, cell.net.layers["output"].output.placeholder)
         return i + 1, net_vars, acc_ta
 

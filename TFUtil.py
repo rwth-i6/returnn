@@ -1660,3 +1660,15 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
     x = tf.where(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
     x = tf.where(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
     return x
+
+
+def identity_op_nested(x, name="identity"):
+  """
+  :param tf.Tensor|list[tf.Tensor] x: 
+  :param str name: 
+  :rtype tf.Tensor|list[tf.Tensor]
+  """
+  if isinstance(x, (list, tuple)):
+    return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
+  assert isinstance(x, tf.Tensor)
+  return tf.identity(x, name=name)
