@@ -796,6 +796,49 @@ def identity(x):
   return x
 
 
+def _plus(a, b):
+  return a + b
+
+
+def _minus(a, b):
+  return a - b
+
+
+def _mul(a, b):
+  return a * b
+
+
+def _div(a, b):
+  return a / b
+
+
+_bin_ops = {"+": _plus, "-": _minus, "*": _mul, "/": _div}
+
+
+def _get_act_func_with_op(s):
+  """
+  :param str s: e.g. "2 * sigmoid" or even "3 + 2 * sigmoid"
+  :rtype: (tf.Tensor) -> tf.Tensor
+  """
+  def _conv(v):
+    v = v.strip()
+    from Util import str_is_number
+    if str_is_number(v):
+      v = float(v)
+      return lambda x: v
+    else:
+      return get_activation_function(v)
+  a, b = None, None
+  for k in _bin_ops:
+    if k in s:
+      a, b = s.split(k, 2)
+      a, b = _conv(a), _conv(b)
+      def combined_op(x):
+        return _bin_ops[k](a(x), b(x))
+      return combined_op
+  assert False
+
+
 def get_activation_function(s):
   """
   :param str|None s:
@@ -803,6 +846,8 @@ def get_activation_function(s):
   """
   if not s or s == "none":
     return identity
+  if any(k in s for k in _bin_ops):
+    return _get_act_func_with_op(s)
   act_func = getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
   return act_func
 
