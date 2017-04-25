@@ -1057,7 +1057,11 @@ class ReduceLayer(_ConcatInputLayer):
       elif axis == "spatial_except_time":
         axis = input_data.get_dynamic_batch_axes()
         axis.remove(input_data.batch_dim_axis)
+        assert input_data.time_dim_axis is not None
         axis.remove(input_data.time_dim_axis)
+      elif axis in ["t", "time"]:
+        assert input_data.time_dim_axis is not None
+        axis = input_data.time_dim_axis
       elif axis in ["f", "feature"]:
         axis = input_data.get_non_dynamic_axes()
       else:
@@ -1113,6 +1117,84 @@ class SqueezeLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     return ReduceLayer.get_out_data_from_opts(keep_dims=False, **kwargs)
+
+
+class PrefixInTimeLayer(CopyLayer):
+  layer_class = "prefix_in_time"
+
+  def __init__(self, prefix=0.0, repeat=1, **kwargs):
+    """
+    :param float|str prefix: either some constant or another layer
+    :param int repeat: how often to repeat the prefix
+    """
+    super(PrefixInTimeLayer, self).__init__(**kwargs)
+    assert self.output.time_dim_axis is not None
+    assert isinstance(prefix, (float, int)), "other layer src not yet supported"
+    c = tf.constant(prefix, dtype=self.output.dtype)
+    shape = [((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
+              if (i != self.output.time_dim_axis)
+              else repeat)
+             for i in range(self.output.batch_ndim)]
+    x = tf.ones(shape, dtype=self.output.dtype)
+    self.output.placeholder = tf.concat([x * c, self.output.placeholder], axis=self.output.time_dim_axis)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
+
+
+class ResizeLayer(_ConcatInputLayer):
+  layer_class = "resize"
+
+  def __init__(self, factor, axis, kind="nn", **kwargs):
+    """
+    :param int factor:
+    :param str|int axis: the axis to resize, counted with batch-dim. can also be "T" for time
+    :param str kind: "linear", "nn"/"nearest_neighbor", "cubic"
+    """
+    super(ResizeLayer, self).__init__(**kwargs)
+    axis = ReduceLayer.get_axes(axis, input_data=self.output)
+    assert len(axis) == 1
+    axis = axis[0]
+    assert axis > 0, "batch-dim resize not supported"
+    # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
+    self.output.placeholder = self.input_data.copy_as_batch_major().placeholder
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    if (axis - 1) in self.output.size_placeholder:
+      self.output.size_placeholder[axis - 1] *= factor
+
+    # images expected shape: [batch, height, width, channels]
+    remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
+    x = dimshuffle(self.output.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
+    shape = tf.shape(self.output.placeholder)
+    shape = [shape[i] for i in range(self.output.batch_ndim)]
+    x = tf.reshape(x, [shape[0], shape[axis], 1] + [tf.reduce_prod([shape[i] for i in remaining_axes])])  # [batch,height,width,channels]
+    new_size = shape[axis] * factor
+    if kind == "linear":
+      x = tf.image.resize_bilinear(x, size=(new_size, 1))
+    elif kind == "cubic":
+      x = tf.image.resize_bicubic(x, size=(new_size, 1))
+    elif kind in ["nn", "nearest_neighbor"]:
+      x = tf.image.resize_nearest_neighbor(x, size=(new_size, 1))
+    else:
+      raise Exception("invalid kind %r for resizing" % kind)
+    x = tf.reshape(x, [shape[0], new_size, 1] + [shape[i] for i in remaining_axes])  # [batch,new_size,1] + remaining_axes
+    x = tf.squeeze(x, axis=2)  # [batch,new_size] + remaining_axes
+    if axis != 1:
+      perm = [0] + remaining_axes
+      perm.insert(axis, 1)
+      x = tf.transpose(x, perm)
+    self.output.placeholder = x
+
+  @classmethod
+  def get_out_data_from_opts(cls, factor, axis, sources, **kwargs):
+    out = get_concat_sources_data_template(sources).copy_as_batch_major()
+    axis = ReduceLayer.get_axes(axis, input_data=out)
+    assert len(axis) == 1
+    axis = axis[0]
+    assert axis > 0, "batch-dim resize not supported"
+    if out.shape[axis - 1] is not None:
+      out_shape = list(out.shape)
+      out_shape[axis - 1] *= factor
+      out.shape = tuple(out_shape)
+    return out
 
 
 class GetLastHiddenStateLayer(LayerBase):

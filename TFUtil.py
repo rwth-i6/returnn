@@ -107,6 +107,20 @@ class Data(object):
     data.size_placeholder = self.size_placeholder
     return data
 
+  def copy_as_batch_major(self):
+    """
+    :return: copy of myself with batch_dim_axis == 0
+    :rtype: Data
+    """
+    data = self.copy()
+    if data.batch_dim_axis != 0:
+      if data.placeholder is not None:
+        data.placeholder = swapaxes(data.placeholder, 0, data.batch_dim_axis)
+      if data.time_dim_axis is not None and data.time_dim_axis <= data.batch_dim_axis:
+        data.time_dim_axis += 1
+      data.batch_dim_axis = 0
+    return data
+
   def copy_template_excluding_time_dim(self, name=None):
     """
     :param str|None name: if set, this will be the new name
