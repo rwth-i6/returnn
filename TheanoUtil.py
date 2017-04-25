@@ -763,10 +763,10 @@ def print_to_file(filename, x, argmax=None, sum=None, shape=False):
       elif shape:
         f.write(str(x.shape) + '\n')
       else:
-        opt = numpy.get_printoptions()
-        numpy.set_printoptions(threshold='nan')
+        #opt = numpy.get_printoptions()
+        #numpy.set_printoptions(threshold='nan')
         f.write(str(x) + '\n')
-        numpy.set_printoptions(opt)
+        #numpy.set_printoptions(opt)
   return theano.printing.Print(global_fn=theano_print_to_file)(x)
 
 

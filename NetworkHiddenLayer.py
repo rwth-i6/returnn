@@ -2885,7 +2885,7 @@ class AlignmentLayer(ForwardLayer):
 class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
-  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False,
                base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
@@ -2957,6 +2957,8 @@ class CAlignmentLayer(ForwardLayer):
     if reduce_output:
       self.output = z_out if output_z else x_out
       self.index = index
+      if train_emission:
+        idx = T.cumsum(T.sum(self.attention,axis=0).dimshuffle(1,0),axis=0)
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
@@ -2976,6 +2978,23 @@ class CAlignmentLayer(ForwardLayer):
       b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
       z_out = T.dot(x_out, W_skip) + b_skip
       self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
+    elif train_emission:
+      idx = (self.sources[0].index.flatten() > 0).nonzero()
+      norm = T.sum(self.network.j[target],dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
+      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      y_out = T.sum(self.attention,axis=0).dimshuffle(1,0)
+
+      #y_out = y_out / y_out.sum(axis=0,keepdims=True)
+      y_out = y_out.flatten().dimshuffle(0, 'x') # (TB)
+      y_out = T.concatenate([numpy.float32(1) - y_out, y_out], axis=1) # (TB)2
+      z_out = T.dot(x_in, W_skip) + b_skip # TB2
+      z_out = T.nnet.softmax(z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))).reshape(z_out.shape)
+      self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
+      z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2])) # (TB)2
+      self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
+      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./n_cls)))
+      return
     else:
       y_out = self.y_out
 
