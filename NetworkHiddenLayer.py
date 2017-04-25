@@ -2954,11 +2954,39 @@ class CAlignmentLayer(ForwardLayer):
     #z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
     z_out = self.b + T.dot(x_out,T.concatenate(self.W_in,axis=0))
 
+    if train_emission:
+      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      q_in = T.dot(x_in, W_skip) + b_skip
+      q_in = T.nnet.softmax(q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2]))).reshape(q_in.shape)
+
+
     if reduce_output:
       self.output = z_out if output_z else x_out
       self.index = index
       if train_emission:
-        idx = T.cumsum(T.sum(self.attention,axis=0).dimshuffle(1,0),axis=0)
+        def encode(x_t,q_t,x_p,q_p,i_p):
+          q_c = q_t + q_p
+          write_flag = T.ge(q_c, numpy.float32(1))
+          q = T.switch(write_flag, q_c - numpy.float32(1), q_c)
+          x = q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1) * x_t + T.switch(write_flag, T.zeros_like(x_p), x_p)
+          return x, q, write_flag
+
+        out, _ = theano.scan(encode, sequences=[x_in,q_in[:,:,1]],
+                             outputs_info=[T.zeros_like(x_in[0]), T.zeros_like(q_in[0]), T.zeros((q_in.shape[1],),'float32')])
+        x, q, i = out[:3]
+        def select(x_b,i_b,L):
+          idx = (i_b > 0).nonzero()
+          len = T.sum(i_b)
+          buf = T.zeros((L,x_b.shape[1]),'float32')
+          buf = T.set_subtensor(buf[:len],x_b[idx])
+          ind = T.zeros((L, ), 'float32')
+          ind = T.set_subtensor(ind[:len], numpy.int32(1))
+          return buf, ind
+
+        out, _ = theano.map(select, sequences=[x.dimshuffle(1,0,2), i.dimshuffle(1,0,2)], non_sequences=[T.max(T.sum(i,axis=0))+1])
+        self.output = out[0].dimshuffle(1,0,2)
+        self.index = T.cast(out[1].dimshuffle(0,1),'int32')
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
