@@ -995,6 +995,60 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
     return x
 
 
+def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
+  """
+  :param tf.Tensor x:
+  :param list[int]|tuple[int] axes: after completion, tf.shape(y)[axis] == 1 for axis in axes
+  :param str name: scope name
+  :return: y where we have a new broadcast axis for each axis in axes
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    for i in sorted(axes):
+      x = tf.expand_dims(x, axis=i, name="expand_axis_%i" % i)
+    return x
+
+
+def dimshuffle(x, axes, name="dimshuffle"):
+  """
+  Like Theanos dimshuffle.
+  Combines tf.transpose, tf.expand_dims and tf.squeeze.
+  
+  :param tf.Tensor x:
+  :param list[int|str]|tuple[int|str] axes:
+  :param str name: scope name
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    assert all([i == "x" or isinstance(i, int) for i in axes])
+    real_axes = [i for i in axes if isinstance(i, int)]
+    bc_axes = [i for (i, j) in enumerate(axes) if j == "x"]
+    if x.get_shape().ndims is None:
+      x_shape = tf.shape(x)
+      x = tf.reshape(x, [x_shape[i] for i in range(max(real_axes) + 1)])  # will have static ndims
+    assert x.get_shape().ndims is not None
+
+    # First squeeze missing axes.
+    i = 0
+    while i < x.get_shape().ndims:
+      if i not in real_axes:
+        x = tf.squeeze(x, axis=i)
+        real_axes = [(j if (j < i) else (j - 1)) for j in real_axes]
+      else:
+        i += 1
+
+    # Now permute.
+    assert list(sorted(real_axes)) == list(range(x.get_shape().ndims))
+    if real_axes != list(range(x.get_shape().ndims)):
+      x = tf.transpose(x, real_axes)
+
+    # Now add broadcast dimensions.
+    if bc_axes:
+      x = expand_multiple_dims(x, bc_axes)
+    assert len(axes) == x.get_shape().ndims
+    return x
+
+
 def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type

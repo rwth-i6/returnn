@@ -225,3 +225,21 @@ def test_scatter_nd():
     shape=(n_base_time, n_batch, n_in))
   session.run(ref_grad)
 
+
+def test_dimshuffle():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (1, 2, 0))))), [3, 5, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, ('x', 1, 2, 0))))), [1, 3, 5, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, ('x', 1, 'x', 2, 'x', 0, 'x'))))), [1, 3, 1, 5, 1, 2, 1])
+  x = tf.zeros((2, 1, 3))
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, 0))))), [3, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, 'x', 'x', 0))))), [3, 1, 1, 2])
+
+
+def test_expand_multiple_dims():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 2))))), [2, 1, 1, 3, 5])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 4))))), [2, 1, 3, 5, 1])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])
