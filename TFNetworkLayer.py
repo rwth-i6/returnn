@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_scope
+from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_scope, dimshuffle, swapaxes
 
 
 class LayerBase(object):
@@ -1015,7 +1015,7 @@ class ReduceLayer(_ConcatInputLayer):
     x = self.input_data.placeholder
     if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
       x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
-    axis = self._get_axis(axis, input_data=self.input_data)
+    axis = self.get_axes(axis, input_data=self.input_data)
     if mode == "max":
       f = tf.reduce_max
     elif mode == "sum":
@@ -1040,7 +1040,7 @@ class ReduceLayer(_ConcatInputLayer):
     self.output.size_placeholder = y_dyn_sizes
 
   @classmethod
-  def _get_axis(cls, axis, input_data):
+  def get_axes(cls, axis, input_data):
     """
     :param axis: see self.__init__()
     :param Data input_data:
@@ -1070,21 +1070,49 @@ class ReduceLayer(_ConcatInputLayer):
     return axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
     input_data = get_concat_sources_data_template(sources)
-    axis = cls._get_axis(axis=axis, input_data=input_data)
+    axis = cls.get_axes(axis=axis, input_data=input_data)
     y_shape = list(input_data.batch_shape)
+    if input_data.batch_dim_axis != enforce_batch_dim_axis:
+      y_shape[input_data.batch_dim_axis], y_shape[enforce_batch_dim_axis] = \
+        y_shape[enforce_batch_dim_axis], y_shape[input_data.batch_dim_axis]
     if keep_dims:
       for i in axis:
         y_shape[i] = 1
     else:
       for i in reversed(sorted(axis)):
+        assert i != enforce_batch_dim_axis
         del y_shape[i]
     return Data(
       name="%s_output" % name,
-      shape=tuple(y_shape[1:]),
+      shape=tuple(y_shape[:enforce_batch_dim_axis] + y_shape[enforce_batch_dim_axis + 1:]),
+      batch_dim_axis=enforce_batch_dim_axis,
       dtype=input_data.dtype,
       sparse=False)
+
+
+class SqueezeLayer(_ConcatInputLayer):
+  layer_class = "squeeze"
+
+  def __init__(self, axis, enforce_batch_dim_axis=0, **kwargs):
+    """
+    :param int|list[int]|str axis: one axis or multiple axis to squeeze.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    """
+    super(SqueezeLayer, self).__init__(**kwargs)
+    axes = ReduceLayer.get_axes(axis, input_data=self.input_data)
+    x = self.input_data.placeholder
+    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
+      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
+    for i in reversed(sorted(axes)):
+      x = tf.squeeze(x, axis=i)
+    self.output.placeholder = x
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    return ReduceLayer.get_out_data_from_opts(keep_dims=False, **kwargs)
 
 
 class GetLastHiddenStateLayer(LayerBase):
@@ -1244,6 +1272,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = base.output.copy_template_excluding_time_dim()
+    assert out.time_dim_axis is None
     if n_out:
       assert out.dim == n_out, (
         "The default attention selects some frame-weighted input of shape [batch, frame, dim=%i]," % out.dim +
@@ -1309,7 +1338,15 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
 
   layer_class = "gauss_window_attention"
 
-  def __init__(self, window_size, std=1., **kwargs):
+  def __init__(self, window_size, std=1., inner_size=None, inner_size_step=0.5, **kwargs):
+    """
+    :param int window_size: the window size where the Gaussian window will be applied on the base
+    :param float std: standard deviation for Gauss
+    :param int|None inner_size: if given, the output will have an additional dimension of this size,
+      where t is shifted by +/- inner_size_step around.
+      e.g. [t-1,t-0.5,t,t+0.5,t+1] would be the locations with inner_size=5 and inner_size_step=0.5. 
+    :param float inner_size_step: see inner_size above
+    """
     super(GaussWindowAttentionLayer, self).__init__(**kwargs)
     from TFUtil import expand_dims_unbroadcast
 
@@ -1326,35 +1363,24 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
       # Fixed std for now.
       # std = std_min + a[:, 1] * (std_max - std_min)  # (batch,)
       std = tf.expand_dims(tf.convert_to_tensor(std), axis=0)  # (batch,)
-      std_t_bc = tf.expand_dims(std, axis=0)  # (beam,batch)
 
     with tf.name_scope("t"):
       if self.input_data.shape == ():
-        t = self.input_data.get_placeholder_as_batch_major()
+        t = self.input_data.get_placeholder_as_batch_major()  # (batch,)
       else:
         assert self.input_data.shape == (1,)
-        t = tf.squeeze(self.input_data.get_placeholder_as_batch_major(), axis=1)
-      t_bc = tf.expand_dims(t, axis=0)  # (beam,batch)
+        t = tf.squeeze(self.input_data.get_placeholder_as_batch_major(), axis=1)  # (batch,)
       # Now calculate int32 indices for the window.
       t_round = tf.cast(tf.round(t), tf.int32)  # (batch,)
     with tf.name_scope("idxs"):
       start_idxs = t_round - window_size // 2  # (batch,), beams, centered around t_int
       idxs_0 = tf.expand_dims(tf.range(window_size), axis=1)  # (beam,batch). all on cpu, but static, no round trip
       idxs = idxs_0 + tf.expand_dims(start_idxs, axis=0)  # (beam,batch). centered around t_int
+    with tf.name_scope("beam"):
       # Handle clipping for idxs.
       cidxs = tf.clip_by_value(idxs, 0, tf.shape(base)[0] - 1)
       cidxs = tf.where(tf.less(cidxs, base_seq_lens_bc), cidxs, tf.ones_like(cidxs) * base_seq_lens_bc - 1)
       #cidxs = tf.Print(cidxs, ["i=", self.network.layers[":i"].output.placeholder, "t=", t, "cidxs=", cidxs[window_size // 2:]])
-
-    with tf.name_scope("gauss_window"):
-      # gauss window
-      f_e = tf.exp(-((t_bc - tf.cast(idxs, tf.float32)) ** 2) / (2 * std_t_bc ** 2))  # (beam,batch)
-      from math import pi, sqrt
-      norm = 1. / (std_t_bc * sqrt(2. * pi))  # (beam,batch)
-      w_t = f_e * norm  # (beam,batch)
-      w_t_bc = tf.expand_dims(w_t, axis=2)  # (beam,batch,n_in)
-
-    with tf.name_scope("beam"):
       # We don't have multi_batch_beam for TF yet.
       # But tf.gather_nd or so might anyway be better to use here.
       # If that will not result in a sparse gradient in the while-loop,
@@ -1367,10 +1393,42 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
       idxs_exp = tf.stack([cidxs, batches_idxs_bc], axis=2, name="idxs_exp")  # (beam,batch,2), where the 2 stands for (base_time,batch)
       # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
       gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
+
+    with tf.name_scope("gauss_window"):
+      # Gauss window
+      idxs_tr_bc = dimshuffle(idxs, (1, 0, 'x'))  # (batch,beam,inner_size)
+      std_t_bc = dimshuffle(std, (0, 'x', 'x'))  # (batch,beam,inner_size)
+      t_bc = dimshuffle(t, (0, 'x', 'x'))  # (batch,beam,inner_size)
+      if inner_size:
+        assert isinstance(inner_size, int)
+        t_offs = tf.convert_to_tensor([(i * inner_size_step - inner_size / 2.0) for i in range(inner_size)])  # (inner_size,)
+        t_offs_bc = dimshuffle(t_offs, ('x', 'x', 0))  # (batch,beam,inner_size)
+        t_bc += t_offs_bc
+      f_e = tf.exp(-((t_bc - tf.cast(idxs_tr_bc, tf.float32)) ** 2) / (2 * std_t_bc ** 2))  # (batch,beam,inner_size)
+      from math import pi, sqrt
+      norm = 1. / (std_t_bc * sqrt(2. * pi))  # (batch,beam,inner_size)
+      w_t = f_e * norm  # (batch,beam,inner_size)
+
     with tf.name_scope("att"):
-      att = tf.reduce_sum(gathered * w_t_bc, axis=0)  # (batch,n_in)
+      gathered_tr = dimshuffle(gathered, (1, 2, 'x', 0))  # (batch,n_in,1,beam)
+      w_t_bc = expand_dims_unbroadcast(w_t, axis=1, dim=self.base.output.dim)  # (batch,n_in,beam,inner_size)
+      att = tf.matmul(gathered_tr, w_t_bc)  # (batch,n_in,1,inner_size)
+      att = tf.squeeze(att, axis=2)  # (batch,n_in,inner_size)
+      if not inner_size:
+        att = tf.squeeze(att, axis=2)  # (batch,n_in)
+      else:
+        att = tf.transpose(att, (0, 2, 1))  # (batch,inner_size,n_in)
+
     self.output.placeholder = att
     self.output.size_placeholder = {}
+
+  @classmethod
+  def get_out_data_from_opts(cls, inner_size=None, **kwargs):
+    out = super(GaussWindowAttentionLayer, cls).get_out_data_from_opts(**kwargs)
+    if inner_size:
+      assert isinstance(inner_size, int)
+      out.shape = out.shape[:-1] + (inner_size,) + out.shape[-1:]
+    return out
 
 
 class RecLayer(_ConcatInputLayer):
