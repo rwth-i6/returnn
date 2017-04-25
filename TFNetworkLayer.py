@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
+import TFUtil
 from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_scope, dimshuffle, swapaxes
 
 
@@ -685,7 +686,12 @@ class SliceLayer(_ConcatInputLayer):
 class LinearLayer(_ConcatInputLayer):
   layer_class = "linear"
 
-  def __init__(self, activation, with_bias=True, **kwargs):
+  def __init__(self, activation, with_bias=True, grad_filter=None, **kwargs):
+    """
+    :param str|None activation: e.g. "relu", or None 
+    :param bool with_bias: 
+    :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
+    """
     super(LinearLayer, self).__init__(**kwargs)
 
     self.activation = activation
@@ -727,6 +733,12 @@ class LinearLayer(_ConcatInputLayer):
       if self.with_bias:
         x = tf.add(x, b, name="add_bias")
         assert x.get_shape().ndims == ndim
+
+    if grad_filter:
+      x = TFUtil.filter_grad(
+        x,
+        threshold=grad_filter,
+        axis=[i for i in range(input_data.batch_ndim) if i != input_data.batch_dim_axis])
 
     if self.activation:
       from TFUtil import get_activation_function
@@ -1353,7 +1365,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
   and we are supposed to return the attention output, e.g. (batch,att_dim).
   
   Some sources:
-  * Bahdanau, Bengio, Montreal, Neural Machine Translation by Jointly Learning to Align and Translate, 2015, https://arxiv.org/abs/1409.0473 
+  * Bahdanau, Bengio, Montreal, Neural Machine Translation by Jointly Learning to Align and Translate, 2015, https://arxiv.org/abs/1409.0473
   * Luong, Stanford, Effective Approaches to Attention-based Neural Machine Translation, 2015, https://arxiv.org/abs/1508.04025
     -> dot, general, concat, location attention; comparison to Bahdanau
   * https://github.com/ufal/neuralmonkey/blob/master/neuralmonkey/decoders/decoder.py

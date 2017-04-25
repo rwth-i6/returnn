@@ -935,9 +935,9 @@ def swapaxes(x, axis1, axis2):
     ndim = x.get_shape().ndims
     if ndim is not None:
       if isinstance(axis1, tf.Tensor) or isinstance(axis2, tf.Tensor):
-        perm = [tf.select(tf.equal(axis1, i), axis2,
-                          tf.select(tf.equal(axis2, i), axis1,
-                                    i))
+        perm = [tf.where(tf.equal(axis1, i), axis2,
+                         tf.where(tf.equal(axis2, i), axis1,
+                                  i))
                 for i in range(ndim)]
       else:
         perm = list(range(ndim))
@@ -954,9 +954,9 @@ def swapaxes(x, axis1, axis2):
       assert axis2.get_shape().ndims == 0
       axis1_bc = tf.expand_dims(axis1, 0)
       axis2_bc = tf.expand_dims(axis2, 0)
-      perm = tf.select(tf.equal(axis1_bc, all_axes), axis2_bc,
-                       tf.select(tf.equal(axis2_bc, all_axes), axis1_bc,
-                                 all_axes))
+      perm = tf.where(tf.equal(axis1_bc, all_axes), axis2_bc,
+                      tf.where(tf.equal(axis2_bc, all_axes), axis1_bc,
+                               all_axes))
     return tf.transpose(x, perm=perm)
 
 
@@ -1603,7 +1603,7 @@ class CustomGradient(object):
     """
     :param list[tf.DType] input_types:
     :param (tf.Tensor) -> tf.Tensor op:
-    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op: args are (op, out_grad) and it must return in_grad
     :param str name: optional func_name
     :return: op
     :rtype: (tf.Tensor) -> tf.Tensor
@@ -1620,6 +1620,32 @@ class CustomGradient(object):
 
 
 custom_gradient = CustomGradient()
+
+
+def filter_grad(x, threshold, axis):
+  """
+  :param tf.Tensor x:
+  :param float threshold: all grads going through `x` which max(grad**2) is over the threshold are removed
+  :param int|list[int] axis: max(grad**2) will be reduced over this axis
+  :return: identity(x) with custom gradient
+  :rtype: tf.Tensor
+  """
+  def grad_op(op, out_grad):
+    with tf.name_scope("filter_grad__grad_op"):
+      assert isinstance(op, tf.Operation)
+      assert isinstance(out_grad, tf.Tensor)
+      out_grad.set_shape(op.inputs[0].get_shape())
+      keep_filter = tf.less(tf.reduce_max(out_grad ** 2, axis=axis, keep_dims=True), threshold)
+      # keep_filter must be the same shape as out_grad.
+      keep_filter = tf.logical_and(keep_filter, tf.ones_like(out_grad, dtype=tf.bool))
+      out_grad = tf.where(keep_filter, out_grad, tf.zeros_like(out_grad))
+      return out_grad
+
+  with tf.name_scope("filter_grad"):
+    op = custom_gradient.register([x.dtype], op=identity, grad_op=grad_op)
+    y = op(x)
+    y.set_shape(x.get_shape())
+    return y
 
 
 def debugRegisterBetterRepr():
