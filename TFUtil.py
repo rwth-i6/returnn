@@ -316,6 +316,55 @@ class Data(object):
       axes.pop(axes.index(self.batch_dim_axis))
     return axes
 
+  def get_axes_from_description(self, axes):
+    """
+    :param int|list[int]|str axes: one axis or multiple axis to reduce.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :return: list of axes
+    :rtype: list[int]
+    """
+    if isinstance(axes, str):
+      axes = axes.lower()
+      if axes in ["b", "batch"]:
+        axes = 0
+      elif axes == "spatial":
+        axes = self.get_dynamic_batch_axes()
+        axes.remove(self.batch_dim_axis)
+      elif axes == "spatial_except_time":
+        axes = self.get_dynamic_batch_axes()
+        axes.remove(self.batch_dim_axis)
+        assert self.time_dim_axis is not None
+        axes.remove(self.time_dim_axis)
+      elif axes in ["t", "time"]:
+        assert self.time_dim_axis is not None
+        axes = self.time_dim_axis
+      elif axes in ["f", "feature", "non_spatial"]:
+        axes = self.get_non_dynamic_batch_axes()
+      else:
+        raise Exception("invalid axis mode %r" % axes)
+    if isinstance(axes, int):
+      axes = [axes]
+    assert isinstance(axes, (tuple, list)), "invalid axis %r" % axes
+    flat_axes = []
+    for i in axes:
+      if isinstance(i, int):
+        flat_axes += [i]
+      else:
+        assert isinstance(i, (str, tuple, list))
+        flat_axes += self.get_axes_from_description(i)
+    flat_axes = [i % self.batch_ndim for i in flat_axes]
+    return flat_axes
+
+  def get_axis_from_description(self, axis):
+    """
+    :param int|str axis: 
+    :return: 
+    """
+    axes = self.get_axes_from_description(axis)
+    assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
+    return axes[0]
+
   def get_batch_axis_excluding_batch(self, axis):
     if axis == self.batch_dim_axis:
       return None
@@ -345,16 +394,24 @@ class Data(object):
             for axis in self.get_dynamic_batch_axes()
             if not axis == self.batch_dim_axis]
 
+  def get_non_dynamic_batch_axes(self):
+    """
+    :rtype: list[int]
+    :return: axes counted with batch-dim which are not dynamic. opposite of self.get_dynamic_batch_axes()
+    """
+    all_axes = self.get_axes(exclude_batch=True)
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [axis
+            for axis in all_axes
+            if axis not in dyn_axes]
+
   def get_non_dynamic_axes(self):
     """
     :rtype: list[int]
     :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
     """
-    all_axes = self.get_axes(exclude_batch=True)
-    dyn_axes = self.get_dynamic_batch_axes()
     return [self.get_batch_axis_excluding_batch(axis)
-            for axis in all_axes
-            if axis not in dyn_axes]
+            for axis in self.get_non_dynamic_batch_axes()]
 
   @property
   def non_dynamic_batch_shape(self):

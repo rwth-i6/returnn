@@ -1047,30 +1047,8 @@ class ReduceLayer(_ConcatInputLayer):
     :return: list of axes
     :rtype: list[int]
     """
-    if isinstance(axis, str):
-      axis = axis.lower()
-      if axis in ["b", "batch"]:
-        axis = 0
-      elif axis == "spatial":
-        axis = input_data.get_dynamic_batch_axes()
-        axis.remove(input_data.batch_dim_axis)
-      elif axis == "spatial_except_time":
-        axis = input_data.get_dynamic_batch_axes()
-        axis.remove(input_data.batch_dim_axis)
-        assert input_data.time_dim_axis is not None
-        axis.remove(input_data.time_dim_axis)
-      elif axis in ["t", "time"]:
-        assert input_data.time_dim_axis is not None
-        axis = input_data.time_dim_axis
-      elif axis in ["f", "feature"]:
-        axis = input_data.get_non_dynamic_axes()
-      else:
-        raise Exception("invalid axis mode %r" % axis)
-    if isinstance(axis, int):
-      axis = [axis]
-    assert isinstance(axis, (tuple, list)), "invalid axis %r" % axis
+    axis = input_data.get_axes_from_description(axis)
     assert len(axis) > 0, "no axis to reduce. input_data: %s" % (input_data,)
-    axis = [i % input_data.batch_ndim for i in axis]
     return axis
 
   @classmethod
@@ -1150,11 +1128,9 @@ class ResizeLayer(_ConcatInputLayer):
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic"
     """
     super(ResizeLayer, self).__init__(**kwargs)
-    axis = ReduceLayer.get_axes(axis, input_data=self.output)
-    assert len(axis) == 1
-    axis = axis[0]
-    assert axis > 0, "batch-dim resize not supported"
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
+    axis = self.output.get_axis_from_description(axis)
+    assert axis > 0, "batch-dim resize not supported"
     self.output.placeholder = self.input_data.copy_as_batch_major().placeholder
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     if (axis - 1) in self.output.size_placeholder:
@@ -1186,14 +1162,66 @@ class ResizeLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, factor, axis, sources, **kwargs):
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
-    axis = ReduceLayer.get_axes(axis, input_data=out)
-    assert len(axis) == 1
-    axis = axis[0]
+    axis = out.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
     if out.shape[axis - 1] is not None:
       out_shape = list(out.shape)
       out_shape[axis - 1] *= factor
       out.shape = tuple(out_shape)
+    return out
+
+
+class CombineDimsLayer(_ConcatInputLayer):
+  layer_class = "combine_dims"
+
+  def __init__(self, axes, **kwargs):
+    """
+    :param int|list[int]|str axis: one axis or multiple axis to reduce.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    """
+    super(CombineDimsLayer, self).__init__(**kwargs)
+    axes = self.input_data.get_axes_from_description(axes)
+    assert len(axes) >= 2
+    shape = list(self.input_data.batch_shape)
+    assert all([shape[i] for i in axes]), "all axes which are reduced must be defined"
+    import numpy
+    first_axis = min(axes)
+    new_size = numpy.prod([shape[i] for i in axes])
+    # self.output.shape should be already set via self.get_out_data_from_opts().
+    assert self.output.time_dim_axis_excluding_batch not in axes, "not supported yet"
+    # Transpose so that all axes to be combined start at axis `first_axis`.
+    perm = list(range(len(shape)))
+    for i, j in enumerate(axes):
+      perm.pop(j)
+      perm.insert(first_axis + i, j)
+    x = tf.transpose(self.input_data.placeholder, perm)
+    # Now combine the axes via reshaping.
+    x_shape = tf.shape(x)
+    x = tf.reshape(
+      x,
+      [x_shape[i] for i in range(first_axis)] +
+      [new_size] +
+      [x_shape[i] for i in range(first_axis + len(axes), len(shape))])
+    self.output.placeholder = x
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    for i in axes:
+      assert self.output.get_batch_axis_excluding_batch(i) not in self.output.size_placeholder
+
+  @classmethod
+  def get_out_data_from_opts(cls, axes, sources, **kwargs):
+    out = get_concat_sources_data_template(sources)
+    axes = out.get_axes_from_description(axes)
+    assert len(axes) >= 2
+    axes = sorted(axes)
+    shape = list(out.batch_shape)
+    assert all([shape[i] for i in axes]), "all axes which are reduced must be defined"
+    import numpy
+    shape[min(axes)] = numpy.prod([shape[i] for i in axes])
+    for i in reversed(sorted(axes)[1:]):
+      del shape[i]
+    out.shape = tuple(shape[:out.batch_dim_axis] + shape[out.batch_dim_axis + 1:])
+    out.dim = shape[-1]
     return out
 
 
