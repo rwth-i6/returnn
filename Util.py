@@ -198,6 +198,14 @@ def describe_tensorflow_version():
     git_info = "<unknown(git exception: %r)>" % e
   return "%s (%s in %s)" % (version, git_info, tdir)
 
+def get_tensorflow_version_tuple():
+  """
+  :return: tuple of ints, first entry is the major version
+  :rtype: tuple[int]
+  """
+  import tensorflow as tf
+  return tuple([int(s) for s in tf.__version__.split(".")])
+
 def eval_shell_env(token):
   if token.startswith("$"):
     return os.environ.get(token[1:], "")
@@ -1294,3 +1302,90 @@ def get_temp_dir():
     if dirname:
       return "%s/%s" % (dirname, username)
   return "/tmp/%s" % username
+
+
+class LockFile(object):
+  def __init__(self, directory, name="lock_file", lock_timeout=1 * 60 * 60):
+    """
+    :param str directory: 
+    :param int|float lock_timeout: in seconds
+    """
+    self.directory = directory
+    self.name = name
+    self.fd = None
+    self.lock_timeout = lock_timeout
+    self.lockfile = "%s/%s" % (directory, name)
+
+  def is_old_lockfile(self):
+    try:
+      mtime = os.path.getmtime(self.lockfile)
+    except OSError:
+      mtime = None
+    if mtime and (abs(time.time() - mtime) > self.lock_timeout):
+      return True
+    return False
+
+  def maybe_remove_old_lockfile(self):
+    if not self.is_old_lockfile():
+      return
+    print("Removing old lockfile %r (probably crashed proc)." % self.lockfile)
+    try:
+      os.remove(self.lockfile)
+    except OSError as exc:
+      print("Remove lockfile exception %r. Ignoring it." % exc)
+
+  def is_locked(self):
+    if self.is_old_lockfile():
+      return False
+    try:
+      return os.path.exists(self.lockfile)
+    except OSError:
+      return False
+
+  def lock(self):
+    import time
+    import errno
+    while True:
+      # Try to create directory if it does not exist.
+      try:
+        os.makedirs(self.directory)
+      except OSError:
+        pass  # Ignore any errors.
+      # Now try to create the lock.
+      try:
+        self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        return
+      except OSError as exc:
+        # Possible errors:
+        # ENOENT (No such file or directory), e.g. if the directory was deleted.
+        # EEXIST (File exists), if the lock already exists.
+        if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+          raise  # Other error, so reraise.
+      # We did not get the lock.
+      # Check if it is a really old one.
+      self.maybe_remove_old_lockfile()
+      # Wait a bit, and then retry.
+      time.sleep(1)
+
+  def unlock(self):
+    os.close(self.fd)
+    os.remove(self.lockfile)
+
+  def __enter__(self):
+    self.lock()
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    self.unlock()
+
+
+def str_is_number(s):
+  """
+  :param str s: e.g. "1", ".3" or "x" 
+  :return: whether s can be casted to float or int
+  :rtype: bool
+  """
+  try:
+    float(s)
+    return True
+  except ValueError:
+    return False
