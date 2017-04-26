@@ -253,7 +253,7 @@ class LearningRateControl(object):
       return None
     if only_last_n >= 1:
       values = values[-only_last_n:]
-    values = [(v, ep) for (v, ep) in values if v - min_score_dist < latest_score]
+    values = [(v, ep) for (v, ep) in values if v + min_score_dist < latest_score]
     if not values:
       return None
     return min(values)[1]
