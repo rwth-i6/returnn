@@ -2964,29 +2964,32 @@ class CAlignmentLayer(ForwardLayer):
     if reduce_output:
       self.output = z_out if output_z else x_out
       self.index = index
-      if train_emission:
+      if train_emission: #  and not self.train_flag:
         def encode(x_t,q_t,x_p,q_p,i_p):
           q_c = q_t + q_p
           write_flag = T.ge(q_c, numpy.float32(1))
           q = T.switch(write_flag, q_c - numpy.float32(1), q_c)
-          x = q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1) * x_t + T.switch(write_flag, T.zeros_like(x_p), x_p)
-          return x, q, write_flag
+          #x = x_t * q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1)
+          #x += T.switch(write_flag.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1), T.zeros_like(x_p), x_p)
+          x = x_t #* T.cast(write_flag.dimshuffle(0, 'x').repeat(x_t.shape[1], axis=1),'float32')
+          return x, q, T.cast(write_flag,'float32')
 
         out, _ = theano.scan(encode, sequences=[x_in,q_in[:,:,1]],
-                             outputs_info=[T.zeros_like(x_in[0]), T.zeros_like(q_in[0]), T.zeros((q_in.shape[1],),'float32')])
+                             outputs_info=[T.zeros_like(x_in[0]), T.zeros((q_in.shape[1],),'float32'), T.zeros((q_in.shape[1],),'float32')])
         x, q, i = out[:3]
         def select(x_b,i_b,L):
           idx = (i_b > 0).nonzero()
-          len = T.sum(i_b)
+          len = T.cast(T.sum(i_b),'int32')
           buf = T.zeros((L,x_b.shape[1]),'float32')
           buf = T.set_subtensor(buf[:len],x_b[idx])
           ind = T.zeros((L, ), 'float32')
-          ind = T.set_subtensor(ind[:len], numpy.int32(1))
+          ind = T.set_subtensor(ind[:len], numpy.float32(1))
           return buf, ind
 
-        out, _ = theano.map(select, sequences=[x.dimshuffle(1,0,2), i.dimshuffle(1,0,2)], non_sequences=[T.max(T.sum(i,axis=0))+1])
-        self.output = out[0].dimshuffle(1,0,2)
-        self.index = T.cast(out[1].dimshuffle(0,1),'int32')
+        out, _ = theano.map(select, sequences=[x.dimshuffle(1,0,2), i.dimshuffle(1,0)],
+                            non_sequences=[T.max(T.sum(i,axis=0,dtype='int32'))+numpy.int32(1)])
+        self.output = out[0].dimshuffle(1,0,2)[:-1]
+        self.index = T.cast(out[1].dimshuffle(1,0),'int8')[:-1]
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
@@ -3009,17 +3012,17 @@ class CAlignmentLayer(ForwardLayer):
     elif train_emission:
       idx = (self.sources[0].index.flatten() > 0).nonzero()
       norm = T.sum(self.network.j[target],dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
-      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
-      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      #W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      #b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
       y_out = T.sum(self.attention,axis=0).dimshuffle(1,0)
 
       #y_out = y_out / y_out.sum(axis=0,keepdims=True)
       y_out = y_out.flatten().dimshuffle(0, 'x') # (TB)
       y_out = T.concatenate([numpy.float32(1) - y_out, y_out], axis=1) # (TB)2
-      z_out = T.dot(x_in, W_skip) + b_skip # TB2
-      z_out = T.nnet.softmax(z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))).reshape(z_out.shape)
-      self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
-      z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2])) # (TB)2
+      #z_out = T.dot(x_in, W_skip) + b_skip # TB2
+      #z_out = T.nnet.softmax(z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))).reshape(z_out.shape)
+      #self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
+      z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
       self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
       self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./n_cls)))
       return
