@@ -241,9 +241,9 @@ class TFNetwork(object):
           error = layer.get_error_value()
           constraints = layer.get_constraints_value()
           if loss is not None:
-            tf.summary.scalar("loss_%s" % layer.name, loss)
+            tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
           if error is not None:
-            tf.summary.scalar("error_%s" % layer.name, error)
+            tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
         if loss is not None:
           self.loss_by_layer[name] = loss
           self.total_loss += loss

@@ -89,6 +89,8 @@ class Data(object):
             # For each batch a separate size.
             size_placeholder[i] = tf.placeholder(
               name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
+    if not size_placeholder and self.ndim_dense <= 1:
+      size_placeholder = {}
     self.size_placeholder = size_placeholder
 
   def get_kwargs(self):
@@ -103,6 +105,20 @@ class Data(object):
     data = Data(**self.get_kwargs())
     data.placeholder = self.placeholder
     data.size_placeholder = self.size_placeholder
+    return data
+
+  def copy_as_batch_major(self):
+    """
+    :return: copy of myself with batch_dim_axis == 0
+    :rtype: Data
+    """
+    data = self.copy()
+    if data.batch_dim_axis != 0:
+      if data.placeholder is not None:
+        data.placeholder = swapaxes(data.placeholder, 0, data.batch_dim_axis)
+      if data.time_dim_axis is not None and data.time_dim_axis <= data.batch_dim_axis:
+        data.time_dim_axis += 1
+      data.batch_dim_axis = 0
     return data
 
   def copy_template_excluding_time_dim(self, name=None):
@@ -174,6 +190,12 @@ class Data(object):
     return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
 
   @property
+  def shape_dense(self):
+    if self.sparse:
+      return self.shape + (self.dim,)
+    return self.shape
+
+  @property
   def ndim(self):
     """
     :rtype: int
@@ -215,6 +237,7 @@ class Data(object):
 
   def get_placeholder_as_time_major(self):
     if self.is_time_major:
+      assert self.batch_dim_axis == 1
       return self.placeholder
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
@@ -293,6 +316,55 @@ class Data(object):
       axes.pop(axes.index(self.batch_dim_axis))
     return axes
 
+  def get_axes_from_description(self, axes):
+    """
+    :param int|list[int]|str axes: one axis or multiple axis to reduce.
+      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :return: list of axes
+    :rtype: list[int]
+    """
+    if isinstance(axes, str):
+      axes = axes.lower()
+      if axes in ["b", "batch"]:
+        axes = 0
+      elif axes == "spatial":
+        axes = self.get_dynamic_batch_axes()
+        axes.remove(self.batch_dim_axis)
+      elif axes == "spatial_except_time":
+        axes = self.get_dynamic_batch_axes()
+        axes.remove(self.batch_dim_axis)
+        assert self.time_dim_axis is not None
+        axes.remove(self.time_dim_axis)
+      elif axes in ["t", "time"]:
+        assert self.time_dim_axis is not None
+        axes = self.time_dim_axis
+      elif axes in ["f", "feature", "non_spatial"]:
+        axes = self.get_non_dynamic_batch_axes()
+      else:
+        raise Exception("invalid axis mode %r" % axes)
+    if isinstance(axes, int):
+      axes = [axes]
+    assert isinstance(axes, (tuple, list)), "invalid axis %r" % axes
+    flat_axes = []
+    for i in axes:
+      if isinstance(i, int):
+        flat_axes += [i]
+      else:
+        assert isinstance(i, (str, tuple, list))
+        flat_axes += self.get_axes_from_description(i)
+    flat_axes = [i % self.batch_ndim for i in flat_axes]
+    return flat_axes
+
+  def get_axis_from_description(self, axis):
+    """
+    :param int|str axis: 
+    :return: 
+    """
+    axes = self.get_axes_from_description(axis)
+    assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
+    return axes[0]
+
   def get_batch_axis_excluding_batch(self, axis):
     if axis == self.batch_dim_axis:
       return None
@@ -322,16 +394,24 @@ class Data(object):
             for axis in self.get_dynamic_batch_axes()
             if not axis == self.batch_dim_axis]
 
+  def get_non_dynamic_batch_axes(self):
+    """
+    :rtype: list[int]
+    :return: axes counted with batch-dim which are not dynamic. opposite of self.get_dynamic_batch_axes()
+    """
+    all_axes = self.get_axes(exclude_batch=True)
+    dyn_axes = self.get_dynamic_batch_axes()
+    return [axis
+            for axis in all_axes
+            if axis not in dyn_axes]
+
   def get_non_dynamic_axes(self):
     """
     :rtype: list[int]
     :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
     """
-    all_axes = self.get_axes(exclude_batch=True)
-    dyn_axes = self.get_dynamic_batch_axes()
     return [self.get_batch_axis_excluding_batch(axis)
-            for axis in all_axes
-            if axis not in dyn_axes]
+            for axis in self.get_non_dynamic_batch_axes()]
 
   @property
   def non_dynamic_batch_shape(self):
@@ -779,11 +859,66 @@ def dot(a, b):
     return res
 
 
-def get_activation_function(s):
+def identity(x):
   """
-  :param str s:
+  :param tf.Tensor x: 
+  :rtype: tf.Tensor
+  """
+  return x
+
+
+def _plus(a, b):
+  return a + b
+
+
+def _minus(a, b):
+  return a - b
+
+
+def _mul(a, b):
+  return a * b
+
+
+def _div(a, b):
+  return a / b
+
+
+_bin_ops = {"+": _plus, "-": _minus, "*": _mul, "/": _div}
+
+
+def _get_act_func_with_op(s):
+  """
+  :param str s: e.g. "2 * sigmoid" or even "3 + 2 * sigmoid"
   :rtype: (tf.Tensor) -> tf.Tensor
   """
+  def _conv(v):
+    v = v.strip()
+    from Util import str_is_number
+    if str_is_number(v):
+      v = float(v)
+      return lambda x: v
+    else:
+      return get_activation_function(v)
+  a, b = None, None
+  for k in _bin_ops:
+    if k in s:
+      a, b = s.split(k, 2)
+      a, b = _conv(a), _conv(b)
+      def combined_op(x):
+        return _bin_ops[k](a(x), b(x))
+      return combined_op
+  assert False
+
+
+def get_activation_function(s):
+  """
+  :param str|None s:
+  :rtype: (tf.Tensor) -> tf.Tensor
+  """
+  if not s or s == "none":
+    return identity
+  if any(k in s for k in _bin_ops):
+    return _get_act_func_with_op(s)
   act_func = getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
   return act_func
 
@@ -800,9 +935,9 @@ def swapaxes(x, axis1, axis2):
     ndim = x.get_shape().ndims
     if ndim is not None:
       if isinstance(axis1, tf.Tensor) or isinstance(axis2, tf.Tensor):
-        perm = [tf.select(tf.equal(axis1, i), axis2,
-                          tf.select(tf.equal(axis2, i), axis1,
-                                    i))
+        perm = [tf.where(tf.equal(axis1, i), axis2,
+                         tf.where(tf.equal(axis2, i), axis1,
+                                  i))
                 for i in range(ndim)]
       else:
         perm = list(range(ndim))
@@ -819,9 +954,9 @@ def swapaxes(x, axis1, axis2):
       assert axis2.get_shape().ndims == 0
       axis1_bc = tf.expand_dims(axis1, 0)
       axis2_bc = tf.expand_dims(axis2, 0)
-      perm = tf.select(tf.equal(axis1_bc, all_axes), axis2_bc,
-                       tf.select(tf.equal(axis2_bc, all_axes), axis1_bc,
-                                 all_axes))
+      perm = tf.where(tf.equal(axis1_bc, all_axes), axis2_bc,
+                      tf.where(tf.equal(axis2_bc, all_axes), axis1_bc,
+                               all_axes))
     return tf.transpose(x, perm=perm)
 
 
@@ -914,19 +1049,74 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     return res
 
 
-def expand_dims_unbroadcast(x, axis, dim):
+def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
   :param tf.Tensor x:
   :param int|tf.Tensor axis: new axis
   :param int|tf.Tensor dim: dimension for axis
+  :param str name: scope name
   :return: if x is of shape (a,b,c) and axis=0, then we return (dim,a,b,c)
   :rtype: tf.Tensor
   """
-  with tf.name_scope("expand_dims_unbroadcast"):
+  with tf.name_scope(name):
     x = tf.expand_dims(x, axis)
     new_ndim = x.get_shape().ndims
     assert new_ndim is not None
     x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
+    return x
+
+
+def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
+  """
+  :param tf.Tensor x:
+  :param list[int]|tuple[int] axes: after completion, tf.shape(y)[axis] == 1 for axis in axes
+  :param str name: scope name
+  :return: y where we have a new broadcast axis for each axis in axes
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    for i in sorted(axes):
+      x = tf.expand_dims(x, axis=i, name="expand_axis_%i" % i)
+    return x
+
+
+def dimshuffle(x, axes, name="dimshuffle"):
+  """
+  Like Theanos dimshuffle.
+  Combines tf.transpose, tf.expand_dims and tf.squeeze.
+  
+  :param tf.Tensor x:
+  :param list[int|str]|tuple[int|str] axes:
+  :param str name: scope name
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    assert all([i == "x" or isinstance(i, int) for i in axes])
+    real_axes = [i for i in axes if isinstance(i, int)]
+    bc_axes = [i for (i, j) in enumerate(axes) if j == "x"]
+    if x.get_shape().ndims is None:
+      x_shape = tf.shape(x)
+      x = tf.reshape(x, [x_shape[i] for i in range(max(real_axes) + 1)])  # will have static ndims
+    assert x.get_shape().ndims is not None
+
+    # First squeeze missing axes.
+    i = 0
+    while i < x.get_shape().ndims:
+      if i not in real_axes:
+        x = tf.squeeze(x, axis=i)
+        real_axes = [(j if (j < i) else (j - 1)) for j in real_axes]
+      else:
+        i += 1
+
+    # Now permute.
+    assert list(sorted(real_axes)) == list(range(x.get_shape().ndims))
+    if real_axes != list(range(x.get_shape().ndims)):
+      x = tf.transpose(x, real_axes)
+
+    # Now add broadcast dimensions.
+    if bc_axes:
+      x = expand_multiple_dims(x, bc_axes)
+    assert len(axes) == x.get_shape().ndims
     return x
 
 
@@ -1323,8 +1513,8 @@ class OpCodeCompiler(object):
       common_opts += compiler_opts
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
-    common_opts += self.ld_flags
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
+    opts += self.ld_flags
     cmd_bin = "g++"
     if self._cuda_env:
       cmd_bin = self._cuda_env.get_compiler_bin()
@@ -1413,7 +1603,7 @@ class CustomGradient(object):
     """
     :param list[tf.DType] input_types:
     :param (tf.Tensor) -> tf.Tensor op:
-    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
+    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op: args are (op, out_grad) and it must return in_grad
     :param str name: optional func_name
     :return: op
     :rtype: (tf.Tensor) -> tf.Tensor
@@ -1430,6 +1620,32 @@ class CustomGradient(object):
 
 
 custom_gradient = CustomGradient()
+
+
+def filter_grad(x, threshold, axis):
+  """
+  :param tf.Tensor x:
+  :param float threshold: all grads going through `x` which max(grad**2) is over the threshold are removed
+  :param int|list[int] axis: max(grad**2) will be reduced over this axis
+  :return: identity(x) with custom gradient
+  :rtype: tf.Tensor
+  """
+  def grad_op(op, out_grad):
+    with tf.name_scope("filter_grad__grad_op"):
+      assert isinstance(op, tf.Operation)
+      assert isinstance(out_grad, tf.Tensor)
+      out_grad.set_shape(op.inputs[0].get_shape())
+      keep_filter = tf.less(tf.reduce_max(out_grad ** 2, axis=axis, keep_dims=True), threshold)
+      # keep_filter must be the same shape as out_grad.
+      keep_filter = tf.logical_and(keep_filter, tf.ones_like(out_grad, dtype=tf.bool))
+      out_grad = tf.where(keep_filter, out_grad, tf.zeros_like(out_grad))
+      return out_grad
+
+  with tf.name_scope("filter_grad"):
+    op = custom_gradient.register([x.dtype], op=identity, grad_op=grad_op)
+    y = op(x)
+    y.set_shape(x.get_shape())
+    return y
 
 
 def debugRegisterBetterRepr():
@@ -1640,3 +1856,15 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
     x = tf.where(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
     x = tf.where(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
     return x
+
+
+def identity_op_nested(x, name="identity"):
+  """
+  :param tf.Tensor|list[tf.Tensor] x: 
+  :param str name: 
+  :rtype tf.Tensor|list[tf.Tensor]
+  """
+  if isinstance(x, (list, tuple)):
+    return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
+  assert isinstance(x, tf.Tensor)
+  return tf.identity(x, name=name)

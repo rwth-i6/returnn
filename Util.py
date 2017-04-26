@@ -1376,3 +1376,16 @@ class LockFile(object):
 
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.unlock()
+
+
+def str_is_number(s):
+  """
+  :param str s: e.g. "1", ".3" or "x" 
+  :return: whether s can be casted to float or int
+  :rtype: bool
+  """
+  try:
+    float(s)
+    return True
+  except ValueError:
+    return False
