@@ -1669,22 +1669,30 @@ class RecLayer(_ConcatInputLayer):
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   @classmethod
-  def get_out_data_from_opts(cls, unit, n_out=None, out_type=None, **kwargs):
-    if out_type or n_out:
+  def get_out_data_from_opts(cls, unit, **kwargs):
+    n_out = kwargs.get("n_out", None)
+    out_type = kwargs.get("out_type", None)
+    target = kwargs.get("target", None)
+    loss = kwargs.get("loss", None)
+    if out_type or n_out or target or loss:
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
         assert out_type.get("batch_dim_axis", 1) == 1
-      out = super(RecLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+      out = super(RecLayer, cls).get_out_data_from_opts(**kwargs)
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      if "n_out" in unit["output"] or "out_type" in unit["output"]:
-        sub_n_out = unit["output"].get("n_out")
+      if "n_out" in unit["output"] or "out_type" in unit["output"] or "target" in unit["output"] or "loss" in unit["output"]:
         sub_out_type = unit["output"].get("out_type")
         if sub_out_type and "shape" in sub_out_type:
           sub_out_type = sub_out_type.copy()
           sub_out_type["shape"] = (None,) + tuple(sub_out_type["shape"])  # add time-dim
-        sub_out = cls._base_get_out_data_from_opts(n_out=sub_n_out, out_type=sub_out_type, **kwargs)
+        sub_opts = kwargs.copy()
+        sub_opts.setdefault("n_out", unit["output"].get("n_out"))
+        sub_opts.setdefault("out_type", sub_out_type)
+        sub_opts.setdefault("target", unit["output"].get("target"))
+        sub_opts.setdefault("loss", unit["output"].get("loss"))
+        sub_out = cls._base_get_out_data_from_opts(**sub_opts)
         if out:
           assert sub_out.dim == out.dim
           assert sub_out.shape == out.shape
@@ -1999,7 +2007,11 @@ class RecLayer(_ConcatInputLayer):
         else:
           raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
       if isinstance(dim, (tuple, list)):
-        return tuple([make(d) for d in dim])
+        s = [make(d) for d in dim]
+        # Make it the same type because nest.assert_same_structure() will complain otherwise.
+        if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
+          return type(dim)(*s)
+        return type(dim)(s)
       return make(dim)
 
     def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
