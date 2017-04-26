@@ -229,6 +229,35 @@ class LearningRateControl(object):
                          (key, error, 'learning_rate_control_error_measure', 'dev_error')
     return error[key]
 
+  def getLastBestEpoch(self, last_epoch, first_epoch=1, filter_score=float("inf"), only_last_n=-1, min_score_dist=0.0):
+    """
+    :param int first_epoch: will check all epochs >= first_epoch
+    :param int last_epoch: will check all epochs <= last_epoch
+    :param float filter_score: all epochs which values over this score are not considered
+    :param int only_last_n: if set, from the resulting list, we consider only the last only_last_n
+    :param float min_score_dist: filter out epochs where the diff to the most recent is not big enough
+    :return: the last best epoch. to get the details then, you might want to use getEpochErrorDict.
+    :rtype: int|None
+    """
+    if first_epoch > last_epoch:
+      return None
+    values = [(self.getEpochErrorValue(ep), ep) for ep in range(first_epoch, last_epoch + 1)]
+    # Note that the order of the checks here is a bit arbitrary but I had some thoughts on it.
+    # Changing the order will also slightly change the behavior, so be sure it make sense.
+    values = [(v, ep) for (v, ep) in values if v is not None]
+    if not values:
+      return None
+    latest_score = values[-1][0]
+    values = [(v, ep) for (v, ep) in values if v <= filter_score]
+    if not values:
+      return None
+    if only_last_n >= 1:
+      values = values[-only_last_n:]
+    values = [(v, ep) for (v, ep) in values if v - min_score_dist < latest_score]
+    if not values:
+      return None
+    return min(values)[1]
+
   def save(self):
     if not self.filename: return
     # First write to a temp-file, to be sure that the write happens without errors.
