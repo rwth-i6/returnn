@@ -816,6 +816,7 @@ class Engine(object):
              self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
             file=log.v2)
       self.load_model(epoch=last_best_epoch)
+      self.updater.init_optimizer_vars()  # reset the optimizer vars
 
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
