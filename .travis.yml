@@ -7,8 +7,16 @@ python:
   - "3.6"
   - "nightly"
 
+# https://github.com/travis-ci/travis-ci/issues/2890
+before_install:
+  - sudo apt-get build-dep python-scipy
+  - sudo apt-get install -qq python-numpy python-scipy python-matplotlib
+
 # command to install dependencies
-install: "pip install -r requirements.txt && pip install tensorflow && pip install nosetests"
+install:
+  - pip install -r requirements.txt
+  - pip install tensorflow
+  - pip install nosetests
 
 env:
   - TEST=Config
@@ -42,6 +50,6 @@ env:
   - TEST=Util
 
 # command to run tests
-script: nosetests tests/test_$TEST.py
-
+script:
+  - nosetests tests/test_$TEST.py
 
