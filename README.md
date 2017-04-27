@@ -27,3 +27,6 @@ There are some real-world examples [here](https://github.com/rwth-i6/returnn-exp
 Some benchmark setups against other frameworks
 can be found [here](https://github.com/rwth-i6/returnn-benchmarks).
 The results are in the [RETURNN paper](https://arxiv.org/abs/1608.00895).
+
+[![Test Status](https://travis-ci.org/rwth-i6/returnn.svg?branch=master)](https://travis-ci.org/rwth-i6/returnn)
+
