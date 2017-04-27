@@ -504,10 +504,14 @@ def demo():
   import rnn
   import sys
   if len(sys.argv) <= 1:
-    print("usage: python %s [config] [other options]" % __file__)
+    print("usage: python %s [config] [other options] [++check_learning_rates 1]" % __file__)
     print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
   rnn.initConfig(commandLineOptions=sys.argv[1:])
   rnn.config._hack_value_reading_debug()
+  rnn.config.update({"log": []})
+  rnn.initLog()
+  rnn.initBackendEngine()
+  check_lr = rnn.config.bool("check_learning_rates", False)
   from Pretrain import pretrainFromConfig
   pretrain = pretrainFromConfig(rnn.config)
   first_non_pretrain_epoch = 1
@@ -547,6 +551,10 @@ def demo():
     if hasattr(control, "_calcRecentMeanRelativeError"):
       s += ", previous mean relative error: %s" % control._calcRecentMeanRelativeError(epoch)
     print(s)
+    if check_lr and oldLearningRate is not None:
+      if oldLearningRate != learningRate:
+        print("Learning rate is different in epoch %i!" % epoch)
+        sys.exit(1)
     # Overwrite new learning rate so that the calculation for further learning rates stays consistent.
     if epoch in control.epochData:
       control.epochData[epoch].learningRate = learningRate
