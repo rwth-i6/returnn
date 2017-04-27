@@ -9,7 +9,10 @@ import gc
 SharedMemNumpyConfig["enabled"] = True
 SharedMemNumpyConfig["auto_pickling_min_size"] = 1
 
-from StringIO import StringIO
+try:
+  from StringIO import StringIO
+except ImportError:  # Python 3
+  from io import StringIO
 
 def pickle_dumps(obj):
   sio = StringIO()

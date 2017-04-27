@@ -74,5 +74,5 @@ def test_collect_class_init_kwargs():
       pass
 
   kwargs = collect_class_init_kwargs(C)
-  print kwargs
+  print(kwargs)
   assert_equal(sorted(kwargs), ["a", "b", "c"])

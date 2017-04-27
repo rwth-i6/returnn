@@ -1296,6 +1296,11 @@ class CudaEnv(object):
     :return: whether this is a valid usable CUDA env
     :rtype: bool
     """
+    return self.is_available()
+
+  __bool__ = __nonzero__  # Python 3
+
+  def is_available(self):
     return bool(self.cuda_path)
 
   def get_compiler_opts(self):
@@ -1304,6 +1309,7 @@ class CudaEnv(object):
       "-x", "cu"]
 
   def get_compiler_bin(self):
+    assert self.cuda_path
     return "%s/bin/nvcc" % self.cuda_path
 
   @classmethod
@@ -1434,7 +1440,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": bool(self._cuda_env)
+      "with_cuda": self._cuda_env.is_available()
     }
 
   def _make_code_hash(self):
@@ -1504,7 +1510,7 @@ class OpCodeCompiler(object):
       common_opts += ["-undefined", "dynamic_lookup"]
     common_opts += ["-I", self._include_path]
     compiler_opts = ["-fPIC"]
-    if self._cuda_env:
+    if self._cuda_env.is_available():
       common_opts += self._cuda_env.get_compiler_opts()
       common_opts += ["-DGOOGLE_CUDA=1"]
       for opt in compiler_opts:
@@ -1516,7 +1522,7 @@ class OpCodeCompiler(object):
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
     opts += self.ld_flags
     cmd_bin = "g++"
-    if self._cuda_env:
+    if self._cuda_env.is_available():
       cmd_bin = self._cuda_env.get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError

@@ -143,10 +143,10 @@ def downsample(source, axis, factor, method="average"):
   factor = int(factor)
   # make shape[axis] a multiple of factor
   src = source
-  source = source[slice_for_axis(axis=axis, s=slice(0, (source.shape[axis] / factor) * factor))]
+  source = source[slice_for_axis(axis=axis, s=slice(0, (source.shape[axis] // factor) * factor))]
   # Add a temporary dimension as the factor.
   added_dim_shape = [source.shape[i] for i in range(source.ndim)]
-  added_dim_shape = added_dim_shape[:axis] + [source.shape[axis] / factor, factor] + added_dim_shape[axis + 1:]
+  added_dim_shape = added_dim_shape[:axis] + [source.shape[axis] // factor, factor] + added_dim_shape[axis + 1:]
   if method == "lstm":
     assert axis == 0
     return source
@@ -184,7 +184,8 @@ def upsample(source, axis, factor, method="nearest-neighbor", target_axis_len=No
 def pad(source, axis, target_axis_len, pad_value=None):
   if pad_value is None:
     pad_value = T.zeros([source.shape[i] if i != axis else 1 for i in range(source.ndim)], dtype=source.dtype)
-  num_missing = T.cast(target_axis_len, dtype="int32") - source.shape[axis]
+  target_axis_len = T.cast(target_axis_len, dtype="int32")
+  num_missing = target_axis_len - source.shape[axis]
   # There is some strange bug in Theano. If num_missing is 0, in some circumstances,
   # it crashes with Floating point exception.
   # Thus, do this workaround.
@@ -205,7 +206,7 @@ def chunked_time_reverse(source, chunk_size):
   (Padded with 0, recovers original size.)
   """
   chunk_size = T.cast(chunk_size, dtype="int32")
-  num_chunks = (source.shape[0] + chunk_size - 1) / chunk_size
+  num_chunks = (source.shape[0] + chunk_size - 1) // chunk_size
   needed_time = num_chunks * chunk_size
   remaining_dims = [source.shape[i + 1] for i in range(source.ndim - 1)]
   padded_source = pad(source, axis=0, target_axis_len=needed_time)

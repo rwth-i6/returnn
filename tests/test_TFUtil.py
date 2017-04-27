@@ -1,6 +1,8 @@
 
 # start test like this:  nosetests-2.7  tests/test_TFUtil.py  --nologcapture
 
+import logging
+logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack

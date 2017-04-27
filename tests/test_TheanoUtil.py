@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -28,7 +30,7 @@ def naive_windowed_batch(source, window):
   n_time = source.shape[0]
   n_batch = source.shape[1]
   n_dim = source.shape[2]
-  w_right = window / 2
+  w_right = window // 2
   w_left = window - w_right - 1
   dtype = source.dtype
   pad_left = numpy.zeros((w_left, n_batch, n_dim), dtype=dtype)
@@ -47,14 +49,14 @@ def test_windowed_batch_small():
   n_dim = 2
   window = 3
   source = numpy.arange(1, n_time*n_batch*n_dim + 1).reshape(n_time, n_batch, n_dim)
-  print "source:"
-  print source
+  print("source:")
+  print(source)
   naive = naive_windowed_batch(source, window=window)
   real = windowed_batch(source, window=window).eval()
-  print "naive:"
-  print naive
-  print "real:"
-  print real
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
   numpy.testing.assert_almost_equal(naive, real)
 
 
@@ -144,7 +146,7 @@ def test_chunked_time_reverse():
 
 def test_indices_in_flatten_array():
   n_copies, n_cells = 5, 4
-  n_complex_cells = n_cells / 2
+  n_complex_cells = n_cells // 2
   n_batch = 3
   static_rng = numpy.random.RandomState(1234)
   def make_permut():

@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -157,35 +159,35 @@ def compare_lstm(lstm_opts=None):
   res1 = load()
   res2 = load(lstm_opts=lstm_opts)
   fail = False
-  print "keys in res1:", sorted(res1.keys())
-  print "keys in res2:", sorted(res2.keys())
+  print("keys in res1:", sorted(res1.keys()))
+  print("keys in res2:", sorted(res2.keys()))
   for key in sorted(res1.keys()):
     if key not in res2:
-      print "ERROR: %r not in res2" % key
+      print("ERROR: %r not in res2" % key)
       fail = True
     v1 = res1[key]
     v2 = res2[key]
     v1 = numpy.asarray(v1)
     v2 = numpy.asarray(v2)
     if v1.shape != v2.shape:
-      print "shape does not match for %r" % key
-      print "v1 shape:", v1.shape
-      print "v2 shape:", v2.shape
+      print("shape does not match for %r" % key)
+      print("v1 shape:", v1.shape)
+      print("v2 shape:", v2.shape)
       fail = True
     elif not numpy.allclose(v1, v2, atol=atol):
-      print "not equal: %r" % key
+      print("not equal: %r" % key)
       c = 0
       for idx in zip(*numpy.unravel_index(range(numpy.prod(v1.shape)), v1.shape)):
         e1 = v1[idx]
         e2 = v2[idx]
         if not numpy.isclose(e1, e2, atol=atol):
-          print "idx %r differs: %r vs %r" % (idx, e1, e2)
+          print("idx %r differs: %r vs %r" % (idx, e1, e2))
           c += 1
           if c >= 10: break
       fail = True
   for key in sorted(res2.keys()):
     if key not in res1:
-      print "ERROR: %r not in res1" % key
+      print("ERROR: %r not in res1" % key)
       fail = True
   assert not fail
 

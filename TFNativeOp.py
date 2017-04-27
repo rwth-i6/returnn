@@ -67,7 +67,7 @@ class OpMaker(object):
   @classmethod
   def _cls_init(cls):
     if cls.with_cuda is None:
-      cls.with_cuda = bool(TFUtil.CudaEnv.get_instance())
+      cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
       if cls.with_cuda:
         cls._load_cuda_blas_gemm()
 

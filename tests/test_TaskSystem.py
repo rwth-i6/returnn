@@ -2,7 +2,10 @@
 import sys
 sys.path += ["."]  # Python 3 hack
 
-from StringIO import StringIO
+try:
+  from StringIO import StringIO
+except ImportError:  # Python 3
+  from io import StringIO
 from TaskSystem import *
 import inspect
 

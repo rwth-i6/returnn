@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -86,7 +88,7 @@ def getDeviceBatchRunParent(dev, task):
 
     def start(self):
       # Do nothing. Don't start the thread.
-      print "DummyDeviceBatchRunParent: dummy start thread (ignored)"
+      print("DummyDeviceBatchRunParent: dummy start thread (ignored)")
 
   return DummyDeviceBatchRunParent()
 
@@ -96,11 +98,11 @@ class DummyDevice(Device):
     super(DummyDevice, self).__init__("cpu", config=config, blocking=True)
 
   def run(self, task):
-    print "DummyDevice run %r (ignored)" % task
+    print("DummyDevice run %r (ignored)" % task)
     self.run_called_count += 1
 
   def set_net_params(self, network):
-    print "DummyDevice set_net_params (ignored)"
+    print("DummyDevice set_net_params (ignored)")
 
 
 class DummyDeviceBatchRun(TaskThread.DeviceBatchRun):
@@ -112,7 +114,7 @@ class DummyDeviceBatchRun(TaskThread.DeviceBatchRun):
 
   def start(self):
     # Do nothing. Don't start the thread.
-    print "DummyDeviceBatchRun: dummy start thread (ignored)"
+    print("DummyDeviceBatchRun: dummy start thread (ignored)")
 
   def allocate(self):
     self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
@@ -164,7 +166,7 @@ def test_DeviceBatchRun_outputs_format():
   pprint(res)
 
   # Simulate epoch end.
-  print "train epoch score:", trainer.score, "elapsed:", hms(trainer.elapsed)
+  print("train epoch score:", trainer.score, "elapsed:", hms(trainer.elapsed))
   trainer.finalize()
   dev_run.alloc_devices[0].finish_epoch_stats()
 
@@ -184,11 +186,11 @@ def test_DeviceBatchRun_outputs_format():
   dev_run.finish()
 
   # Simulate epoch end.
-  print "eval epoch elapsed:", hms(tester.elapsed)
+  print("eval epoch elapsed:", hms(tester.elapsed))
   tester.finalize()
   dev_run.alloc_devices[0].finish_epoch_stats()
 
-  print "eval results:", tester.score, tester.error
+  print("eval results:", tester.score, tester.error)
 
   assert_is_instance(dev_run.result, dict)
   assert_in("results", dev_run.result)
