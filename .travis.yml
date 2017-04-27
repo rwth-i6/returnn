@@ -24,7 +24,9 @@ install:
   - pip install -qq -r requirements.txt
   - pip install -qq tensorflow
   - pip install -qq nose
-  - echo "[global] \n device = cpu \n floatX = float32 \n\n" >> ~/.theanorc
+  - echo "[global]" >> ~/.theanorc
+  - echo "device = cpu" >> ~/.theanorc
+  - echo "floatX = float32" >> ~/.theanorc
 
 env:
   - TEST=Config
