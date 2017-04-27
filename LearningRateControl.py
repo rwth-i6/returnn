@@ -430,6 +430,11 @@ class NewbobMultiEpoch(LearningRateControl):
     self.learningRateDecayFactor = learningRateDecayFactor
 
   def _calcMeanRelativeError(self, epochs):
+    """
+    :param list[int] epochs:
+    :return: mean of relative errors
+    :rtype: float|None
+    """
     assert len(epochs) >= 2
     errors = [self.calcRelativeError(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
     if any([e is None for e in errors]):
@@ -437,13 +442,18 @@ class NewbobMultiEpoch(LearningRateControl):
     return numpy.mean(errors)
 
   def _calcRecentMeanRelativeError(self, epoch):
+    """
+    :param int epoch:
+    :return: recent mean of relative errors
+    :rtype: float|None
+    """
     # Take one more than numEpochs because we are looking at the diffs.
     lastEpochs = self._lastEpochsForEpoch(epoch, numEpochs=self.numEpochs + 1)
     if not lastEpochs:
       return None
     # We could also use the self.numEpochs limit here. But maybe this is better.
     if len(lastEpochs) <= 1:
-      return []
+      return None
     return self._calcMeanRelativeError(lastEpochs)
 
   def calcLearningRateForEpoch(self, epoch):
