@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from StringIO import StringIO
 from TaskSystem import *
 import inspect

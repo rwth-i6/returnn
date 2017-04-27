@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from nose.tools import assert_equal, assert_is, assert_in, assert_not_in, assert_true, assert_false
 from NetworkLayer import LayerClasses
 from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer, DualStateLayer

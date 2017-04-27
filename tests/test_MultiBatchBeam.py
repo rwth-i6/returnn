@@ -1,5 +1,8 @@
 
 import sys
+sys.path += ["."]  # Python 3 hack
+
+import sys
 import numpy
 import theano
 import theano.scan_module.scan_op

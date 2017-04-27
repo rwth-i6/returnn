@@ -1,3 +1,7 @@
+
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from HDFDataset import HDFDataset
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal

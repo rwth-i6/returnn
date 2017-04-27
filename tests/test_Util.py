@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from nose.tools import assert_equal, assert_raises, assert_true, assert_is
 from Util import *
 import numpy as np
