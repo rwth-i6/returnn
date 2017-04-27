@@ -63,3 +63,7 @@ env:
 script:
   - nosetests tests/test_$TEST.py
 
+# https://docs.travis-ci.com/user/notifications
+# no notifications
+notifications:
+  email: false
