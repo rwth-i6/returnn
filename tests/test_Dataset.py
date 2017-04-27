@@ -6,9 +6,12 @@ from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_i
 from GeneratingDataset import GeneratingDataset, DummyDataset
 from EngineBatch import Batch
 from Dataset import DatasetSeq
-from Log import log
 import numpy as np
 
+import better_exchook
+better_exchook.replace_traceback_format_tb()
+
+from Log import log
 log.initialize()
 
 
@@ -20,6 +23,7 @@ def test_generate_batches():
     batch_gen.peek_next_n(1)
     batch_gen.advance(1)
 
+
 def test_generate_batches_recurrent():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=20)
   dataset.init_seq_order(1)
@@ -28,18 +32,20 @@ def test_generate_batches_recurrent():
     batch_gen.peek_next_n(1)
     batch_gen.advance(1)
 
+
 def test_iterate_seqs_no_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
-  seqs = list(dataset._iterate_seqs(chunk_size=0, chunk_step=0))
+  seqs = list(dataset._iterate_seqs(chunk_size=0, chunk_step=0, used_data_keys=None))
   assert_equal(len(seqs), 2)
   assert_equal(seqs[0], (0, 0, 11))  # seq-idx, start-frame, end-frame
   assert_equal(seqs[1], (1, 0, 11))
 
+
 def test_iterate_seqs_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
-  seqs = list(dataset._iterate_seqs(chunk_size=10, chunk_step=5))
+  seqs = list(dataset._iterate_seqs(chunk_size=10, chunk_step=5, used_data_keys=None))
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 6)
@@ -49,6 +55,7 @@ def test_iterate_seqs_chunking_1():
   assert_equal(seqs[3], (1, 0, 10))
   assert_equal(seqs[4], (1, 5, 11))
   assert_equal(seqs[5], (1, 10, 11))
+
 
 def test_batches_recurrent_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
@@ -108,6 +115,7 @@ def test_batches_recurrent_1():
   assert_equal(all_batches[3].seqs[0].batch_slice, 0)
   assert_equal(all_batches[3].seqs[0].batch_frame_offset, 0)
 
+
 def test_batches_non_recurrent_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
@@ -152,13 +160,29 @@ def test_batches_non_recurrent_1():
   assert_equal(all_batches[2].seqs[0].frame_length, 1)
   assert_equal(all_batches[2].seqs[0].batch_slice, 0)
   assert_equal(all_batches[2].seqs[0].batch_frame_offset, 0)
+  assert_equal(all_batches[2].seqs[1].seq_idx, 1)
+  assert_equal(all_batches[2].seqs[1].seq_start_frame, 0)
+  assert_equal(all_batches[2].seqs[1].seq_end_frame, 4)
+  assert_equal(all_batches[2].seqs[1].frame_length, 4)
+  assert_equal(all_batches[2].seqs[1].batch_slice, 0)
+  assert_equal(all_batches[2].seqs[1].batch_frame_offset, 1)
 
   assert_equal(all_batches[3].start_seq, 1)
   assert_equal(all_batches[3].end_seq, 2)  # exclusive
   assert_equal(len(all_batches[3].seqs), 1)  # 1 BatchSeqCopyPart
   assert_equal(all_batches[3].seqs[0].seq_idx, 1)
-  assert_equal(all_batches[3].seqs[0].seq_start_frame, 0)
-  assert_equal(all_batches[3].seqs[0].seq_end_frame, 5)
+  assert_equal(all_batches[3].seqs[0].seq_start_frame, 4)
+  assert_equal(all_batches[3].seqs[0].seq_end_frame, 9)
   assert_equal(all_batches[3].seqs[0].frame_length, 5)
   assert_equal(all_batches[3].seqs[0].batch_slice, 0)
   assert_equal(all_batches[3].seqs[0].batch_frame_offset, 0)
+
+  assert_equal(all_batches[4].start_seq, 1)
+  assert_equal(all_batches[4].end_seq, 2)  # exclusive
+  assert_equal(len(all_batches[4].seqs), 1)  # 1 BatchSeqCopyPart
+  assert_equal(all_batches[4].seqs[0].seq_idx, 1)
+  assert_equal(all_batches[4].seqs[0].seq_start_frame, 9)
+  assert_equal(all_batches[4].seqs[0].seq_end_frame, 11)
+  assert_equal(all_batches[4].seqs[0].frame_length, 2)
+  assert_equal(all_batches[4].seqs[0].batch_slice, 0)
+  assert_equal(all_batches[4].seqs[0].batch_frame_offset, 0)

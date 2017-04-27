@@ -5,7 +5,10 @@ sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
 from Config import Config
-from StringIO import StringIO
+try:
+  from StringIO import StringIO
+except ImportError:  # Python 3
+  from io import StringIO
 from Network import LayerNetwork
 import h5py
 import tempfile
@@ -28,8 +31,8 @@ config_enc_dec1_json = """
 
 "encoder_fw" : { "class" : "rec", "unit" : "lstmp", "n_out" : 7, "dropout" : 0.3, "direction" : 1, "from" : [ "proto_fw_3", "proto_bw_3" ]  },
 "encoder_bw" : { "class" : "rec", "unit" : "lstmp", "n_out" : 7, "dropout" : 0.3, "direction" : -1, "from" : [ "proto_fw_3", "proto_bw_3" ]  },
-"decoder_fw" : { "class" : "rec", "unit" : "lstme", "n_out" : 7, "dropconnect" : 0.0, "direction" : 1, "attention" : "default", "attention_beam" : 0, "lm" : false, "encoder" : [ "encoder_bw" ], "from" : ["null"] },
-"decoder_bw" : { "class" : "rec", "unit" : "lstme", "n_out" : 7, "dropconnect" : 0.0, "direction" : -1, "attention" : "default", "attention_beam" : 0, "lm" : false, "encoder" : [ "encoder_fw" ], "from" : ["null"] },
+"decoder_fw" : { "class" : "rec", "unit" : "lstme", "n_out" : 7, "direction" : 1, "attention" : "default", "attention_beam" : 0, "lm" : false, "encoder" : [ "encoder_bw" ], "from" : ["null"] },
+"decoder_bw" : { "class" : "rec", "unit" : "lstme", "n_out" : 7, "direction" : -1, "attention" : "default", "attention_beam" : 0, "lm" : false, "encoder" : [ "encoder_fw" ], "from" : ["null"] },
 
 "output" : { "class" : "softmax", "from" : ["decoder_fw", "decoder_bw"] }
 }
