@@ -17,12 +17,13 @@ dist: trusty
 #  - sudo apt-get install -qq python-numpy python-scipy python-matplotlib
 
 # command to install dependencies
+# quiet (-qq) to keep log smaller
 install:
-  - pip install --upgrade pip setuptools wheel
-  - pip install --only-binary=numpy,scipy numpy
-  - pip install -r requirements.txt
-  - pip install tensorflow
-  - pip install nose
+  - pip install -qq --upgrade pip setuptools wheel
+  - pip install -qq --only-binary=numpy,scipy numpy
+  - pip install -qq -r requirements.txt
+  - pip install -qq tensorflow
+  - pip install -qq nose
 
 env:
   - TEST=Config
