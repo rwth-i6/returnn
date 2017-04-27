@@ -4,9 +4,8 @@ sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is, assert_in, assert_not_in, assert_true, assert_false
 from NetworkLayer import LayerClasses
-from NetworkHiddenLayer import ForwardLayer, StateToAct, BaseInterpolationLayer, ChunkingLayer, DualStateLayer
-from NetworkRecurrentLayer import RecurrentLayer, RecurrentUnitLayer
-from NetworkLstmLayer import LstmLayer, OptimizedLstmLayer, FastLstmLayer, SimpleLstmLayer, GRULayer, SRULayer, SRALayer
+from NetworkHiddenLayer import ForwardLayer
+from NetworkRecurrentLayer import RecurrentUnitLayer
 
 
 
@@ -26,12 +25,7 @@ def test_LayerClasses_list():
   assert_in("state_to_act", LayerClasses)
   assert_in("base", LayerClasses)
   assert_in('rec', LayerClasses)
-  assert_in('lstm_opt', LayerClasses)
-  assert_in('lstm_fast', LayerClasses)
-  assert_in('lstm_simple', LayerClasses)
 
   assert_is(LayerClasses["forward"], ForwardLayer)
-  assert_is(LayerClasses["recurrent"], RecurrentLayer)
+  assert_is(LayerClasses["hidden"], ForwardLayer)  # alias
   assert_is(LayerClasses["rec"], RecurrentUnitLayer)
-  assert_is(LayerClasses["gru"], GRULayer)
-
