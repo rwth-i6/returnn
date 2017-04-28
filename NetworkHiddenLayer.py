@@ -2885,7 +2885,7 @@ class AlignmentLayer(ForwardLayer):
 class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
-  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0,
                base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
@@ -2967,11 +2967,11 @@ class CAlignmentLayer(ForwardLayer):
       if train_emission: #  and not self.train_flag:
         def encode(x_t,q_t,x_p,q_p,i_p):
           q_c = q_t + q_p
-          write_flag = T.ge(q_c, numpy.float32(1))
-          q = T.switch(write_flag, q_c - numpy.float32(1), q_c)
-          #x = x_t * q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1)
-          #x += T.switch(write_flag.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1), T.zeros_like(x_p), x_p)
-          x = x_t #* T.cast(write_flag.dimshuffle(0, 'x').repeat(x_t.shape[1], axis=1),'float32')
+          write_flag = T.ge(q_c, numpy.float32(clip_emission))
+          q = T.switch(write_flag, q_c - numpy.float32(clip_emission), q_c)
+          x = x_t * q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1)
+          x += T.switch(write_flag.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1), T.zeros_like(x_p), x_p)
+          #x = x_t #* T.cast(write_flag.dimshuffle(0, 'x').repeat(x_t.shape[1], axis=1),'float32')
           return x, q, T.cast(write_flag,'float32')
 
         out, _ = theano.scan(encode, sequences=[x_in,q_in[:,:,1]],
