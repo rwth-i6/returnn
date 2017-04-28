@@ -33,7 +33,7 @@ from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describ
 
 
 config = None; """ :type: Config """
-engine = None; """ :type: Engine | TFEngine.Engine """
+engine = None; """ :type: TFEngine.Engine | Engine """
 train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """

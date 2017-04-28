@@ -570,14 +570,18 @@ class Engine(object):
   get_epoch_model = TheanoEngine.get_epoch_model
   epoch_model_filename = TheanoEngine.epoch_model_filename
 
-  def get_epoch_model_filename(self):
-    return self.epoch_model_filename(self.model_filename, self.epoch, self.is_pretrain_epoch())
+  def get_epoch_model_filename(self, epoch=None):
+    if not epoch:
+      epoch = self.epoch
+    return self.epoch_model_filename(self.model_filename, epoch, self.is_pretrain_epoch(epoch=epoch))
 
   def get_epoch_str(self):
     return ("pretrain " if self.is_pretrain_epoch() else "") + "epoch %s" % self.epoch
 
-  def is_pretrain_epoch(self):
-    return self.pretrain and self.epoch <= self.pretrain.get_train_num_epochs()
+  def is_pretrain_epoch(self, epoch=None):
+    if not epoch:
+      epoch = self.epoch
+    return self.pretrain and epoch <= self.pretrain.get_train_num_epochs()
 
   def is_first_epoch_after_pretrain(self):
     return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
@@ -588,6 +592,18 @@ class Engine(object):
       if not dataset: continue
       eval_datasets[name] = dataset
     return eval_datasets
+
+  def load_model(self, epoch=None, filename=None):
+    """
+    :param int epoch: 
+    :param str filename: 
+    """
+    assert epoch or filename
+    if epoch:
+      assert not filename
+      filename = self.get_epoch_model_filename(epoch=epoch)
+    print("Load model %s" % (filename,), file=log.v4)
+    self.network.load_params_from_file(filename, session=self.tf_session)
 
   def save_model(self, filename):
     """
@@ -773,6 +789,34 @@ class Engine(object):
       self.network.declare_train_params()
 
     self.updater.set_trainable_vars(self.network.get_trainable_params())
+
+    self._maybe_use_better_last_model()
+
+  def _maybe_use_better_last_model(self):
+    if not self.config.is_true("use_last_best_model"):
+      return
+    if self.is_pretrain_epoch():
+      return
+    opts = self.config.get_of_type("use_last_best_model", dict, default={}).copy()
+    if self.epoch % opts.pop("modulo", 1) != 0:
+      # Normally we would filter those out. One maybe sensible exception is if the last score was really bad.
+      if (self.learning_rate_control.getEpochErrorValue(self.epoch - 1) or 0) \
+           <= opts.get("filter_score", float("inf")):
+        return
+    # Check if the previous epoch model is the best and otherwise take the best last model params.
+    last_best_epoch = self.learning_rate_control.getLastBestEpoch(
+      last_epoch=self.epoch - 1,
+      first_epoch=self.pretrain.get_train_num_epochs() if self.pretrain else 1,
+      **opts)
+    if last_best_epoch and last_best_epoch != self.epoch - 1:
+      print("Last epoch %i (score: %f) is not the optimal model" %
+            (self.epoch -1, self.learning_rate_control.getEpochErrorValue(self.epoch -1))
+            + " but epoch %i has better score %f (%r), will use that model." %
+            (last_best_epoch, self.learning_rate_control.getEpochErrorValue(last_best_epoch),
+             self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
+            file=log.v2)
+      self.load_model(epoch=last_best_epoch)
+      self.updater.init_optimizer_vars()  # reset the optimizer vars
 
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)

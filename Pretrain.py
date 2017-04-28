@@ -5,7 +5,7 @@ from Network import LayerNetwork
 from NetworkBaseLayer import Layer
 from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
 from Log import log
-from Util import unicode
+from Util import unicode, long
 
 
 class WrapEpochValue:

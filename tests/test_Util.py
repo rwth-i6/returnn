@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from nose.tools import assert_equal, assert_raises, assert_true, assert_is
 from Util import *
 import numpy as np
@@ -71,5 +74,5 @@ def test_collect_class_init_kwargs():
       pass
 
   kwargs = collect_class_init_kwargs(C)
-  print kwargs
+  print(kwargs)
   assert_equal(sorted(kwargs), ["a", "b", "c"])

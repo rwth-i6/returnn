@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from subprocess import Popen, PIPE, STDOUT
 import re
 import os

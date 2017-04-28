@@ -992,10 +992,15 @@ class NumbersDict:
 
 def collect_class_init_kwargs(cls):
   kwargs = set()
+  if PY3:
+    getargspec = inspect.getfullargspec
+  else:
+    getargspec = inspect.getargspec
   for cls_ in inspect.getmro(cls):
-    if not inspect.ismethod(cls_.__init__):  # Python function. could be builtin func or so
+    # Check Python function. Could be builtin func or so. Python 2 getargspec does not work in that case.
+    if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
       continue
-    arg_spec = inspect.getargspec(cls_.__init__)
+    arg_spec = getargspec(cls_.__init__)
     kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
   return kwargs
 

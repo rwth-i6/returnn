@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 
 import NativeOp
 import numpy
