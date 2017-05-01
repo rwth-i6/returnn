@@ -369,6 +369,7 @@ class OpMaker(object):
       ld_flags += ["-L%s/.libs" % numpy_dir]
       from glob import glob
       for f in glob("%s/.libs/*.so" % numpy_dir):
+        f = os.path.basename(f)
         if f.startswith("lib"):
           f = f[3:]
         if f.endswith(".so"):
