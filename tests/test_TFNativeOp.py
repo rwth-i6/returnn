@@ -45,7 +45,7 @@ def dump_info():
 
 def test_dummy():
   dump_info()
-  assert False
+  #assert False
 
 
 def test_make_lstm_op():
