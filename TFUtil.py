@@ -1866,10 +1866,12 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
 
 def identity_op_nested(x, name="identity"):
   """
-  :param tf.Tensor|list[tf.Tensor] x: 
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x: 
   :param str name: 
-  :rtype tf.Tensor|list[tf.Tensor]
+  :rtype tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
   """
+  if isinstance(x, dict):
+    return {k: identity_op_nested(x[k], name="%s_%s" % (name, k)) for k in x}
   if isinstance(x, (list, tuple)):
     return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
   assert isinstance(x, tf.Tensor)

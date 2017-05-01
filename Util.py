@@ -1394,3 +1394,13 @@ def str_is_number(s):
     return True
   except ValueError:
     return False
+
+
+def sorted_values_from_dict(d):
+  assert isinstance(d, dict)
+  return [v for (k, v) in sorted(d.items())]
+
+
+def dict_zip(keys, values):
+  assert len(keys) == len(values)
+  return dict(zip(keys, values))

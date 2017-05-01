@@ -493,6 +493,7 @@ class Engine(object):
     self.train_data = None; " :type: Dataset.Dataset "
     self.start_epoch = None
     self.use_dynamic_train_flag = False
+    self.use_search_flag = False
 
   def finalize(self):
     self._close_tf_session()
@@ -684,7 +685,8 @@ class Engine(object):
     network = TFNetwork(
       rnd_seed=epoch,
       train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
-      if self.use_dynamic_train_flag else False)
+      if self.use_dynamic_train_flag else False,
+      search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
@@ -1012,3 +1014,27 @@ class Engine(object):
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
+
+  def search(self, dataset):
+    """
+    :param Dataset.Dataset dataset: 
+    """
+    if not self.use_search_flag:
+      self.use_search_flag = True
+      if self.network:
+        print("Reinit network with search flag.", file=log.v3)
+      self.init_network_from_config(self.config)
+    else:
+      if not self.network:
+        self.init_network_from_config(self.config)
+    batches = dataset.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=self.batch_size,
+      max_seqs=1,
+      max_seq_length=int(self.max_seq_length),
+      used_data_keys=self.network.used_data_keys)
+    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False)
+    runner.run(report_prefix=self.get_epoch_str() + " search")
+    assert runner.finalized
+    print("search: score %s error %s" % (
+      self.format_score(runner.score), self.format_score(runner.error)))
