@@ -365,10 +365,14 @@ class OpMaker(object):
     # Another option to find some BLAS lib.
     import numpy
     numpy_dir = os.path.dirname(numpy.__file__)
-    if os.path.exists("%s/.libs"):
-      #ld_flags += ["-L%s/.libs" % numpy_dir]
+    if os.path.exists("%s/.libs" % numpy_dir):
+      ld_flags += ["-L%s/.libs" % numpy_dir]
       from glob import glob
       for f in glob("%s/.libs/*.so" % numpy_dir):
+        if f.startswith("lib"):
+          f = f[3:]
+        if f.endswith(".so"):
+          f = f[:-3]
         ld_flags += ["-l%s" % f]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
