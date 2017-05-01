@@ -5,7 +5,6 @@ python:
   - "2.7"
   - "3.5"
   - "3.6"
-  - "nightly"
 
 # https://blog.travis-ci.com/2017-04-17-precise-EOL
 # Also needed for TensorFlow for glibc 2.7.
@@ -54,6 +53,7 @@ env:
   - TEST=SprintInterface
   - TEST=TaskSystem
   - TEST=TaskSystem_SharedMem
+  - TEST=TFNativeOp
   - TEST=TFNetworkLayer
   - TEST=TFUtil
   - TEST=TheanoUtil
