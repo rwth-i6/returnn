@@ -318,9 +318,14 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             output("format_tb: tb is None and sys._getframe() failed")
             return out
     import inspect
+    import traceback
+    def isstacksummary(_tb):
+        if not hasattr(traceback, "StackSummary"):
+            return False
+        return isinstance(_tb, traceback.StackSummary)
     isframe = inspect.isframe
     if withTitle:
-        if isframe(tb): output('Traceback (most recent call first)')
+        if isframe(tb) or isstacksummary(tb): output('Traceback (most recent call first)')
         else: output('Traceback (most recent call last):') # expect traceback-object (or compatible)
     try:
         if limit is None:
@@ -328,7 +333,11 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 limit = sys.tracebacklimit
         n = 0
         _tb = tb
+        class NotFound(Exception):
+            pass
         def _resolveIdentifier(namespace, id):
+            if id[0] not in namespace:
+                raise NotFound()
             obj = namespace[id[0]]
             for part in id[1:]:
                 obj = getattr(obj, part)
@@ -336,11 +345,12 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         def _trySet(old, prefix, func):
             if old is not None: return old
             try: return add_indent_lines(prefix, func())
-            except KeyError: return old
+            except NotFound: return old
             except Exception as e:
                 return prefix + "!" + e.__class__.__name__ + ": " + str(e)
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb): f = _tb
+            elif isstacksummary(_tb): f = _tb[0].tb_frame
             else: f = _tb.tb_frame
             if allLocals is not None: allLocals.update(f.f_locals)
             if allGlobals is not None: allGlobals.update(f.f_globals)
@@ -349,7 +359,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             co = f.f_code
             filename = co.co_filename
             name = co.co_name
-            output('  File "%s", line %d, in %s' % (filename,lineno,name))
+            output('  File "%s", line %d, in %s' % (filename, lineno, name))
             if not os.path.isfile(filename):
                 altfn = fallback_findfile(filename)
                 if altfn:
@@ -375,8 +385,14 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 if len(alreadyPrintedLocals) == 0: output("       no locals")
             else:
                 output('    -- code not available --')
-            if isframe(_tb): _tb = _tb.f_back
-            else: _tb = _tb.tb_next
+            if isframe(_tb):
+                _tb = _tb.f_back
+            elif isstacksummary(_tb):
+                _tb = traceback.StackSummary.from_list(_tb[1:])
+                if not _tb:
+                    _tb = None
+            else:
+                _tb = _tb.tb_next
             n += 1
 
     except Exception as e:
@@ -431,12 +447,48 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
         debug_shell(user_ns=allLocals, user_global_ns=allGlobals, traceback=tb)
     file.flush()
 
+
 def install():
     sys.excepthook = better_exchook
+
+
+def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
+    """Create a StackSummary from a traceback or stack object.
+    Very simplified copy of the original StackSummary.extract().
+    We want always to capture locals, that is why we overwrite it.
+    Additionally, we also capture the frame.
+    This is a bit hacky and also not like this is originally intended (to not keep refs).
+     
+    :param frame_gen: A generator that yields (frame, lineno) tuples to
+        include in the stack.
+    :param limit: None to include all frames or the number of frames to
+        include.
+    :param lookup_lines: If True, lookup lines for each frame immediately,
+        otherwise lookup is deferred until the frame is rendered.
+    :param capture_locals: If True, the local variables from each frame will
+        be captured as object representations into the FrameSummary.
+    """
+    from traceback import StackSummary, FrameSummary
+    class ExtendedFrameSummary(FrameSummary):
+        def __init__(self, frame, **kwargs):
+            FrameSummary.__init__(self, **kwargs)
+            self.tb_frame = frame
+    result = StackSummary()
+    for f, lineno in frame_gen:
+        co = f.f_code
+        filename = co.co_filename
+        name = co.co_name
+        result.append(ExtendedFrameSummary(
+            frame=f, filename=filename, lineno=lineno, name=name, lookup_line=False))
+    return result
+
 
 def replace_traceback_format_tb():
     import traceback
     traceback.format_tb = format_tb
+    if hasattr(traceback, "StackSummary"):
+        traceback.StackSummary.format = format_tb
+        traceback.StackSummary.extract = _StackSummary_extract
 
 
 
