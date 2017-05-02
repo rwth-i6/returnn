@@ -369,6 +369,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             if allLocals is not None: allLocals.update(f.f_locals)
             if allGlobals is not None: allGlobals.update(f.f_globals)
             if hasattr(_tb, "tb_lineno"): lineno = _tb.tb_lineno
+            elif isstacksummary(_tb): lineno = _tb[0].lineno
             else: lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
