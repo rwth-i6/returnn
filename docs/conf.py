@@ -101,6 +101,9 @@ exclude_patterns = ['_build', "crnn"]
 # output. They are ignored by default.
 # show_authors = False
 
+# http://stackoverflow.com/questions/5599254/how-to-use-sphinxs-autodoc-to-document-a-classs-init-self-method
+autoclass_content = 'both'
+
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
