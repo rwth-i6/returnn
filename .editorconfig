@@ -15,4 +15,4 @@ indent_style = space
 
 [better_exchook.py]
 indent_size = 4
-indent_style = tab
+indent_style = space
