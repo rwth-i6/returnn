@@ -82,6 +82,30 @@ def test_DataProvider():
   assert_equal(classes.tolist(), [[1, 2, 0, 1, 2]])
 
 
+def test_engine_analyze():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "sil_label_idx": 0,
+  })
+  engine = Engine(config=config)
+  # Normally init_network_from_config but that requires an existing network model.
+  # engine.init_network_from_config(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+
+  engine.analyze(data=dataset, statistics=None)
+
+
 def test_engine_forward_single():
   from GeneratingDataset import DummyDataset
   seq_len = 5
@@ -92,6 +116,7 @@ def test_engine_forward_single():
 
   config = Config()
   config.update({
+    "model": "/tmp/model",
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}}
@@ -101,3 +126,23 @@ def test_engine_forward_single():
 
   engine.forward_single(dataset=dataset, seq_idx=0)
 
+
+def test_engine_search():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}}
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+
+  engine.search(dataset=dataset)
