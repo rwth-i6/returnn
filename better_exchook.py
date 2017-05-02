@@ -34,6 +34,8 @@
 
 import sys, os, os.path
 
+_cur_pwd = os.getcwd()
+
 try:
     unicode
 except NameError: # Python3
@@ -233,10 +235,22 @@ def pretty_print(obj):
     return s
 
 def fallback_findfile(filename):
-    mods = [ m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__ ]
-    if len(mods) == 0: return None
+    mods = [m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__]
+    if len(mods) == 0:
+        return None
     altfn = mods[0].__file__
     if altfn[-4:-1] == ".py": altfn = altfn[:-1] # *.pyc or whatever
+    if not os.path.exists(altfn) and altfn.startswith("./"):
+        # Maybe current dir changed.
+        altfn2 = _cur_pwd + altfn[1:]
+        if os.path.exists(altfn2):
+            return altfn2
+        # Try dirs of some other mods.
+        for m in ["__main__", "better_exchook"]:
+            if hasattr(sys.modules.get(m), "__file__"):
+                altfn2 = os.path.dirname(sys.modules[m].__file__) + altfn[1:]
+                if os.path.exists(altfn2):
+                    return altfn2
     return altfn
 
 def is_source_code_missing_open_brackets(source_code):
