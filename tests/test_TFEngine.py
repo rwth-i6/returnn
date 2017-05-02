@@ -140,7 +140,12 @@ def test_engine_search():
     "model": "/tmp/model",
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}}
+    "network": {
+      "output": {"class": "rec", "target": "classes", "unit": {
+        "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+        "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
+      }},
+    }
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)

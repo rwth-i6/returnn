@@ -446,7 +446,7 @@ class LayerBase(object):
     shape = [batch_dim] + list(data.shape)
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
-        return tf.ones(shape) * v
+        return tf.ones(shape, dtype=data.dtype) * v
     assert isinstance(v, str)
     if v == "zeros":
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
@@ -2074,6 +2074,7 @@ class RecLayer(_ConcatInputLayer):
         layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
         layer.output.placeholder = prev_outputs[name]
         layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
+        assert layer.output.placeholder.dtype is tf.as_dtype(layer.output.dtype)
         layer.output.size_placeholder = {}  # must be set
       for name in prev_extra.keys():
         if name not in prev_layers:
@@ -2595,6 +2596,7 @@ class Loss(object):
           self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
         else:
           self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+          self.output_flat.set_shape(tf.TensorShape(output.shape))
       else:
         self.loss_norm_factor = 1.0
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)

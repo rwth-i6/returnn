@@ -259,7 +259,10 @@ class Runner(object):
         d["size:%s:%i" % (key, dim)] = v
     if self._should_train or self._should_eval:
       # These values are cached internally and the graph nodes are created on the first call.
-      d["loss"] = self.engine.network.get_objective()
+      loss = self.engine.network.get_objective()
+      if loss is 0:
+        loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
+      d["loss"] = loss
       for layer_name, loss in self.engine.network.loss_by_layer.items():
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
@@ -495,6 +498,7 @@ class Engine(object):
     self.start_epoch = None
     self.use_dynamic_train_flag = False
     self.use_search_flag = False
+    self._const_cache = {}  # type: dict[str,tf.Tensor]
 
   def finalize(self):
     self._close_tf_session()
@@ -502,6 +506,11 @@ class Engine(object):
     self.network = None
     self.updater = None
     self._merge_all_summaries = None
+
+  def get_const_tensor(self, key, value):
+    if key not in self._const_cache:
+      self._const_cache[key] = tf.constant(value=value, name="const_%s" % key)
+    return self._const_cache[key]
 
   def _get_devices_config(self):
     """
@@ -566,6 +575,7 @@ class Engine(object):
     tf.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
+    self._const_cache.clear()
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
