@@ -76,3 +76,7 @@ def test_collect_class_init_kwargs():
   kwargs = collect_class_init_kwargs(C)
   print(kwargs)
   assert_equal(sorted(kwargs), ["a", "b", "c"])
+
+
+def test_terminal_size():
+  terminal_size()

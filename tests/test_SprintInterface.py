@@ -56,6 +56,7 @@ def create_first_epoch(config_filename):
   engine.init_train_from_config(config=config, train_data=None)
   engine.epoch = 1
   engine.save_model(engine.get_epoch_model_filename(), epoch=engine.epoch)
+  Engine._epoch_model = None
 
 
 

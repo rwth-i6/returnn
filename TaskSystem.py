@@ -225,7 +225,7 @@ class SharedMem:
 
 
 def next_power_of_two(n):
-  return 2 ** ((n - 1).bit_length())
+  return 2 ** (int(n - 1).bit_length())
 
 
 class SharedNumpyArray:
@@ -626,7 +626,11 @@ def numpy_alloc(shape, dtype, fortran_for_shared=False):
   return numpy.ndarray(shape, dtype=dtype)
 
 
-_BasePickler = getattr(pickle, "_Pickler", pickle.Pickler)
+try:
+  _BasePickler = pickle._Pickler  # use the pure Python implementation
+except AttributeError:
+  _BasePickler = pickle.Pickler
+
 
 class Pickler(_BasePickler):
   """
@@ -637,7 +641,7 @@ class Pickler(_BasePickler):
   def __init__(self, *args, **kwargs):
     if not "protocol" in kwargs:
       kwargs["protocol"] = pickle.HIGHEST_PROTOCOL
-    pickle.Pickler.__init__(self, *args, **kwargs)
+    _BasePickler.__init__(self, *args, **kwargs)
   dispatch = _BasePickler.dispatch.copy()
 
   def save_func(self, obj):
@@ -719,7 +723,7 @@ class Pickler(_BasePickler):
     # and use a separate write for the obj itself.
     # For a huge obj, this avoids one unnecessary copy of the data.
     self.write(pickle.BINSTRING + pack("<i", len(obj)))
-    self.write(obj)
+    self.write(bytes(obj, "utf8"))
   dispatch[str] = save_string
 
   def save_ndarray(self, obj):
@@ -768,7 +772,7 @@ class Pickler(_BasePickler):
 
     assert "\n" not in module
     assert "\n" not in name
-    self.write(pickle.GLOBAL + module + '\n' + name + '\n')
+    self.write(pickle.GLOBAL + bytes(module + '\n' + name + '\n', "utf8"))
     self.memoize(obj)
 
   def save_type(self, obj):
@@ -781,9 +785,9 @@ class Pickler(_BasePickler):
     # such as types.FunctionType. This is fixed here.
     for modname in ["types"]:
       moddict = sys.modules[modname].__dict__
-      for modobjname,modobj in moddict.iteritems():
+      for modobjname,modobj in moddict.items():
         if modobj is obj:
-          self.write(pickle.GLOBAL + modname + '\n' + modobjname + '\n')
+          self.write(pickle.GLOBAL + bytes(modname + '\n' + modobjname + '\n', "utf8"))
           self.memoize(obj)
           return
     # Generic serialization of new-style classes.

@@ -15,6 +15,7 @@ import numpy as np
 import os
 import sys
 import better_exchook
+better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 
 
@@ -27,7 +28,7 @@ dummyconfig_dict = {
   "bidirectional": False,
 }
 
-log.initialize()
+log.initialize(verbosity=[5])
 
 os.chdir((os.path.dirname(__file__) or ".") + "/..")
 assert os.path.exists("rnn.py")
@@ -52,16 +53,22 @@ def generate_batch(seq_idx, dataset):
 def test_assign_dev_data():
   config = Config()
   config.update(dummyconfig_dict)
-  device = DummyDevice(config=config)
-  dataset = ExternSprintDataset(sprintExecPath,
-                                "--*.feature-dimension=2 --*.trainer-output-dimension=3 "
-                                "--*.crnn-dataset=DummyDataset(2,3,4)")
+  print("Create ExternSprintDataset")
+  dataset = ExternSprintDataset(
+    [sys.executable, sprintExecPath],
+    "--*.feature-dimension=2 --*.trainer-output-dimension=3 --*.crnn-dataset=DummyDataset(2,3,4)")
   dataset.init_seq_order(epoch=1)
   assert_true(dataset.is_less_than_num_seqs(0))
   recurrent = False
   batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=512)
   batches = batch_generator.peek_next_n(2)
   assert_equal(len(batches), 2)
+  print("Create Device")
+  device = DummyDevice(config=config)
   success, num_batches = assign_dev_data(device, dataset, batches)
   assert_true(success)
   assert_equal(num_batches, len(batches))
+
+
+if __name__ == "__main__":
+  test_assign_dev_data()

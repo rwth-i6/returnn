@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import sys
 import os
 
@@ -35,19 +37,19 @@ def iterateEpochs():
   start_epoch, start_batch = Engine.get_train_start_epoch_batch(config)
   final_epoch = Engine.config_get_final_epoch(config)
 
-  print >> log.v3, "Starting with epoch %i, batch %i." % (start_epoch, start_batch)
-  print >> log.v3, "Final epoch is: %i" % final_epoch
+  print("Starting with epoch %i, batch %i." % (start_epoch, start_batch), file=log.v3)
+  print("Final epoch is: %i" % final_epoch, file=log.v3)
 
   recurrent_net = "lstm" in config.value("hidden_type", "")  # good enough...
   batch_size = config.int('batch_size', 1)
   max_seqs = config.int('max_seqs', -1)
 
   for epoch in range(start_epoch, final_epoch + 1):
-    print >> log.v3, "Epoch %i." % epoch
+    print("Epoch %i." % epoch, file=log.v3)
     rnn.train_data.init_seq_order(epoch)
     iterateDataset(rnn.train_data, recurrent_net=recurrent_net, batch_size=batch_size, max_seqs=max_seqs)
 
-  print >> log.v3, "Finished all epochs."
+  print("Finished all epochs.", file=log.v3)
 
 
 def init(configFilename, commandLineOptions):
@@ -57,7 +59,7 @@ def init(configFilename, commandLineOptions):
   global config
   config = rnn.config
   rnn.initLog()
-  print >> log.v3, "CRNN demo-dataset starting up"
+  print("CRNN demo-dataset starting up", file=log.v3)
   rnn.initFaulthandler()
   rnn.initConfigJsonNetwork()
   rnn.initData()

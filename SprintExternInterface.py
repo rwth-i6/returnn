@@ -10,7 +10,7 @@ from __future__ import print_function
 import os
 import TaskSystem
 from TaskSystem import Pickler, Unpickler
-from Util import to_bool
+from Util import to_bool, unicode
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.

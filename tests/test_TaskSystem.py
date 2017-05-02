@@ -5,9 +5,12 @@ sys.path += ["."]  # Python 3 hack
 try:
   from StringIO import StringIO
 except ImportError:  # Python 3
-  from io import StringIO
+  from io import BytesIO as StringIO
 from TaskSystem import *
 import inspect
+import better_exchook
+better_exchook.replace_traceback_format_tb()
+
 
 def pickle_dumps(obj):
   sio = StringIO()

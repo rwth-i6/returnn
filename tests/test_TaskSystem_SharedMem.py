@@ -5,6 +5,8 @@ sys.path += ["."]  # Python 3 hack
 import threading
 from TaskSystem import *
 import gc
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 SharedMemNumpyConfig["enabled"] = True
 SharedMemNumpyConfig["auto_pickling_min_size"] = 1
@@ -12,7 +14,8 @@ SharedMemNumpyConfig["auto_pickling_min_size"] = 1
 try:
   from StringIO import StringIO
 except ImportError:  # Python 3
-  from io import StringIO
+  from io import BytesIO as StringIO
+
 
 def pickle_dumps(obj):
   sio = StringIO()

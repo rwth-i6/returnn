@@ -284,10 +284,13 @@ def model_epoch_from_filename(filename):
 
 
 def terminal_size(): # this will probably work on linux only
-  import os, sys
+  import os, sys, io
   if not hasattr(sys.stdout, "fileno"):
     return -1, -1
-  if not os.isatty(sys.stdout.fileno()):
+  try:
+    if not os.isatty(sys.stdout.fileno()):
+      return -1, -1
+  except io.UnsupportedOperation:
     return -1, -1
   env = os.environ
   def ioctl_GWINSZ(fd):
