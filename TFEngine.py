@@ -34,7 +34,7 @@ class DataProvider(object):
 
   def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, have_fixed_batch_size=False):
     """
-    :param tf.Session tf_session:
+    :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param ExternData extern_data:
@@ -683,6 +683,7 @@ class Engine(object):
     self._make_tf_session()
     tf.set_random_seed(42)
     network = TFNetwork(
+      config=self.config,
       rnd_seed=epoch,
       train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
       if self.use_dynamic_train_flag else False,

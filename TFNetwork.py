@@ -39,6 +39,32 @@ class ExternData(object):
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
+  def init_from_dataset(self, dataset):
+    """
+    :param Dataset.Dataset dataset: 
+    """
+    target_keys = list(dataset.get_target_list())
+    if target_keys:
+      if "classes" in target_keys:
+        self.default_target = "classes"
+      else:
+        self.default_target = target_keys[0]
+    data_keys = list(dataset.get_data_keys())
+    input_keys = [key for key in data_keys if key not in target_keys]
+    if input_keys:
+      if "data" in input_keys:
+        self.default_input = "data"
+      else:
+        self.default_input = input_keys[0]
+    for key in data_keys:
+      dim = dataset.get_data_dim(key)
+      shape = [None] + list(dataset.get_data_shape(key))
+      sparse = dataset.is_data_sparse(key)
+      dtype = dataset.get_data_dtype(key)
+      self.data[key] = Data(
+        name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
+        shape=shape, dim=dim, sparse=sparse, dtype=dtype)
+
   def register_data_from_dict(self, data):
     """
     :param dict[str,dict[str]] data: init kwargs for Data
