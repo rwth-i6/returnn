@@ -467,6 +467,7 @@ class Runner(object):
       self.device_crash_batch = step
 
     finally:
+      writer.close()
       coord.request_stop()
       coord.join(threads)
       self.data_provider.stop_thread()
@@ -713,8 +714,7 @@ class Engine(object):
     self.network.set_params_by_serialized(old_network_params, session=self.tf_session)
 
   def train(self):
-    if self.start_epoch:
-      print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
+    print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
     print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
@@ -771,6 +771,8 @@ class Engine(object):
 
       if self.epoch != self.final_epoch:
         print("Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch), file=log.v3)
+
+    print("Finished training in epoch %i." % self.epoch, file=log.v3)
 
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
@@ -848,6 +850,7 @@ class Engine(object):
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
+      print("Trainer not finalized, quitting.", file=log.v4)
       sys.exit(1)
 
     assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), \

@@ -325,6 +325,7 @@ def init(configFilename=None, commandLineOptions=()):
 
 
 def finalize():
+  print("Quitting", file=getattr(log, "v4", sys.stderr))
   global quit
   quit = True
   sys.exited = True
